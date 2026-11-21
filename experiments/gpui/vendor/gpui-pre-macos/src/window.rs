@@ -2329,7 +2329,16 @@ impl PlatformWindow for MacWindow {
                 NSSize::new(32., 32.),
             );
 
-            for (path, is_directory) in paths.entries() {
+            // Every file gets a dragging item, because the items are what the
+            // drop receives. Only the first few items get a picture. AppKit
+            // asks each item for its picture and draws them all, so a drag
+            // of thousands of files with a picture each took seconds to
+            // start and drew thousands of icons on top of one another. With
+            // a picture on only the first few, the drag shows a small pile
+            // of icons, and AppKit adds its own badge with the number of
+            // files.
+            const ITEMS_WITH_A_PICTURE: usize = 4;
+            for (index, (path, is_directory)) in paths.entries().iter().enumerate() {
                 // Preserve non-UTF-8 paths
                 let Ok(path_bytes) = CString::new(path.as_os_str().as_bytes()) else {
                     log::warn!("start_external_drag skipped path containing an interior nul byte");
@@ -2358,7 +2367,12 @@ impl PlatformWindow for MacWindow {
                     .extension()
                     .and_then(|extension| extension.to_str())
                     .map(String::from);
+                let has_picture = index < ITEMS_WITH_A_PICTURE;
                 let provider = RcBlock::new(move || {
+                    if !has_picture {
+                        let none = NSArray::<NSDraggingImageComponent>::new();
+                        return NonNull::new_unchecked(Retained::autorelease_return(none));
+                    }
                     let component = NSDraggingImageComponent::draggingImageComponentWithKey(
                         NSDraggingImageComponentIconKey,
                     );
@@ -2400,6 +2414,9 @@ impl PlatformWindow for MacWindow {
 
             let started = !session.is_null();
             if started {
+                // `NSDraggingFormationPile` (2): the pictures are drawn on
+                // top of one another, as Finder draws several files.
+                let _: () = msg_send![session, setDraggingFormation: 2isize];
                 self.0.lock().synthetic_drag_counter += 1;
             }
             log::debug!(

@@ -509,6 +509,18 @@ used only an undocumented call.
   nothing, and `blurred_view_update_layer` removes that fill, so a `Blurred`
   window would show what is behind it without blur.
 
+`gpui-pre-macos`, dragging many files out of the window
+- `src/window.rs`, `start_external_drag`: every dragged file still gets a
+  dragging item, because the items are what the drop receives, but only the
+  first four items now return a picture from their
+  `imageComponentsProvider`; the others return an empty array. In 0.3.12
+  every item returns an icon, and AppKit draws all of them, so a drag of
+  several thousand files took seconds to start and drew thousands of icons
+  on top of one another. The session's formation is also set to
+  `NSDraggingFormationPile`, so the four pictures are drawn as a small pile,
+  as Finder draws several files. AppKit adds its own badge with the number
+  of files. This has not been tried with a real drag of thousands of files.
+
 `gpui-pre-windows`
 - `src/window.rs`, `set_background_appearance`: on Windows 11 version 22H2
   (build 22621) and later, `Blurred` now sets the window attribute
@@ -5057,7 +5069,48 @@ diff --color -ruN gpui-pre-macos-0.3.12/src/window.rs b/gpui-pre-macos/src/windo
      fn is_subpixel_rendering_supported(&self) -> bool {
          false
      }
-@@ -3749,6 +3767,20 @@
+@@ -2311,7 +2329,16 @@
+                 NSSize::new(32., 32.),
+             );
+ 
+-            for (path, is_directory) in paths.entries() {
++            // Every file gets a dragging item, because the items are what the
++            // drop receives. Only the first few items get a picture. AppKit
++            // asks each item for its picture and draws them all, so a drag
++            // of thousands of files with a picture each took seconds to
++            // start and drew thousands of icons on top of one another. With
++            // a picture on only the first few, the drag shows a small pile
++            // of icons, and AppKit adds its own badge with the number of
++            // files.
++            const ITEMS_WITH_A_PICTURE: usize = 4;
++            for (index, (path, is_directory)) in paths.entries().iter().enumerate() {
+                 // Preserve non-UTF-8 paths
+                 let Ok(path_bytes) = CString::new(path.as_os_str().as_bytes()) else {
+                     log::warn!("start_external_drag skipped path containing an interior nul byte");
+@@ -2340,7 +2367,12 @@
+                     .extension()
+                     .and_then(|extension| extension.to_str())
+                     .map(String::from);
++                let has_picture = index < ITEMS_WITH_A_PICTURE;
+                 let provider = RcBlock::new(move || {
++                    if !has_picture {
++                        let none = NSArray::<NSDraggingImageComponent>::new();
++                        return NonNull::new_unchecked(Retained::autorelease_return(none));
++                    }
+                     let component = NSDraggingImageComponent::draggingImageComponentWithKey(
+                         NSDraggingImageComponentIconKey,
+                     );
+@@ -2382,6 +2414,9 @@
+ 
+             let started = !session.is_null();
+             if started {
++                // `NSDraggingFormationPile` (2): the pictures are drawn on
++                // top of one another, as Finder draws several files.
++                let _: () = msg_send![session, setDraggingFormation: 2isize];
+                 self.0.lock().synthetic_drag_counter += 1;
+             }
+             log::debug!(
+@@ -3749,6 +3784,20 @@
  ) -> Bool {
      let window_state = unsafe { get_window_state(this) };
      let position = drag_event_position(&window_state, dragging_info);
@@ -5078,7 +5131,7 @@ diff --color -ruN gpui-pre-macos-0.3.12/src/window.rs b/gpui-pre-macos/src/windo
      send_file_drop_event(window_state, FileDropEvent::Submit { position }).to_objc()
  }
  
-@@ -3764,7 +3796,15 @@
+@@ -3764,7 +3813,15 @@
      )]
      let filenames: *mut NSArray<NSString> =
          unsafe { msg_send![pasteboard, propertyListForType: NSFilenamesPboardType] };
