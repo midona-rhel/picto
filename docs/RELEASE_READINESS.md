@@ -1,161 +1,109 @@
 # Picto release readiness
 
-Picto ships for these platforms only:
+Picto is released for these systems only:
 
-- macOS on Apple Silicon (`arm64`), distributed as DMG and ZIP artifacts;
-- Windows on x86-64, distributed as an NSIS installer;
-- Linux on x86-64, distributed as an AppImage.
+- macOS on Apple Silicon (`arm64`), as a disk image and a ZIP archive;
+- Windows on x86-64, as an NSIS installer;
+- Linux on x86-64, as an AppImage.
 
-Intel macOS is not a supported build or runtime target. Package configuration, CI artifact names,
-native addons, and downloaded native tools must not imply otherwise.
+Picto is not built for and does not run on a Mac with an Intel processor. No package setting, no
+artifact name and no downloaded tool may suggest that it does.
 
 ## Required gates
 
-1. `npm run release:audit` passes before compilation.
-2. TypeScript, focused UI tests, the production frontend build, Rust tests, and native-addon build
-   pass on every supported runner.
-3. `npm run release:audit -- --artifacts` passes after native binaries are built.
-4. The packaged smoke test opens the app with an isolated library, loads and settles the renderer,
-   plays a VP9 WebM through Picto's media protocol, closes the native library, and removes its
-   temporary data without native-module errors. Import, subscription, and thumbnail behavior remains covered by
-   focused integration tests rather than being overstated as part of this smoke test.
-5. Cloud Sync (experimental) passes its separately owned persistence, packaged-build, and
-   restart-recovery checks.
+A release passes all of these on its final commit. The Alpha Gate (`.github/workflows/alpha-gate.yml`)
+runs them for every push to a release branch.
+
+1. The source audit passes: `node scripts/release-audit.mjs`.
+2. The `verify` workflow passes: the tests of the scripts, Clippy and the tests of the crates
+   `core`, `picto-library` and `picto-sources`, and the build and the tests of the app on Linux
+   and Windows.
+3. The `Package` workflow builds the package for each of the three systems with `app/package.sh`,
+   and each package passes that workflow's checks and the package audit
+   (`node scripts/release-audit.mjs --artifacts`). The section "Packages" says what the checks
+   prove.
+
+What the gates do not prove:
+
+- CI does not run the app's tests on macOS. The macOS job of the `Package` workflow compiles the
+  release program there and starts it with `--version`. The tests are run on a Mac by hand
+  (`cargo test --locked` in `app/`).
+- No check opens a window or a library in a packaged program. The checks of the `Package` workflow
+  start the packaged program with `--version` only, which ends before a window opens. The windows
+  of the app are drawn and photographed by `verify:app`, which runs a debug build.
+- Cloud Sync (experimental) is checked by the step `Cloud` of `verify:app`, against a plain folder
+  that stands in for the desktop folder of Dropbox. It is not checked against a real provider.
 
 ## Repository hygiene
 
-- Do not commit generated binaries, databases, credentials, local settings, screenshots, audit
-  captures, build caches, or extracted third-party application source.
-- Product and test assets live under an explicit asset or fixture directory and carry provenance
-  and license information when Picto did not create them.
-- Third-party runtimes are fetched from pinned revisions or release URLs, verified where publisher
-  digests exist, and accompanied by version-exact notices.
-- Release commits must contain no personal absolute paths, private-key markers, or reference-source
-  references. Run the source audit before publishing history.
+- Do not commit generated programs, databases, credentials, local settings, screenshots, captures
+  of an audit, build caches, or the extracted source of another application.
+- Product assets and test assets are in a folder that the source audit names as a folder of assets
+  or fixtures. An asset that Picto did not create has its origin and its license written beside
+  it.
+- A program or a library that is downloaded for a build is taken from a fixed revision or a fixed
+  release address, and is compared with the digest that its publisher gives where there is one.
+- A commit of a release holds no home-folder path, no private key and not the name of the
+  reference product. The source audit checks that. Run it before history is published.
 
-## Acceptance integration handoff (2026-10-11)
+## Packages
 
-- PR #88 passed review and CI and was merged into `dev` as `18e22a82` after user approval.
-- PR #90 passed review and CI and was merged into `dev` as `747e5204`. This accepted commit is
-  the base for `0.6.16-alpha`; the user's uncommitted work on `main` is excluded.
-- The user smoke-tested the merged debug build. The detailed manual evidence below predates the
-  final review fixes; it must not be presented as a fresh full manual pass on the release head.
-- All available macOS manual rechecks passed against acceptance code commit `df9b2046`. The evidence
-  index is `artifacts/acceptance/RESULTS.json`, with the final captures under
-  `artifacts/acceptance/round7/`.
-- The Google Drive check used a real remote round trip: all 502 uploaded, downloaded, and restored
-  blobs matched by hash. Dropbox was not checked because it is not installed on the test host.
-- Windows memory remains untested because the acceptance host is macOS. This is an unavailable
-  platform check, not a test pass. The user accepted both Windows manual testing and Dropbox
-  remote delivery as unverified exceptions for this acceptance. Automated CI and package gates
-  are not waived.
-- The six-filter UI check used Date Imported because the UI has no capture-date control;
-  `captured_at` remains covered by runtime evidence only.
-- Picto Pack reimport through the native chooser restored conflicting metadata without changing
-  existing undo or redo entries. The always-rendered, hidden CloudSyncBar fallback text was not an
-  active import indicator; native completion, modal closure, restored notes, and exact history state
-  are recorded in `round7/pack-history-fixed.json`.
+`app/package.sh` builds the release program and makes the package for the system it runs on.
+[`app/README.md`](../app/README.md), section 3, says what each package holds and what the script
+needs. The `Package` workflow (`.github/workflows/package.yml`) is the only workflow that builds
+packages. It runs the script on macOS 26, Ubuntu 24.04 and Windows and uploads the results as the
+artifacts `picto-macos-arm64`, `picto-linux-x64` and `picto-windows-x64`.
 
-## 0.6.16-alpha local preparation
+A release publishes these files:
 
-- `release/0.6.16-alpha` is based on accepted `dev` commit `747e5204`. Its additional
-  changes are version synchronization, release notes and the release-only packaging fix in #92.
-- Fresh `npm run alpha:verify` passed: 202 frontend/Electron test files, 1,340 tests passed and
-  one skipped; 633 Rust tests passed and four ignored; source audit, localization (1,482 messages
-  across eight languages), TypeScript, strict Clippy and command parity passed. Local Rust is
-  1.96; the accepted dev CI also passed with its pinned toolchain.
-- The initial sandboxed attempt could not bind local HTTP fixtures or access macOS network
-  configuration; the complete gate passed after rerunning with those permissions. No tests were
-  disabled to obtain the pass.
-- `npm run build` passed, including viewer assets and generated license notices.
-  `npm audit --omit=dev` reported zero known vulnerabilities. Non-failing output included React
-  `act(...)` warnings in GroupSurface/ScopeTitle tests and Vite's large-chunk warning.
-- The release branch was pushed at `2afd34c6`. Alpha Gate run `38154619086` passed verification,
-  all three package jobs and packaged smoke tests, but log inspection found an unacceptable
-  macOS ad-hoc signing and flat-icon fallback. Those artifacts are not publication candidates.
-  Issue #92 makes these requirements fail closed; all three platform gates must pass again on
-  the corrected release head. No tag or publication has been created.
-- The first corrected gate (`38156887199`, `adeb0fc4`) passed Windows/Linux packaging and smoke,
-  but macOS failed to resolve the signing identity and later timed out. The temporary keychain
-  must also be on the user's search list for certificate-chain resolution, then removed from it
-  during cleanup. A bounded signing preflight now checks actual key usability before packaging;
-  bounded keychain operations prevent cleanup from hanging until the CI timeout.
-- Gate `38159701393` proved the real signing preflight and app signature work. It exposed an
-  incorrect certificate-extraction argument and a macOS admin-trust removal prompt. The verifier
-  uses the joined `--extract-certificates=prefix` form, covered by a real macOS read-only test;
-  hosted VM disposal now owns the public trust record while private keychains are still deleted.
-- Issue reconciliation is tracked in #91; partial fixes and deferred work remain open rather than
-  being closed merely because the integration merged.
+| System | Files |
+|---|---|
+| macOS | `Picto-<version>-arm64.dmg`, `Picto-<version>-arm64-mac.zip`, `latest-mac.yml` |
+| Windows | `Picto-Setup-<version>.exe`, `latest.yml` |
+| Linux | `Picto-<version>.AppImage`, `latest-linux.yml` |
 
-## Publication gates
+The `.yml` files are the update feeds. An installed Picto reads the feed of its system from the
+newest release and finds its update there. Picto 0.6.19 and earlier, which were built with
+Electron, read the same feeds under the same names, and the app has the same name and the same id
+(`com.picto.desktop`) as those versions. A package therefore installs over such a version as its
+next version.
 
-- The accepted release icon is wired for macOS, Windows, and Linux. macOS packages consume the
-  generated native `Picto.icon` layer bundle on an Apple Silicon macOS 26 runner; Apple `actool`
-  compiles its Liquid Glass asset catalog and legacy ICNS representation during packaging.
-- Public Apple Developer ID signing and notarization are not part of the alpha gate. The macOS
-  alpha packages are signed with the project's private self-signed certificate so packaged
-  binaries have one stable identity. Packaging requires a valid signing identity, then verifies
-  the final app's signature, matching leaf certificate and compiled icon catalog before archiving.
-  Self-signed certificate trust is installed only on disposable GitHub-hosted macOS runners and
-  expires with that VM. Private keys and temporary keychains are deleted and the original keychain
-  search list is restored by the build. Local and self-hosted machines must already trust the identity.
-- Pull requests to `release/**` branches run verification. Release-branch pushes run verification
-  and all three platform package/smoke jobs in parallel; manual runs can also exercise them. Tags
-  only publish the exact artifacts from a successful release-branch push for the same commit; they
-  never rebuild. Branch and pull-request rules are in [CONTRIBUTING](../CONTRIBUTING.md).
-- Every subscription provider is implemented by the native Rust source crate. Release packages
-  contain no Python runtime, gallery-dl, OF-Scraper, bridge script, or provider-owned history store.
-- Require TypeScript, the production build, the complete frontend and Rust test suites, command
-  parity, strict Clippy, and source/artifact audits on the candidate. Record non-failing warnings
-  separately rather than treating a passing exit code as a warning-free run.
-- Check current production dependency advisories with `npm audit --omit=dev` and run the source
-  license and repository-hygiene audit; packaged artifact licenses remain part of the platform gate.
-- Keep the release candidate in reviewed commits and its worktree clean; generated build output
-  remains untracked.
-- The public branch and tags have been rewritten to remove audited personal absolute paths,
-  reference-product names, copied audit material, and generated captures. Keep the local lineage on
-  that scrubbed base before publishing further work so removed objects are not reintroduced.
+What the `Package` workflow checks on each system:
 
-## GPUI packages
+- macOS: the archive is unpacked into a new folder and the disk image is mounted, and the program
+  in each is run with `--version`. The unpacked app must pass `codesign --verify --deep --strict`
+  and hold the compiled icon catalog.
+- Linux: the AppImage is unpacked and the program is run with `--version`. Then the AppImage
+  itself is run with `--version` in a container that holds only Ubuntu 24.04 and the libraries
+  that the user guide names. The app's own reader checks the update feed against the AppImage.
+- Windows: the installer is run silently as a first installation. The folder, the registry values,
+  the shortcuts and the file association are checked, the installed program is run with
+  `--version`, the installer is run again as an upgrade, and the uninstaller must remove
+  everything. Then the installer of Picto 0.6.19-alpha is run, this installer upgrades that
+  installation, and the folder must then hold this app and none of the old version's files.
+- On every system, the package audit checks that the package folder holds exactly the files of
+  the table above, and that the update feed gives the version and each file's size and SHA-512.
 
-The GPUI app (`app/`) is the next version of Picto. Its packages take the place of
-the Electron app's packages: they have the same file names (`Picto-<version>-arm64.dmg`,
-`Picto-<version>-arm64-mac.zip`, `Picto-Setup-<version>.exe`, `Picto-<version>.AppImage`), the
-same update feeds (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`), and the app has the same
-name and the same id (`com.picto.desktop`), so a package installs over an installed Electron app.
+Signing:
 
-They are not part of a release yet. Releases are still built from the Electron app by the Alpha
-Gate, as described below. Making the releases from the GPUI packages is a later change; until then
-the facts in this section describe packages that are built for trying out.
-
-How they are built:
-
-- `app/package.sh` builds the release program and makes the package for the system it
-  runs on. `app/README.md`, section 3, says what each package holds and what the
-  script needs.
-- The workflow `.github/workflows/gpui-package.yml` runs the script on macOS 26, Ubuntu 24.04 and
-  Windows, checks each package on that system, and uploads the packages as the artifacts
-  `picto-macos-arm64`, `picto-linux-x64` and `picto-windows-x64`. Those are the names the Alpha
-  Gate uses, so that a later change can make the release from these jobs without renaming
-  anything. The workflow starts by itself for a pull request into `dev` that changes the
-  packaging, and by hand for anything else.
-- The checks start the packaged program with `--version` only. They do not open a window or a
-  library. The Electron app's packaged smoke test (required gate 4) has no counterpart for the
-  GPUI packages yet, and the workflow uploads no smoke report.
-
-Signing follows the policy of the Electron packages, stated under "Publication gates":
-
-- macOS: the app is signed with the project's own self-signed certificate "Picto Code Signing"
-  when the secrets `MAC_CSC_LINK` and `MAC_CSC_KEY_PASSWORD` are present. The same code imports
-  the certificate and checks the signature for both apps (`scripts/mac-signing.mjs`). An ad-hoc
-  signature is never accepted in its place: without the secrets the app is left unsigned, and the
-  script prints that it is not signed with the project's certificate. Such a package must not be
-  published. The app is not notarized, because the project has no Apple Developer ID.
+- macOS: the app is signed with the project's own self-signed certificate "Picto Code Signing",
+  from the secrets `MAC_CSC_LINK` and `MAC_CSC_KEY_PASSWORD` (`scripts/sign-mac-app.mjs`,
+  `scripts/mac-signing.mjs`). An ad-hoc signature is never accepted in its place. In a release
+  the macOS job fails without the certificate, and it fails without Xcode 26 or later, whose
+  `actool` compiles the icon `build/Picto.icon`. Before the archive and the disk image are made,
+  the script checks the app's signature, the certificate it was made with, and the compiled icon
+  catalog. Outside a release, a run without the secrets leaves the app unsigned and prints that
+  it is not signed; such a package must not be published.
+- The self-signed certificate is trusted only on a GitHub-hosted macOS runner, which is thrown
+  away after the job. The build deletes the private key and its temporary keychain and puts the
+  keychain search list back as it was. A local or self-hosted machine must already trust the
+  certificate.
+- The app is not notarized, because the project has no Apple Developer ID.
 - Windows and Linux: the installer and the AppImage are not signed. The project has no Windows
   code-signing certificate.
 
-What a user sees when starting a package for the first time, and what to do, is written for users
-in [Getting Started](user-guide/getting-started.md). In short:
+What a user sees when starting a package for the first time is written for users in
+[Getting Started](user-guide/getting-started.md). In short:
 
 - macOS: a downloaded Picto is not notarized, so macOS refuses to open it the first time and
   offers no button to open it. The user allows it once under System Settings › Privacy &
@@ -164,108 +112,142 @@ in [Getting Started](user-guide/getting-started.md). In short:
   because it is not signed. The user chooses **More info** and then **Run anyway**. Where Smart
   App Control is on, Windows blocks the installer and offers no way to run it.
 - Linux: the AppImage is a file the user makes executable. Nothing warns. It needs GTK 3 and
-  WebKitGTK 4.1 on the system, which the Electron app's AppImage did not.
+  WebKitGTK 4.1 on the system.
 
-What a user who upgrades from the Electron app keeps and loses:
+What a user who upgrades from Picto 0.6.19 or earlier keeps and loses:
 
 - Kept: every library, and everything that is stored in a library, which includes the
   application settings. The application data folder (`picto` in the per-user application data
-  folder), with the downloaded AI models. The site logins, which both apps keep in the system
-  keychain under the same names.
-- Listed again, opened by the user: the GPUI app copies the Electron app's list of libraries
-  once, on its first start. It does not open the library that the Electron app had open last. The
-  user picks a library from the list, and the app asks once per library whether it may open that
-  library directly.
-- Not carried over: what the Electron app kept per machine in its window's storage, which is the
-  window's place and size, the widths of the sidebar and the inspector, the saved filters, the
-  recent tags and folders, the keyboard preset and the changed shortcuts, the language and the
-  interface zoom. The GPUI app keeps these in its own file, `state.json` in the folder
+  folder), with the downloaded AI models. The site logins, which are kept in the system keychain
+  under the same names.
+- Listed again, opened by the user: the app copies the older version's list of libraries once,
+  on its first start. It does not open the library that was open last. The user picks a library
+  from the list, and the app asks once per library whether it may open that library directly.
+- Not carried over: what the older version kept per machine in its window's storage, which is
+  the window's place and size, the widths of the sidebar and the inspector, the saved filters,
+  the recent tags and folders, the keyboard preset and the changed shortcuts, the language and
+  the interface zoom. The app keeps these in its own file, `state.json` in the folder
   `Picto GPUI` of the per-user configuration folder, and starts with the defaults.
+- On Linux, the AppImage of Picto 0.6.19 and earlier needed no libraries of the system. This
+  AppImage needs the ones named above.
+
+Open before the first release that is built from these packages:
+
+- The packages hold neither `LICENSE` nor `THIRD_PARTY_LICENSES`, and no license texts of the
+  crates the app is built from.
+- No `*.blockmap` files are made. An updater that does not find one downloads the whole package.
+- No package has been installed and used with a library on any system, and no update has been
+  installed from a published feed. [`app/README.md`](../app/README.md), section 7, lists what
+  was not verified.
+
+## Publication rules
+
+- A pull request into a `release/**` branch runs the `verify` workflow. A push to a release
+  branch runs the `verify` workflow and the `Package` workflow for the three systems side by
+  side. A tag publishes the packages that the push of the same commit to its release branch
+  built. A tag builds nothing. The rules for branches and pull requests are in
+  [CONTRIBUTING](../CONTRIBUTING.md).
+- Every subscription source is implemented by the Rust crate `picto-sources`. A package holds no
+  Python runtime, no gallery-dl, no OF-Scraper, no bridge script and no history store of a
+  provider.
+- A check that passes with warnings is recorded with its warnings. An exit code of 0 is not
+  reported as a run without warnings.
+- The release candidate consists of reviewed commits, and its worktree is clean. Build output is
+  not tracked.
+- The public branches and tags were rewritten once to remove personal absolute paths, names of
+  the reference product, copied audit material and generated captures. Base further work on that
+  rewritten history, so that the removed objects are not published again.
 
 ## Release procedure
 
 ### Prepare locally, then review
 
-Preparation and publication are separate actions. When asked to prepare a release, make the local
-commits and notes, report the outstanding gates, and stop for review. Do not push a release branch
-or tag until authorized: the branch starts packaging, and the tag starts publication.
+Preparing a release and publishing it are separate actions. Preparing means making the local
+commits and the release notes and reporting which gates are still open. It ends there. A release
+branch or a tag is pushed only after that work was reviewed and the push was approved, because
+pushing the branch starts the packaging and pushing the tag starts the publication.
 
-Use the Git CLI to inspect `status`, `log`, and remote refs before choosing the next version.
-`git ls-remote --heads --tags origin` can verify refs even if GitHub CLI authentication is unavailable.
-Do not infer the remote state from local tags alone. Preserve unrelated work and never stage an
-entire worktree blindly; exclude synthetic libraries, benchmark output and local investigation files.
+Before choosing the next version, look at `git status`, `git log` and the remote's branches and
+tags (`git ls-remote --heads --tags origin`). Local tags alone do not show what the remote holds.
+Leave unrelated work alone, and stage only the files of the release: no generated libraries, no
+benchmark output and no files of a local investigation.
 
-Implementation lands on `dev` through reviewed pull requests ([CONTRIBUTING](../CONTRIBUTING.md)).
-`main` holds released code only. Release preparation happens on `release/<version>`, cut from the
-accepted `dev` commit (or from `main` for a hotfix). Never rewrite published history to prepare a release.
+Implementation reaches `dev` through reviewed pull requests ([CONTRIBUTING](../CONTRIBUTING.md)).
+`main` holds released code only. A release is prepared on `release/<version>`, which is cut from
+the accepted commit of `dev`, or from `main` for a hotfix. Published history is never rewritten
+to prepare a release.
 
-Synchronize the application version in all of these files without updating unrelated dependencies:
+The version is written in these places. Change all of them to the new version, and change no
+other dependency:
 
-- `package.json` and both root-package version entries in `package-lock.json`;
-- `native/picto-node/package.json` and both root-package entries in its `package-lock.json`;
-- `core/Cargo.toml`, `native/picto-node/Cargo.toml`, and `picto-sources/Cargo.toml`;
-- the corresponding three application package entries in `Cargo.lock`.
+- `package.json`, and the two entries of the root package in `package-lock.json`. The app's
+  build reads the version from `package.json`.
+- `core/Cargo.toml` and `picto-sources/Cargo.toml`.
+- The entries of `picto_core` and `picto_sources` in `Cargo.lock` and in `app/Cargo.lock`.
 
-`picto-library` has its own crate version; do not bump it merely to match the desktop release.
-The pinned Electron runtime version is also independent of the Picto application version.
+`picto-library` and the app's crate (`app/Cargo.toml`) have versions of their own, which do not
+follow the release.
 
-Create `docs/<version>-release-notes.md` with a `# Picto <version>` heading and short `* ` bullets,
-matching previous releases. Describe user-visible changes, not implementation details, issue IDs,
-test counts or development history. Mention material upgrade/startup tradeoffs plainly. Preserve
-older version notes; replace a temporary next-release draft with the versioned file. This one file
-is bundled for offline What's New and used as the GitHub release body.
+Create `docs/<version>-release-notes.md` with the heading `# Picto <version>` and short lines
+that start with `* `, as the notes of the earlier versions have. The notes describe what a user
+sees: no implementation details, no issue numbers, no test counts. Say plainly when an upgrade
+changes what a user has or how the app starts. Keep the notes of older versions. The app's build
+includes this file, the app shows it as What's New, and the release on GitHub uses it as its
+text.
 
-Run the source release audit and `git diff --check` on the complete intended commit, including new
-source files. Record which implementation checks already passed and which remain unverified; do
-not claim a fresh full-suite pass from an earlier report. Local release-profile checks can diagnose
-a Windows debug-toolchain problem, but do not waive CI's configured checks.
+Run the source audit and `git diff --check` on the complete commit, including new files. Record
+which checks passed on this commit and which were not run. A result from an earlier commit is
+not reported as a result for this one. A local check does not replace a check that CI is set up
+to run.
 
-For changes to library opening or switching, finish the approved bounded packaged-app smoke on
-synthetic data: open, switch, cancel/quit during loading, and reopen. Record process ownership,
-deadlines and results. The standard alpha smoke is not a substitute for those interaction cases.
-Check normal startup separately from switching: the main window currently appears after the initial
-native open, so switching progress does not establish visible cold-start progress.
+For a change to how a library is opened or switched, also check these four cases in a packaged
+build on a generated library: opening, switching, quitting while a library loads, and opening
+again. Record which process held the library, how long each step was given, and the result. The
+checks of the `Package` workflow do not cover these cases.
 
-At the review handoff, provide the local commit IDs, proposed version, notes, remaining checks and
-whether anything has been pushed. Test consolidation is not a reason to restart a performance
-campaign; preserve meaningful correctness and data-safety coverage.
+Hand over for review: the ids of the local commits, the proposed version, the release notes, the
+checks that are still open, and whether anything was pushed.
 
 ### Run the release gate and publish after approval
 
-1. Cut `release/<version>` from the accepted `dev` commit and push it. Commit the synchronized
-   package versions and the versioned notes on that branch. Keep issue references in commits, not
-   release notes. Every push to the branch runs the Alpha Gate: renderer tests, Rust lint/tests, and
-   macOS/Windows/Linux packaging and smoke together. Every job must pass on the final head.
-2. After the final release-branch gate passes, open a pull request from `release/<version>` into `main`
-   and merge it with a **merge commit**
-   (squash is disabled for `main`), so the gated release commit stays in `main`'s ancestry.
-   The required `branch-policy` check verifies the exact package/smoke artifacts before merge.
-   If the PR was opened before the gate finished, rerun its CI after the gate succeeds.
-3. Tag the release-branch head (not the merge commit) as `v<version>` and push the tag. Publication
-   checks the matching release branch, main ancestry, successful gate commit, and all three
-   package/smoke artifact sets. It downloads those package artifacts by ID with digest verification
-   and attaches the bundled notes.
-4. Open a pull request from `main` into `dev` and merge it with a merge commit, so release-branch
-   fixes and the version bump return to development. Release branches are kept as the release record.
+1. Cut `release/<version>` from the accepted commit of `dev` and push it. Commit the changed
+   versions and the release notes on that branch. Issue references belong in commits, not in the
+   release notes. Every push to the branch runs the Alpha Gate: the `verify` workflow and the
+   `Package` workflow for macOS, Windows and Linux. Every job must pass on the final head.
+2. When the gate has passed on the final head, open a pull request from `release/<version>` into
+   `main` and merge it with a **merge commit**. Squash merges are switched off for `main`, so
+   that the commit that passed the gate stays in `main`'s ancestry. The required check
+   `branch-policy` looks for that commit's successful gate and its three package artifacts
+   before the merge. If the pull request was opened before the gate finished, run its CI again
+   after the gate has passed.
+3. Tag the head of the release branch, not the merge commit, as `v<version>` and push the tag.
+   The publication job checks that the tag is the head of its release branch, that the commit is
+   in `main`, that the gate of that commit passed, and that its three package artifacts exist
+   (`scripts/ci/find-release-gate.mjs`). It downloads those artifacts by their ids, compares
+   their digests, and creates the release with the files and the release notes.
+4. Open a pull request from `main` into `dev` and merge it with a merge commit, so that the
+   fixes made on the release branch and the new version reach `dev`. Release branches are kept.
 
-A hotfix follows the same steps with `release/<version>` cut from `main` instead of `dev`.
+A hotfix follows the same steps, with `release/<version>` cut from `main`.
 
-No test, lint, audit, signing requirement, or packaged smoke check is skipped to shorten the gate.
-Parallel packaging can spend runner time on a candidate that fails verification, but avoids adding
-verification time to the packaging critical path. Installers are built once, before tagging.
+No test, lint, audit, signing requirement or package check is skipped to make the gate shorter.
+The packages are built while the verification runs, so a candidate that fails verification has
+used runner time for packages that are thrown away. The packages are built once, before the tag.
 
-If a gate fails, fix it on the release branch through a pull request (and carry the fix to `dev`
-in step 4), then wait for the new gate. Rerun failed jobs for transient runner failures. If publication fails, rerun only the
-tagged publication job; do not move a published tag or rebuild different binaries under it. Expired
-gate artifacts require rerunning the release-branch gate at the same commit before retrying publication.
+If a gate fails, fix it on the release branch through a pull request, and carry the fix to `dev`
+in step 4. Then wait for the new gate. Run a failed job again only when the failure came from
+the runner and not from the code. If the publication fails, run only the publication job of the
+tag again. Do not move a published tag and do not build other files under it. If the artifacts
+of the gate have expired, run the gate of the release branch again at the same commit before
+publishing.
 
-Inspect the exact Alpha Gate run in GitHub Actions (or the GitHub CLI when authenticated). A manual
-workflow run is useful for diagnosis but is not the qualifying release-branch push run required by
-`scripts/ci/find-release-gate.mjs`. The tag must match the package version, the release branch must
-point to that same commit, and the commit must be on main. All three package artifacts and all three
-smoke reports must exist and be unexpired. Never create a separate manual release with unverified
-local installers or use automatic developer-oriented notes instead of the versioned notes file.
+Look at the exact run of the Alpha Gate on GitHub. A run started by hand helps to find a fault,
+but it is not the run that `scripts/ci/find-release-gate.mjs` requires, which is the run for the
+push of the release branch. The tag must match the version in `package.json`, the release branch
+must point to the same commit, and the commit must be in `main`. The three package artifacts
+must exist and must not have expired. Do not create a release by hand from files that were built
+locally, and do not use notes that GitHub generates in place of the release notes file.
 
-After publication, verify the release body, versioned installers and updater manifests for every
-platform. Keep the successful run and smoke-report links with the release handoff. Do not advertise
-platform-specific performance unless it was measured on that platform.
+After the publication, check the release's text, the files of each system and the three update
+feeds. Keep the link to the successful run with the hand-over of the release. Do not state how
+fast the app is on a system on which that was not measured.

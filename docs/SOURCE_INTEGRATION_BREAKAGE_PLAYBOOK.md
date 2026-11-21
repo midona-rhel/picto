@@ -25,8 +25,8 @@ Python processes, sidecars, packaged binaries, databases, or fallback execution 
 - `core/src/native_source.rs`: adapter execution and canonical ingest handoff.
 - `core/src/subscription_runtime.rs` and `core/src/library_subscription_state.rs`: durable runs,
   settlement, reset, recovery, and counters.
-- `electron/windows/authSites.mjs`, `authSessions.mjs`, and `externalOnlyFansAuth.mjs`: interactive
-  authentication and credential capture.
+- `app/src/logins/` and `app/src/platform/login_window/`: the sign-in window, the rules that say
+  when a login to a site is complete, and the capture of the credentials.
 - `picto-sources/tests/fixtures/<site>/`: sanitized provider responses used by parser tests.
 - `core/tests/subscription_source_readiness.rs`: fresh-library live certification.
 
@@ -207,7 +207,7 @@ A provider repair is complete only when the relevant evidence exists:
 
 - a focused sanitized fixture reproduces the upstream response shape;
 - parser and cursor tests cover the failure and the end boundary;
-- authentication changes have Electron session tests and preserve credential scoping;
+- authentication changes have tests in `app/src/logins/` and preserve credential scoping;
 - a fresh-library run materializes the expected media and blobs;
 - restart continues from the last settled post;
 - reset clears native run/cursor history and starts discovery from the beginning, while canonical

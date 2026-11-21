@@ -3,10 +3,12 @@ Picto Third-Party Software Notices
 
 Picto is licensed under the MIT License. See LICENSE.
 
-This file identifies separately distributed runtimes and prominent bundled assets. Every release
-also contains generated, version-exact notices for the JavaScript and Rust dependency graphs under
-`resources/app.asar/dist/licenses/`. Those generated notices include the license files published in
-the locked package sources.
+This file identifies the programs that a Picto package holds beside the app, the prominent parts
+that are compiled into the app, and the assets that it bundles. The app is built from the Rust
+crates that `app/Cargo.lock` pins, and each of those crates declares its own license.
+
+TODO: the packages hold neither this file nor the license texts of the crates the app is built
+from. A package has to hold them before it is published.
 
 
 FFmpeg / FFprobe
@@ -18,21 +20,40 @@ Sources:
   Windows: https://github.com/GyanD/codexffmpeg/releases/tag/8.0.1
 Corresponding source: https://github.com/FFmpeg/FFmpeg/tree/release/8.0
 
-Picto invokes FFmpeg and FFprobe as separate subprocesses. Release downloads are pinned and checked
-against publisher-provided SHA-256 digests by `scripts/download-ffmpeg.sh`. The selected builds may
+Picto runs FFmpeg and FFprobe as separate programs, which a package holds beside the app. The
+downloads are pinned and checked against the SHA-256 digests that the publishers provide, by
+`scripts/download-ffmpeg.sh`. The selected builds may
 contain additional GPL/LGPL/BSD/MIT/ISC/MPL components; the build publisher's configuration and
 license inventory are authoritative for the exact archive.
 
 
 Ruffle
 ------
-Version: 0.5.0
+Version: the revision of the Ruffle repository that `app/Cargo.toml` pins
 License: MIT OR Apache-2.0
 Source: https://github.com/ruffle-rs/ruffle
 
-The exact Ruffle JavaScript/WASM runtime is copied from the pinned NPM package. Its published MIT
-and Apache-2.0 license files are copied with the runtime and are also included in generated NPM
-notices.
+Ruffle's Rust crates are compiled into the app and play Flash files. The license texts that Ruffle
+publishes are in `app/assets/LICENSE-Ruffle.md`.
+
+
+GPUI
+----
+Version: 0.3.12 of the crates `gpui-pre`, with the changes that `app/vendor/README.md` lists
+License: Apache-2.0
+Source: https://github.com/zed-industries/zed
+
+GPUI is the user interface framework that the app is written on. Six of its crates are in
+`app/vendor/` with changes. The text field in `app/src/ui/text_input/` is adapted from an example
+of GPUI 0.2.2. The license text is in `app/LICENSE-gpui`.
+
+
+Tabler Icons
+------------
+License: MIT
+Source: https://github.com/tabler/tabler-icons
+
+The sidebar's icons are Tabler Icons. The license text is in `app/assets/LICENSE-tabler`.
 
 
 Optional AI models
@@ -53,23 +74,13 @@ DanbooruTagQuery/DINOv3 remains developer tooling only and is excluded from the 
 until Picto implements the DINOv3 agreement acceptance and retention requirements.
 
 
-Geist
------
-Version: 1.7.2
-License: SIL Open Font License 1.1
-Source: https://github.com/vercel/geist-font
-
-Picto bundles the Geist Sans variable webfont for Windows and Linux. The published license is
-included at `src/shared/assets/fonts/LICENSE-Geist.txt` and copied into release notices.
-
-
 Fira Mono
 ---------
 License: SIL Open Font License 1.1
 Source: https://github.com/mozilla/Fira
 
-Picto bundles Fira Mono for compact inspector property values. The published license is included
-at `src/shared/assets/fonts/LICENSE-FiraMono.txt` and copied into release notices.
+Picto bundles Fira Mono for text in a fixed-width font, such as the values in the inspector. The
+published license is in `app/assets/LICENSE-FiraMono.txt`.
 
 
 Roboto
@@ -77,17 +88,12 @@ Roboto
 License: SIL Open Font License 1.1
 Source: https://github.com/google/fonts/tree/main/ofl/roboto
 
-Picto bundles Roboto under an inspector-only family name to reproduce the compact reference
-metrics without changing the application's SF Pro/Geist UI stack. The published license is
-included at `src/shared/assets/fonts/LICENSE-Roboto.txt` and copied into release notices.
+Picto bundles Roboto in the weights regular, medium and semi-bold for the inspector's text. The
+published license is in `app/assets/LICENSE-Roboto.txt`.
 
 
-Generated dependency notices
+Licenses of the dependencies
 ----------------------------
-`npm run generate:license-notices` derives notices from `package-lock.json`, locked Cargo metadata,
-and the installed package/crate license files. `npm run release:audit` rejects dependencies without
-declared licenses, missing notice packaging, copied audit
-artifacts, local absolute paths, and other release hygiene failures.
-
-License expressions in generated notices are the package authors' declarations. A package's own
-license text controls if a summary here differs from it.
+`node scripts/release-audit.mjs` fails when a crate of the root Cargo workspace or an npm package
+of the build scripts declares no license. A crate's or a package's own license text applies if a
+summary in this file differs from it.

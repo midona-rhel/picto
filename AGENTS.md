@@ -76,7 +76,7 @@ Automated and human reviews of pull requests check these first:
   undo entry or with one that misses a touched root, tag, folder or order.
 - Smart folders, counts, Trash and selections stay correct after the change;
   query-wide selections (select-all, ranges) are resolved by the backend, never
-  from the renderer's loaded window.
+  from the items that the app has loaded.
 - Work on a library of 1M items with tags on 200k stays bounded: no full scans
   or per-item SQL inside a loop on interactive paths. Ask for a
   `library_ops_benchmark` row when a hot path changes.
