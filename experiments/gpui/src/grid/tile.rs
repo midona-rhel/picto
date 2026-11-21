@@ -1,6 +1,7 @@
-//! One grid tile: what it shows and how it is drawn (`drawBase.ts`), shared
-//! by the library's grid and a collection's editor, and the grid's own tile
-//! with the hit area that takes the pointer.
+//! One tile of the grid: what it shows and how it is drawn (`drawBase.ts`).
+//! [`tile_art`] draws a tile and is used by the library's grid and by a
+//! collection's editor. The library grid's own tile, further down, adds the
+//! area that receives the pointer.
 use super::prefs::ViewPrefs;
 use super::thumbnails::{Thumb, Thumbnails};
 use super::{Activated, GridView, MenuRequested, art, format, layout, marquee, reveal, selection};
@@ -12,12 +13,13 @@ use layout::ViewMode;
 use picto_library::query::RootSummary;
 use std::path::PathBuf;
 
-/// The canvas centres a tile's text rows on the middle of the font's em box
-/// (`textBaseline = 'middle'`) at fractional positions; GPUI centres the
-/// line's ascent and descent and lands half a point lower.
+/// The Electron canvas centres a tile's rows of text on the middle of the
+/// font's em box (`textBaseline = 'middle'`), at positions that are not whole
+/// pixels. GPUI centres the line's ascent and descent, which puts the text
+/// half a point lower.
 const CANVAS_TEXT_LIFT: f32 = -0.5;
 
-/// A tile name shaped in the grid's 13px UI font.
+/// Shapes a tile's name in the grid's 13px UI font.
 pub(super) fn name_line(text: &str, window: &Window) -> ShapedLine {
     crate::ui::shape_line(
         text.to_owned(),
@@ -28,13 +30,13 @@ pub(super) fn name_line(text: &str, window: &Window) -> ShapedLine {
     )
 }
 
-/// A tile name's width in the grid's 13px UI font.
+/// The width of a tile's name in the grid's 13px UI font.
 pub(super) fn name_width(text: &str, window: &Window) -> f32 {
     f32::from(name_line(text, window).width)
 }
 
-/// The item's aspect ratio when it is known. Audio without dimensions is
-/// drawn two to one.
+/// The item's width divided by its height, when its size is known. Audio that
+/// has no size is drawn twice as wide as it is tall.
 pub(super) fn aspect(item: &RootSummary) -> Option<f64> {
     match (item.width, item.height) {
         (Some(width), Some(height)) if width > 0 && height > 0 => {
@@ -45,28 +47,47 @@ pub(super) fn aspect(item: &RootSummary) -> Option<f64> {
     }
 }
 
-/// A visible tile, copied out of the session for the visible tiles only.
+/// One visible tile. Its data is copied out of the session, and only for the
+/// tiles that are visible.
 pub(super) struct TileData {
     /// The tile in the window's layout.
     pub index: usize,
     /// The item's place in the destination.
     pub ordinal: usize,
-    /// What it draws, placed in the whole destination's height.
+    /// What the tile shows. Its position is given within the full height of
+    /// the destination.
     pub look: TileLook,
 }
 
-/// Whether a tile letterboxes its media, and the media's rect inside the
-/// tile's image area. Only the grid mode letterboxes by choice; waterfall and
-/// justified tiles already have their item's shape. Video and audio always
-/// do. An item of unknown shape takes the whole area.
+/// Whether a tile shows the whole of its picture with empty space beside it
+/// (`true`), or fills its whole area with the picture and cuts off what does
+/// not fit (`false`). Also returns the rectangle the picture takes inside the
+/// tile's image area.
+///
+/// - In the grid mode with Fit Thumbnails on, pictures and videos fill the
+///   square tile.
+/// - In the grid mode with Fit Thumbnails off, everything is shown whole.
+/// - Waterfall and justified tiles already have their item's shape, so a
+///   picture fills them. A video is shown whole there, because its thumbnail
+///   can have another shape than the item (a rotated video).
+/// - Audio is always shown whole: its picture is a waveform, and filling the
+///   tile would cut off the waveform's two ends.
+///
+/// An item whose shape is not known takes the whole area.
 pub(super) fn media_rect(
     tile: &layout::Tile,
     item: &RootSummary,
     prefs: &ViewPrefs,
 ) -> (bool, (f32, f32, f32, f32)) {
     let image_height = tile.h - prefs.text_height();
-    let timed = item.mime.starts_with("video/") || item.mime.starts_with("audio/");
-    let contain = (prefs.mode == ViewMode::Grid && !prefs.fit_cover) || timed;
+    let grid = prefs.mode == ViewMode::Grid;
+    let contain = if item.mime.starts_with("audio/") {
+        true
+    } else if grid {
+        !prefs.fit_cover
+    } else {
+        item.mime.starts_with("video/")
+    };
     let rect = aspect(item)
         .filter(|_| contain)
         .and_then(|aspect| {
@@ -76,9 +97,10 @@ pub(super) fn media_rect(
     (contain, rect)
 }
 
-/// Places artwork of `size` (drawing units, `art::MARGIN` included) drawn at
-/// `scale`, centred on the tile's image area, inside the media rect at
-/// (`x`, `y`).
+/// Places a piece of artwork of `size` (in drawing units, `art::MARGIN`
+/// included), drawn at `scale`, so that it is centred on the tile's image
+/// area. `media` is the position of the media rectangle, which the artwork is
+/// placed inside.
 fn art_at(
     image: std::sync::Arc<Image>,
     size: (f32, f32),
@@ -102,22 +124,25 @@ pub(crate) struct TileLook {
     pub thumbnail: PathBuf,
     pub selected: bool,
     pub thumb: Thumb,
-    /// The original, decoded for the tile's size, once it is worth having.
+    /// The original, decoded at the tile's size, when the tile is larger than
+    /// its thumbnail.
     pub original: Option<std::sync::Arc<RenderImage>>,
-    /// The image's and its placeholder's opacity, as the reveal has them.
+    /// The opacity of the picture and of its placeholder during the fade-in.
     pub alphas: (f32, f32),
-    /// The pointer rests on the image: the magnifier marks it.
+    /// Whether the pointer is on the picture. The magnifier is drawn on it
+    /// then.
     pub magnifier: bool,
-    /// Grayscale (`gridGrayscaleAtom`): the whole tile without colour, its
-    /// placeholder included.
+    /// Grayscale (`gridGrayscaleAtom`): the whole tile is drawn without
+    /// colour, its placeholder included.
     pub grayscale: bool,
 }
 
-/// One grid tile, drawn to the rules of the Electron canvas grid
-/// (`drawBase.ts`): the media rect, its hairline ring, badges inside the
-/// rect, the selection stroke outside it, and optional text rows below. The
-/// library's grid and a collection's editor (`CanvasGrid` both) draw their
-/// tiles with it; each adds the hit area that takes the pointer.
+/// Draws one grid tile by the rules of the Electron app's canvas grid
+/// (`drawBase.ts`): the media rectangle, the thin line around it, the badges
+/// inside it, the selection outline outside it, and the optional rows of text
+/// below it. The library's grid and a collection's editor (both `CanvasGrid`
+/// in the Electron app) draw their tiles with it. Each adds its own area that
+/// receives the pointer.
 pub(crate) fn tile_art(
     look: TileLook,
     prefs: &ViewPrefs,
@@ -142,11 +167,12 @@ pub(crate) fn tile_art(
     let audio = item.mime.starts_with("audio/");
     let font = item.mime.starts_with("font/");
     let timed = item.mime.starts_with("video/") || audio;
-    // Letterboxed media keeps its own rect inside the tile; badges and the
-    // selection stroke follow that rect, not the tile.
+    // Media that is shown whole keeps its own rectangle inside the tile. The
+    // badges and the selection outline follow that rectangle, not the tile.
     let (contain, (x, y, w, h)) = media_rect(&tile, &item, prefs);
-    // The image fades in over its dominant colour, then that colour fades
-    // away beneath it, which matters for images with transparency.
+    // The picture fades in over its dominant colour, and then that colour
+    // fades out under it. The second step matters for pictures with
+    // transparent parts.
     let placeholder = item
         .palette
         .first()
@@ -179,7 +205,8 @@ pub(crate) fn tile_art(
                     .border_2()
                     .border_color(rgb(theme::GRID_SELECTION)),
             )
-            // A hairline of the app background between stroke and image.
+            // A thin line in the app's background colour between the selection
+            // outline and the picture.
             .child(
                 div()
                     .absolute()
@@ -202,8 +229,8 @@ pub(crate) fn tile_art(
         .rounded(px(theme::TILE_RADIUS));
     let area = (tile.w, image_height);
     if font {
-        // A font has no thumbnail: its card shows at once, centred on
-        // the tile and at most 72% of it.
+        // A font has no thumbnail. Its card is shown at once, centred on the
+        // tile and at most 72% of the tile's size.
         let art = art::Art::for_color(art, theme.surface_2());
         let mark = (tile.w * 0.72).min(image_height * 0.72).min(art::FONT_SIZE);
         let side = art::FONT_SIZE + 2. * art::MARGIN;
@@ -218,8 +245,8 @@ pub(crate) fn tile_art(
                 (x, y),
             ));
     } else if thumb == Thumb::Failed {
-        // The torn page, at most 64% of the tile's height, on the plain
-        // placeholder colour.
+        // The torn-page artwork for a thumbnail that could not be made, at
+        // most 64% of the tile's height, on the plain placeholder colour.
         let art = art::Art::for_color(art, theme.surface_2());
         let (art_width, art_height) = art::BROKEN_SIZE;
         let mark = (image_height * 0.64).min(art_height);
@@ -232,24 +259,24 @@ pub(crate) fn tile_art(
         ));
     } else {
         media = media.child(layer().bg(placeholder).opacity(placeholder_alpha));
-        // The original, where the tile outgrew its thumbnail, takes the
-        // thumbnail's place with no second reveal.
+        // When the tile is larger than its thumbnail, the original takes the
+        // thumbnail's place without a second fade-in.
         let image = match original {
             Some(original) => img(original),
             None => img(thumbnail).image_cache(thumbnails),
         }
         .size_full()
         .rounded(px(theme::TILE_RADIUS))
-        // A thumbnail of another shape than its item (cover art, a
-        // rotated video) is fitted, not cropped.
+        // A thumbnail whose shape differs from its item's (cover art, a
+        // rotated video) is shown whole and not cut.
         .object_fit(if contain {
             ObjectFit::Contain
         } else {
             ObjectFit::Cover
         });
         media = if audio {
-            // Audio: a faint tint, and the cover art in grey at half
-            // strength over it.
+            // Audio: a faint tint, with the cover art over it in grey at half
+            // strength.
             media
                 .child(
                     layer()
@@ -345,9 +372,11 @@ pub(crate) fn tile_art(
                 .flex()
                 .justify_center()
                 .child(
-                    // The name truncates to the tile less 8px as the
-                    // canvas measures it; selected, it is white on a pill
-                    // of the selection colour 3px wider either side.
+                    // The name is cut with an ellipsis at the tile's width
+                    // less 8px, as the canvas measures it. On a selected tile
+                    // the name is white on a rounded background in the
+                    // selection colour, which is 3px wider than the name on
+                    // each side.
                     div()
                         .px(px(3.))
                         .rounded(px(2.))
@@ -363,7 +392,7 @@ pub(crate) fn tile_art(
                             } else {
                                 item.name.clone()
                             };
-                            // Show Extension adds `.EXT` after it.
+                            // Show Extension adds `.EXT` after the name.
                             let extension = format::label_extension(&item.mime);
                             let label = if prefs.show_extension && !extension.is_empty() {
                                 format!("{name}.{}", extension.to_uppercase())
@@ -375,8 +404,8 @@ pub(crate) fn tile_art(
                                 &label,
                                 max,
                                 |text| name_width(text, window),
-                                // The whole name was shaped this frame
-                                // already: shaping it again is a lookup.
+                                // The whole name was already shaped in this
+                                // frame, so shaping it again only looks it up.
                                 || {
                                     let line = name_line(&label, window);
                                     let ellipsis = name_width("…", window);
@@ -439,8 +468,8 @@ pub(crate) fn tile_art(
 }
 
 impl GridView {
-    /// One grid tile ([`tile_art`]) and the image's hit area, which takes
-    /// the clicks.
+    /// One grid tile ([`tile_art`]) with the hit area of its picture, which
+    /// receives the clicks.
     pub(super) fn tile(
         &mut self,
         data: TileData,
@@ -456,17 +485,18 @@ impl GridView {
         } = data;
         let (tile, in_selection) = (look.tile, look.selected);
         let image_height = tile.h - prefs.text_height();
-        // The magnifier marks the hovered image, except on video and while
-        // the grid is scrolling.
+        // The magnifier is drawn on the picture under the pointer, except on a
+        // video and while the grid is scrolling.
         look.magnifier = self.hovered == Some(index)
             && !look.item.mime.starts_with("video/")
             && self.scrolled.elapsed() >= crate::motion::MAGNIFIER_RESUME;
         look.alphas = reveal::alphas(self.reveal.progress(look.item.root_id.0, now));
         look.grayscale = self.session.read(cx).grayscale;
-        // An option of the grid's list, named by its file, selected while in
-        // the selection, at its place in the whole destination. Only the
-        // tiles drawn are in the tree; the one the keyboard is on is what
-        // assistive technology reads as focused.
+        // For assistive technology the tile is an option of the grid's list.
+        // Its name is the file's name, it is selected while it is in the
+        // selection, and its position is its place in the whole destination.
+        // Only the tiles that are drawn are in the tree. The tile the keyboard
+        // is on is the one that assistive technology reads as focused.
         let described = crate::ui::a11y::active(window).then(|| {
             let session = self.session.read(cx);
             (
@@ -488,8 +518,9 @@ impl GridView {
                 hit = hit.aria_active_descendant();
             }
         }
-        // Only the image takes the pointer: the name and resolution rows
-        // below it are empty space, as in the canvas grid's hit test.
+        // Only the picture receives the pointer. The rows for the name and the
+        // resolution below it count as empty space, as in the canvas grid's
+        // hit test.
         cell.child(
             hit.absolute()
                 .left_0()
@@ -543,7 +574,8 @@ impl GridView {
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                        // The grid's own right-click is for empty space.
+                        // The grid's own right-click handler is for empty
+                        // space only.
                         cx.stop_propagation();
                         this.tile_menu(ordinal, in_selection, event.position, window, cx);
                     }),
@@ -551,8 +583,9 @@ impl GridView {
         )
     }
 
-    /// A tile's menu, at a window position. A right-click inside the
-    /// selection keeps it; elsewhere it selects the tile first.
+    /// Opens a tile's menu at a position in the window. A right-click on a
+    /// tile inside the selection keeps the selection. A right-click on another
+    /// tile selects that tile first.
     fn tile_menu(
         &mut self,
         ordinal: usize,

@@ -161,6 +161,15 @@ out what this app does not need: lens, dispersion, tint and rim light.
   - A frame with a delay of 10 ms or less is shown for 100 ms, as browsers
     show it (`shown_for`). Before, the image advanced by one such frame for
     each frame that was drawn.
+- `src/elements/img.rs`: An image element takes its picture's shape only
+  when the caller leaves its width or its height open. Before, the element
+  always gave the layout the picture's width-to-height ratio. For an element
+  with both a width and a height (for example `size_full`), the layout then
+  replaced the given height with one worked out from the width. A tall
+  picture that fills a square box (`ObjectFit::Cover`) was therefore laid out
+  taller than the box, starting at the box's top, so the box showed the top
+  part of the picture and not its middle, and the rest spilled out below.
+  The grid's Fit Thumbnails and the Set cover photo dialog showed this.
 - Accessibility. 0.3.12 already builds an AccessKit tree from every element
   that has an id and a role. It hands the tree to each platform's adapter
   (macOS NSAccessibility, Windows UI Automation, Linux AT-SPI) only while
@@ -842,13 +851,10 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/img.rs b/gpui-pre/src/elements/im
      /// Set the object fit for the image.
      fn object_fit(mut self, object_fit: ObjectFit) -> Self {
          self.image_style().object_fit = object_fit;
-@@ -242,6 +251,17 @@
- impl DerefMut for Stateful<Img> {
-     fn deref_mut(&mut self) -> &mut Self::Target {
-         &mut self.element
-+    }
-+}
-+
+@@ -245,11 +254,24 @@
+     }
+ }
+ 
 +/// How long frame `index` of an animated image is shown. As browsers do,
 +/// a frame of 10 ms or less is shown for 100 ms.
 +fn shown_for(data: &RenderImage, index: usize) -> Duration {
@@ -857,10 +863,11 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/img.rs b/gpui-pre/src/elements/im
 +        Duration::from_millis(100)
 +    } else {
 +        delay
-     }
- }
- 
-@@ -250,6 +270,8 @@
++    }
++}
++
+ /// The image state between frames
+ struct ImgState {
      frame_index: usize,
      last_frame_time: Option<Instant>,
      started_loading: Option<(Instant, Task<()>)>,
@@ -917,7 +924,28 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/img.rs b/gpui-pre/src/elements/im
                                      }
                                  } else {
                                      state.last_frame_time = None;
-@@ -375,12 +397,22 @@
+@@ -343,7 +365,19 @@
+ 
+                             let image_size = data.render_size(frame_index);
+ 
+-                            if style.aspect_ratio.is_none() {
++                            // The picture's own shape decides the element's
++                            // shape only when the caller left the width or
++                            // the height open. When both are given (for
++                            // example `size_full`), the element takes that
++                            // box, and `object_fit` places the picture in
++                            // it. Setting the ratio in that case made the
++                            // layout replace the given height with one
++                            // worked out from the width, so a tall picture
++                            // that fills a square box showed its top part
++                            // and not its middle.
++                            let open = matches!(style.size.width, Length::Auto)
++                                || matches!(style.size.height, Length::Auto);
++                            if style.aspect_ratio.is_none() && open {
+                                 style.aspect_ratio = Some(image_size.width / image_size.height);
+                             }
+ 
+@@ -375,12 +409,22 @@
                                  };
                              }
  
@@ -946,7 +974,7 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/img.rs b/gpui-pre/src/elements/im
                              }
                          }
                          Some(_err) => {
-@@ -489,13 +521,14 @@
+@@ -489,13 +533,14 @@
                          .get_bounds(bounds, data.size(layout_state.frame_index));
                      let corner_radii = style.corner_radii.to_pixels(window.rem_size());
                      window
