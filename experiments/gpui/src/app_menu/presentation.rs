@@ -3,8 +3,10 @@
 //! Windows and Linux, which have no menu bar, it builds the rows of a menu
 //! that a button in the titlebar opens inside the window.
 //!
-//! It also answers, for the Quick Search panel, which of the menu's rows
-//! that have a registry shortcut are enabled now ([`shortcut_rows`]).
+//! It also answers two questions for the Quick Search panel: which of the
+//! menu's rows that have a registry shortcut are enabled now
+//! ([`shortcut_rows`]), and which rows the menu has besides those
+//! ([`other_rows`]).
 use super::*;
 use crate::settings::registry;
 
@@ -118,6 +120,92 @@ pub fn shortcut_rows(window: &Window, cx: &mut App) -> Vec<ShortcutRow> {
             action,
         })
         .collect()
+}
+
+/// One row of the application menu that shows no shortcut of the registry,
+/// for example Library Manager… or Check for Updates….
+pub struct OtherRow {
+    /// The row's title. A row of a submenu has the submenu's title before
+    /// its own, as in "Set Rating: 3 Stars".
+    pub title: String,
+    /// The keys that the menu shows for the row, written for display, or an
+    /// empty text when the row has no keys.
+    pub keys: String,
+    /// The action that the row performs.
+    pub action: Box<dyn Action>,
+}
+
+/// Returns the enabled rows of this platform's menus that show no shortcut
+/// of the registry, for the menu's current context. The Quick Search panel
+/// lists them as actions after the commands of the registry.
+///
+/// Three kinds of rows are left out. A row that the system performs on the
+/// focused text field (Cut, Copy, Paste, Select All) would act on the
+/// panel's own search field. A ticked row is a choice that is already made,
+/// such as the open library under Recent Libraries. A row whose action a row
+/// before it already has is listed once.
+pub fn other_rows(window: &Window, cx: &mut App) -> Vec<OtherRow> {
+    fn collect(entries: &[Entry], parent: Option<&str>, out: &mut Vec<(String, Item)>) {
+        for entry in entries {
+            match entry {
+                Entry::Item(item) => {
+                    let registry = matches!(item.keys, Keys::Registry(_) | Keys::Shortcut(_));
+                    if registry || item.os_action.is_some() || item.checked || !item.enabled {
+                        continue;
+                    }
+                    let title = match parent {
+                        Some(parent) => format!("{parent}: {}", item.title),
+                        None => item.title.clone(),
+                    };
+                    out.push((
+                        title,
+                        Item {
+                            title: item.title.clone(),
+                            keys: item.keys,
+                            enabled: item.enabled,
+                            checked: item.checked,
+                            action: item.action.boxed_clone(),
+                            os_action: item.os_action,
+                        },
+                    ));
+                }
+                Entry::Submenu {
+                    title,
+                    enabled,
+                    entries,
+                } => {
+                    if *enabled {
+                        collect(entries, Some(title), out);
+                    }
+                }
+                Entry::Separator | Entry::Services => {}
+            }
+        }
+    }
+    let (preset, overrides) = crate::settings::keyboard(cx);
+    let menus = model(&context(cx), Platform::CURRENT);
+    let mut found = Vec::new();
+    for menu in &menus {
+        collect(&menu.entries, None, &mut found);
+    }
+    let mut rows: Vec<OtherRow> = Vec::new();
+    for (title, item) in found {
+        let repeated = rows
+            .iter()
+            .any(|row| row.action.partial_eq(item.action.as_ref()));
+        if repeated || !handled(item.action.as_ref(), window, cx) {
+            continue;
+        }
+        rows.push(OtherRow {
+            title,
+            keys: item
+                .accelerator(preset, &overrides)
+                .map(|keys| registry::display(&keys).to_string())
+                .unwrap_or_default(),
+            action: item.action,
+        });
+    }
+    rows
 }
 
 /// Returns the rows of the menu inside the window (`toMenuEntries` in

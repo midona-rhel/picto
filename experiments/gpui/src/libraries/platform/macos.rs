@@ -1,16 +1,20 @@
-//! Whether the Electron app runs, on macOS: every process's executable path
-//! (`proc_listallpids`, `proc_pidpath`), looked at by [`is_picto`].
+//! Finds out, on macOS, whether the Electron app is running. It reads the
+//! executable path of every process (`proc_listallpids`, `proc_pidpath`) and
+//! tests each path with [`is_picto`].
 use std::ffi::c_void;
 use std::path::Path;
 
-/// The executable of the first process of the Electron app found, if any.
+/// Returns the executable path of the first process found that belongs to the
+/// Electron app, or `None` if there is none. Returns an error if the list of
+/// processes could not be read.
 pub fn picto_process() -> Result<Option<String>, String> {
     // SAFETY: a null buffer asks for the number of processes.
     let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
     if count <= 0 {
         return Err("the list of processes could not be read".into());
     }
-    // Room for processes started since the count.
+    // The buffer has room for 64 more processes, in case some started after
+    // the count was read.
     let mut pids = vec![0 as libc::c_int; count as usize + 64];
     let bytes = (pids.len() * std::mem::size_of::<libc::c_int>()) as libc::c_int;
     // SAFETY: the buffer holds `bytes` bytes.
@@ -40,10 +44,12 @@ pub fn picto_process() -> Result<Option<String>, String> {
     Ok(None)
 }
 
-/// Whether an executable is the Electron app's: its main process or one of
-/// its helpers, inside any `Picto.app` (production's `productName`), or an
-/// executable named `Picto` wherever the bundle was renamed to. This app's
-/// own bundle (`Picto GPUI.app`, executable `picto-gpui-spike`) is not.
+/// Returns whether the executable at `path` belongs to the Electron app. It
+/// does when it is inside a bundle named `Picto.app` (the Electron app's
+/// `productName`), as its main process and its helpers are. It also does when
+/// its file name is `Picto` or starts with `Picto Helper`, which covers a
+/// bundle that the user renamed. This app's own bundle (`Picto GPUI.app`,
+/// executable `picto-gpui-spike`) does not.
 pub fn is_picto(path: &str) -> bool {
     if path.contains("/Picto.app/Contents/") {
         return true;
@@ -56,7 +62,8 @@ pub fn is_picto(path: &str) -> bool {
     name == "Picto" || name.starts_with("Picto Helper")
 }
 
-/// The database file's identity: its device and inode.
+/// Returns a text that identifies the database file at `path`: its device, its
+/// inode and the time it was created.
 pub fn file_identity(path: &Path) -> std::io::Result<String> {
     super::unix_identity(path)
 }
@@ -78,7 +85,8 @@ mod tests {
             "/home/me/Code/experiments/gpui/target/Picto GPUI.app/Contents/MacOS/picto-gpui-spike"
         ));
         assert!(!is_picto("/usr/bin/pictor"));
-        // The process this test runs in is not the Electron app.
+        // The list of processes can be read. Whether the Electron app is
+        // running on this machine is not checked.
         assert!(super::picto_process().is_ok());
     }
 }

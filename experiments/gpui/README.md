@@ -424,8 +424,12 @@ app has no such panel.
   handles the binding's action (`app_menu::handled`). A row shows the
   command's keys at the right. Choosing a row gives the keyboard focus back
   to where it was and dispatches the action there, as the application menu
-  does. The rows of the application menu that have no registry shortcut,
-  such as Library Manager… and Check for Updates…, are not listed.
+  does. After the registry's commands come the enabled rows of the
+  application menu that show no registry shortcut, such as Library
+  Manager… and Check for Updates… (`app_menu::other_rows`). A row of a
+  submenu has the submenu's title before its own. The rows that the system
+  performs on a text field (Cut, Copy, Paste, Select All) and ticked rows
+  are left out.
 - **Places** are the sidebar's destinations (the system rows, every folder
   and every smart folder) and the subscriptions, which are read with the
   core's `subscriptions.list` command. A row has the icon and the colour

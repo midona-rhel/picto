@@ -1,19 +1,20 @@
-//! What production's main process does for the desktop around the window:
-//! the app's badge is the Inbox count (`inboxBadgeService.mjs`), and a
-//! system notification says when a batch of subscription runs has finished
-//! (`subscriptionNotificationService.mjs`). Both follow the library's change
-//! events. Only the real app starts them, never the off-screen checks.
+//! This module does for the desktop what the Electron app's main process does
+//! outside its window. It sets the app's badge to the Inbox count
+//! (`inboxBadgeService.mjs`), and it shows a system notification when a batch
+//! of subscription runs has finished (`subscriptionNotificationService.mjs`).
+//! Both react to the library's change events. Only the real app starts them;
+//! the off-screen checks never do.
 //!
-//! It also hands files to the rest of the desktop as production's main
-//! process does (`picto:shell:*`, `picto:clipboard:copyFiles`): opening one
-//! in its default application or one the user picks, showing it in the
-//! file manager, and putting files on the clipboard. Those reach the desktop
-//! only in the real app; anywhere else (the off-screen checks) each is
-//! written down instead, for the checks to read with [`requests`], so that
-//! nothing opens on the screen and the clipboard is left alone. Only files
-//! inside the open copy are handed over, whatever path the library stored
-//! (the hand-offs, the drag out of the grid and "Copy File Path" refuse any
-//! other with a notification).
+//! It also passes files to other parts of the desktop, as the Electron app's
+//! main process does (`picto:shell:*`, `picto:clipboard:copyFiles`): it opens
+//! a file in its default application or in one the user picks, shows a file in
+//! the file manager, and puts files on the clipboard. These requests reach the
+//! desktop only in the real app. In the off-screen checks each request is
+//! recorded instead, and the checks read the records with [`requests`], so
+//! nothing opens on the screen and the clipboard is not changed. Only files
+//! inside the open copy are passed on, whatever path the library stored. For
+//! any other path, these functions, the drag out of the grid and "Copy File
+//! Path" refuse and show a notification.
 use crate::application::{self, Event};
 use crate::session::{Coalesced, Session};
 use gpui::{App, AppContext as _, Context, Entity, Global, Subscription, Task};
@@ -24,26 +25,31 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-/// `CHANGE_DEBOUNCE_MS`: a burst of changes sets the badge once.
+/// `CHANGE_DEBOUNCE_MS`: how long the badge waits after a change before it
+/// reads the Inbox count, so that several changes close together set the badge
+/// once.
 const BADGE_DEBOUNCE: Duration = Duration::from_millis(200);
-/// `SETTLE_DEBOUNCE_MS`
+/// `SETTLE_DEBOUNCE_MS`: how long to wait after a change to subscriptions or
+/// tasks before reading the subscriptions' runs.
 const SETTLE_DEBOUNCE: Duration = Duration::from_millis(250);
-/// `MAX_BADGE`
+/// `MAX_BADGE`: the largest number the badge shows.
 const MAX_BADGE: u64 = 9_999;
 
-/// Set by `main` so that the window's shell starts the desktop services.
+/// A global that `main` sets through [`enable`]. While it is set, [`start`]
+/// starts the badge and the subscription notification.
 struct Enabled;
 
 impl Global for Enabled {}
 
-/// Lets [`start`] run: only the app proper calls this.
+/// Allows [`start`] to start the badge and the subscription notification. Only
+/// the real app calls this; the off-screen checks do not.
 pub fn enable(cx: &mut App) {
     cx.set_global(Enabled);
 }
 
-/// Notes the session's library as the only one whose files may be handed to
-/// the desktop, and starts the badge and the subscription notification for
-/// it, if the app enabled them.
+/// Records the root of the session's library as the only folder whose files
+/// may be passed to the desktop. If [`enable`] was called, it also starts the
+/// badge and the subscription notification for that library.
 pub fn start(session: &Entity<Session>, cx: &mut App) {
     let root = session.read(cx).root().to_path_buf();
     cx.set_global(HandOff(root));
@@ -54,7 +60,8 @@ pub fn start(session: &Entity<Session>, cx: &mut App) {
     cx.set_global(Running { _desktop: desktop });
 }
 
-/// The desktop services, kept for the app's life.
+/// A global that keeps the [`Desktop`] entity alive for as long as the app
+/// runs.
 struct Running {
     _desktop: Entity<Desktop>,
 }
@@ -63,17 +70,20 @@ impl Global for Running {}
 
 struct Desktop {
     session: Entity<Session>,
-    /// The count the badge shows.
+    /// The count that the badge shows now, or `None` before the first count
+    /// was read.
     shown: Option<u64>,
     badge_timer: Option<Task<()>>,
-    /// The Inbox count is being read.
+    /// Whether the Inbox count is being read now, and whether to read it again
+    /// afterwards.
     badge_reading: Coalesced,
-    /// The runs of the batch being watched, and whether one has been seen
-    /// running.
+    /// The ids of the runs in the batch that is being watched. `batch_active`
+    /// says whether any of them has been seen pending or running.
     batch: BTreeSet<i64>,
     batch_active: bool,
     settle_timer: Option<Task<()>>,
-    /// The subscriptions and their finished runs are being read.
+    /// Whether the subscriptions and their finished runs are being read now,
+    /// and whether to read them again afterwards.
     settle_reading: Coalesced,
     _events: Subscription,
 }
@@ -118,7 +128,9 @@ impl Desktop {
         }));
     }
 
-    /// `library.inbox_count`, then the badge.
+    /// Reads the Inbox count with `library.inbox_count` and shows it on the
+    /// badge. If a read is already running, it reads once more when that one
+    /// ends.
     fn read_badge(&mut self, cx: &mut Context<Self>) {
         if !self.badge_reading.begin() {
             return;
@@ -164,8 +176,11 @@ impl Desktop {
         }));
     }
 
-    /// `refreshOnce`: notes the runs going; once none is, reads what the
-    /// batch added and says so.
+    /// `refreshOnce`: reads `subscriptions.list` and adds the pending and
+    /// running runs to the batch. When no run is pending or running any more,
+    /// it reads each run of the batch with `subscriptions.runs.get`, counts
+    /// the library items the batch added, and shows the system notification
+    /// with that count.
     fn read_runs(&mut self, cx: &mut Context<Self>) {
         if !self.settle_reading.begin() {
             return;
@@ -201,13 +216,15 @@ impl Desktop {
                     Some(count) => {
                         this.batch.clear();
                         this.batch_active = false;
-                        // Whatever Settings › Notifications says, as in
-                        // production: those settings are for the pop-ups
+                        // The system notification is shown whatever Settings ›
+                        // Notifications says, as in the Electron app. Those
+                        // settings apply only to the notifications shown
                         // inside the window.
                         platform::notify("Subscriptions finished", &finished_body(count), cx);
                     }
-                    // An unavailable activity is not evidence that the run
-                    // added nothing: the batch waits for a later change.
+                    // If a run's activity could not be read, that does not
+                    // show that the run added nothing. The batch is kept, and
+                    // a later change event reads it again.
                     None => eprintln!(
                         "picto: subscription completion details are unavailable; notification is pending"
                     ),
@@ -222,8 +239,10 @@ impl Desktop {
         .detach();
     }
 
-    /// Takes in `subscriptions.list`; the batch's runs when it has just
-    /// finished.
+    /// Updates the batch from the answer of `subscriptions.list`. Returns the
+    /// ids of the batch's runs when no run is pending or running now and at
+    /// least one was seen pending or running earlier. Otherwise it returns
+    /// `None`.
     fn observe(&mut self, list: &serde_json::Value) -> Option<Vec<i64>> {
         let active = active_runs(list);
         self.batch.extend(active.iter().copied());
@@ -237,18 +256,20 @@ impl Desktop {
 
 // ── Files handed to the desktop ─────────────────────────────
 
-/// The canonical root of the open library copy. Only its own files are
-/// handed to the desktop: a stored path that still names the library the
-/// copy was made from, or anything else outside the copy, would let another
-/// application edit, move or delete a file the user keeps.
+/// A global that holds the canonical root of the open library copy. Only files
+/// inside it are passed to the desktop. A stored path that still names the
+/// library the copy was made from, or any other path outside the copy, would
+/// let another application edit, move or delete a file the user keeps.
 struct HandOff(PathBuf);
 
 impl Global for HandOff {}
 
-/// Whether `path` lies below `root`. Both are canonical, so neither holds a
-/// link or a `..` step; Windows' verbatim prefix (`\\?\C:\`, `\\?\UNC\`) is
-/// read as the plain form it stands for, and Windows compares names without
-/// case, as its file systems do. The root itself is not inside.
+/// Returns whether `path` is inside the folder `root`. Both must be canonical
+/// paths, so neither contains a symbolic link or a `..` step. A path with
+/// Windows' verbatim prefix (`\\?\C:\`, `\\?\UNC\`) is compared as the same
+/// path without the prefix. On Windows, names are compared without regard to
+/// case, as Windows' file systems compare them. The root itself does not count
+/// as inside.
 pub(crate) fn inside(root: &Path, path: &Path) -> bool {
     let (root, path) = (system_path(root), system_path(path));
     let same = |left: std::path::Component, right: std::path::Component| {
@@ -274,9 +295,9 @@ pub(crate) fn inside(root: &Path, path: &Path) -> bool {
             .all(|part| matches!(part, std::path::Component::Normal(_)))
 }
 
-/// `paths`, each as the canonical path of a file of the open copy, or why
-/// they cannot be handed to the desktop: one of them is missing or lies
-/// outside the copy.
+/// Returns the canonical path of each of `paths` when all of them are files
+/// inside the open copy. Returns an error message when no library is open, or
+/// when one of the paths does not exist or is outside the copy.
 fn checked(paths: &[PathBuf], cx: &App) -> Result<Vec<PathBuf>, String> {
     match cx.try_global::<HandOff>() {
         Some(HandOff(root)) => checked_in(root, paths),
@@ -284,7 +305,7 @@ fn checked(paths: &[PathBuf], cx: &App) -> Result<Vec<PathBuf>, String> {
     }
 }
 
-/// [`checked`] against the copy at the canonical `root`.
+/// Does the work of [`checked`] for the copy whose canonical root is `root`.
 fn checked_in(root: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     paths
         .iter()
@@ -299,15 +320,15 @@ fn checked_in(root: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
         .collect()
 }
 
-/// [`checked`] for one file.
+/// Does what [`checked`] does, for one file.
 fn checked_one(path: &Path, cx: &App) -> Result<PathBuf, String> {
     checked(&[path.to_path_buf()], cx).map(|mut paths| paths.remove(0))
 }
 
-/// The files of the open copy a drag out of the window hands to the system,
-/// by the paths it shows (no `\\?\` prefix on Windows, as Copy gives
-/// them): all of them, or none, with a notification, when one is not the
-/// copy's.
+/// Returns the paths that a drag out of the window gives to the system. Each
+/// path is in the form that [`copy_paths`] writes, without the `\\?\` prefix
+/// on Windows. If any of `paths` is not a file of the open copy, it returns no
+/// paths and shows an error notification.
 pub fn drag_out(paths: &[PathBuf], cx: &mut App) -> Vec<PathBuf> {
     match checked(paths, cx) {
         Ok(paths) => paths.iter().map(|path| system_path(path)).collect(),
@@ -318,12 +339,14 @@ pub fn drag_out(paths: &[PathBuf], cx: &mut App) -> Vec<PathBuf> {
     }
 }
 
-/// What was asked of the desktop in a run that does not reach it.
+/// The requests that were recorded and not sent to the desktop, in a test run
+/// that did not call [`enable`].
 #[cfg(test)]
 static REQUESTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-/// Whether this run reaches the desktop: only the app proper does; the
-/// off-screen checks write each request down instead.
+/// Returns whether requests in this run are sent to the desktop. In a test
+/// build they are sent only after [`enable`] was called, which only the real
+/// app does. Otherwise each request is recorded for the off-screen checks.
 #[cfg(test)]
 fn live(cx: &App) -> bool {
     cx.has_global::<Enabled>()
@@ -344,8 +367,9 @@ fn record(request: String) {
 #[cfg(not(test))]
 fn record(_: String) {}
 
-/// What was asked of the desktop since the last look, oldest first, in a
-/// run that does not reach it.
+/// Returns the requests recorded since the last call, oldest first, and
+/// empties the record. Requests are recorded only in a run that does not send
+/// them to the desktop.
 #[cfg(test)]
 pub fn requests() -> Vec<String> {
     REQUESTS
@@ -362,10 +386,11 @@ fn listed(paths: &[PathBuf]) -> String {
         .join(" | ")
 }
 
-/// Whether a link may be handed to the system: only web addresses, as
-/// production's `open_external_url` allows. A source address comes from
-/// downloaded metadata or from what was typed, so a `file:` address or one
-/// for another application's scheme is never opened.
+/// Returns whether a link may be opened by the system. Only `http` and `https`
+/// addresses may, as in the Electron app's `open_external_url`. A source
+/// address comes from downloaded metadata or from what the user typed, so a
+/// `file:` address, or an address with another application's scheme, is never
+/// opened.
 pub fn is_web_link(link: &str) -> bool {
     let link = link.trim();
     let Some((scheme, rest)) = link.split_once(':') else {
@@ -376,8 +401,8 @@ pub fn is_web_link(link: &str) -> bool {
         && rest.len() > 2
 }
 
-/// `open_external_url`: a web address in the browser. Anything else is
-/// refused with production's message.
+/// `open_external_url`: opens a web address in the browser. For any other link
+/// it shows the Electron app's error message and opens nothing.
 pub fn open_link(link: &str, cx: &mut App) {
     if !is_web_link(link) {
         crate::ui::notify::error(
@@ -394,8 +419,8 @@ pub fn open_link(link: &str, cx: &mut App) {
     }
 }
 
-/// `shell.openPath`: the file in its default application, if it is one of
-/// the copy's.
+/// `shell.openPath`: opens the file in its default application, if the file is
+/// inside the open copy. Otherwise it shows an error notification.
 pub fn open_default(path: &Path, cx: &mut App) {
     let path = match checked_one(path, cx) {
         Ok(path) => path,
@@ -410,8 +435,9 @@ pub fn open_default(path: &Path, cx: &mut App) {
     }
 }
 
-/// `shell.showItemInFolder`: Finder or Explorer, with the file selected, if
-/// it is one of the copy's.
+/// `shell.showItemInFolder`: shows the file, selected, in the system's file
+/// manager (Finder or Explorer), if the file is inside the open copy.
+/// Otherwise it shows an error notification.
 pub fn reveal(path: &Path, cx: &mut App) {
     let path = match checked_one(path, cx) {
         Ok(path) => path,
@@ -424,9 +450,10 @@ pub fn reveal(path: &Path, cx: &mut App) {
     }
 }
 
-/// An update's verified installer started as electron-updater's updater for
-/// this system starts it (`doInstall`; see each system's file). A test
-/// build writes it down instead.
+/// Starts an update's verified installer in the way that electron-updater's
+/// updater for this operating system starts it (`doInstall`). The details are
+/// in each system's file (`macos.rs`, `windows.rs`, `linux.rs`). A test build
+/// records the request and starts nothing.
 pub fn install_update(
     installer: &Path,
     silent: bool,
@@ -443,13 +470,16 @@ pub fn install_update(
     platform::install_update(installer, silent, run_after, admin)
 }
 
-/// `$APPIMAGE` on Linux: the AppImage this process runs from.
+/// Returns the path of the AppImage that this process runs from, which is
+/// `$APPIMAGE` on Linux. On macOS and Windows it returns `None`.
 pub fn app_image() -> Option<PathBuf> {
     platform::app_image()
 }
 
-/// Show in File Manager for a library in the Library Manager: its folder,
-/// only when it is the open library or one the list of libraries holds.
+/// Does Show in File Manager for a library in the Library Manager: shows the
+/// library's folder in the file manager. It does so only when the library is
+/// the open one, or is in the library history, or is a pinned library.
+/// Otherwise it shows an error notification.
 pub fn reveal_library(path: &Path, cx: &mut App) {
     let text = path.to_string_lossy();
     let open = crate::libraries::host::current(cx).is_some_and(|(root, _)| root == path);
@@ -470,8 +500,9 @@ pub fn reveal_library(path: &Path, cx: &mut App) {
     }
 }
 
-/// Show Cloud Folder: the provider folder the open library syncs to, and
-/// no other folder.
+/// Does Show Cloud Folder: shows `path` in the file manager, only when `path`
+/// is the cloud folder that the open library syncs to and that folder exists.
+/// Otherwise it shows an error notification.
 pub fn reveal_cloud_folder(path: &Path, cx: &mut App) {
     let configured = crate::libraries::host::shell(cx)
         .and_then(|shell| {
@@ -493,8 +524,9 @@ pub fn reveal_cloud_folder(path: &Path, cx: &mut App) {
     }
 }
 
-/// `picto:shell:openWithApplication`: the file, if it is one of the copy's,
-/// in the application at `application` (macOS only, as in production).
+/// `picto:shell:openWithApplication`: opens the file in the application at
+/// `application`, if the file is inside the open copy. This exists on macOS
+/// only, as in the Electron app.
 #[cfg(target_os = "macos")]
 pub fn open_with(application: &Path, file: &Path, cx: &App) -> Result<(), String> {
     let file = checked_one(file, cx)?;
@@ -515,8 +547,9 @@ pub fn open_with(_application: &Path, _file: &Path, _cx: &App) -> Result<(), Str
     Err("Application selection is only available on macOS".into())
 }
 
-/// `writeClipboardFilePaths`: the files themselves on the clipboard, each
-/// once, for Finder or another application to paste, if all are the copy's.
+/// `writeClipboardFilePaths`: puts the files themselves on the clipboard, each
+/// one once, so that Finder or another application can paste them. It does so
+/// only if all of them are inside the open copy.
 pub fn copy_files(paths: &[PathBuf], cx: &App) -> Result<(), String> {
     let mut unique: Vec<PathBuf> = Vec::new();
     for path in checked(paths, cx)? {
@@ -535,8 +568,9 @@ pub fn copy_files(paths: &[PathBuf], cx: &App) -> Result<(), String> {
     }
 }
 
-/// "Copy File Path": the paths as text, one a line, if all are the copy's
-/// files. The text is the path as the system writes it.
+/// "Copy File Path": puts the paths on the clipboard as text, one path on each
+/// line, if all of them are files inside the open copy. Each path is written
+/// as [`system_path`] gives it, without Windows' `\\?\` prefix.
 pub fn copy_paths(paths: &[PathBuf], cx: &mut App) -> Result<(), String> {
     let paths = checked(paths, cx)?;
     if paths.is_empty() {
@@ -551,9 +585,9 @@ pub fn copy_paths(paths: &[PathBuf], cx: &mut App) -> Result<(), String> {
     Ok(())
 }
 
-/// `picto:shell:openWithChooser`: the system's own application chooser on
-/// the file, if it is one of the copy's, which only Windows offers (its
-/// "Open with" dialog).
+/// `picto:shell:openWithChooser`: opens the system's own dialog for choosing
+/// an application for the file, if the file is inside the open copy. Only
+/// Windows has such a dialog (its "Open with" dialog).
 #[cfg(target_os = "windows")]
 pub fn open_with_chooser(file: &Path, cx: &App) -> Result<(), String> {
     let file = checked_one(file, cx)?;
@@ -570,27 +604,32 @@ pub fn open_with_chooser(_file: &Path, _cx: &App) -> Result<(), String> {
     Err("The system application chooser is unavailable".into())
 }
 
-/// An application that opens a file (`getAssociatedApplications`).
+/// One application that can open a file, as `getAssociatedApplications` lists
+/// it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Application {
     pub name: String,
     pub path: PathBuf,
     /// Its icon, 32 pixels square, as PNG.
     pub icon: Option<Arc<gpui::Image>>,
-    /// The one the system opens the file with.
+    /// Whether this is the application that the system opens the file with by
+    /// default.
     pub default: bool,
 }
 
-/// The applications that can open `file`, the default first and the rest
-/// by name, leaving Picto itself out. Only macOS lists them (production
-/// offers Windows' own chooser and nothing on Linux). Asking changes
-/// nothing, so it is asked in every run; it takes a while for a new type,
-/// so it runs off the thread that draws.
+/// Returns the applications that can open `file`: the default one first, then
+/// the rest by name, without Picto itself. Only macOS lists them; the Electron
+/// app offers Windows' own chooser on Windows and nothing on Linux. Asking the
+/// system for the list changes nothing on the desktop, so the off-screen
+/// checks ask too. The answer can take a long time for a file type that has
+/// not been asked about before, so this is called on a background thread, not
+/// on the thread that draws.
 pub fn applications(file: &Path) -> Vec<Application> {
     platform::applications(file)
 }
 
-/// The run of each subscription that is pending or running.
+/// Returns the `active_run_id` of each subscription in the answer of
+/// `subscriptions.list` whose status is pending or running.
 fn active_runs(list: &serde_json::Value) -> Vec<i64> {
     list["subscriptions"]
         .as_array()
@@ -603,8 +642,9 @@ fn active_runs(list: &serde_json::Value) -> Vec<i64> {
         .collect()
 }
 
-/// How many library items the batch's runs added, counting each once; none
-/// while any run's activity could not be read.
+/// Returns how many library items the batch's runs added, counting an item
+/// once even if several runs list it. Returns `None` if the activity of any
+/// run could not be read.
 fn new_items(activities: &[Option<serde_json::Value>]) -> Option<usize> {
     let mut keys = BTreeSet::new();
     for activity in activities {
@@ -615,7 +655,8 @@ fn new_items(activities: &[Option<serde_json::Value>]) -> Option<usize> {
     Some(keys.len())
 }
 
-/// The notification's text.
+/// Returns the body text of the "Subscriptions finished" notification for
+/// `count` new library items.
 fn finished_body(count: usize) -> String {
     match count {
         0 => "All subscriptions finished. No new library items were added.".into(),
@@ -627,7 +668,8 @@ fn finished_body(count: usize) -> String {
     }
 }
 
-/// The badge's number: the count, at most 9,999.
+/// Returns the number the badge shows: the Inbox count, or 9,999 if the count
+/// is larger.
 fn badge_count(count: &serde_json::Value) -> u64 {
     count
         .as_u64()
@@ -640,30 +682,33 @@ fn badge_count(count: &serde_json::Value) -> u64 {
 #[path = "macos.rs"]
 mod platform;
 
-/// Windows: no badge (Electron's `setBadgeCount` does nothing there), the
-/// notification as a toast through GPUI, the files on the clipboard as
-/// production's native addon puts them (`CF_HDROP`), and Open With Other as
-/// the system's own chooser.
+/// On Windows there is no badge, because Electron's `setBadgeCount` does
+/// nothing there. The notification is shown as a toast through GPUI. Files are
+/// put on the clipboard in the `CF_HDROP` format, as the Electron app's native
+/// addon does. Open With Other opens the system's own chooser.
 #[cfg(target_os = "windows")]
 #[path = "windows.rs"]
 mod platform;
 
-/// Linux: the Inbox count on the launcher (`app.setBadgeCount`, which
-/// Electron sends as the Unity launcher's D-Bus signal), the notification
-/// through GPUI (the freedesktop notification service), the files on the
-/// clipboard as production writes them (a `text/uri-list` of `file:` URLs),
-/// and no Open With Other, as production offers none there.
+/// On Linux the Inbox count is shown on the launcher, as `app.setBadgeCount`
+/// does; Electron sends it as the Unity launcher's D-Bus signal. The
+/// notification is shown through GPUI, which uses the freedesktop notification
+/// service. Files are put on the clipboard as a `text/uri-list` of `file:`
+/// URLs, as the Electron app does. There is no Open With Other, because the
+/// Electron app has none on Linux.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[path = "linux.rs"]
 mod platform;
 
-/// The app's identity to the desktop: Windows files its toasts under it
-/// and Linux names their sender with it.
+/// The id by which the desktop knows the app. Windows groups the app's toasts
+/// under this id, and Linux uses it as the name of the notifications' sender.
 pub const APP_ID: &str = "dev.picto.gpui-experiment";
 pub const APP_NAME: &str = "Picto GPUI";
 
-/// The Unity launcher entry the badge updates: the app's desktop file, and
-/// the object path libunity sends from.
+/// The D-Bus object path from which the badge's signal to the Unity launcher
+/// is sent; libunity sends from the same kind of path. The signal also carries
+/// [`launcher_uri`], which names the app's desktop file and so tells the
+/// launcher which entry to update.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 const LAUNCHER_PATH: &str = "/com/canonical/unity/launcherentry/picto";
 
@@ -672,8 +717,8 @@ fn launcher_uri() -> String {
     format!("application://{APP_ID}.desktop")
 }
 
-/// `new Notification({ title, body }).show()` off macOS, through GPUI's
-/// system notifications under [`APP_ID`].
+/// `new Notification({ title, body }).show()` on Windows and Linux: shows the
+/// notification through GPUI's system notifications, under [`APP_ID`].
 #[cfg(not(target_os = "macos"))]
 fn system_notification(title: &str, body: &str, cx: &App) {
     cx.show_system_notification(gpui::SystemNotification {
@@ -684,26 +729,28 @@ fn system_notification(title: &str, body: &str, cx: &App) {
     });
 }
 
-/// The `DROPFILES` list (`CF_HDROP`) of `paths` as the desktop takes them,
-/// built by the vendored GPUI's drag source, so that Copy and a drag out of
-/// the window hand Explorer the same list.
+/// Returns the `DROPFILES` list (`CF_HDROP`) of `paths`, with each path in the
+/// form [`system_path`] gives. The vendored GPUI's drag source builds it, so
+/// that Copy and a drag out of the window give Explorer the same list.
 #[cfg(target_os = "windows")]
 fn drop_files(paths: &[PathBuf]) -> Vec<u8> {
     let paths: Vec<PathBuf> = paths.iter().map(|path| system_path(path)).collect();
     gpui_windows::drag_drop_files(&paths)
 }
 
-/// The `text/uri-list` production writes on Linux, built by the vendored
-/// GPUI's X11 drag source, so that Copy and a drag out offer the same list.
+/// Returns the `text/uri-list` that the Electron app writes on Linux. The
+/// vendored GPUI's X11 drag source builds it, so that Copy and a drag out of
+/// the window offer the same list.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn uri_list(paths: &[PathBuf]) -> Vec<u8> {
     gpui_linux::xdnd_uri_list(paths)
 }
 
-/// A path as the rest of the desktop takes it. The library's root is a
-/// canonical path, which on Windows is written with the `\\?\` prefix that
-/// Explorer, the clipboard and other applications do not read; it comes off
-/// here (`\\?\UNC\server\share` becomes `\\server\share`).
+/// Returns `path` in the form that other applications accept. The library's
+/// root is a canonical path, which on Windows starts with the `\\?\` prefix.
+/// Explorer, the clipboard and other applications do not accept that prefix,
+/// so this function removes it (`\\?\UNC\server\share` becomes
+/// `\\server\share`).
 pub fn system_path(path: &Path) -> PathBuf {
     let text = path.to_string_lossy();
     if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
@@ -715,7 +762,8 @@ pub fn system_path(path: &Path) -> PathBuf {
     }
 }
 
-/// Production's order: the default application first, then by name.
+/// Sorts the applications in the Electron app's order: the default application
+/// first, then the rest by name.
 #[cfg(any(test, target_os = "macos"))]
 fn sort_applications(
     applications: &mut [Application],
@@ -733,7 +781,9 @@ fn sort_applications(
 mod tests {
     use std::path::{Path, PathBuf};
 
-    /// `CF_HDROP`'s list, as production's native addon builds it.
+    /// The `CF_HDROP` list has the layout that the Electron app's native addon
+    /// builds: a 20-byte `DROPFILES` header, then the paths as UTF-16 text,
+    /// each ended by a zero, and one more zero at the end.
     #[cfg(windows)]
     #[test]
     fn files_go_to_the_windows_clipboard_as_a_wide_dropfiles_list() {
@@ -755,8 +805,8 @@ mod tests {
         assert_eq!(units, expected);
     }
 
-    /// `clipboardImport.test.mjs`: "Linux writes the standard URI-list
-    /// clipboard format".
+    /// Ports the test "Linux writes the standard URI-list clipboard format" of
+    /// `clipboardImport.test.mjs`.
     #[cfg(target_os = "linux")]
     #[test]
     fn files_go_to_the_linux_clipboard_as_a_uri_list() {
@@ -783,9 +833,9 @@ mod tests {
         );
     }
 
-    /// A canonical path below the copy's root is the copy's; the root
-    /// itself, a sibling whose name starts the same, a step back out and
-    /// anything elsewhere are not.
+    /// A canonical path inside the copy's root counts as the copy's. The root
+    /// itself, a sibling folder whose name starts with the root's name, a path
+    /// that leaves the root with `..`, and a path anywhere else do not.
     #[cfg(unix)]
     #[test]
     fn only_paths_below_the_copy_are_the_copys() {
@@ -803,15 +853,16 @@ mod tests {
         ));
         assert!(!inside("/home/someone/Pictures/Main.library/blobs/x.jpg"));
         assert!(!inside("blobs/x.jpg"));
-        // Names differ by case on Linux and on a case-sensitive Mac volume;
-        // the canonical path has the case the disk has, so no folding.
+        // On Linux and on a case-sensitive Mac volume, two names that differ
+        // only in case are different files. The canonical path has the case
+        // that the disk has, so names are compared exactly.
         assert!(!inside(
             "/private/tmp/picto-gpui-library.a1/main.library/blobs/x.jpg"
         ));
     }
 
-    /// Windows: the canonical root carries the verbatim prefix and the
-    /// stored path may not; names compare without case.
+    /// On Windows the canonical root has the verbatim prefix and the stored
+    /// path may not have it. Names are compared without regard to case.
     #[cfg(windows)]
     #[test]
     fn only_paths_below_the_copy_are_the_copys() {
@@ -837,7 +888,7 @@ mod tests {
             r"D:\Work\Temp\picto-gpui-library.a1\Main.library\x.jpg"
         ));
         assert!(!inside(r"C:\Work\Pictures\Main.library\blobs\x.jpg"));
-        // A copy on a network share.
+        // The same rules hold for a copy on a network share.
         let share = Path::new(r"\\?\UNC\server\share\picto-gpui-library.a1\Main.library");
         assert!(super::inside(
             share,
@@ -849,9 +900,11 @@ mod tests {
         ));
     }
 
-    /// Real files: one in the copy is handed over by its canonical path; a
-    /// missing one, one outside, and (where links can be made) a link in the
-    /// copy that leads out are refused, and then nothing is handed over.
+    /// This test uses real files. A file in the copy is returned by its
+    /// canonical path. A missing file, a file outside the copy and, where
+    /// links can be made, a link in the copy that points outside it are
+    /// refused. When one path of a request is refused, no path of that request
+    /// is returned.
     #[test]
     fn only_the_copys_own_files_are_handed_to_the_desktop() {
         let folder = tempfile::tempdir().unwrap();
@@ -931,8 +984,9 @@ mod tests {
         assert_eq!(names, ["Preview", "affinity", "Safari"]);
     }
 
-    /// Writes to a pasteboard of its own, never the user's clipboard, and
-    /// reads back what Finder and GPUI read.
+    /// This test writes to a pasteboard made for the test, never to the user's
+    /// clipboard, and reads back the `NSFilenamesPboardType` list that Finder
+    /// and GPUI read.
     #[cfg(target_os = "macos")]
     #[test]
     fn files_go_on_the_pasteboard_as_a_list_of_paths() {
@@ -959,8 +1013,9 @@ mod tests {
         }
     }
 
-    /// Opening a file in an application cannot be tried here without
-    /// opening it, so its message is checked against AppKit's own types.
+    /// A test cannot open a file in an application without that application
+    /// appearing on the screen. So this test only checks that the selectors
+    /// `open_with` sends exist in AppKit with the argument types it uses.
     #[cfg(target_os = "macos")]
     #[test]
     fn opening_with_an_application_sends_what_appkit_takes() {
@@ -981,8 +1036,9 @@ mod tests {
             .unwrap();
     }
 
-    /// Asking which applications open a type changes nothing; every Mac
-    /// opens a PNG with something, and has a default for it.
+    /// Asking which applications open a file type changes nothing on the
+    /// desktop. Every Mac has at least one application that opens a PNG, and a
+    /// default application for it, so the test expects both.
     #[cfg(target_os = "macos")]
     #[test]
     fn applications_that_open_a_picture_are_listed_with_icons() {
@@ -1016,7 +1072,7 @@ mod tests {
             Some(json!({ "new_library_item_keys": ["b", "c"] })),
         ];
         assert_eq!(new_items(&runs), Some(3));
-        // An unreadable run leaves the count unknown.
+        // If one run's activity could not be read, the count is `None`.
         assert_eq!(new_items(&[runs[0].clone(), None]), None);
         assert_eq!(
             new_items(&[Some(json!({ "new_library_item_keys": [1] }))]),

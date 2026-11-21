@@ -1,19 +1,23 @@
-//! Opening libraries: disposable copies as before, and the libraries the
-//! user keeps under the rules of [`admission`] (README, "Opening
-//! libraries"). This module also keeps production's list of libraries
-//! (`libraryHistory`, `pinnedLibraries`, `lastLibrary`) in this app's own
-//! state, never in the Electron app's `config.json`, and the user's consent
-//! per library.
+//! Opens libraries. A disposable copy is opened as before. A library the
+//! user keeps is opened under the rules of [`admission`] (README, "Opening
+//! libraries"). This module also keeps the Electron app's list of libraries
+//! (`libraryHistory`, `pinnedLibraries`, `lastLibrary`) and the user's
+//! consent for each library. It keeps both in this app's own state, never
+//! in the Electron app's `config.json`.
 //!
-//! - [`admission`]: the rules, pure, with the system's probes injectable.
-//! - [`platform`]: whether the Electron app runs, and a file's identity.
-//! - [`host`]: the main window's content (the gate or a library's shell),
-//!   opening, switching and closing, the consent dialog, and the notice
-//!   that blocks the window while the Electron app runs.
-//! - [`manager`]: the Library Manager window.
-//! - [`files`]: Delete… and Move… on disk, as production's main process.
-//! - [`seed`]: the first run's list, read once from the Electron app's
-//!   `config.json`.
+//! - [`admission`] holds the rules. Its functions have no side effects,
+//!   and its checks of the system can be replaced in tests.
+//! - [`platform`] finds out whether the Electron app is running, and
+//!   returns a file's identity.
+//! - [`host`] owns the main window's content, which is the gate or a
+//!   library's shell. It opens, switches and closes libraries, and shows
+//!   the consent dialog and the notice that blocks the window while the
+//!   Electron app is running.
+//! - [`manager`] is the Library Manager window.
+//! - [`files`] does Delete… and Move… on disk, as the Electron app's main
+//!   process does.
+//! - [`seed`] fills the list on the first run, reading the Electron app's
+//!   `config.json` once.
 pub mod admission;
 pub mod files;
 pub mod host;
@@ -26,15 +30,17 @@ use std::sync::OnceLock;
 
 pub use admission::{Facts, Identity, Origin};
 
-/// Whether this process was started with `--allow-real-libraries`. Set
-/// once, from the command line, before anything is opened.
+/// Whether this process was started with `--allow-real-libraries`. It is set
+/// once, from the command line, before any library is opened.
 static FLAG: OnceLock<bool> = OnceLock::new();
 
 pub fn set_flag(flag: bool) {
     let _ = FLAG.set(flag);
 }
 
-/// What this process is, for [`admission`].
+/// Returns the facts about this process that [`admission`] decides on: whether
+/// it is a release build, whether it was started with the flag, which
+/// automation seam is active, and the test folder.
 pub fn facts() -> Facts {
     Facts {
         release: !cfg!(debug_assertions) && !cfg!(test),
@@ -44,11 +50,13 @@ pub fn facts() -> Facts {
     }
 }
 
-/// `PICTO_GPUI_TEST_LIBRARIES=<folder>`, in test builds only (the off-screen
-/// tool): the libraries directly in that folder count as permitted by the
-/// build and the seams, so the real-library path can be photographed with
-/// generated libraries. The folder must lie inside a temporary folder; any
-/// other is ignored, so it cannot be pointed at a library the user keeps.
+/// Returns the folder named by `PICTO_GPUI_TEST_LIBRARIES=<folder>`. Only test
+/// builds read the variable; the off-screen tool sets it. The libraries
+/// directly in that folder may be opened in spite of the build and the
+/// automation seam, so that the off-screen tool can take pictures of the code
+/// path for real libraries, using generated libraries. The folder must be
+/// inside a temporary folder. Any other folder is ignored, so the variable
+/// cannot name a folder that holds a library the user keeps.
 #[cfg(test)]
 fn test_folder() -> Option<PathBuf> {
     let folder = PathBuf::from(std::env::var_os("PICTO_GPUI_TEST_LIBRARIES")?)
@@ -82,39 +90,48 @@ fn test_folder() -> Option<PathBuf> {
 /// What kind of library is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// A disposable copy: marked, in a scratch folder, detached on open.
+    /// A disposable copy. It has the marker file, it is in a temporary folder,
+    /// and it is detached when it is opened.
     Copy,
-    /// A library the user keeps: opened as production opens it.
+    /// A library the user keeps. It is opened as the Electron app opens it.
     Real,
 }
 
-/// Where the edits that write files themselves (rendered and regenerated
-/// thumbnails, Set as Thumbnail, the library's cover) may write, and the
-/// gate on Delete Permanently and Empty Trash: the canonical root of the
-/// library open in the main window, however it was admitted (a disposable
-/// copy the guard accepted, or a library the user keeps that
-/// `admission::admit` let through with the user's consent), when `root` is
-/// that library. `None` when nothing is open, another library is, or it is
-/// being closed. The one predicate for all of them.
+/// Returns the canonical root of the library that is open in the main window,
+/// when `root` is that library. Returns `None` when no library is open, when
+/// another library is open, or when the open library is being closed. It does
+/// not matter how the library was admitted: as a disposable copy that the
+/// guard accepted, or as a library the user keeps that `admission::admit`
+/// allowed with the user's consent.
+///
+/// The edits that write files themselves (rendered and regenerated thumbnails,
+/// Set as Thumbnail, the library's cover) may write only inside the returned
+/// folder. Delete Permanently and Empty Trash run only when this returns a
+/// folder. All of them use this one function.
 pub fn writable(root: &Path, cx: &gpui::App) -> Option<PathBuf> {
     let open = host::current(cx).map(|(open, _)| open);
     writable_in(open.as_deref(), root)
 }
 
-/// [`writable`], given the library open now.
+/// Does the work of [`writable`]. `open` is the root of the library that is
+/// open now, or `None`.
 pub fn writable_in(open: Option<&Path>, root: &Path) -> Option<PathBuf> {
     let open = open?.canonicalize().ok()?;
     let root = root.canonicalize().ok()?;
     (open == root).then_some(root)
 }
 
-/// `path` as a file inside the library at `root` (canonical), or why it may
-/// not be written: the desktop hand-off's check (`desktop::inside`), for a
-/// file that may not exist yet. Its folder is made canonical, the nearest
-/// part of it that exists followed to where it really is (so a link on the
-/// way that leads out of the library is caught), and what does not exist
-/// yet must be plain names. The file itself must not be a link: replacing
-/// or removing it then touches that name only, never what a link points at.
+/// Returns `path` as the path of a file inside the library at `root`, or an
+/// error message that says the file was not written. `root` must be canonical.
+/// This is the same check as the one for files passed to the desktop
+/// (`desktop::inside`), but for a file that may not exist yet.
+///
+/// The file's folder is made canonical. If part of the folder does not exist
+/// yet, the nearest part that exists is resolved to its real location, so a
+/// link on the way that points out of the library is found, and the parts that
+/// do not exist yet must be plain names. The file itself must not be a
+/// symbolic link. Then replacing or removing the file changes only that name,
+/// and never the file a link points at.
 pub fn confine(root: &Path, path: &Path) -> Result<PathBuf, String> {
     let outside = || {
         format!(
@@ -144,7 +161,7 @@ pub fn confine(root: &Path, path: &Path) -> Result<PathBuf, String> {
     let mut folder = loop {
         match existing.canonicalize() {
             Ok(canonical) => break canonical,
-            // A link that leads nowhere.
+            // This part is a symbolic link whose target does not exist.
             Err(_) if existing.symlink_metadata().is_ok() => return Err(outside()),
             Err(_) => {
                 let part = existing
@@ -168,17 +185,18 @@ pub fn confine(root: &Path, path: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// A library's name as production shows it: its folder's name without
-/// `.library` (`getLibraryName`).
+/// Returns a library's name as the Electron app shows it (`getLibraryName`):
+/// the name of its folder without `.library`.
 pub fn name(path: &str) -> String {
     crate::shell::library::split(path).0
 }
 
-/// Whether libraries the user keeps may be listed and looked at in this
-/// process: only where they may be opened. A process that cannot open
-/// them (a debug build without the flag, any automation) reads nothing of
-/// them, not even whether their folders exist; in a test build only the
-/// test folder's libraries are listed.
+/// Returns whether the library at `path` may be listed and read in this
+/// process. A library the user keeps may be listed only in a process that may
+/// open it. A process that may not open such libraries (a debug build started
+/// without the flag, or any automation) reads nothing about them, not even
+/// whether their folders exist. A library directly in the test folder of a
+/// test build is always listed.
 pub fn listed(path: &str, facts: &Facts) -> bool {
     let path = Path::new(path);
     match &facts.test_folder {
@@ -187,7 +205,7 @@ pub fn listed(path: &str, facts: &Facts) -> bool {
     }
 }
 
-/// The consents kept in the state, as identities.
+/// Returns the consents that the state holds, each as an [`Identity`].
 pub fn consents(cx: &gpui::App) -> Vec<Identity> {
     crate::state::get(cx)
         .library_consents
@@ -199,8 +217,11 @@ pub fn consents(cx: &gpui::App) -> Vec<Identity> {
         .collect()
 }
 
-/// Recent Libraries' rows: the listed libraries, pinned ones first, and
-/// the open library (a copy is never in the history) checked.
+/// Returns the rows of the Recent Libraries menu: the libraries that may be
+/// listed, with the pinned ones first. The open library's row is marked as
+/// current. If the open library is not among the rows, a row for it is added
+/// at the end; a copy is never among them, because a copy is not in the
+/// history.
 pub fn recent(cx: &gpui::App) -> Vec<crate::app_menu::Recent> {
     let facts = facts();
     let state = crate::state::get(cx);
@@ -231,7 +252,9 @@ pub fn recent(cx: &gpui::App) -> Vec<crate::app_menu::Recent> {
     rows
 }
 
-/// Clear History: only the open library stays listed.
+/// Does Clear History: removes every library except the open one from the
+/// history and from the pinned libraries, then rebuilds the app's menus and
+/// redraws the main window's content.
 pub fn clear_history(cx: &mut gpui::App) {
     let current = host::current(cx).map(|(root, _)| root.to_string_lossy().into_owned());
     crate::state::update(cx, |state| {
@@ -245,17 +268,20 @@ pub fn clear_history(cx: &mut gpui::App) {
     host::host(cx).update(cx, |_, cx| cx.notify());
 }
 
-/// The list of libraries, as production's `globalConfig.mjs` keeps it.
+/// The operations on the list of libraries, ported from the Electron app's
+/// `globalConfig.mjs`.
 pub mod history {
-    /// `addLibraryToHistory`: first, once, and the last library.
+    /// `addLibraryToHistory`: puts `path` first in the history, removes any
+    /// earlier entry for it, and makes it the last library.
     pub fn add(history: &mut Vec<String>, last: &mut Option<String>, path: &str) {
         history.retain(|known| known != path);
         history.insert(0, path.to_owned());
         *last = Some(path.to_owned());
     }
 
-    /// `removeLibraryFromHistory`: out of the history and Quick Access; the
-    /// last library becomes the first left.
+    /// `removeLibraryFromHistory`: removes `path` from the history and from
+    /// the pinned libraries (Quick Access). If it was the last library, the
+    /// last library becomes the first one that remains in the history.
     pub fn remove(
         history: &mut Vec<String>,
         pinned: &mut Vec<String>,
@@ -269,7 +295,9 @@ pub mod history {
         }
     }
 
-    /// Clear History: only the open library stays, in both lists.
+    /// Clear History: removes every library except the open one (`current`)
+    /// from the history and from the pinned libraries. If the open library was
+    /// not in the history, it is added to it.
     pub fn clear(history: &mut Vec<String>, pinned: &mut Vec<String>, current: Option<&str>) {
         history.retain(|known| Some(known.as_str()) == current);
         pinned.retain(|known| Some(known.as_str()) == current);
@@ -280,7 +308,8 @@ pub mod history {
         }
     }
 
-    /// `togglePinned`: pinned at the end, or unpinned.
+    /// `togglePinned`: unpins `path` if it is pinned; otherwise adds it at the
+    /// end of the pinned libraries.
     pub fn toggle_pinned(pinned: &mut Vec<String>, path: &str) {
         if pinned.iter().any(|known| known == path) {
             pinned.retain(|known| known != path);
@@ -289,7 +318,9 @@ pub mod history {
         }
     }
 
-    /// `updateLibraryPath`: a renamed library keeps its places.
+    /// `updateLibraryPath`: replaces the path `from` with `to` in the history
+    /// and in the pinned libraries, at the same positions, and in the last
+    /// library.
     pub fn rename(
         history: &mut [String],
         pinned: &mut [String],
@@ -307,8 +338,9 @@ pub mod history {
         }
     }
 
-    /// `updateLibraryPath`'s `libraryMeta`: the colour and icon follow a
-    /// renamed, moved or located library.
+    /// The `libraryMeta` part of `updateLibraryPath`: moves the colour and
+    /// icon stored for the path `from` to the path `to`, so a library that was
+    /// renamed, moved or located keeps them.
     pub fn rename_look(
         looks: &mut std::collections::BTreeMap<String, crate::state::LibraryLook>,
         from: &str,
@@ -319,8 +351,10 @@ pub mod history {
         }
     }
 
-    /// The Recent Libraries submenu's rows (`buildRecentLibrariesMenu`):
-    /// pinned libraries in the history first, then the rest.
+    /// Returns the paths for the rows of the Recent Libraries submenu
+    /// (`buildRecentLibrariesMenu`) in two lists: first the pinned libraries
+    /// that are in the history, then the libraries of the history that are not
+    /// pinned.
     pub fn recent_rows(history: &[String], pinned: &[String]) -> (Vec<String>, Vec<String>) {
         let first = pinned
             .iter()
@@ -336,8 +370,9 @@ pub mod history {
     }
 }
 
-/// `createLibrary`'s checks: the new library's folder, `<name>.library` in
-/// `parent`, or production's words for why not.
+/// The checks of `createLibrary`: returns the path of the new library's
+/// folder, `<name>.library` in `parent`, or the Electron app's error message
+/// when the name or the place is not allowed.
 pub fn new_library_path(name: &str, parent: &Path) -> Result<PathBuf, String> {
     use crate::i18n::en;
     let name = name.trim();
@@ -347,7 +382,8 @@ pub fn new_library_path(name: &str, parent: &Path) -> Result<PathBuf, String> {
     if name.contains(['/', '\\']) {
         return Err(en("Library name cannot contain slashes").to_owned());
     }
-    // `isInsideLibraryPackage`: no library inside another.
+    // `isInsideLibraryPackage`: a library may not be created inside another
+    // library's folder.
     if parent.ancestors().any(|folder| {
         folder
             .file_name()
@@ -358,7 +394,8 @@ pub fn new_library_path(name: &str, parent: &Path) -> Result<PathBuf, String> {
     }
     let path = parent.join(format!("{name}.library"));
     if path.exists() {
-        // Production opens what is there; this app makes only new ones.
+        // The Electron app opens the library that is already there. This app
+        // only creates new libraries, so it returns an error.
         return Err(en(
             "A library with that name already exists in the selected folder. Choose another location or open the existing library.",
         )
@@ -367,16 +404,19 @@ pub fn new_library_path(name: &str, parent: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// `locatedLibraryPath`: the library a Locate… folder dialog found, the
-/// chosen folder itself or the library of the same name inside it, if it
-/// holds `library.sqlite`.
+/// `locatedLibraryPath`: returns the library that the folder dialog of Locate…
+/// found. This is the chosen folder itself, or the folder named `name` inside
+/// it, whichever holds `library.sqlite`. Returns `None` when neither does.
 pub fn located(chosen: &Path, name: &std::ffi::OsStr) -> Option<PathBuf> {
     [chosen.to_path_buf(), chosen.join(name)]
         .into_iter()
         .find(|candidate| candidate.join("library.sqlite").is_file())
 }
 
-/// `renameLibrary`'s checks: the renamed folder beside the old one.
+/// The checks of `renameLibrary`: returns the path of the renamed folder,
+/// `<name>.library` in the same parent folder as the old one, or an error
+/// message when the name is not allowed or a library with that name is already
+/// there.
 pub fn renamed_path(path: &Path, name: &str) -> Result<PathBuf, String> {
     use crate::i18n::en;
     let name = name.trim();
@@ -389,7 +429,8 @@ pub fn renamed_path(path: &Path, name: &str) -> Result<PathBuf, String> {
     let parent = path.parent().unwrap_or(Path::new("/"));
     let renamed = parent.join(format!("{name}.library"));
     if renamed != path && renamed.exists() {
-        // Production's main process writes it in English, without a key.
+        // The Electron app's main process writes this message in English,
+        // without a translation key.
         return Err(format!(
             "A library named \"{name}\" already exists at that location"
         ));
@@ -460,12 +501,13 @@ mod tests {
         );
     }
 
-    /// The path a library the user keeps takes from the Library Manager to
-    /// an open application and on to the next library, with the probes
-    /// injected: admitted only with consent; opened as it is (not
-    /// detached, nothing of a copy written); locked while open; a switch
-    /// closes it, after which its old application reaches nothing, and
-    /// opens the next.
+    /// Follows a library the user keeps from the Library Manager to an open
+    /// application and then to a switch to another library. The checks of the
+    /// system are replaced by test values. The library is admitted only with
+    /// the user's consent. It is opened as it is: it is not detached, and no
+    /// file of a copy is written into it. It is locked while it is open. A
+    /// switch closes it, after which its old application answers no command,
+    /// and then opens the next library.
     #[test]
     fn a_kept_library_opens_as_it_is_and_a_switch_closes_it_first() {
         use crate::application::Application;
@@ -489,7 +531,8 @@ mod tests {
             seam: None,
             test_folder: None,
         };
-        // Asked first; opened once the user agreed.
+        // The user is asked first. The library is admitted once the user has
+        // agreed.
         let Decision::Ask { identity, .. } =
             admission::admit(&one, Origin::Manager, &release, &[], &not_running())
         else {
@@ -502,7 +545,8 @@ mod tests {
         let (events, _received) = std::sync::mpsc::channel();
         let first = Application::new(one.clone(), Kind::Real, events.clone());
         first.open(|_| {}).unwrap();
-        // Held while open: another application could not open it.
+        // The library is locked while it is open, so another application could
+        // not open it.
         assert!(picto_core::state::lock_library(&one).is_err());
         let watch: i64 = rusqlite::Connection::open(one.join("library.sqlite"))
             .unwrap()
@@ -513,7 +557,8 @@ mod tests {
         assert_eq!(watch, 1, "a kept library was detached");
         assert!(!one.join(crate::application::MARKER).exists());
         assert!(!one.join(".gpui-detached").exists());
-        // The switch: the first closes (and lets go), the second opens.
+        // This is the switch: the first application closes and releases its
+        // lock, then the second opens.
         first.close();
         assert!(
             futures::executor::block_on(first.dispatch("sidebar.counts", serde_json::json!({})))
@@ -529,7 +574,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
         assert_eq!(counts["all"].as_u64(), Some(0));
-        // The first application still reaches nothing.
+        // The first application still answers no command.
         assert!(
             futures::executor::block_on(first.dispatch("sidebar.counts", serde_json::json!({})))
                 .unwrap()
@@ -540,10 +585,10 @@ mod tests {
     }
 
     /// The edits that cannot be undone (Delete Permanently, Empty Trash,
-    /// rendered and regenerated thumbnails, Set as Thumbnail, the cover)
-    /// all ask `writable`: refused with no library open, for a library
-    /// that is not the open one, and allowed for the open one whichever
-    /// way it was admitted.
+    /// rendered and regenerated thumbnails, Set as Thumbnail, the cover) all
+    /// call `writable`. It refuses when no library is open and when the
+    /// library is not the open one. It allows the open library, whichever way
+    /// that library was admitted.
     #[test]
     fn edits_are_refused_unless_their_library_is_the_open_one() {
         let folder = tempfile::tempdir().unwrap();
@@ -552,7 +597,8 @@ mod tests {
         assert_eq!(writable_in(None, &kept), None);
         assert_eq!(writable_in(Some(&other), &kept), None);
         assert_eq!(writable_in(Some(&kept), &kept), Some(kept.clone()));
-        // Through the app: nothing is open in a fresh one.
+        // `writable` reads the open library from the app. In a new app no
+        // library is open.
         let cx = gpui::TestAppContext::single();
         cx.update(|cx| {
             assert_eq!(writable(&kept, cx), None);
@@ -560,8 +606,8 @@ mod tests {
         });
     }
 
-    /// Every path an edit writes or removes is checked against the open
-    /// library's folder, as the desktop hand-offs are.
+    /// Every path that an edit writes or removes is checked to be inside the
+    /// open library's folder, as the paths passed to the desktop are.
     #[cfg(unix)]
     #[test]
     fn writes_are_confined_to_the_open_library() {
@@ -570,7 +616,8 @@ mod tests {
         let elsewhere = tempfile::tempdir().unwrap();
         let outside = elsewhere.path().canonicalize().unwrap();
         std::fs::create_dir_all(root.join("blobs/t/ab")).unwrap();
-        // A file there, a file to be made, folders to be made.
+        // These are allowed: a file that exists, a file that does not exist
+        // yet, and a file in folders that do not exist yet.
         for inside in [
             root.join("library.sqlite"),
             root.join(".picto-library-cover.png"),
@@ -584,7 +631,9 @@ mod tests {
                 inside.display()
             );
         }
-        // The library's folder itself, a sibling, a step out, elsewhere.
+        // These are refused: the library's folder itself, a file in a sibling
+        // folder, a path that leaves the library with `..`, and a file
+        // somewhere else.
         for refused in [
             root.clone(),
             folder
@@ -598,19 +647,24 @@ mod tests {
         ] {
             assert!(confine(&root, &refused).is_err(), "{}", refused.display());
         }
-        // A folder that is a link out of the library.
+        // A folder that is a symbolic link pointing out of the library is
+        // refused.
         std::os::unix::fs::symlink(&outside, root.join("blobs/f")).unwrap();
         assert!(confine(&root, &root.join("blobs/f/x.png")).is_err());
         assert!(confine(&root, &root.join("blobs/f/new/x.png")).is_err());
-        // The file itself a link, wherever it points.
+        // A file that is itself a symbolic link is refused, whether it points
+        // outside the library or inside it.
         std::os::unix::fs::symlink(outside.join("x.png"), root.join("dangling.png")).unwrap();
         std::os::unix::fs::symlink(root.join("library.sqlite"), root.join("inner.png")).unwrap();
         assert!(confine(&root, &root.join("dangling.png")).is_err());
         assert!(confine(&root, &root.join("inner.png")).is_err());
-        // A folder that is a dangling link.
+        // A folder that is a symbolic link to a target that does not exist is
+        // refused.
         std::os::unix::fs::symlink(outside.join("gone"), root.join("blobs/g")).unwrap();
         assert!(confine(&root, &root.join("blobs/g/x.png")).is_err());
-        // Thumbnails drawn here and set aside while made again.
+        // The same check applies to the thumbnail this app renders
+        // (`rendered_target`) and to the old thumbnail that is renamed to a
+        // backup while a new one is made (`set_aside`).
         let jpeg = root.join("blobs/t/ab/abcd.jpg");
         assert_eq!(
             crate::grid::thumbnails::rendered_target(&root, &jpeg).unwrap(),
@@ -632,9 +686,9 @@ mod tests {
         assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1);
     }
 
-    /// Locate… finds the library in the folder chosen, or the library of
-    /// the same name inside it, as `locatedLibraryPath` does; anything else
-    /// is not found.
+    /// Locate… finds the library when the chosen folder is the library, or
+    /// when the library of the same name is inside the chosen folder, as
+    /// `locatedLibraryPath` does. In any other case it finds nothing.
     #[test]
     fn locate_finds_the_library_chosen_or_the_one_inside_the_folder() {
         let folder = tempfile::tempdir().unwrap();

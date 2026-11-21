@@ -1,15 +1,20 @@
-//! The disposable-copy rules: which folder this app opens as a copy
-//! ([`guard`]), how a copy is made ([`make_copy`]) and how it is cut loose
-//! from the library it was copied from ([`detach`]).
+//! The rules for disposable copies of a library. [`guard`] decides whether a
+//! folder is a copy that this app may open. [`make_copy`] makes a copy.
+//! [`detach`] stops a copy from continuing the cloud sync, watched folders,
+//! subscription runs and import jobs of the library it was copied from.
 use std::path::{Path, PathBuf};
 
-/// The file `run.sh` writes into a copy, naming the library it copied.
+/// The name of the file that `run.sh` writes into a copy. The file's text is
+/// the path of the library that was copied.
 pub const MARKER: &str = ".gpui-disposable";
-/// What the folder holding a copy is called (`run.sh`, `million.sh`).
+/// The start of the name of the folder that holds a copy. `run.sh` and
+/// `million.sh` make folders with this name.
 const SCRATCH_PREFIX: &str = "picto-gpui-";
-/// Written once the copy has been cut loose the first time.
+/// The name of the file that [`detach`] writes into a copy after it has
+/// detached the copy for the first time.
 const DETACHED: &str = ".gpui-detached";
-/// Written once the copy has a cloud identity of its own.
+/// The name of the file that [`detach`] writes into a copy after it has given
+/// the copy a library id and a device id of its own for cloud sync.
 const CLOUD_IDENTITY: &str = ".gpui-cloud-identity";
 
 /// Checks that `root` is a marked disposable copy and not the library it was
@@ -37,26 +42,30 @@ pub fn guard(root: &Path) -> Result<PathBuf, String> {
             source.display()
         ));
     }
-    // A marker is only a file: one copied along with a library, or left in
-    // a folder that was moved, would open something the user keeps. A
-    // disposable copy is also where the scripts put it: in a folder of its
-    // own named `picto-gpui-…`, directly in a temporary folder.
+    // The marker alone does not prove that the folder is a copy. A marker file
+    // can be copied along with a library, or stay in a folder that the user
+    // moved, and then the folder is one the user keeps. So the folder must
+    // also be where the scripts put a copy: inside a folder named
+    // `picto-gpui-…` that is directly inside a temporary folder.
     if !in_scratch(&root) {
         return Err(format!(
             "{} is not in a picto-gpui-… folder of a temporary folder, where run.sh and million.sh make copies; it is not opened",
             root.display()
         ));
     }
-    // A link in the copy leads out of it: what is written or deleted through
-    // it lands wherever it points, which may be the real library.
+    // A symbolic link in the copy points outside the copy. A file written or
+    // deleted through the link is written or deleted where the link points,
+    // and that may be the real library.
     if let Some(link) = first_link(&root) {
         return Err(format!(
             "{} is a symbolic link inside the copy; it is not opened",
             link.display()
         ));
     }
-    // The same database file reached another way (a hard link) is the real
-    // library, whatever the folder is called.
+    // If the copy's `library.sqlite` is a hard link to the source's
+    // `library.sqlite`, both names are the same file, and writing to the copy
+    // would write to the real library. Such a folder is refused, whatever it
+    // is called.
     let (copy, real) = (root.join("library.sqlite"), source.join("library.sqlite"));
     if same_file::is_same_file(&copy, &real).unwrap_or(false) {
         return Err(format!(
@@ -68,8 +77,9 @@ pub fn guard(root: &Path) -> Result<PathBuf, String> {
     Ok(root)
 }
 
-/// The temporary folders a copy may live in: the system's, and `/tmp` where
-/// the scripts make theirs.
+/// Returns the temporary folders that a copy may be in: the system's temporary
+/// folder and, on Unix, `/tmp` and `/var/tmp`. The scripts make their copies
+/// in `/tmp`.
 fn scratch_folders() -> Vec<PathBuf> {
     let mut folders = vec![std::env::temp_dir()];
     if cfg!(unix) {
@@ -81,7 +91,8 @@ fn scratch_folders() -> Vec<PathBuf> {
         .collect()
 }
 
-/// Whether the (canonical) `root` is `<temporary folder>/picto-gpui-…/<name>`.
+/// Returns whether `root`, which must be a canonical path, has the form
+/// `<temporary folder>/picto-gpui-…/<name>`.
 fn in_scratch(root: &Path) -> bool {
     let Some(holder) = root.parent() else {
         return false;
@@ -96,21 +107,22 @@ fn in_scratch(root: &Path) -> bool {
             .is_some_and(|parent| scratch_folders().iter().any(|folder| folder == parent))
 }
 
-/// Makes a disposable copy of the library at `source` and returns its root,
-/// for opening with this app: what `run.sh` does on macOS, done here so
-/// that every system has it (`picto-gpui-spike --make-copy <library>`).
+/// Makes a disposable copy of the library at `source` and returns the copy's
+/// root, which this app can then open. `run.sh` does the same on macOS. This
+/// function exists so that every operating system has it. The command is
+/// `picto-gpui-spike --make-copy <library>`.
 ///
 /// The copy goes in a new `picto-gpui-library.…` folder of the system's
 /// temporary folder, where [`guard`] allows one. The database is copied with
 /// SQLite's online backup from a read-only connection, which includes
-/// committed WAL data and never writes the live files; it is copied first,
-/// so every file it names is already there when the rest is copied.
-/// Everything else in the library folder is copied with the system's own
-/// file copy, which clones where the file system can (APFS, btrfs, XFS,
-/// ReFS) and copies in full elsewhere. A symbolic link anywhere in the
-/// library is refused, as the guard would refuse it in the copy. The marker
-/// names the source, and the copy is detached as every launch detaches it.
-/// The source is only read; on any failure the new folder is removed.
+/// committed WAL data and never writes the live files. It is copied first, so
+/// every file it names is already there when the rest is copied. Everything
+/// else in the library folder is copied with the system's own file copy, which
+/// clones where the file system can (APFS, btrfs, XFS, ReFS) and copies in
+/// full elsewhere. A symbolic link anywhere in the library is refused, as the
+/// guard would refuse it in the copy. The marker file names the source, and
+/// the copy is detached with [`detach`], as it is again on every launch. The
+/// source is only read. On any failure the new folder is removed.
 pub fn make_copy(source: &Path) -> Result<PathBuf, String> {
     let source = source
         .canonicalize()
@@ -159,9 +171,11 @@ pub fn make_copy(source: &Path) -> Result<PathBuf, String> {
     guard(&kept.join(name))
 }
 
-/// The database's own files, which the online backup has already copied,
-/// and the lock an application holding the library open keeps (a locked
-/// file cannot be read on Windows, and a copy is not open anywhere).
+/// Returns whether `name` is a file that [`make_copy`] must not copy with the
+/// file copy. These are the database's own files, which the online backup has
+/// already copied, and the lock file that an application keeps while it has
+/// the library open. A locked file cannot be read on Windows, and the copy is
+/// not open in any application, so it needs no lock file.
 fn is_database_file(name: &str) -> bool {
     matches!(
         name,
@@ -169,7 +183,8 @@ fn is_database_file(name: &str) -> bool {
     ) || name == picto_core::state::LIBRARY_LOCK_FILE
 }
 
-/// Copies `from` to `to`, folders and all, refusing symbolic links.
+/// Copies the file or folder `from` to `to`, with everything inside a folder.
+/// Returns an error if it finds a symbolic link.
 pub(crate) fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     let kind = from
         .symlink_metadata()
@@ -197,8 +212,10 @@ pub(crate) fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     }
 }
 
-/// The first symbolic link among the copy's own entries and its blob
-/// folders, where the application writes and deletes.
+/// Returns the first symbolic link among the entries directly inside the
+/// copy's root and directly inside its `blobs` folder, or `None` if there is
+/// none. It also checks whether `blobs/f` or `blobs/t` is itself a link. The
+/// application writes and deletes files in these folders.
 fn first_link(root: &Path) -> Option<PathBuf> {
     let folders = [
         root.to_path_buf(),
@@ -226,36 +243,37 @@ fn first_link(root: &Path) -> Option<PathBuf> {
         .cloned()
 }
 
-/// Cuts the copy loose from work the real library has going on elsewhere,
-/// before the application starts its workers on it:
-/// - cloud sync is disconnected, so no snapshot of the copy is ever written
-///   to the user's cloud folder;
-/// - watched folders are switched off, so nothing outside the copy is
-///   imported (or deleted after import);
-/// - runs that were queued or running in the real library are cancelled, and
-///   schedules have no next run, so no subscription downloads unless the user
-///   starts it. Choosing a schedule again sets its next run;
-/// - no import job deletes the file it imports: a job queued in the real
-///   library by a moving import, a subscription or a watched folder names a
-///   file outside the copy, and would remove the user's only original once
-///   the copy had it;
-/// - the first time, import jobs still queued from the real library are
-///   marked failed rather than run, and the stored file paths, which the
-///   database backup carries over pointing into the real library, are
-///   pointed at the copy's own files, so that nothing opened, revealed,
-///   copied or dragged out before the application repairs them is a file of
-///   the real library.
+/// Stops the copy from continuing work that belongs to the real library. It
+/// runs before the application starts its workers on the copy. It does this:
+/// - It disconnects cloud sync, so no snapshot of the copy is ever written
+///   to the user's cloud folder.
+/// - It switches off watched folders, so nothing outside the copy is
+///   imported (or deleted after import).
+/// - It cancels the runs that were queued or running in the real library and
+///   clears every schedule's next run, so no subscription downloads unless
+///   the user starts it. Choosing a schedule again sets its next run.
+/// - It clears `delete_after_ingest` on every import job, so no job deletes
+///   the file it imports. A job that a moving import, a subscription or a
+///   watched folder queued in the real library names a file outside the
+///   copy, and would remove the user's only original once the copy had it.
+/// - The first time only, it marks the import jobs that are still queued
+///   from the real library as failed, so they are not run. It also changes
+///   the stored file paths, which the database backup copies while they
+///   still point into the real library, so that they point at the copy's
+///   own files. Then no file that is opened, revealed, copied or dragged
+///   out before the application repairs the paths is a file of the real
+///   library.
+/// - Once only, it gives the copy a new library id and a new device id for
+///   cloud sync, and records that in `.gpui-cloud-identity`. A copy that is
+///   connected to a cloud folder then never writes into, or purges from,
+///   the folder of the library it was copied from.
 ///
-/// - the copy has a cloud identity of its own (a new library and device
-///   id, once, kept in `.gpui-cloud-identity`), so a copy connected to a
-///   cloud folder never writes into, or purges from, the folder of the
-///   library it was copied from.
-///
-/// Each step is idempotent; the copy is detached again on every launch.
-/// `keep_cloud` keeps the cloud folder the user connected the copy to in
-/// this run: a copy opened again after a restore (`host::restore`).
-/// A folder without the marker is a library the user keeps: it is refused
-/// before anything is opened.
+/// Each step can be repeated without changing the result, and the copy is
+/// detached again on every launch. When `keep_cloud` is true, the cloud
+/// folder that the user connected the copy to in this run stays connected.
+/// This is used when a copy is opened again after a restore
+/// (`host::restore`). A folder without the marker is a library the user
+/// keeps, so `detach` returns an error for it before it opens the database.
 pub fn detach(root: &Path, keep_cloud: bool) -> Result<(), String> {
     if !root.join(MARKER).is_file() {
         return Err(format!(
@@ -316,7 +334,8 @@ pub fn detach(root: &Path, keep_cloud: bool) -> Result<(), String> {
                 [&now],
             )?;
             if let Some(source) = &source {
-                // `substr` rather than `LIKE`: a path may hold `%` or `_`.
+                // This uses `substr` and not `LIKE`, because a path may
+                // contain `%` or `_`, which `LIKE` treats as wildcards.
                 let copy = root.to_string_lossy();
                 transaction.execute(
                     "UPDATE media_file
@@ -345,8 +364,8 @@ mod tests {
     use super::{MARKER, detach, guard};
     use std::path::{Path, PathBuf};
 
-    /// A folder as `run.sh` makes one: `picto-gpui-library.…` in the
-    /// temporary folder.
+    /// Makes a folder as `run.sh` makes one: a folder named
+    /// `picto-gpui-library.…` in the temporary folder.
     fn scratch() -> tempfile::TempDir {
         tempfile::Builder::new()
             .prefix("picto-gpui-library.")
@@ -354,9 +373,10 @@ mod tests {
             .unwrap()
     }
 
-    /// `--make-copy`: a marked, detached copy in a folder the guard allows,
-    /// with the database backed up and the rest copied; the source is left
-    /// as it was, and a library holding a link is refused.
+    /// `--make-copy` makes a marked, detached copy in a folder that the guard
+    /// allows. The database is backed up and the other files are copied. The
+    /// source is left as it was. A library that contains a symbolic link is
+    /// refused.
     #[test]
     fn make_copy_makes_an_openable_copy_and_leaves_the_source_alone() {
         let elsewhere = tempfile::tempdir().unwrap();
@@ -383,7 +403,8 @@ mod tests {
             .unwrap();
         assert_eq!(text, "kept");
         assert!(!source.join(MARKER).exists());
-        // Windows keeps an open database's files from being removed.
+        // Windows does not let an open database's files be removed, so the
+        // connection is closed first.
         drop(copied);
         std::fs::remove_dir_all(&holder).unwrap();
 
@@ -403,32 +424,35 @@ mod tests {
         std::fs::create_dir_all(&source).unwrap();
         std::fs::create_dir_all(&copy).unwrap();
         std::fs::write(source.join("library.sqlite"), b"real").unwrap();
-        // Unmarked: refused.
+        // A folder without the marker is refused.
         assert!(guard(&copy).is_err());
         assert!(guard(&source).is_err());
-        // Marked, naming its source: opened.
+        // A folder whose marker names its source is opened.
         std::fs::write(copy.join(MARKER), format!("{}\n", source.display())).unwrap();
         std::fs::write(copy.join("library.sqlite"), b"copy").unwrap();
         assert_eq!(guard(&copy).unwrap(), copy.canonicalize().unwrap());
-        // A marker planted in the real library, or in a folder inside it.
+        // A marker in the real library, or in a folder inside it, does not
+        // make that folder a copy.
         std::fs::write(source.join(MARKER), format!("{}\n", source.display())).unwrap();
         assert!(guard(&source).is_err());
         let inside = source.join("blobs");
         std::fs::create_dir_all(&inside).unwrap();
         std::fs::write(inside.join(MARKER), format!("{}\n", source.display())).unwrap();
         assert!(guard(&inside).is_err());
-        // A copy whose database is the real one under another name.
+        // A copy whose database is a hard link to the real database is
+        // refused.
         std::fs::remove_file(copy.join("library.sqlite")).unwrap();
         std::fs::hard_link(source.join("library.sqlite"), copy.join("library.sqlite")).unwrap();
         assert!(guard(&copy).is_err());
-        // An empty marker.
+        // A copy with an empty marker is refused.
         std::fs::remove_file(copy.join("library.sqlite")).unwrap();
         std::fs::write(copy.join(MARKER), "\n").unwrap();
         assert!(guard(&copy).is_err());
     }
 
-    /// A marker travels with the files: a marked copy that was moved or
-    /// copied out of the scratch folders is something the user keeps.
+    /// The marker file is moved and copied along with the other files. A
+    /// marked copy that was moved or copied out of the temporary folders is
+    /// treated as a library the user keeps, and is refused.
     #[test]
     fn a_marked_folder_outside_the_scratch_folders_is_refused() {
         let elsewhere = tempfile::tempdir().unwrap();
@@ -439,19 +463,21 @@ mod tests {
             std::fs::write(folder.join("library.sqlite"), b"copy").unwrap();
             std::fs::write(folder.join(MARKER), format!("{}\n", source.display())).unwrap();
         };
-        // Named as a copy's folder is, but not in a temporary folder.
+        // This folder has the name of a copy's folder but is not in a
+        // temporary folder.
         let moved = elsewhere
             .path()
             .join("picto-gpui-library.moved")
             .join("Kept.library");
         mark(&moved);
         assert!(guard(&moved).is_err());
-        // In a temporary folder, but not in a folder of the scripts' naming.
+        // This folder is in a temporary folder, but not inside a folder named
+        // `picto-gpui-…`.
         let stray = tempfile::tempdir().unwrap();
         let unnamed = stray.path().join("Kept.library");
         mark(&unnamed);
         assert!(guard(&unnamed).is_err());
-        // Deeper than the scripts put it.
+        // This folder is one level deeper than where the scripts put a copy.
         let scratch = scratch();
         let deep = scratch.path().join("more").join("Kept.library");
         mark(&deep);
@@ -461,7 +487,8 @@ mod tests {
         assert!(guard(&placed).is_ok());
     }
 
-    /// What is written through a link lands where the link points.
+    /// A file written through a symbolic link is written where the link
+    /// points, so a copy with a link in it is refused.
     #[cfg(unix)]
     #[test]
     fn a_copy_with_a_link_in_it_is_refused() {
@@ -484,9 +511,6 @@ mod tests {
         }
     }
 
-    /// Opens the application on a real copy, sends commands as the Electron
-    /// renderer does, and sees the invalidation of a write arrive.
-
     /// `--detach` and every launch detach only a marked copy: a library
     /// the user keeps is refused before its database is opened, and left
     /// exactly as it was.
@@ -507,11 +531,12 @@ mod tests {
         assert!(!root.join(super::DETACHED).exists());
     }
 
-    /// A copy synced to a cloud folder writes, and purges, only under an
-    /// identity of its own: never the library's it was copied from, whose
-    /// snapshots and originals in that folder it could otherwise replace or
-    /// remove. The identity stays across launches, and a copy opened again
-    /// after a restore keeps the folder the user connected it to.
+    /// A copy that syncs to a cloud folder has a library id and a device id of
+    /// its own, different from those of the library it was copied from. With
+    /// the source's ids, the copy could replace or remove the source's
+    /// snapshots and originals in that folder. The copy keeps its ids across
+    /// launches. A copy that is opened again after a restore (`keep_cloud`)
+    /// keeps the cloud folder the user connected it to.
     #[test]
     fn a_copy_never_syncs_as_the_library_it_was_copied_from() {
         let scratch = tempfile::tempdir().unwrap();
@@ -560,8 +585,8 @@ mod tests {
     #[test]
     fn a_copy_keeps_no_cloud_watch_or_queued_work() {
         let scratch = tempfile::tempdir().unwrap();
-        // The copy's marker names the library it was made from.
-        // An absolute path of this platform's own form.
+        // The copy's marker names the library it was made from. The path is
+        // absolute and in the form of the platform the test runs on.
         let source = PathBuf::from(if cfg!(windows) {
             r"C:\Work\Pictures\Real.library"
         } else {
@@ -615,9 +640,10 @@ mod tests {
         }
         drop(connection);
         detach(scratch.path(), false).unwrap();
-        // An import started in the copy and cut short by quitting is the
-        // user's own: the next launch leaves it queued, but still deletes
-        // nothing it imports from.
+        // An import that the user started in the copy, and that was still
+        // queued when the application quit, belongs to the copy. The next
+        // launch leaves it queued, but still clears its `delete_after_ingest`,
+        // so the file it imports is not deleted.
         rusqlite::Connection::open(scratch.path().join("library.sqlite"))
             .unwrap()
             .execute_batch(
@@ -626,7 +652,7 @@ mod tests {
                  VALUES (4, 'own', 'file', '/home/me/Desktop/own.png', '{}', 1, 'pending', 'now', 'now', 'now');",
             )
             .unwrap();
-        // Again, on the next launch.
+        // Detach again, as the next launch does.
         detach(scratch.path(), false).unwrap();
         let connection = rusqlite::Connection::open(scratch.path().join("library.sqlite")).unwrap();
         let one = |sql: &str| -> String {
@@ -646,8 +672,8 @@ mod tests {
             one("SELECT group_concat(status) FROM subscription_run ORDER BY run_id"),
             "cancelled,succeeded"
         );
-        // No job deletes its source, and what the real library had queued
-        // is not run.
+        // No job deletes the file it imports, and the jobs that the real
+        // library had queued are marked failed and not run.
         assert_eq!(
             one("SELECT CAST(sum(delete_after_ingest) AS TEXT) FROM ingest_job"),
             "0"
@@ -658,7 +684,8 @@ mod tests {
             ),
             "failed,failed,succeeded,pending"
         );
-        // Stored paths lead into the copy; the neighbour's are left alone.
+        // The stored path of the source's file now points into the copy. The
+        // path of the neighbour folder's file is unchanged.
         assert_eq!(
             one("SELECT file_path FROM media_file WHERE file_id = 1"),
             stored(scratch.path(), "aa")

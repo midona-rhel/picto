@@ -1,10 +1,12 @@
-//! The text the log window copies and the support report it saves
-//! (`supportReport.ts`, and `picto:diagnostics:save` in the main process's
-//! `registerHandlers.mjs`).
+//! Builds the text that the log window copies to the clipboard and the support
+//! report that it saves to a file. It ports `supportReport.ts`, and
+//! `picto:diagnostics:save` in the Electron main process's
+//! `registerHandlers.mjs`.
 use super::Entry;
 use serde_json::Value;
 
-/// `WorkerDiagnostic`, as `diagnostics.snapshot` answers it.
+/// `WorkerDiagnostic`: one worker's state, as `diagnostics.snapshot` returns
+/// it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Worker {
     pub id: String,
@@ -17,7 +19,8 @@ pub struct Worker {
 }
 
 impl Worker {
-    /// The workers of a `diagnostics.snapshot` answer.
+    /// Reads the workers from the answer of `diagnostics.snapshot`. A missing
+    /// text field becomes an empty string and a missing number becomes 0.
     pub fn list(snapshot: &Value) -> Vec<Worker> {
         let text = |worker: &Value, key: &str| {
             worker
@@ -49,7 +52,8 @@ impl Worker {
     }
 }
 
-/// `formatDiagnosticEntry`: every field, tab-delimited, untruncated.
+/// `formatDiagnosticEntry`: returns all of an entry's fields in full,
+/// separated by tabs.
 pub fn entry_line(entry: &Entry) -> String {
     let duration = match (entry.duration_ms, entry.native_duration_ms) {
         (None, _) => String::new(),
@@ -67,11 +71,14 @@ pub fn entry_line(entry: &Entry) -> String {
     .join("\t")
 }
 
-/// `DISPLAY_COLUMN_WIDTHS`.
+/// `DISPLAY_COLUMN_WIDTHS`: the width in characters of each of the first five
+/// columns of a line in the log window.
 const DISPLAY_COLUMNS: [usize; 5] = [14, 8, 10, 34, 38];
 
-/// `formatDiagnosticDisplayEntry`: one line with stable character columns
-/// and no truncation, with `time` in the first column.
+/// `formatDiagnosticDisplayEntry`: returns one line for the log window. Each
+/// of the first five fields is padded with spaces to its width in
+/// `DISPLAY_COLUMNS`, so the columns line up in a monospace font. No field is
+/// cut short. `time` replaces the timestamp in the first column.
 pub fn display_line(entry: &Entry, time: &str) -> String {
     let line = entry_line(entry);
     let mut fields: Vec<&str> = line.split('\t').collect();
@@ -80,8 +87,9 @@ pub fn display_line(entry: &Entry, time: &str) -> String {
     let mut out = String::new();
     for (field, width) in fields.iter().zip(DISPLAY_COLUMNS) {
         out.push_str(field);
-        // `padEnd` counts UTF-16 units; the fields are ASCII but for a
-        // target, where characters are close enough.
+        // The Electron app's `padEnd` counts UTF-16 units and this loop counts
+        // characters. The fields are ASCII, except that a target may not be,
+        // and for a target the difference is small enough to ignore.
         for _ in field.chars().count()..width {
             out.push(' ');
         }
@@ -90,8 +98,9 @@ pub fn display_line(entry: &Entry, time: &str) -> String {
     out
 }
 
-/// `formatTime`: the local time of day on the 24-hour clock, with
-/// milliseconds.
+/// `formatTime`: returns the timestamp as the local time of day on the 24-hour
+/// clock, with milliseconds. A timestamp that cannot be parsed is returned
+/// unchanged.
 pub fn local_time(timestamp: &str) -> String {
     chrono::DateTime::parse_from_rfc3339(timestamp)
         .map(|time| {
@@ -102,8 +111,10 @@ pub fn local_time(timestamp: &str) -> String {
         .unwrap_or_else(|_| timestamp.to_owned())
 }
 
-/// `scrubSupportText`: home folders, e-mail addresses, bearer tokens and
-/// the paths and queries of links are taken out.
+/// `scrubSupportText`: removes personal data from the text. A home folder
+/// becomes `~`, an e-mail address becomes `<email>`, a bearer token becomes
+/// `<redacted>`, and a link keeps its origin while its path and query become
+/// `<redacted>`.
 pub fn scrub(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let chars: Vec<char> = text.chars().collect();
@@ -141,7 +152,8 @@ pub fn scrub(text: &str) -> String {
                 continue;
             }
         }
-        // `Bearer <token>`
+        // The word `Bearer`, then whitespace, then a token. The token is
+        // replaced by `<redacted>`.
         if at_word_start && lower_starts_with(here, "bearer") {
             let spaces = here[6..].iter().take_while(|c| c.is_whitespace()).count();
             let token = here[6 + spaces..]
@@ -155,7 +167,9 @@ pub fn scrub(text: &str) -> String {
                 continue;
             }
         }
-        // `https?://…` up to whitespace: its origin is kept.
+        // A link that starts with `http://` or `https://` and runs up to the
+        // next whitespace. Its origin is kept and the rest is replaced by
+        // `/<redacted>`. A link that cannot be parsed becomes `<url>`.
         if at_word_start
             // i18n: a link's scheme
             && (lower_starts_with(here, "http://") || lower_starts_with(here, "https://"))
@@ -172,7 +186,7 @@ pub fn scrub(text: &str) -> String {
             index += length;
             continue;
         }
-        // An e-mail address.
+        // An e-mail address, which is replaced by `<email>`.
         if at_word_start
             && (here[0].is_ascii_alphanumeric() || "._%+-".contains(here[0]))
             && let Some(length) = email_at(
@@ -208,8 +222,9 @@ fn lower_starts_with(chars: &[char], prefix: &str) -> bool {
             .all(|(a, b)| a == b.to_ascii_lowercase())
 }
 
-/// `\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b`, case-insensitive, at the
-/// start of `text`: its length in characters.
+/// Returns the length in characters of the e-mail address at the start of
+/// `text`, or `None` if there is none. An address is what the case-insensitive
+/// pattern `\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b` matches.
 fn email_at(text: &str) -> Option<usize> {
     let local = text
         .chars()
@@ -222,7 +237,8 @@ fn email_at(text: &str) -> Option<usize> {
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric() || ".-".contains(*c))
         .collect();
-    // The longest domain that ends in a dot and two or more letters.
+    // This finds the longest domain that ends in a dot followed by two or more
+    // letters.
     (0..domain.len()).rev().find_map(|end| {
         let candidate = &domain[..=end];
         let dot = candidate.iter().rposition(|c| *c == '.')?;
@@ -236,9 +252,10 @@ fn email_at(text: &str) -> Option<usize> {
     })
 }
 
-/// `buildSupportReport`, with the version and host lines the main process
-/// adds when it saves the report. `runtime` and `language` stand for the
-/// user agent and `navigator.language`.
+/// `buildSupportReport`: returns the text of the support report, scrubbed with
+/// [`scrub`]. It includes the Version and Host lines that the Electron main
+/// process adds when it saves the report. `runtime` and `language` take the
+/// place of the user agent and `navigator.language`.
 pub fn build(
     entries: &[Entry],
     workers: &[Worker],
@@ -284,17 +301,19 @@ pub fn build(
     scrub(&lines.join("\n"))
 }
 
-/// `picto-support-<stamp>.txt`, the stamp being the time in UTC with its
-/// colons and dot made dashes.
+/// Returns the report's file name, `picto-support-<stamp>.txt`. The stamp is
+/// `created`, the time in UTC, with each colon and dot replaced by a dash.
 pub fn file_name(created: &str) -> String {
     format!("picto-support-{}.txt", created.replace([':', '.'], "-"))
 }
 
-/// The main process refuses an empty report and one over 10 MB.
+/// The largest report that [`write`] saves, 10 MB. The Electron main process
+/// refuses an empty report and one over 10 MB.
 pub const MAX_BYTES: usize = 10 * 1024 * 1024;
 
-/// Writes the report where the user chose, readable by the user only on
-/// Unix (`mode: 0o600`).
+/// Writes the report to `path`, the file the user chose. On Unix the file is
+/// created with `mode: 0o600`, so only the user can read it. An empty report,
+/// or one over [`MAX_BYTES`], is not written and gives an error.
 pub fn write(path: &std::path::Path, report: &str) -> std::io::Result<()> {
     if report.is_empty() || report.len() > MAX_BYTES {
         return Err(std::io::Error::other(
@@ -308,8 +327,9 @@ pub fn write(path: &std::path::Path, report: &str) -> std::io::Result<()> {
     std::io::Write::write_all(&mut options.open(path)?, report.as_bytes())
 }
 
-/// The operating system, its version and architecture, as `platform()
-/// release() arch()` write them for the host line.
+/// Returns the text of the report's Host line: the operating system, its
+/// version and its architecture, written as Node's `platform()`, `release()`
+/// and `arch()` write them.
 pub fn host() -> String {
     let platform = match std::env::consts::OS {
         "macos" => "darwin",

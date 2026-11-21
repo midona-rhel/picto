@@ -1,41 +1,47 @@
-//! The first run's list of libraries, seeded from the Electron app's. That
-//! app keeps its list in `config.json` (`globalConfig.mjs`:
-//! `libraryHistory`, `pinnedLibraries`, and each library's colour and icon
-//! in `libraryMeta`) in its folder of the per-user
-//! application data (`app.getPath('appData')`/`picto`): on macOS
+//! Fills this app's list of libraries on the first run from the Electron app's
+//! list. The Electron app keeps its list in `config.json` (`globalConfig.mjs`:
+//! `libraryHistory`, `pinnedLibraries`, and each library's colour and icon in
+//! `libraryMeta`). The file is in the folder `picto` of the per-user
+//! application data (`app.getPath('appData')`): on macOS
 //! `~/Library/Application Support/picto/config.json`, on Windows
 //! `%APPDATA%\picto\config.json`, on Linux
 //! `$XDG_CONFIG_HOME/picto/config.json` or `~/.config/picto/config.json`
 //! (`state::config_folder`).
 //!
-//! Once only (this app's own list empty and never seeded before), and only
-//! in a process that may list libraries the user keeps at all
-//! (`Facts::permits`: never in a debug build without the flag, never under
-//! automation), the file is read, read-only, and its entries copied into
-//! this app's own state; that it was done is kept (`librariesSeeded`), so it
-//! never is again. Seeding only lists: it gives no consent, opens nothing
-//! and sets no last library. A missing, unreadable or malformed file seeds
-//! nothing and is not an error.
+//! This happens once only, when this app's own list is empty and was never
+//! seeded before. It happens only in a process that is allowed to list
+//! libraries the user keeps (`Facts::permits`: never in a debug build that was
+//! started without the flag, and never under automation). The file is only
+//! read, and its entries are copied into this app's own state.
+//! `librariesSeeded` records that this was done, so it is never done again.
+//! Seeding only adds libraries to the list: it gives no consent, opens no
+//! library and sets no last library. If the file is missing, unreadable or
+//! malformed, nothing is seeded and no error is reported.
 use std::path::{Path, PathBuf};
 
-/// What a production `config.json` lists.
+/// The libraries that the Electron app's `config.json` lists, with their
+/// colours and icons.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Seed {
     pub history: Vec<String>,
     pub pinned: Vec<String>,
-    /// `libraryMeta`'s colours and icons, by path.
+    /// The colour and icon of each library from `libraryMeta`, keyed by the
+    /// library's path.
     pub looks: std::collections::BTreeMap<String, crate::state::LibraryLook>,
 }
 
-/// Where production keeps its `config.json` on this platform.
+/// Returns the path of the Electron app's `config.json` on this platform, or
+/// `None` when the per-user configuration folder is not known.
 pub fn production_config() -> Option<PathBuf> {
     // i18n: a folder and a file name production writes
     crate::state::config_folder().map(|folder| folder.join("picto").join("config.json"))
 }
 
-/// The libraries the `config.json` at `path` lists, or `None` when it is
-/// missing, unreadable or not what production writes. Only absolute paths
-/// are taken, each once; anything else in an entry is left out.
+/// Returns the libraries that the `config.json` at `path` lists, or `None`
+/// when the file is missing, unreadable or not a JSON object. Only entries
+/// that are absolute paths are taken, each path once; other entries are
+/// skipped. A colour or icon is taken only for a library that is in the
+/// history or pinned.
 pub fn read(path: &Path) -> Option<Seed> {
     let text = std::fs::read_to_string(path).ok()?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
@@ -75,9 +81,10 @@ pub fn read(path: &Path) -> Option<Seed> {
     })
 }
 
-/// Seeds `state` from `seed` if it never was and its list is empty, and
-/// records that it was tried, whatever the file held. Hands back whether
-/// anything was listed.
+/// Copies the libraries of `seed` into `state`, if `state` was never seeded
+/// and its list of libraries is empty. It sets `libraries_seeded` whenever it
+/// was not set, whatever `seed` returns, so seeding is tried only once.
+/// Returns whether any library was added to the list.
 pub fn apply(state: &mut crate::state::State, seed: impl FnOnce() -> Option<Seed>) -> bool {
     if state.libraries_seeded {
         return false;
@@ -95,8 +102,8 @@ pub fn apply(state: &mut crate::state::State, seed: impl FnOnce() -> Option<Seed
     !state.library_history.is_empty() || !state.pinned_libraries.is_empty()
 }
 
-/// At start: seeds the list once, in a process that may list libraries the
-/// user keeps.
+/// Called when the app starts. Seeds the list of libraries, if it was never
+/// seeded and this process is allowed to list libraries the user keeps.
 pub fn once(cx: &mut gpui::App) {
     if crate::state::get(cx).libraries_seeded || super::facts().permits().is_err() {
         return;
@@ -139,7 +146,7 @@ mod tests {
         );
         let seed = read(&path).unwrap();
         if cfg!(windows) {
-            // Unix paths are not absolute there.
+            // On Windows a Unix path is not absolute, so no entry is taken.
             assert!(seed.history.is_empty());
             return;
         }
@@ -168,13 +175,14 @@ mod tests {
     fn a_missing_unreadable_or_malformed_file_seeds_nothing() {
         let folder = tempfile::tempdir().unwrap();
         assert_eq!(read(&folder.path().join("config.json")), None);
-        // A folder where the file should be.
+        // The path is a folder, not a file.
         assert_eq!(read(folder.path()), None);
         for text in ["", "{", "[1, 2]", "null", "\"text\""] {
             let (_folder, path) = fixture(text);
             assert_eq!(read(&path), None, "{text}");
         }
-        // Production's keys with the wrong types list nothing.
+        // When the Electron app's keys hold values of the wrong type, no
+        // library is listed.
         let (_folder, path) = fixture(r#"{"libraryHistory": "x", "pinnedLibraries": {}}"#);
         assert_eq!(read(&path), Some(Seed::default()));
         let mut state = State::default();
@@ -197,16 +205,18 @@ mod tests {
         assert_eq!(state.library_history, ["/a/Main.library", "/b/Art.library"]);
         assert_eq!(state.pinned_libraries, ["/b/Art.library"]);
         assert!(state.libraries_seeded);
-        // It lists only: no last library, no consent.
+        // Seeding only adds libraries to the list. It sets no last library and
+        // gives no consent.
         assert_eq!(state.last_library, None);
         assert!(state.library_consents.is_empty());
-        // Never again, even once the list is emptied.
+        // Seeding does not happen a second time, even after the list was
+        // emptied.
         state.library_history.clear();
         state.pinned_libraries.clear();
         assert!(!apply(&mut state, seed));
         assert!(state.library_history.is_empty());
-        // A list of this app's own is never replaced, and is not seeded
-        // later either.
+        // A list that this app already has is not replaced. The state is
+        // marked as seeded, so it is not seeded later either.
         let mut own = State {
             library_history: vec!["/c/Own.library".into()],
             ..State::default()
@@ -214,14 +224,15 @@ mod tests {
         assert!(!apply(&mut own, seed));
         assert_eq!(own.library_history, ["/c/Own.library"]);
         assert!(own.libraries_seeded);
-        // Missing: tried, and never again.
+        // When the file is missing, the state is still marked as seeded, so
+        // seeding is not tried again.
         let mut fresh = State::default();
         assert!(!apply(&mut fresh, || None));
         assert!(fresh.libraries_seeded);
     }
 
-    /// The test process is a test build, an automation seam: it never
-    /// reads the user's real file.
+    /// The test process is a test build, which counts as automation, so `once`
+    /// never reads the user's real file.
     #[test]
     fn a_process_that_cannot_list_kept_libraries_never_reads_the_file() {
         assert!(crate::libraries::facts().permits().is_err());

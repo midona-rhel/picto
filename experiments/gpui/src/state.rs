@@ -167,8 +167,8 @@ pub struct State {
     /// For each library, the choices made most recently in the Quick Search
     /// panel, the newest first. The map's key is the library's key
     /// ([`library_key`]). Each choice is a JSON object that
-    /// `crate::shell::quick_search` writes and reads. Production has no such panel
-    /// and no such list.
+    /// `crate::shell::quick_search` writes and reads. Production has no such
+    /// panel and no such list.
     pub quick_search_recent: BTreeMap<String, Vec<Value>>,
     /// The keyboard preset, `us` or `eu` (`picto-keyboard-preset`).
     pub keyboard_preset: String,

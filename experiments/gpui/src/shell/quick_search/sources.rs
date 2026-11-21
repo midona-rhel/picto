@@ -75,9 +75,13 @@ const SUBSCRIPTION_ICON: &str = "download";
 /// own list of actions.
 const OWN_SHORTCUTS: [&str; 2] = ["nav.commandPalette", "nav.goToFolder"];
 
-/// Returns the commands of the shortcut registry that can run now, as rows,
-/// and the action that each row runs. The action of a row is at the position
-/// that the row's [`Target::Action`] holds.
+/// Returns the commands that can run now, as rows, and the action that each
+/// row runs. The action of a row is at the position that the row's
+/// [`Target::Action`] holds. The commands of the shortcut registry come
+/// first, and after them the rows of the application menu that show no
+/// registry shortcut, such as Library Manager… and Check for Updates…
+/// (`app_menu::other_rows`). A menu row is left out when a command before it
+/// already runs the same action.
 ///
 /// "Now" means: with the keyboard focus where it is when this function is
 /// called. The panel calls it before it takes the focus.
@@ -131,6 +135,25 @@ pub fn actions(window: &Window, cx: &mut App) -> (Vec<Entry>, Vec<Box<dyn Action
             picture: None,
         });
         actions.push(action);
+    }
+    for row in app_menu::other_rows(window, cx) {
+        if actions
+            .iter()
+            .any(|action| action.partial_eq(row.action.as_ref()))
+        {
+            continue;
+        }
+        entries.push(Entry {
+            kind: Kind::Actions,
+            key: format!("action:menu:{}", row.title),
+            label: row.title,
+            detail: row.keys,
+            icon: ACTION_ICON.into(),
+            tint: None,
+            target: Target::Action(actions.len()),
+            picture: None,
+        });
+        actions.push(row.action);
     }
     (entries, actions)
 }
