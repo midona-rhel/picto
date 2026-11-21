@@ -25,14 +25,15 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-/// `CHANGE_DEBOUNCE_MS`: how long the badge waits after a change before it
-/// reads the Inbox count, so that several changes close together set the badge
-/// once.
+/// The time the badge waits after a change before it reads the Inbox count,
+/// so that several changes close together set the badge once. The Electron
+/// app waits the same time (`CHANGE_DEBOUNCE_MS`).
 const BADGE_DEBOUNCE: Duration = Duration::from_millis(200);
-/// `SETTLE_DEBOUNCE_MS`: how long to wait after a change to subscriptions or
-/// tasks before reading the subscriptions' runs.
+/// The time to wait after a change to subscriptions or tasks before the
+/// subscriptions' runs are read. The Electron app waits the same time
+/// (`SETTLE_DEBOUNCE_MS`).
 const SETTLE_DEBOUNCE: Duration = Duration::from_millis(250);
-/// `MAX_BADGE`: the largest number the badge shows.
+/// The largest number the badge shows, as in the Electron app (`MAX_BADGE`).
 const MAX_BADGE: u64 = 9_999;
 
 /// A global that `main` sets through [`enable`]. While it is set, [`start`]
@@ -116,7 +117,7 @@ impl Desktop {
         desktop
     }
 
-    // ── The badge ───────────────────────────────────────────────
+    // The next three functions keep the badge at the Inbox count.
 
     fn badge_changed(&mut self, cx: &mut Context<Self>) {
         self.badge_timer = Some(cx.spawn(async move |this, cx| {
@@ -164,7 +165,8 @@ impl Desktop {
         platform::set_badge(count);
     }
 
-    // ── Subscriptions finishing ─────────────────────────────────
+    // The functions that follow watch the subscriptions' runs and show the
+    // system notification when a batch of runs has finished.
 
     fn subscriptions_changed(&mut self, cx: &mut Context<Self>) {
         self.settle_timer = Some(cx.spawn(async move |this, cx| {
@@ -176,11 +178,11 @@ impl Desktop {
         }));
     }
 
-    /// `refreshOnce`: reads `subscriptions.list` and adds the pending and
-    /// running runs to the batch. When no run is pending or running any more,
-    /// it reads each run of the batch with `subscriptions.runs.get`, counts
-    /// the library items the batch added, and shows the system notification
-    /// with that count.
+    /// Reads `subscriptions.list` and adds the pending and running runs to
+    /// the batch. When no run is pending or running any more, it reads each
+    /// run of the batch with `subscriptions.runs.get`, counts the library
+    /// items the batch added, and shows the system notification with that
+    /// count. The Electron app does this in `refreshOnce`.
     fn read_runs(&mut self, cx: &mut Context<Self>) {
         if !self.settle_reading.begin() {
             return;
@@ -254,7 +256,8 @@ impl Desktop {
     }
 }
 
-// ── Files handed to the desktop ─────────────────────────────
+// The functions that pass files and links to other parts of the desktop
+// start here.
 
 /// A global that holds the canonical root of the open library copy. Only files
 /// inside it are passed to the desktop. A stored path that still names the
@@ -401,8 +404,9 @@ pub fn is_web_link(link: &str) -> bool {
         && rest.len() > 2
 }
 
-/// `open_external_url`: opens a web address in the browser. For any other link
-/// it shows the Electron app's error message and opens nothing.
+/// Opens a web address in the browser, as the Electron app's
+/// `open_external_url` does. For any other link it shows the Electron app's
+/// error message and opens nothing.
 pub fn open_link(link: &str, cx: &mut App) {
     if !is_web_link(link) {
         crate::ui::notify::error(
@@ -419,8 +423,9 @@ pub fn open_link(link: &str, cx: &mut App) {
     }
 }
 
-/// `shell.openPath`: opens the file in its default application, if the file is
-/// inside the open copy. Otherwise it shows an error notification.
+/// Opens the file in its default application, if the file is inside the open
+/// copy. Otherwise it shows an error notification. The Electron app opens the
+/// file with `shell.openPath`.
 pub fn open_default(path: &Path, cx: &mut App) {
     let path = match checked_one(path, cx) {
         Ok(path) => path,
@@ -435,9 +440,10 @@ pub fn open_default(path: &Path, cx: &mut App) {
     }
 }
 
-/// `shell.showItemInFolder`: shows the file, selected, in the system's file
-/// manager (Finder or Explorer), if the file is inside the open copy.
-/// Otherwise it shows an error notification.
+/// Shows the file, selected, in the system's file manager (Finder or
+/// Explorer), if the file is inside the open copy. Otherwise it shows an
+/// error notification. The Electron app shows the file with
+/// `shell.showItemInFolder`.
 pub fn reveal(path: &Path, cx: &mut App) {
     let path = match checked_one(path, cx) {
         Ok(path) => path,
@@ -524,9 +530,9 @@ pub fn reveal_cloud_folder(path: &Path, cx: &mut App) {
     }
 }
 
-/// `picto:shell:openWithApplication`: opens the file in the application at
-/// `application`, if the file is inside the open copy. This exists on macOS
-/// only, as in the Electron app.
+/// Opens the file in the application at `application`, if the file is inside
+/// the open copy. This exists on macOS only, as in the Electron app
+/// (`picto:shell:openWithApplication`).
 #[cfg(target_os = "macos")]
 pub fn open_with(application: &Path, file: &Path, cx: &App) -> Result<(), String> {
     let file = checked_one(file, cx)?;
@@ -547,9 +553,10 @@ pub fn open_with(_application: &Path, _file: &Path, _cx: &App) -> Result<(), Str
     Err("Application selection is only available on macOS".into())
 }
 
-/// `writeClipboardFilePaths`: puts the files themselves on the clipboard, each
-/// one once, so that Finder or another application can paste them. It does so
-/// only if all of them are inside the open copy.
+/// Puts the files themselves on the clipboard, each one once, so that Finder
+/// or another application can paste them. It does so only if all of them are
+/// inside the open copy. The Electron app does this in
+/// `writeClipboardFilePaths`.
 pub fn copy_files(paths: &[PathBuf], cx: &App) -> Result<(), String> {
     let mut unique: Vec<PathBuf> = Vec::new();
     for path in checked(paths, cx)? {
@@ -568,9 +575,9 @@ pub fn copy_files(paths: &[PathBuf], cx: &App) -> Result<(), String> {
     }
 }
 
-/// "Copy File Path": puts the paths on the clipboard as text, one path on each
-/// line, if all of them are files inside the open copy. Each path is written
-/// as [`system_path`] gives it, without Windows' `\\?\` prefix.
+/// Does "Copy File Path": puts the paths on the clipboard as text, one path
+/// on each line, if all of them are files inside the open copy. Each path is
+/// written as [`system_path`] gives it, without Windows' `\\?\` prefix.
 pub fn copy_paths(paths: &[PathBuf], cx: &mut App) -> Result<(), String> {
     let paths = checked(paths, cx)?;
     if paths.is_empty() {
@@ -585,9 +592,10 @@ pub fn copy_paths(paths: &[PathBuf], cx: &mut App) -> Result<(), String> {
     Ok(())
 }
 
-/// `picto:shell:openWithChooser`: opens the system's own dialog for choosing
-/// an application for the file, if the file is inside the open copy. Only
-/// Windows has such a dialog (its "Open with" dialog).
+/// Opens the system's own dialog for choosing an application for the file, if
+/// the file is inside the open copy. Only Windows has such a dialog (its
+/// "Open with" dialog). The Electron app opens it for
+/// `picto:shell:openWithChooser`.
 #[cfg(target_os = "windows")]
 pub fn open_with_chooser(file: &Path, cx: &App) -> Result<(), String> {
     let file = checked_one(file, cx)?;
@@ -734,8 +742,9 @@ fn launcher_uri() -> String {
     format!("application://{APP_ID}.desktop")
 }
 
-/// `new Notification({ title, body }).show()` on Windows and Linux: shows the
-/// notification through GPUI's system notifications, under [`APP_ID`].
+/// Shows a notification on Windows and Linux through GPUI's system
+/// notifications, under [`APP_ID`]. The Electron app shows it with
+/// `new Notification({ title, body }).show()`.
 #[cfg(not(target_os = "macos"))]
 fn system_notification(title: &str, body: &str, cx: &App) {
     cx.show_system_notification(gpui::SystemNotification {
@@ -822,8 +831,8 @@ mod tests {
         assert_eq!(units, expected);
     }
 
-    /// Ports the test "Linux writes the standard URI-list clipboard format" of
-    /// `clipboardImport.test.mjs`.
+    /// Checks what the Electron app's test "Linux writes the standard
+    /// URI-list clipboard format" in `clipboardImport.test.mjs` checks.
     #[cfg(target_os = "linux")]
     #[test]
     fn files_go_to_the_linux_clipboard_as_a_uri_list() {
@@ -1016,8 +1025,9 @@ mod tests {
             std::path::PathBuf::from("/tmp/a b.png"),
             std::path::PathBuf::from("/tmp/c.jpg"),
         ];
-        // SAFETY: NSPasteboard's documented selectors; the pasteboard is
-        // one made for this test and released at the end.
+        // SAFETY: The messages sent are documented selectors of
+        // NSPasteboard, with the argument types they take. The pasteboard
+        // is made for this test and is released at the end.
         unsafe {
             let pasteboard: Retained<AnyObject> = msg_send![class, pasteboardWithUniqueName];
             assert!(super::platform::write_paths(&pasteboard, &paths));
