@@ -1,7 +1,10 @@
-//! The tag picker's drawing: the rail of groups, the tag rows and the
-//! create row, the list, the settings panel and the picker itself.
+//! How the tag picker is drawn: the rail of tag groups, a tag's row, the row
+//! that offers to create a tag, the list of rows, the settings panel, and the
+//! picker as a whole.
 use super::model::display_name;
-use super::{HEIGHT, LOAD_AHEAD, Layout, NARROW, RAIL, ROW, TagPicker, View};
+use super::{
+    COLUMN_GAP, HEIGHT, LOAD_AHEAD, Layout, NARROW, RAIL, ROW, ROW_GAP, TagPicker, View,
+};
 use crate::i18n::format;
 use crate::i18n::t;
 use crate::tags::{Preferences, record_name as name};
@@ -19,8 +22,10 @@ use picto_library::TagRecord;
 use picto_library::predicate::SetMatchMode;
 
 impl TagPicker {
-    /// `.sidebarItem`: a 24px rail row, its badge brightening under the
-    /// pointer or when chosen. `mark` is given the row's hover group.
+    /// `.sidebarItem`: one 24px row of the rail. Its count is drawn stronger
+    /// while the pointer is on the row or the row is the chosen one. `mark` is
+    /// called with the name of the row's hover group, so that the mark it
+    /// returns can react to the pointer too.
     fn rail_item(
         &self,
         id: &'static str,
@@ -150,7 +155,7 @@ impl TagPicker {
         ))
     }
 
-    /// `.tagRow`
+    /// `.tagRow`: one tag's row in the list.
     fn row(
         &self,
         index: usize,
@@ -167,7 +172,8 @@ impl TagPicker {
             .filter
             .as_ref()
             .is_some_and(|filter| filter.excluded.contains(&tag_name));
-        // `.tagRowExcluded`: the name, mark and count fade.
+        // `.tagRowExcluded`: the name, the mark and the count of a tag that a
+        // filter excludes are drawn at 45% strength.
         let dim = if excluded { 0.45 } else { 1. };
         let focused = self.focus_index == Some(index);
         let starred = preferences.is_starred(&tag_name);
@@ -200,9 +206,10 @@ impl TagPicker {
             .flex_none()
         };
         let label = display_name(tag, prefixes);
-        // A check box named by the tag and its count: ticked while the tag
-        // is chosen, mixed while a filter excludes it; the row the keys are
-        // on reads as focused.
+        // For assistive technology the row is a check box whose name is the
+        // tag's name and its count. It is ticked while the tag is chosen, and
+        // mixed while a filter excludes the tag. The row the keyboard is on is
+        // the one that is read as focused.
         let name = format!("{label} ({})", format::grouped(tag.active_count));
         let text = overlay_shell::search_match(label, query, cx);
         let row_tag = tag.clone();
@@ -219,7 +226,11 @@ impl TagPicker {
             .when(focused, |row| row.aria_active_descendant())
             .group(group.clone())
             .relative()
-            .h(px(ROW))
+            // The row's box is `ROW_GAP` shorter than the line it is in, and
+            // the line centres it. Two rows that are both filled (chosen,
+            // or under the pointer) therefore have `ROW_GAP` pixels between
+            // their fills and are seen as two rows.
+            .h(px(ROW - ROW_GAP))
             .min_w_0()
             .px(px(6.))
             .flex()
@@ -228,7 +239,7 @@ impl TagPicker {
             .rounded(px(theme::RADIUS_MD))
             .cursor_pointer()
             .text(theme::TEXT_MD)
-            .line_height(px(ROW))
+            .line_height(px(ROW - ROW_GAP))
             .bg(fill);
         if self.filter.is_some() {
             row = row.child(check::check_box(
@@ -293,7 +304,8 @@ impl TagPicker {
         )
     }
 
-    /// `.createTagRow`: Create "name".
+    /// `.createTagRow`: the row that says Create "name", shown when the search
+    /// text names a tag that does not exist.
     fn create_row(&self, tag: &TagRecord, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = theme::theme(cx);
         let focused = self.focus_index == Some(0);
@@ -368,7 +380,8 @@ impl TagPicker {
                 .map_or(String::new(), |(query, _)| query.clone())
         };
         let can_show_empty = local || self.pager.settled.is_some();
-        // Near the end of what is loaded, the next page.
+        // When the list has been scrolled near the end of the rows that are
+        // loaded, the next page is loaded.
         let max = f32::from(self.scroll.max_offset().y);
         let scrolled = -f32::from(self.scroll.offset().y);
         if max - scrolled < LOAD_AHEAD {
@@ -381,7 +394,13 @@ impl TagPicker {
         }
         let columns = self.columns();
         for (chunk_index, chunk) in rows.chunks(columns).enumerate() {
-            let mut line = div().w_full().h(px(ROW)).flex_none().flex();
+            let mut line = div()
+                .w_full()
+                .h(px(ROW))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(COLUMN_GAP));
             for (column, tag) in chunk.iter().enumerate() {
                 let index = offset + chunk_index * columns + column;
                 line = line.child(div().flex_1().min_w_0().child(self.row(
@@ -455,7 +474,8 @@ impl TagPicker {
             )
     }
 
-    /// The layout and counts settings (`.settingsPanel`).
+    /// The settings panel (`.settingsPanel`): the choice between one and two
+    /// columns, and whether counts are shown.
     fn settings_panel(&self, cx: &mut Context<Self>) -> [AnyElement; 2] {
         let theme = theme::theme(cx);
         let layout = self.layout;
@@ -667,7 +687,8 @@ impl Render for TagPicker {
         })
         .header(search);
         if let Some(filter) = &self.filter {
-            // The match rule in place of the settings and the pin.
+            // In the filter mode the header shows the match rule where the
+            // settings and pin buttons otherwise are.
             let modes = [SetMatchMode::Any, SetMatchMode::All, SetMatchMode::Exact];
             let logic = cx.entity().downgrade();
             shell = shell

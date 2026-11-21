@@ -1,8 +1,9 @@
-//! The tag picker the inspector opens (`TagSelectPanel.tsx` in its
-//! `OverlayShell`): a search over the library's tags, a rail of All, the
-//! tag groups, Selected and Starred, and a list in which a click puts a tag
-//! on the items or takes it off at once. A search for a tag that does not
-//! exist offers to create it.
+//! The tag picker that the inspector opens (`TagSelectPanel.tsx` in its
+//! `OverlayShell`). It has a search field over the library's tags, a rail with
+//! All, each tag group, Selected and Starred, and a list of tags. A click on a
+//! tag in the list puts the tag on the selected items or takes it off, at
+//! once. When the search text names a tag that does not exist, the list offers
+//! to create it.
 use super::membership;
 use crate::i18n::t;
 use crate::motion;
@@ -26,20 +27,27 @@ mod view;
 
 use model::{Sources, create_candidate, display_tags, step};
 
-/// `PAGE_SIZE`
+/// `PAGE_SIZE`: how many tags are loaded at a time.
 const PAGE: usize = 100;
-/// 540 × 480 with the group rail, 340 × 480 without.
+/// The picker is 540 × 480 with the rail of groups and 340 × 480 without it.
 const WIDE: f32 = 540.;
 const NARROW: f32 = 340.;
 const HEIGHT: f32 = 480.;
 const RAIL: f32 = 200.;
 const ROW: f32 = 25.;
-/// The search waits this long after typing before it asks the library.
+/// The space in pixels between the fills of two rows, one above the other.
+/// A row's line stays `ROW` tall; the row's own box is this much shorter.
+const ROW_GAP: f32 = 2.;
+/// The space in pixels between two columns of rows.
+const COLUMN_GAP: f32 = 4.;
+/// How long the search waits after the last key press before it asks the
+/// library.
 const SEARCH_DELAY: Duration = Duration::from_millis(150);
-/// More tags load once the list is scrolled this near its end.
+/// The next page of tags is loaded when the list has been scrolled to within
+/// this many pixels of its end.
 const LOAD_AHEAD: f32 = 200.;
 
-/// `TagLayout`: two columns, or one.
+/// `TagLayout`: whether the list has two columns or one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layout {
     Grid,
@@ -48,19 +56,20 @@ pub enum Layout {
 
 /// What the picker asks its owner to do.
 pub enum Event {
-    /// Put the tag on the items (`add`) or take it off. `created` when the
-    /// tag does not exist yet.
+    /// Put the tag on the items (`add` is true) or take it off. `created` is
+    /// true when the tag does not exist yet.
     Toggle {
         name: String,
         add: bool,
         created: bool,
     },
-    /// Show the items with this tag ("Filter Items with This Tag").
+    /// Show the items that have this tag (the menu row "Filter Items with This
+    /// Tag").
     Filter(TagId),
-    /// A tag was renamed, so labels shown elsewhere are out of date.
+    /// A tag was renamed, so its name as shown elsewhere is out of date.
     Renamed,
-    /// In the filter mode, the tags included and excluded (by id and name)
-    /// and the match rule (`onApplyTagFilter`).
+    /// In the filter mode: the tags that are included and the tags that are
+    /// excluded, each by id and name, and the match rule (`onApplyTagFilter`).
     FilterChanged {
         include: Vec<(TagId, String)>,
         exclude: Vec<(TagId, String)>,
@@ -68,13 +77,13 @@ pub enum Event {
     },
 }
 
-/// The picker as the filter bar opens it (`onApplyTagFilter`): a click
-/// includes a tag, a right click excludes it, under a match rule; the list
-/// is one column and nothing is created.
+/// The picker as the filter bar opens it (`onApplyTagFilter`). A click
+/// includes a tag and a right-click excludes it, under a match rule. The list
+/// has one column and no tag can be created.
 struct FilterMode {
     excluded: BTreeSet<String>,
     mode: SetMatchMode,
-    /// The ids of the tags chosen, by name.
+    /// The id of each chosen tag, by the tag's name.
     ids: HashMap<String, TagId>,
 }
 
@@ -88,7 +97,7 @@ pub struct TagPicker {
     geometry: Geometry,
     pinned: bool,
     sidebar: bool,
-    /// The rail's width (200ms) and its fade.
+    /// The rail's width while it opens or closes over 200 ms, and its fade.
     rail_width: motion::Fade,
     rail_shown: motion::Fade,
     layout: Layout,
@@ -97,9 +106,10 @@ pub struct TagPicker {
     query: String,
     pager: TagPager,
     namespaces: Vec<TagNamespaceRecord>,
-    /// The items' tags.
+    /// The tags of the selected items.
     entity: Vec<TagRecord>,
-    /// The names shown checked, changed by each click.
+    /// The names of the tags that are shown as chosen. Each click changes
+    /// this.
     selected: BTreeSet<String>,
     opening_names: Vec<String>,
     dirty: bool,
@@ -110,7 +120,8 @@ pub struct TagPicker {
     menu: menu::Host,
     menu_tag: Option<TagRecord>,
     filter: Option<FilterMode>,
-    /// The layer the panel is drawn on, above a dialog that opened it.
+    /// The layer the panel is drawn on. It is above a dialog when a dialog
+    /// opened the picker.
     layer: usize,
     _subscriptions: Vec<Subscription>,
 }
@@ -118,7 +129,8 @@ pub struct TagPicker {
 impl TagPicker {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| TextInput::new(Kind::Menu, cx).placeholder("Search..."));
-        // The keyboard goes back to the search once a row's menu has gone.
+        // When a row's menu has closed, the keyboard focus goes back to the
+        // search field.
         let menu = menu::Host::deferred(
             crate::ui::layer::MENU,
             menu::Return::To(search.read(cx).focus_handle(cx)),
@@ -171,9 +183,10 @@ impl TagPicker {
         self.opening.is_some()
     }
 
-    /// Takes the layout and counts last chosen in any picker, as each
-    /// `TagSelectPanel` reads `picto-tag-picker-layout` and
-    /// `picto-tag-picker-counts` when it opens.
+    /// Reads the layout and the counts setting that were last chosen in any
+    /// picker. Each `TagSelectPanel` in the Electron app reads
+    /// `picto-tag-picker-layout` and `picto-tag-picker-counts` in the same way
+    /// when it opens.
     fn read_layout(&mut self, cx: &App) {
         let kept = crate::state::get(cx);
         self.layout = if kept.tag_picker_list {
@@ -184,7 +197,8 @@ impl TagPicker {
         self.counts = kept.tag_picker_counts;
     }
 
-    /// Keeps this picker's layout and counts for the next one to open.
+    /// Stores this picker's layout and counts setting, for the next picker
+    /// that opens.
     fn keep_layout(&self, cx: &mut App) {
         let (list, counts) = (self.layout == Layout::List, self.counts);
         crate::state::update(cx, |state| {
@@ -197,8 +211,9 @@ impl TagPicker {
         NARROW + (WIDE - NARROW) * self.rail_width.value_with(motion::EASE_DEFAULT)
     }
 
-    /// Opens beside the inspector at `anchor` (or centred), on the items'
-    /// current tags.
+    /// Opens the picker beside the inspector at `anchor`, or in the middle of
+    /// the window when there is no anchor, showing the tags the items have
+    /// now.
     pub fn open(
         &mut self,
         anchor: Option<Point<f32>>,
@@ -211,8 +226,9 @@ impl TagPicker {
         self.show(anchor, entity, window, cx);
     }
 
-    /// Opens over a dialog, its bottom just above the dialog's button at
-    /// `anchor` (`anchorPlacement: 'above'`), on the tags `entity` names.
+    /// Opens the picker over a dialog, with its bottom edge just above the
+    /// dialog's button at `anchor` (`anchorPlacement: 'above'`), showing the
+    /// tags that `entity` names.
     pub fn open_above(
         &mut self,
         anchor: Point<f32>,
@@ -232,8 +248,8 @@ impl TagPicker {
         );
     }
 
-    /// Opens in the filter mode below a control of the filter bar, on the
-    /// tags the filter includes and excludes.
+    /// Opens the picker in the filter mode below a control of the filter bar,
+    /// showing the tags that the filter includes and excludes.
     pub fn open_filter(
         &mut self,
         below: Point<f32>,
@@ -298,8 +314,9 @@ impl TagPicker {
         cx.notify();
     }
 
-    /// The items' tags changed (or arrived): the Selected view follows, and
-    /// until the first click so do the checks.
+    /// Called when the items' tags have changed or have arrived. The Selected
+    /// view shows the new tags. Until the user's first click, the rows shown
+    /// as chosen follow them too.
     pub fn set_entity(&mut self, entity: Vec<TagRecord>, cx: &mut Context<Self>) {
         if !self.is_open() {
             return;
@@ -332,9 +349,11 @@ impl TagPicker {
         });
     }
 
-    /// One request for each search and view: at once without a search, else
-    /// once typing pauses; an older answer never replaces a newer one. The
-    /// Selected and Starred views list what is at hand.
+    /// Sends one request for the current search text and view. Without search
+    /// text it is sent at once; with search text it is sent when typing has
+    /// paused. An answer to an older request never replaces the answer to a
+    /// newer one. The Selected and Starred views do not ask the library; they
+    /// list tags the picker already has.
     fn request(&mut self, cx: &mut Context<Self>) {
         if !self.is_open() {
             return;
@@ -366,7 +385,7 @@ impl TagPicker {
         cx.notify();
     }
 
-    /// The next page, once the list nears its end.
+    /// Loads the next page when the list is near its end.
     fn load_more(&mut self, cx: &mut Context<Self>) {
         let Some(page) = self.pager.next() else {
             return;
@@ -379,9 +398,9 @@ impl TagPicker {
         .detach();
     }
 
-    /// After an edit: a created tag means the list and groups are read
-    /// again; otherwise the counts are refreshed where the tags stand, so
-    /// nothing moves under the pointer.
+    /// Called after an edit. When a tag was created, the list and the groups
+    /// are read again. Otherwise only the counts are refreshed and every tag
+    /// stays in its place, so that nothing moves under the pointer.
     pub fn edited(&mut self, created: bool, cx: &mut Context<Self>) {
         if !self.is_open() {
             return;
@@ -438,14 +457,16 @@ impl TagPicker {
             tags: &self.pager.tags,
             starred,
         });
-        // The filter mode offers only tags that exist.
+        // The filter mode offers only tags that exist, so it never shows the
+        // create row.
         let create = create_candidate(&self.view, settled, settled_group, &self.pager.tags)
             .filter(|_| self.filter.is_none());
         (create, rows)
     }
 
-    /// `toggleTag`: the tag goes on the items or comes off, at once; in the
-    /// filter mode it is included or no longer, and never excluded.
+    /// `toggleTag`: puts the tag on the items or takes it off, at once. In the
+    /// filter mode it includes the tag or stops including it, and never
+    /// excludes it.
     fn toggle(&mut self, tag: &TagRecord, cx: &mut Context<Self>) {
         let tag_name = name(tag);
         if let Some(filter) = &mut self.filter {
@@ -470,8 +491,8 @@ impl TagPicker {
         cx.notify();
     }
 
-    /// `toggleExcludedTag`: in the filter mode, a right click excludes the
-    /// tag, or no longer.
+    /// `toggleExcludedTag`: in the filter mode, a right-click excludes the tag
+    /// or stops excluding it.
     fn exclude(&mut self, tag: &TagRecord, cx: &mut Context<Self>) {
         let Some(filter) = &mut self.filter else {
             return;
@@ -496,7 +517,7 @@ impl TagPicker {
         }
     }
 
-    /// Tells the filter bar what is included and excluded.
+    /// Tells the filter bar which tags are included and which are excluded.
     fn emit_filter(&mut self, cx: &mut Context<Self>) {
         let Some(filter) = &self.filter else {
             return;
@@ -570,7 +591,8 @@ impl TagPicker {
         }
     }
 
-    /// Scrolls the list so the focused row shows (`scrollIntoView` nearest).
+    /// Scrolls the list just far enough to show the focused row
+    /// (`scrollIntoView` with `nearest`).
     fn reveal_focus(&mut self) {
         let Some(at) = self.focus_index else { return };
         let row = (at / self.columns()) as f32;
@@ -599,7 +621,7 @@ impl TagPicker {
 
     // ── The row menu ────────────────────────────────────────────
 
-    /// `buildCommonTagContextEntries` for a row of the list.
+    /// `buildCommonTagContextEntries`: the context menu of a row of the list.
     fn open_menu(
         &mut self,
         tag: TagRecord,
@@ -651,7 +673,8 @@ impl TagPicker {
             }
             Some(Common::Done) | None => {}
         }
-        // The keyboard goes back to the search once the menu has gone.
+        // When the menu has closed, the keyboard focus goes back to the search
+        // field.
         let handle = self.search.read(cx).focus_handle(cx);
         window.focus(&handle, cx);
     }

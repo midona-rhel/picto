@@ -593,8 +593,10 @@ impl TagsScreen {
                             .text(theme::TEXT_CAPTION)
                             .child(format!("({count})")),
                     ),
-                // One row of tag cards. The last row under a heading has a
-                // line 1 px tall along its bottom edge.
+                // One row of tag cards. Under the last row of a heading
+                // there is a line 1 px tall. The line is 4 px below the
+                // row's bottom edge, so that a card's hover fill, which is
+                // as tall as the row, does not touch it.
                 Row::Tags { tags, section_end } => {
                     let mut row = place(div()).h(px(model::ROW_HEIGHT)).flex().gap(px(2.));
                     for position in tags {
@@ -607,7 +609,7 @@ impl TagsScreen {
                                 .absolute()
                                 .left_0()
                                 .right_0()
-                                .bottom_0()
+                                .bottom(px(-5.))
                                 .h(px(1.))
                                 .bg(theme.border_secondary()),
                         )
