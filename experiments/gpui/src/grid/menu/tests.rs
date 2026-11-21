@@ -151,13 +151,12 @@ fn offers_every_reverse_image_provider_for_images_only() {
             "TinEye",
             "SauceNAO",
             "Yandex Images",
-            "Sogou",
             "Bing Visual Search"
         ]
     );
     assert_eq!(
-        find(search, "Sogou").unwrap().action,
-        Action::SearchByImage(Engine::Sogou)
+        find(search, "Yandex Images").unwrap().action,
+        Action::SearchByImage(Engine::Yandex)
     );
     assert!(
         labels(search)

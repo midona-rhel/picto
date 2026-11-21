@@ -21,8 +21,9 @@
 //! A page that asks for a window of its own has it opened in the browser
 //! instead.
 //!
-//! Three things differ from production:
+//! Four things differ from production:
 //!
+//! - Sogou is not offered ([`Engine`] says why).
 //! - A file larger than 1 MiB, or of a type other than JPEG, PNG, GIF and
 //!   WebP, is sent as a JPEG whose long edge is at most 1,600 pixels
 //!   ([`picture`]). The file is read, made smaller and written into the
@@ -99,25 +100,25 @@ const WAIT_FOR: &str = r#"
     }
 "#;
 
-/// The search engines that Search by Image offers (production's
-/// `REVERSE_IMAGE_SEARCH_ENGINES`).
+/// The search engines that Search by Image offers. They are the Electron
+/// app's `REVERSE_IMAGE_SEARCH_ENGINES` without Sogou. Sogou answers every
+/// upload with a request for a security check, which the hidden window the
+/// search runs in cannot show, so a search on Sogou never gave a result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Engine {
     TinEye,
     SauceNao,
     Yandex,
-    Sogou,
     Bing,
 }
 
 // The item menu translates these names where it draws their rows. The
 // next line is a marker that `i18n::guard` reads, so its words are fixed.
 // i18n: translated where drawn
-pub const ENGINES: [(Engine, &str); 5] = [
+pub const ENGINES: [(Engine, &str); 4] = [
     (Engine::TinEye, "TinEye"),
     (Engine::SauceNao, "SauceNAO"),
     (Engine::Yandex, "Yandex Images"),
-    (Engine::Sogou, "Sogou"),
     (Engine::Bing, "Bing Visual Search"),
 ];
 
@@ -128,7 +129,6 @@ impl Engine {
             Engine::TinEye => "tineye",
             Engine::SauceNao => "saucenao",
             Engine::Yandex => "yandex",
-            Engine::Sogou => "sogou",
             Engine::Bing => "bing",
         }
     }
@@ -218,19 +218,6 @@ fn config(engine: Engine) -> Config {
                     .iter()
                     .any(|host| href.contains(&format!("{host}/images/search")))
             },
-            portable_result: None,
-            result_limit: RESULT_LIMIT,
-        },
-        Engine::Sogou => Config {
-            key: engine.key(),
-            url: "https://pic.sogou.com/",
-            pre_setup: r#"await __waitFor('#cameraIco, .camera-ico, [class*="camera"]');
-        const btn = document.querySelector('#cameraIco') || document.querySelector('.camera-ico') || document.querySelector('[class*="camera"]');
-        if (btn) { btn.click(); await new Promise(r => setTimeout(r, 800)); }
-        await __waitFor("input[type='file']", 5000);"#,
-            file_input: "input[type='file']",
-            post_setup: None,
-            is_result: |href| href.contains("/ris"),
             portable_result: None,
             result_limit: RESULT_LIMIT,
         },

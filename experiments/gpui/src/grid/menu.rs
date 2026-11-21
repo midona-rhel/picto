@@ -310,7 +310,6 @@ impl Action {
             SearchByImage(Engine::TinEye) => "search-tineye",
             SearchByImage(Engine::SauceNao) => "search-saucenao",
             SearchByImage(Engine::Yandex) => "search-yandex",
-            SearchByImage(Engine::Sogou) => "search-sogou",
             SearchByImage(Engine::Bing) => "search-bing",
             SetLibraryCover => "set-library-cover",
             FindMediaMatches => "find-media-matches",

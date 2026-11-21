@@ -793,7 +793,7 @@ reading production's code, seen in this app).
 | Log window | pictures; tests; off-screen |
 | Site logins | tests; `PICTO_GPUI_LOGIN_CHECK` on macOS and in CI |
 | Software updates | `PICTO_GPUI_NET_CHECK` on macOS and in CI |
-| Search by Image | `PICTO_GPUI_NET_CHECK` on all three systems' web views; real searches on macOS, where TinEye, SauceNAO, Yandex and Bing gave their results page and Sogou did not (see "Open") |
+| Search by Image | `PICTO_GPUI_NET_CHECK` on all three systems' web views; real searches on macOS, where TinEye, SauceNAO, Yandex and Bing gave their results page |
 | Accessibility | tests; off-screen tree dumps |
 | Libraries | tests (each rule); off-screen with generated libraries |
 | Cloud | off-screen against a stand-in folder on macOS and in CI |
@@ -927,8 +927,11 @@ reading production's code, seen in this app).
   and is not shown on Linux. Its choice is stored in the library's
   application settings under the keys `frostedGlassRails` and
   `acrylicRails`, which production does not have.
-- Search by Image differs from production's in three ways
-  (`src/search_by_image.rs`). A file larger than 1 MiB, or of a type other
+- Search by Image differs from production's in four ways
+  (`src/search_by_image.rs`). Sogou is not offered: its page answers every
+  upload with "complete the security check and try again", and the search
+  runs in a window that is never shown, so no search on Sogou gave a
+  result. A file larger than 1 MiB, or of a type other
   than JPEG, PNG, GIF and WebP, is sent to the engine as a JPEG whose long
   edge is at most 1,600 pixels; production sends every file as it is, and
   SauceNAO does not accept a 19.9 MB PNG. Yandex's page is given the picture
@@ -969,11 +972,6 @@ Not done:
   protocol, but the vendored GPUI does not yet tell the app whether the
   running compositor has one, and X11 has no blur at all.
 - Detail window always-on-top on Linux.
-- Search by Image on Sogou ends after 30 seconds with "sogou: timed out".
-  Sogou's page answers the upload with "complete the security check and
-  try again", and the search runs in a window that is never shown, so the
-  user cannot complete that check. Production's search runs in a hidden
-  window in the same way.
 - Logins: FANBOX keeps only the User-Agent as its headers; password fields
   do not turn on secure keyboard entry; the OnlyFans browser login has never
   run.
