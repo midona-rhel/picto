@@ -14,8 +14,8 @@
 //! - **Places** are the sidebar's destinations and the subscriptions.
 //!   Choosing one opens it, as a click in the sidebar does.
 //! - **Tags** are the library's tags. Choosing one opens the All destination
-//!   filtered to the items that have the tag, as "Show items" on the Tags
-//!   screen does.
+//!   filtered to the items that have the tag, as the row "Filter Items with
+//!   This Tag" of a tag's menu on the Tags screen does.
 //! - **Items** are the library's files and collections, found by the search
 //!   that the grid's search field uses. Choosing one opens the destination
 //!   that lists the items with that item's media
@@ -708,9 +708,9 @@ impl QuickSearch {
                 }
             }),
             Target::Tag(tag) => self.session.update(cx, |session, cx| {
-                // The same destination and filter as "Show items" on the
-                // Tags screen: the All destination with the tag as the only
-                // filter.
+                // The same destination and filter as the row "Filter Items
+                // with This Tag" of a tag's menu on the Tags screen: the All
+                // destination with the tag as the only filter.
                 let Some(all) = session.nav.iter().position(|entry| {
                     entry.screen.is_none() && !entry.random && entry.scope == ItemScope::All
                 }) else {

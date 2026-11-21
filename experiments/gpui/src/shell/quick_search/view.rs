@@ -11,7 +11,9 @@
 //!
 //! The panel is 480 px wide and is drawn in the middle of the main window
 //! over the dimmed backdrop that the dialogs use. These measurements are
-//! those of the Eagle app's quick-search panel. The parts are the app's own
+//! those of the Eagle app's quick-search panel. The list is as high as its
+//! rows, between 8 and 16 rows, and the top of the panel stays in place when
+//! the list becomes shorter or longer. The parts are the app's own
 //! controls: the dialog's backdrop and glass panel (`ui::modal`), the
 //! dialog search field (`ui::field` with `Look::ModalSearch`), the tabs of
 //! the batch rename dialog (`ui::segmented`), the row of the Add Tags

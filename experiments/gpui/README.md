@@ -432,8 +432,9 @@ quick-search panel of the Eagle app. The Electron app has no such panel.
   subscription opens its page on the Subscriptions screen.
 - **Tags** are the library's tags, those on the most items first, each with
   the number of its items at the right. Choosing a tag opens the All
-  destination with that tag as the only filter, as "Show items" on the Tags
-  screen does (`Session::navigate_with_filters`).
+  destination with that tag as the only filter, as the row "Filter Items
+  with This Tag" of a tag's menu on the Tags screen does
+  (`Session::navigate_with_filters`).
 - **Items** are files and collections. They are found by the library's text
   search, which is the search of the grid's search field
   (`backend::text_filter`), in the All destination. An item's row is 92 px
