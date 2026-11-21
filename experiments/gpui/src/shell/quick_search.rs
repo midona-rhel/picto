@@ -1,11 +1,12 @@
 //! The Quick Search panel. It is a panel in the middle of the main window,
-//! over a dimmed backdrop, with a search field, a row of tabs and a list.
-//! The user types a name and chooses a row with the keyboard or the pointer.
+//! over a dimmed backdrop, with a search field and a list. The user types a
+//! name and chooses a row with the keyboard or the pointer.
 //! The Electron app has no such panel. The structure and the measurements
 //! were chosen for this app and are listed in `quick_search/view.rs`.
 //!
-//! The list holds four kinds of rows, and each kind has a tab. A fifth tab,
-//! All, comes first and lists the best matches of every kind in groups.
+//! The list holds four kinds of rows, and it lists the best matches of
+//! every kind in groups, one group for each kind. Opened with the Go to
+//! Folder shortcut, it lists only the places.
 //!
 //! - **Actions** are the commands of the shortcut registry that can run in
 //!   the window's current state (`sources::actions`). Choosing one gives the
@@ -29,8 +30,8 @@
 //! arrives after the text has changed again is dropped. Nothing is searched
 //! on the thread that draws.
 //!
-//! While the field is empty, each tab lists the choices made most recently
-//! first. They are kept for each library in the state file
+//! While the field is empty, the list starts with the choices made most
+//! recently. They are kept for each library in the state file
 //! (`State::quick_search_recent`).
 mod matching;
 mod sources;
@@ -54,7 +55,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-/// A tab of the panel, and the kind of a row.
+/// The kind of a row. It is also what the panel lists: `All` lists the rows
+/// of every kind in groups, and a single kind lists only the rows of that
+/// kind. The panel is opened with `All`, or with `Places` by the Go to
+/// Folder shortcut.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     All,
@@ -65,17 +69,8 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// The tabs, from left to right.
-    pub const TABS: [Kind; 5] = [
-        Kind::All,
-        Kind::Actions,
-        Kind::Places,
-        Kind::Tags,
-        Kind::Items,
-    ];
-
-    /// Returns the name on the kind's tab and above the kind's group in the
-    /// All tab.
+    /// Returns the name that is written above the kind's group in the
+    /// list.
     pub fn label(self) -> &'static str {
         match self {
             Kind::All => t("All"),
@@ -87,17 +82,18 @@ impl Kind {
     }
 }
 
-/// The largest number of rows that a tab of one kind lists.
+/// The largest number of rows of a list of one kind.
 const LIMIT: usize = 200;
 /// The largest number of items that one search asks the library for.
 const ITEM_LIMIT: usize = 50;
-/// The largest number of rows of each of Actions, Places and Tags in the All
-/// tab.
+/// The largest number of rows of each of Actions, Places and Tags in the
+/// list of every kind.
 const GROUP_LIMIT: usize = 5;
-/// The largest number of items in the All tab. An item's row is as tall as
-/// three and a half other rows.
+/// The largest number of items in the list of every kind. An item's row is
+/// as tall as three and a half other rows.
 const ITEM_GROUP_LIMIT: usize = 3;
-/// The largest number of recent choices at the top of the All tab.
+/// The largest number of recent choices at the top of the list of every
+/// kind.
 const RECENT_GROUP_LIMIT: usize = 6;
 /// The number of recent choices that are remembered for a library.
 const REMEMBERED: usize = 30;
@@ -170,10 +166,9 @@ enum Items {
     /// three, so no search was made.
     TooShort,
     /// The library's answer: the rows, each with the matched letters of its
-    /// name, and the number of items that match in the whole library.
+    /// name.
     Found {
         rows: Vec<(Entry, Vec<Range<usize>>)>,
-        total: u64,
     },
     /// The search failed, with the library's message.
     Failed(String),
@@ -245,7 +240,7 @@ pub struct QuickSearch {
     /// The search field.
     input: Entity<TextInput>,
     /// The keyboard focus of the panel while the search field does not have
-    /// it, for example during a click on a tab.
+    /// it, for example during a click on the scrollbar.
     focus: FocusHandle,
     /// The scroll position of the list.
     scroll: ScrollHandle,
@@ -291,8 +286,9 @@ impl QuickSearch {
         }
     }
 
-    /// Opens the panel on the tab `kind`. When the panel is already open, it
-    /// only changes the tab.
+    /// Opens the panel with a list of `kind`: every kind, or only the
+    /// places. When the panel is already open, it only changes what the
+    /// list holds.
     ///
     /// The list of actions is made here, before the panel takes the keyboard
     /// focus, because which commands can run depends on the element that has
@@ -375,7 +371,7 @@ impl QuickSearch {
         }
     }
 
-    /// Shows the tab `kind` and highlights its first row.
+    /// Makes the list hold the rows of `kind` and highlights its first row.
     fn show_kind(&mut self, kind: Kind, cx: &mut Context<Self>) {
         let Some(open) = &mut self.open else {
             return;
@@ -386,25 +382,6 @@ impl QuickSearch {
             self.scroll.set_offset(point(px(0.), px(0.)));
             cx.notify();
         }
-    }
-
-    /// Shows the tab after the current one, or the tab before it when
-    /// `forward` is false. After the last tab comes the first.
-    fn step_kind(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let Some(open) = &self.open else {
-            return;
-        };
-        let count = Kind::TABS.len();
-        let at = Kind::TABS
-            .iter()
-            .position(|kind| *kind == open.kind)
-            .unwrap_or(0);
-        let next = if forward {
-            (at + 1) % count
-        } else {
-            (at + count - 1) % count
-        };
-        self.show_kind(Kind::TABS[next], cx);
     }
 
     /// Called when the search field changes. When its text differs from the
@@ -511,7 +488,7 @@ impl QuickSearch {
                     Some(
                         library
                             .query_window(&query, &WindowRequest::at(0, ITEM_LIMIT))
-                            .map(|window| (window.page.items, window.page.total))
+                            .map(|window| window.page.items)
                             .map_err(|error| error.to_string()),
                     )
                 })
@@ -533,7 +510,7 @@ impl QuickSearch {
     fn items_found(
         &mut self,
         generation: u64,
-        answer: Result<(Vec<RootSummary>, u64), String>,
+        answer: Result<Vec<RootSummary>, String>,
         cx: &mut Context<Self>,
     ) {
         let Some(open) = &mut self.open else {
@@ -543,7 +520,7 @@ impl QuickSearch {
             return;
         }
         open.items = match answer {
-            Ok((items, total)) => {
+            Ok(items) => {
                 let mut rows: Vec<(u32, Entry, Vec<Range<usize>>)> = items
                     .iter()
                     .map(|item| {
@@ -560,7 +537,6 @@ impl QuickSearch {
                         .into_iter()
                         .map(|(_, entry, ranges)| (entry, ranges))
                         .collect(),
-                    total,
                 }
             }
             Err(error) => Items::Failed(error),
@@ -797,7 +773,7 @@ impl Open {
     /// Returns the key of the highlighted row, to keep that row highlighted
     /// when rows arrive later (the subscriptions, the library's items).
     /// Returns `None` while the highlight is still on the first row that can
-    /// be chosen, which is where it is put when the text or the tab changes.
+    /// be chosen, which is where it is put when the text changes.
     /// The highlight then goes to the first row of the new list, which may
     /// be a row that has just arrived.
     fn highlighted_key(&self) -> Option<String> {
@@ -815,23 +791,6 @@ impl Open {
         }
     }
 
-    /// Returns the number that the tab of `kind` shows after its name: how
-    /// many rows of that kind match the text. The All tab shows no number.
-    /// The Items tab shows none before the library has answered, and none
-    /// while the text is too short to search the items.
-    fn count(&self, kind: Kind) -> Option<u64> {
-        match kind {
-            Kind::All => None,
-            Kind::Actions => Some(self.found.actions.total as u64),
-            Kind::Places => Some(self.found.places.total as u64),
-            Kind::Tags => Some(self.found.tags.total as u64),
-            Kind::Items => match &self.items {
-                Items::Found { total, .. } => Some(*total),
-                Items::Waiting | Items::TooShort | Items::Failed(_) => None,
-            },
-        }
-    }
-
     /// Returns the rows of the recent choices that are items, the newest
     /// first.
     fn recent_items(&self) -> Vec<Entry> {
@@ -841,7 +800,7 @@ impl Open {
             .collect()
     }
 
-    /// Makes `rows` again for the current tab, matches and items. The row
+    /// Makes `rows` again for the current kind, matches and items. The row
     /// with the key `keep` stays highlighted when the new rows have it.
     /// Otherwise the first row that can be chosen is highlighted.
     fn rebuild(&mut self, keep: Option<String>) {
@@ -1016,7 +975,7 @@ mod tests {
     }
 
     /// Returns a panel with two actions, three places and two tags, opened
-    /// on the tab `kind` with `query` in the field and `recent` as the keys
+    /// with a list of `kind`, with `query` in the field and `recent` as the keys
     /// of the recent choices.
     fn panel(kind: Kind, query: &str, recent: &[&str]) -> Open {
         let lists = Lists {
@@ -1072,7 +1031,7 @@ mod tests {
     }
 
     #[test]
-    fn the_empty_all_tab_lists_the_recent_choices_and_then_each_kind() {
+    fn the_empty_field_lists_the_recent_choices_and_then_each_kind() {
         let open = panel(Kind::All, "", &["tag:2", "place:folder:4", "tag:99"]);
         assert_eq!(
             lines(&open),
@@ -1111,9 +1070,7 @@ mod tests {
                 "tag:1",
             ]
         );
-        assert_eq!(open.count(Kind::Places), Some(2));
-        assert_eq!(open.count(Kind::All), None);
-        // A tab of one kind has no group names while a text is typed.
+        // A list of one kind has no group names while a text is typed.
         assert_eq!(
             lines(&panel(Kind::Places, "tr", &[])),
             ["place:system:trash", "place:folder:4"]
@@ -1121,7 +1078,7 @@ mod tests {
     }
 
     #[test]
-    fn the_empty_tab_of_one_kind_puts_its_recent_choices_in_a_group() {
+    fn the_empty_list_of_one_kind_puts_its_recent_choices_in_a_group() {
         let open = panel(Kind::Places, "", &["place:folder:4", "tag:2"]);
         assert_eq!(
             lines(&open),

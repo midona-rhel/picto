@@ -47,11 +47,11 @@
 # script first opens the All destination and resets the zoom.
 #   19 the panel just after its shortcut opened it (Command+T on macOS,
 #      Control+T on Windows and Linux), with the search field empty.
-#   20 the panel after the script typed "inbox". The All tab lists the
+#   20 the panel after the script typed "inbox". The list holds the
 #      command and the place with that name.
-#   21 the Inbox, which the script opened by going to the Places tab with
-#      the Tab key twice and pressing Enter. The picture shows that the
-#      panel has closed and that the chosen place is open.
+#   21 the Inbox, which the script opened by pressing Enter on the first
+#      row, the command Inbox. The picture shows that the panel has closed
+#      and that the Inbox is open.
 reload
 size 1213 865
 wait 800
@@ -218,9 +218,6 @@ shot 19-quick-search
 type inbox
 wait 600
 shot 20-quick-search-typed
-key tab
-key tab
-wait 300
 key enter
 wait 1500
 shot 21-quick-search-opened-inbox

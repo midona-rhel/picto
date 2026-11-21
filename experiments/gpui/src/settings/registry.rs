@@ -73,7 +73,7 @@ pub const SHORTCUT_DEFS: &[ShortcutDef] = &[
         .or("Mod+K")
         .about("Search actions, places, tags and items"),
     def("nav.goToFolder", "Go to Folder", NAV, "Mod+J")
-        .about("Open Quick Search on the Places tab"),
+        .about("Open Quick Search with places only"),
     def("nav.back", "Go Back", NAV, "Alt+ArrowLeft").or("Mod+["),
     def("nav.forward", "Go Forward", NAV, "Alt+ArrowRight").or("Mod+]"),
     def("file.import", "Import Files", FILE, "Mod+I"),

@@ -679,7 +679,8 @@ impl Shell {
         cx.notify();
     }
 
-    /// Opens the Quick Search panel on the tab `kind`.
+    /// Opens the Quick Search panel with a list of `kind`: every kind, or
+    /// only the places.
     ///
     /// It does nothing while a dialog or a popover has the keyboard focus.
     /// The keymap does not run the panel's shortcuts there, but on macOS the
@@ -1479,8 +1480,8 @@ impl Render for Shell {
                 this.session.update(cx, |session, cx| session.redo(cx))
             }))
             // The `nav.commandPalette` shortcut opens the Quick Search panel
-            // on its All tab, and the `nav.goToFolder` shortcut opens it on
-            // its Places tab.
+            // with every kind of row, and the `nav.goToFolder` shortcut opens
+            // it with the places only.
             .on_action(
                 cx.listener(|this, _: &crate::keymap::QuickSearch, window, cx| {
                     this.open_quick_search(quick_search::Kind::All, window, cx)

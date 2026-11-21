@@ -160,4 +160,3 @@ of pixels differ
 Quick Search
 Actions
 Places
-Type at least 3 characters to search items.

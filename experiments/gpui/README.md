@@ -400,15 +400,18 @@ not listed in Settings › Shortcuts. They are listed in `keymap::NOT_YET`:
 
 **Quick Search** (`shell/quick_search.rs`, `shell/quick_search/`). A panel
 480 px wide in the middle of the main window, over the dimmed backdrop that
-the dialogs use. It has a search field, a row of five tabs (All, Actions,
-Places, Tags, Items) and a list, and the user chooses a row with the
-keyboard or the pointer. The Electron app has no such panel.
+the dialogs use. It has a search field and a list, and the user chooses a
+row with the keyboard or the pointer. The list holds four kinds of rows
+(actions, places, tags and items), each kind in a group under its name, with
+at most five actions, five places, five tags and three items. The Electron
+app has no such panel.
 
 - It opens in three ways: the button with the two arrows in the titlebar, at
   the right of the Toggle Panels button; the shortcut `nav.commandPalette`
   (⌘T or ⌘K, Ctrl+T or Ctrl+K on Windows and Linux), which is also the row
   View › Quick Search… of the application menu; and the shortcut
-  `nav.goToFolder` (⌘J or Ctrl+J), which opens the panel on the Places tab.
+  `nav.goToFolder` (⌘J or Ctrl+J), which opens the panel with a list of
+  the places only.
   Both shortcuts are listed in Settings › Shortcuts and can be changed
   there. Like the other shortcuts of the main window, they do not run while
   the keyboard is in a text field, a menu, a popover or a dialog. They do
@@ -450,20 +453,20 @@ keyboard or the pointer. The Electron app has no such panel.
   the first letter of the text must be the first letter of a word of the
   name. The matched letters are drawn in bold and underlined. This is the
   order that the search field of the context menus uses.
-- While the field is empty, each tab lists the choices made most recently
-  first. The 30 most recent choices are kept for each library in
+- While the field is empty, the list starts with the choices made most
+  recently, in a group named Recent. The 30 most recent choices are kept for each library in
   `state.json`, in the field `quickSearchRecent`.
 - The keys: Up and Down move the highlight, Enter chooses the highlighted
-  row, Escape closes the panel, and Tab and Shift+Tab go to the next and
-  the previous tab. The key that opens the panel also closes it. The
+  row and Escape closes the panel. The key that opens the panel also closes
+  it. The
   highlight follows the pointer, and a click chooses a row.
 - The actions, the places and the tags are lists in memory, and they are
   searched on a background thread each time the text changes. The items are
   searched on the library's thread, 50 ms after the last change of the
   text. A text of one or two characters does not search the items, because
   the library's text search needs three characters. A search that is no
-  longer the newest does no work, and its answer is dropped. A tab lists at
-  most 200 rows, and at most 50 items.
+  longer the newest does no work, and its answer is dropped. The list of
+  places that Go to Folder opens holds at most 200 rows.
 - The list is as high as its rows, between 8 and 16 rows of 26 px. The top
   of the panel stays in place when the list becomes shorter or longer.
 
@@ -949,7 +952,7 @@ reading production's code, seen in this app).
   `nav.commandPalette` (⌘K, "Command Palette") and `nav.goToFolder` (⌘J) as
   deferred and binds them to nothing. In this app `nav.commandPalette` is
   called "Quick Search", has the keys ⌘T and ⌘K, and opens the panel, and
-  `nav.goToFolder` opens the panel on its Places tab.
+  `nav.goToFolder` opens the panel with a list of the places only.
 - The handlers for the keys of Media View (Enter), Quick Look (Space), Copy
   (⌘C) and Delete (⌘⌫) over the grid are present only while the key has
   something to act on. Without something to act on, the key press is passed

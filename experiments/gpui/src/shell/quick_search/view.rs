@@ -1,8 +1,7 @@
 //! Draws the Quick Search panel. From top to bottom the panel has:
 //!
-//! - a header 48 px high, with the search field and the close button;
-//! - a row 36 px high with the five tabs, each with the number of its
-//!   matches;
+//! - a header 48 px high, with the search field and the close button, and
+//!   a line along its bottom edge;
 //! - the list, whose rows are 26 px high. A row has an icon, the name with
 //!   the matched letters in bold and underlined, and a short text at the
 //!   right. An item's row is 92 px high and has an 80 px thumbnail, the name
@@ -14,9 +13,8 @@
 //! rows, between 8 and 16 rows, and the top of the panel stays in place when
 //! the list becomes shorter or longer. The parts are the app's own
 //! controls: the dialog's backdrop and glass panel (`ui::modal`), the
-//! dialog search field (`ui::field` with `Look::ModalSearch`), the tabs of
-//! the batch rename dialog (`ui::segmented`), the row of the Add Tags
-//! dialog's list (`ui::selection_modal::item_row`) and the key hints of the
+//! dialog search field (`ui::field` with `Look::ModalSearch`), the row of
+//! the Add Tags dialog's list (`ui::selection_modal::item_row`) and the key hints of the
 //! tag picker (`ui::overlay_shell`).
 use super::sources::{Entry, Picture};
 use super::{Items, Kind, QuickSearch, Row};
@@ -53,7 +51,6 @@ pub const PINS: [&str; 12] = [
 /// each side.
 const WIDTH: f32 = 480.;
 const HEADER: f32 = 48.;
-const TABS: f32 = 36.;
 const FOOTER: f32 = 40.;
 /// The height of a row of an action, a place or a tag.
 const ROW: f32 = 26.;
@@ -158,13 +155,15 @@ fn pressed(id: &str, event: &KeyDownEvent, cx: &App) -> bool {
 }
 
 impl QuickSearch {
-    /// Draws the header: the search field and the close button.
+    /// Draws the header: the search field and the close button, with a
+    /// line along the bottom edge that separates it from the list.
     ///
     /// The header takes the keys of the list from the search field. Up and
-    /// Down move the highlight, Tab and Shift+Tab change the tab, Enter
-    /// chooses the highlighted row and Escape closes the panel. The first
-    /// three are the keys that the search field of the Add Tags dialog
-    /// takes, in that dialog's key context (`SelectionModal`).
+    /// Down move the highlight, Enter chooses the highlighted row and Escape
+    /// closes the panel. Up, Down and Tab are the keys that the search field
+    /// of the Add Tags dialog takes, in that dialog's key context
+    /// (`SelectionModal`). Tab does nothing here: its action is handled so
+    /// that the keyboard focus stays in the search field.
     fn header(&self, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
         let icon = theme::blend(gpui::transparent_black().into(), theme.text_tertiary(), 0.6);
@@ -176,13 +175,12 @@ impl QuickSearch {
             .flex()
             .items_center()
             .gap(px(8.))
+            .border_b_1()
+            .border_color(theme.border_secondary())
             .key_context("SelectionModal")
             .on_action(cx.listener(|this, _: &Up, _, cx| this.step(false, cx)))
             .on_action(cx.listener(|this, _: &Down, _, cx| this.step(true, cx)))
-            .on_action(cx.listener(|this, _: &NextView, window, cx| {
-                let backward = window.modifiers().shift;
-                this.step_kind(!backward, cx);
-            }))
+            .on_action(|_: &NextView, _, _| {})
             .capture_action(cx.listener(|this, _: &text_input::Commit, window, cx| {
                 cx.stop_propagation();
                 this.confirm(window, cx);
@@ -205,56 +203,6 @@ impl QuickSearch {
                 "quick-search-close",
                 cx.listener(|this, _, window, cx| this.close(window, cx)),
             ))
-    }
-
-    /// Draws the row of tabs. A tab shows its name and, after it, the number
-    /// of rows of its kind that match the text. A click on a tab gives the
-    /// keyboard focus back to the search field, so that the user can go on
-    /// typing.
-    fn tabs(&self, cx: &mut Context<Self>) -> Div {
-        let theme = theme::theme(cx);
-        let Some(open) = &self.open else {
-            return div();
-        };
-        let segments = Kind::TABS
-            .iter()
-            .map(|kind| {
-                let label = match open.count(*kind) {
-                    Some(count) => {
-                        format!("{} {}", kind.label(), crate::i18n::format::grouped(count))
-                    }
-                    None => kind.label().to_owned(),
-                };
-                ui::segmented::tab(label)
-            })
-            .collect();
-        let selected = Kind::TABS.iter().position(|kind| *kind == open.kind);
-        let this = cx.entity().downgrade();
-        div()
-            .h(px(TABS))
-            .flex_none()
-            .px(px(8.))
-            .pb(px(4.))
-            .flex()
-            .flex_col()
-            .justify_center()
-            .border_b_1()
-            .border_color(theme.border_secondary())
-            .child(
-                ui::segmented::segmented(
-                    "quick-search-tabs",
-                    ui::segmented::Look::FilledTabs,
-                    segments,
-                    selected,
-                )
-                .name(en("Quick Search"))
-                .on_select(move |index, window, cx| {
-                    let _ = this.update(cx, |this, cx| {
-                        this.show_kind(Kind::TABS[index], cx);
-                        window.focus(&this.input.focus_handle(cx), cx);
-                    });
-                }),
-            )
     }
 
     /// Draws one row of an action, a place or a tag: the icon, the name and
@@ -371,12 +319,12 @@ impl QuickSearch {
         };
         let frame = div().relative().h(px(height)).flex_none();
         if open.rows.is_empty() {
+            // The list of every kind can have no row because the library is
+            // still searching its items, or because that search failed. The
+            // list of places does not hold items.
             let text: SharedString = match (&open.items, open.kind) {
-                (Items::TooShort, Kind::Items) => {
-                    en("Type at least 3 characters to search items.").into()
-                }
-                (Items::Waiting, Kind::Items) => t("Searching...").into(),
-                (Items::Failed(error), Kind::Items) => error.clone().into(),
+                (Items::Waiting, Kind::All) => t("Searching...").into(),
+                (Items::Failed(error), Kind::All) => error.clone().into(),
                 _ => t("No results").into(),
             };
             return frame.child(
@@ -490,8 +438,8 @@ impl QuickSearch {
         ))
     }
 
-    /// Draws the footer, which names the keys: Tab changes the tab, the
-    /// arrows move the highlight, Enter chooses and Escape closes.
+    /// Draws the footer, which names the keys: the arrows move the
+    /// highlight, Enter chooses and Escape closes.
     fn footer(&self, cx: &App) -> Div {
         let theme = theme::theme(cx);
         let hint = |keys: Vec<Div>, label: &str| {
@@ -509,7 +457,6 @@ impl QuickSearch {
             .bg(theme.footer_surface())
             .border_t_1()
             .border_color(theme.border_secondary())
-            .child(hint(vec![overlay_shell::tab_key(cx)], t("Switch")))
             .child(hint(vec![overlay_shell::kbd("↑↓", cx)], t("Move")))
             .child(hint(vec![overlay_shell::kbd("↩", cx)], t("Select")))
             .child(div().flex_1())
@@ -540,7 +487,7 @@ impl Render for QuickSearch {
             .open
             .as_ref()
             .map_or(0., |open| list_height(viewport_height, &open.rows));
-        let largest = HEADER + TABS + largest_list_height(viewport_height) + FOOTER;
+        let largest = HEADER + largest_list_height(viewport_height) + FOOTER;
         let panel =
             ui::modal::dialog_panel("quick-search", theme::RADIUS_LG, en("Quick Search"), cx)
                 .a11y_focus(&self.focus)
@@ -554,12 +501,11 @@ impl Render for QuickSearch {
                 .text(theme::TEXT_MD)
                 .text_color(theme.text())
                 .child(self.header(cx))
-                .child(self.tabs(cx))
                 .child(self.list(height, window, cx))
                 .child(self.footer(cx));
         let layer = ui::modal::backdrop("quick-search-backdrop", shown, Some(&self.focus), window)
-            // The key that opens the panel closes it, and the key that opens
-            // it on the Places tab shows that tab. The keymap does not run
+            // The key that opens the panel closes it, and the Go to Folder
+            // key makes the list hold only the places. The keymap does not run
             // either shortcut here, because the keyboard focus is in a text
             // field inside a dialog.
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {

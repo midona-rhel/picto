@@ -189,8 +189,8 @@ pub fn targets(id: &str) -> Vec<Target> {
         "nav.trash" => vec![to!(App, ShowTrash)],
         "nav.search" => vec![to!(App, FocusSearch)],
         // Both shortcuts open the Quick Search panel (`crate::shell::quick_search`).
-        // The first opens it on the All tab and the second on the Places
-        // tab.
+        // The first opens it with every kind of row and the second with
+        // the places only.
         "nav.commandPalette" => vec![to!(App, QuickSearch)],
         "nav.goToFolder" => vec![to!(App, GoToFolder)],
         "nav.back" => vec![to!(App, GoBack)],
