@@ -554,7 +554,7 @@ impl IconButton {
     }
 
     /// Sets a handler that is called when the pointer enters or leaves the
-    /// button.
+    /// button. It is called for a disabled button too.
     pub fn on_hover(mut self, handler: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_hover = Some(Box::new(handler));
         self
@@ -719,6 +719,14 @@ impl RenderOnce for IconButton {
             );
         }
         if disabled {
+            // A disabled button is not drawn as hovered and shows no
+            // tooltip, but it still covers what is behind it. The caller is
+            // therefore still told when the pointer enters or leaves it, so
+            // that a row which shows its buttons under the pointer keeps
+            // showing them while the pointer is on a disabled one.
+            if let Some(handler) = self.on_hover {
+                button = button.on_hover(move |hovered, window, cx| handler(*hovered, window, cx));
+            }
             return button;
         }
         let focus = super::focus::control(&self.id, window, cx);
