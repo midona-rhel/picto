@@ -68,7 +68,7 @@ vi.mock('../../shared/ui/OverlayShell', () => ({
 
 const model = {
   slug: 'wd14-swinv2-v3', label: 'WD14', enabled: true, downloaded: true,
-  sessionLoaded: false, recommended: true, heavy: false, sizeBytes: 1, dataset: 'test',
+  sessionLoaded: false, backend: null, recommended: true, heavy: false, sizeBytes: 1, dataset: 'test',
 };
 
 const prediction = (rootId: number, tag = 'cat', confidence = 0.8) => ({

@@ -60,6 +60,9 @@ pub struct AiModelStatus {
     pub enabled: bool,
     pub downloaded: bool,
     pub session_loaded: bool,
+    /// What the model's loaded session runs on ("Core ML GPU/ANE", "CPU", ...);
+    /// none until it has been loaded.
+    pub backend: Option<String>,
     pub recommended: bool,
     pub heavy: bool,
     pub optimization_supported: bool,
@@ -174,6 +177,9 @@ async fn model_status_for(
                 enabled: setting_bool(&settings, model_setting_key(&model.slug)).unwrap_or(false),
                 downloaded: models::is_model_downloaded(&models_root, &model.slug),
                 session_loaded: sessions.contains_key(&model.slug),
+                backend: sessions
+                    .get(&model.slug)
+                    .and_then(|session| session.lock().ok().map(|session| session.gpu_backend())),
                 recommended: !model.heavy,
                 slug: model.slug,
                 label: model.label,

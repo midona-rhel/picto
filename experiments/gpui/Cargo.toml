@@ -1,0 +1,203 @@
+[package]
+name = "picto-gpui-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Keep experimental dependencies and lockfile out of the production workspace.
+# The patched GPUI crates under `vendor/` are dependencies, not members.
+[workspace]
+exclude = ["vendor"]
+
+# This standalone workspace does not inherit Picto's optimized debug profile.
+# Keep symbols/checks while optimizing the rendering and decoding hot paths.
+[profile.dev]
+opt-level = 1
+# Line numbers in backtraces are all the checks here need. Full debug
+# information and the incremental caches of this crate, the vendored GPUI
+# and the application core made every build cycle write several gigabytes
+# that nothing cleaned up.
+debug = "line-tables-only"
+incremental = false
+
+[profile.dev.package."*"]
+opt-level = 2
+
+# The AVFoundation frame check needs the process's main thread, which the
+# standard test harness does not give a test.
+[[test]]
+name = "avfoundation_frames"
+harness = false
+
+[dependencies]
+# Weekly crates.io snapshots of upstream GPUI (zed-industries/zed). The official
+# `gpui` crate has not been published since 0.2.2 (October 2025). Pin exactly:
+# GPUI makes no API stability promise between snapshots.
+gpui = { package = "gpui-pre", version = "=0.3.12" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["font-kit", "runtime_shaders", "wayland", "x11"] }
+picto_library = { path = "../../picto-library" }
+# The application layer the Electron app talks to: commands, workers, events.
+picto_core = { path = "../../core" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+# The library's auxiliary reads hand out its own SQLite connection; the same
+# version it builds, so no second copy is compiled.
+rusqlite = "0.40"
+unicode-segmentation = "1"
+# Word boundaries as the browser finds them, with the dictionaries for
+# Chinese, Japanese and Thai; the same build gpui already uses.
+icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
+anyhow = "1"
+# GPUI's and its renderers' warnings, for the log window.
+log = "0.4"
+serde_json = "1"
+futures = "0.3"
+same-file = "1"
+tempfile = "3"
+image = "0.25"
+# Reduced-size JPEG decoding (an eighth to half the DCT), for originals shown
+# smaller than they are; `image` decodes JPEG through zune-jpeg, which has none.
+jpeg-decoder = { version = "0.3", default-features = false }
+smallvec = "1"
+url = "2"
+chrono = "0.4"
+# The system's language, for the interface's default and how numbers and
+# dates are written; the version wgpu's dependencies already build.
+sys-locale = "0.3"
+ruffle_core = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f", features = ["audio", "mp3", "aac", "lzma"] }
+ruffle_frontend_utils = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f", default-features = false, features = ["cpal"] }
+ruffle_common = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f" }
+ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f" }
+wgpu = "27.0.1"
+# Document viewers, all pure Rust so they build on every platform. PDF pages
+# are rasterized by hayro, DjVu by djvu-rs (the crate production runs as
+# WebAssembly), JPEG XL by jxl-oxide (the decoder core/ thumbnails with).
+hayro = "0.9"
+djvu-rs = "0.45"
+jxl-oxide = { version = "0.12.6", features = ["image"] }
+# SVG pages inside comic archives; the version GPUI already builds.
+resvg = { version = "0.46", default-features = false }
+# CBZ and EPUB are zip archives; EPUB's manifest and chapters are XML.
+zip = { version = "8", default-features = false, features = ["deflate"] }
+roxmltree = "0.21"
+pulldown-cmark = { version = "0.13", default-features = false }
+# Text laid out and drawn without a window, for the thumbnails of text
+# documents; the version GPUI's wgpu renderer already builds.
+cosmic-text = "0.19"
+# A font's family name, for loading it into GPUI's text system.
+ttf-parser = "0.25"
+# WOFF tables are zlib streams; the version zip already builds.
+flate2 = "1"
+# Audio playback for the media viewer: the audio output Ruffle already uses,
+# and pure-Rust decoders for the audio formats a library holds.
+cpal = "0.16"
+symphonia = { version = "0.5.5", default-features = false, features = ["mp3", "wav", "pcm", "adpcm", "flac", "ogg", "vorbis", "isomp4", "aac", "aiff"] }
+rustfft = "6"
+# Round caps and joins for the visualizer's strokes; the tessellator GPUI uses.
+lyon_tessellation = "1"
+# Site logins (`src/logins/`): OAuth 1 signatures, OAuth 2 states and the
+# token requests, with the versions and features the application core
+# already builds.
+hmac = "0.12"
+sha1 = "0.10"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+# The site icons' cache names and the update download's check (SHA-256 and
+# SHA-512), the version the application core already builds.
+sha2 = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["charset", "cookies", "http2", "json", "rustls-tls", "stream", "system-proxy"] }
+# The sign-in window's web view: WKWebView on macOS, WebView2 on Windows,
+# WebKitGTK on Linux (`src/platform/login_window/`). Pinned exactly, as its
+# platform crates are reached directly for the cookie stores.
+wry = { version = "=0.57.2", default-features = false, features = ["os-webview"] }
+
+[dev-dependencies]
+# The format matrix draws the viewers off-screen through GPUI's headless
+# renderer, which only test builds include.
+gpui = { package = "gpui-pre", version = "=0.3.12", features = ["test-support"] }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["font-kit", "runtime_shaders", "wayland", "x11", "test-support"] }
+
+# The macOS text system, which unlike the platform can be made off the main
+# thread, for the off-screen checks.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_apple = { package = "gpui-pre-apple", version = "=0.3.12" }
+# The drop reading of the macOS platform, checked on a pasteboard of a
+# test's own.
+gpui_macos = { package = "gpui-pre-macos", version = "=0.3.12" }
+
+# Elsewhere the off-screen checks draw with GPUI's wgpu renderer and its
+# portable text system (on Windows too, where GPUI's own DirectX platform has
+# no headless renderer).
+[target.'cfg(not(target_os = "macos"))'.dev-dependencies]
+gpui_wgpu = { package = "gpui-pre-wgpu", version = "=0.3.12", features = ["test-support"] }
+
+# The launcher badge's D-Bus signal on Linux; the version the notification
+# service GPUI uses already builds. The file list Copy puts on the clipboard
+# is the one the vendored X11 drag source builds (the tests also check the
+# platform's drop reading).
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+zbus = "5"
+gpui_linux = { package = "gpui-pre-linux", version = "=0.3.12" }
+
+# The sign-in window on Linux: a GTK window holding WebKitGTK, and its
+# cookie manager; the versions wry builds.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
+
+# The sign-in window's cookies on Windows (`ICoreWebView2CookieManager`);
+# the versions wry builds. The Win32 calls the app makes itself (the
+# clipboard, window placement, the instance pipe, the process list).
+# The file list Copy puts on the clipboard is the one the vendored drag
+# source builds (the tests also check the platform's drop reading).
+[target.'cfg(windows)'.dependencies]
+gpui_windows = { package = "gpui-pre-windows", version = "=0.3.12" }
+webview2-com = "0.39"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_DataExchange",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-core = "0.62"
+
+# The user's id, for the single-instance folder (`opening/instance/unix.rs`);
+# the version the dependencies already build.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+# Video playback through AVFoundation, presented as CoreVideo pixel buffers
+# by GPUI's `surface` element; the same versions GPUI builds.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSDictionary", "NSString", "NSURL", "NSValue", "NSObject", "NSArray", "NSError", "NSGeometry", "NSData", "NSHTTPCookie", "NSDate"] }
+objc2-core-foundation = "0.3"
+objc2-core-video = { version = "0.3", features = ["CVPixelBuffer", "CVImageBuffer", "CVBuffer", "CVReturn", "CVPixelBufferIOSurface"] }
+objc2-core-media = { version = "0.3", features = ["CMTime", "CMTimeRange"] }
+objc2-av-foundation = { version = "0.3", features = ["AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "AVAsset", "AVMediaFormat", "AVTime", "AVVideoSettings", "AVVideoComposition", "block2", "objc2-core-media", "objc2-core-video"] }
+block2 = "0.6"
+objc2-quartz-core = { version = "0.3", features = ["CABase"] }
+# The sign-in window's cookies (`WKHTTPCookieStore`) and its load failures
+# (`WKNavigationDelegate`); the version wry builds.
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKHTTPCookieStore", "WKNavigation", "WKNavigationDelegate"] }
+
+# GPUI with a backdrop-blur primitive for the glass panels. Only the crates
+# that change are vendored; `vendor/README.md` lists every change against the
+# published 0.3.12 sources.
+[patch.crates-io]
+gpui-pre = { path = "vendor/gpui-pre" }
+gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
+gpui-pre-linux = { path = "vendor/gpui-pre-linux" }
+gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
+gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }

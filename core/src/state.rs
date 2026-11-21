@@ -23,6 +23,49 @@ type WorkerHandle = (&'static str, tokio::task::JoinHandle<()>);
 /// or process shutdown. The shell matches it literally.
 pub const OPEN_CANCELLED_MESSAGE: &str = "Library open was cancelled";
 
+/// The file in a library's folder that every application holding the
+/// library open keeps under an exclusive lock, so that a second application
+/// (another Picto, or another frontend on the same core) cannot open it at
+/// the same time. The system lets the lock go with the process, so a crash
+/// leaves nothing that blocks the next open.
+pub const LIBRARY_LOCK_FILE: &str = ".picto-library.lock";
+
+/// The start of the error message of an open refused because another
+/// application holds the library's lock. The shell may match it literally.
+pub const LIBRARY_IN_USE_MESSAGE: &str = "This library is open in another application";
+
+/// An exclusive lock on a library's [`LIBRARY_LOCK_FILE`], held for as long
+/// as the library is open and let go when dropped.
+pub struct LibraryLock {
+    _file: std::fs::File,
+}
+
+/// Takes the lock of the library at `root`, creating its folder and the
+/// lock file when they are missing (as creating a library does). Fails with
+/// [`LIBRARY_IN_USE_MESSAGE`] while another holder, in this process or
+/// another, has it.
+pub fn lock_library(root: &std::path::Path) -> Result<LibraryLock, String> {
+    std::fs::create_dir_all(root).map_err(|error| format!("{}: {error}", root.display()))?;
+    let path = root.join(LIBRARY_LOCK_FILE);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|error| format!("Could not lock the library ({}): {error}", path.display()))?;
+    match file.try_lock() {
+        Ok(()) => Ok(LibraryLock { _file: file }),
+        Err(std::fs::TryLockError::WouldBlock) => Err(format!(
+            "{LIBRARY_IN_USE_MESSAGE} ({}). Close it there, then open it again.",
+            root.display()
+        )),
+        Err(std::fs::TryLockError::Error(error)) => Err(format!(
+            "Could not lock the library ({}): {error}",
+            path.display()
+        )),
+    }
+}
+
 /// What the in-flight open is doing, as the shell shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -92,6 +135,8 @@ pub struct BackendState {
     cancel: CancellationToken,
     workers: tokio::sync::Mutex<Vec<WorkerHandle>>,
     read_cache: parking_lot::Mutex<LruCache<String, (u64, String)>>,
+    /// The library's lock, held until the library is closed.
+    lock: parking_lot::Mutex<Option<LibraryLock>>,
 }
 
 impl BackendState {
@@ -166,6 +211,22 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<BackendState>, St
     open_library_inner(library_root, None).await
 }
 
+/// Opens a library as [`open_library`] does, and hands its `Library` to
+/// `opened` as soon as the database is open: before the recovery passes run
+/// and the workers start, which on a large library takes many seconds. The
+/// caller can read from it meanwhile; commands still wait for the whole
+/// open. If the open is then cancelled or fails, that library is never
+/// published.
+pub async fn open_library_reporting(
+    library_root: PathBuf,
+    opened: impl FnOnce(Arc<picto_library::Library>) + Send + 'static,
+) -> Result<Arc<BackendState>, String> {
+    cancel_in_flight_open();
+    let _lifecycle = lifecycle_lock().lock().await;
+    let _invocations = invocation_lock().write().await;
+    open_library_stages(library_root, None, Some(Box::new(opened))).await
+}
+
 pub async fn open_tutorial_library(
     library_root: PathBuf,
     fixture_root: PathBuf,
@@ -183,6 +244,17 @@ pub async fn open_tutorial_library(
 async fn open_library_inner(
     library_root: PathBuf,
     tutorial_fixture_root: Option<PathBuf>,
+) -> Result<Arc<BackendState>, String> {
+    open_library_stages(library_root, tutorial_fixture_root, None).await
+}
+
+/// Told the library as soon as its database is open.
+type LibraryOpened = Box<dyn FnOnce(Arc<picto_library::Library>) + Send>;
+
+async fn open_library_stages(
+    library_root: PathBuf,
+    tutorial_fixture_root: Option<PathBuf>,
+    readable: Option<LibraryOpened>,
 ) -> Result<Arc<BackendState>, String> {
     let cancel = OpenCancellation::new();
     let stage = Arc::new(AtomicU8::new(OpenStage::Opening as u8));
@@ -207,7 +279,10 @@ async fn open_library_inner(
         let handle = cancel.clone();
         let stage = Arc::clone(&stage);
         tokio::task::spawn_blocking(move || {
-            if database_path.exists() {
+            // Taken before the database is touched, and kept while it is
+            // open; another application holding it refuses this open.
+            let lock = lock_library(&root)?;
+            let application = if database_path.exists() {
                 let mut progress = |reported: picto_library::OpenStage| {
                     let value = match reported {
                         picto_library::OpenStage::Migrating => OpenStage::Migrating,
@@ -219,16 +294,20 @@ async fn open_library_inner(
                 LibraryApplication::open_with(&root, &handle, &mut progress)
             } else {
                 LibraryApplication::create(&root)
-            }
+            }?;
+            Ok::<_, String>((application, lock))
         })
         .await
         .map_err(|error| format!("Library open task failed: {error}"))?
     };
-    let application = match opened {
-        Ok(application) => Arc::new(application),
+    let (application, lock) = match opened {
+        Ok((application, lock)) => (Arc::new(application), lock),
         Err(_) if cancel.is_cancelled() => return Err(OPEN_CANCELLED_MESSAGE.to_string()),
         Err(error) => return Err(error),
     };
+    if let Some(readable) = readable {
+        readable(Arc::clone(application.library()));
+    }
     if let Err(error) = crate::ai_models::migrate_legacy_storage(application.as_ref()) {
         tracing::warn!(%error, "Could not migrate legacy AI model storage");
     }
@@ -242,6 +321,7 @@ async fn open_library_inner(
         read_cache: parking_lot::Mutex::new(LruCache::new(
             NonZeroUsize::new(16).expect("nonzero query cache capacity"),
         )),
+        lock: parking_lot::Mutex::new(Some(lock)),
     });
     let workers = if let Some(fixture_root) = tutorial_fixture_root {
         crate::library_runtime::start_tutorial(
@@ -812,6 +892,9 @@ async fn close_library_inner() -> Result<(), String> {
     let Some(state) = state else {
         return Ok(());
     };
+    // Let go once the library is checkpointed, or failed to be: the lock
+    // leaves with this function whatever happens below.
+    let _lock = state.lock.lock().take();
     state.cancel.cancel();
     state.application.cancel_ai_model_downloads().await;
     let workers = std::mem::take(&mut *state.workers.lock().await);
@@ -848,8 +931,12 @@ async fn join_workers(workers: Vec<WorkerHandle>) {
 mod tests {
     use super::{initialize_joined_database, QUEUE_CLOUD_MEDIA_RECOVERY_SQL};
 
+    /// The tests that open the one global library take turns.
+    static GLOBAL_LIBRARY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_close_racing_an_open_leaves_nothing_open_and_no_in_flight_record() {
+        let _turn = GLOBAL_LIBRARY.lock().await;
         assert_eq!(
             super::invoke("library.open_status", "{}").await.unwrap(),
             "null"
@@ -891,6 +978,63 @@ mod tests {
         assert!(super::get_state().is_ok());
         super::close_library().await.unwrap();
         assert!(super::get_state().is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_reported_open_hands_over_the_library_before_it_is_published() {
+        let _turn = GLOBAL_LIBRARY.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("Reported.library");
+        // Created, closed, and opened again as an existing library.
+        super::open_library(root.clone()).await.unwrap();
+        super::close_library().await.unwrap();
+        let (sender, handed) = std::sync::mpsc::channel();
+        let state = super::open_library_reporting(root, move |library| {
+            // Not yet published: the recovery passes and workers are to come.
+            let published = super::get_state().is_ok();
+            sender.send((library, published)).unwrap();
+        })
+        .await
+        .unwrap();
+        let (library, published) = handed.try_recv().unwrap();
+        assert!(!published);
+        assert!(std::sync::Arc::ptr_eq(
+            &library,
+            state.application().library()
+        ));
+        assert!(library.sidebar_counts().is_ok());
+        super::close_library().await.unwrap();
+    }
+
+    /// An open library's lock refuses a second holder, in this process or
+    /// another; a library locked elsewhere is not opened; closing lets go,
+    /// so the same library opens again.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_open_library_is_locked_until_it_is_closed() {
+        let _turn = GLOBAL_LIBRARY.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("Locked.library");
+        super::open_library(root.clone()).await.unwrap();
+        assert!(root.join(super::LIBRARY_LOCK_FILE).is_file());
+        let refused = super::lock_library(&root).err().unwrap();
+        assert!(
+            refused.starts_with(super::LIBRARY_IN_USE_MESSAGE),
+            "{refused}"
+        );
+        super::close_library().await.unwrap();
+        // Free once closed.
+        drop(super::lock_library(&root).unwrap());
+        // Held by someone else: the open fails, with the message, and
+        // nothing is open.
+        let held = super::lock_library(&root).unwrap();
+        let error = super::open_library(root.clone()).await.err().unwrap();
+        assert!(error.starts_with(super::LIBRARY_IN_USE_MESSAGE), "{error}");
+        assert!(super::get_state().is_err());
+        drop(held);
+        super::open_library(root.clone()).await.unwrap();
+        // Reopening the open library lets go of its own lock first.
+        super::open_library(root).await.unwrap();
+        super::close_library().await.unwrap();
     }
 
     #[test]
