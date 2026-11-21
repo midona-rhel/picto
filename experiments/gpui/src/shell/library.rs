@@ -658,8 +658,8 @@ mod tests {
     #[test]
     fn a_path_splits_into_name_and_folders() {
         assert_eq!(
-            split("/Users/someone/Pictures/Main.library"),
-            ("Main".into(), "Users/someone/Pictures".into())
+            split("/home/someone/Pictures/Main.library"),
+            ("Main".into(), "home/someone/Pictures".into())
         );
         assert_eq!(
             split("C:\\Media\\Art.library\\"),

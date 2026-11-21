@@ -665,13 +665,13 @@ mod tests {
             test_folder: Some(folder.path().to_path_buf()),
         };
         assert!(listed(&inside.to_string_lossy(), &facts));
-        assert!(!listed("/Users/me/Pictures/Main.library", &facts));
+        assert!(!listed("/home/me/Pictures/Main.library", &facts));
         let release = Facts {
             release: true,
             flag: false,
             seam: None,
             test_folder: None,
         };
-        assert!(listed("/Users/me/Pictures/Main.library", &release));
+        assert!(listed("/home/me/Pictures/Main.library", &release));
     }
 }

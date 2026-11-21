@@ -125,11 +125,11 @@ mod tests {
     fn the_list_is_read_from_productions_keys() {
         let (_folder, path) = fixture(
             r##"{
-              "libraryHistory": ["/Users/me/Pictures/Main.library", "/Volumes/Art/Art.library",
-                                 "relative.library", 3, "/Users/me/Pictures/Main.library"],
+              "libraryHistory": ["/home/me/Pictures/Main.library", "/Volumes/Art/Art.library",
+                                 "relative.library", 3, "/home/me/Pictures/Main.library"],
               "pinnedLibraries": ["/Volumes/Art/Art.library"],
               "cloudLocations": {},
-              "lastLibrary": "/Users/me/Pictures/Main.library",
+              "lastLibrary": "/home/me/Pictures/Main.library",
               "windowState": { "main": null },
               "libraryMeta": {
                 "/Volumes/Art/Art.library": { "color": "#40C057", "icon": "IconStar", "imageHash": "ab" },
@@ -146,7 +146,7 @@ mod tests {
         assert_eq!(
             seed.history,
             [
-                "/Users/me/Pictures/Main.library",
+                "/home/me/Pictures/Main.library",
                 "/Volumes/Art/Art.library"
             ]
         );

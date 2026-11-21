@@ -803,7 +803,7 @@ mod tests {
         };
         state
             .recent_folders
-            .insert("/Users/x/Main.library".into(), vec![4, 9]);
+            .insert("/home/x/Main.library".into(), vec![4, 9]);
         state.shortcut_overrides.insert(
             "view.toggleSidebar".into(),
             Binding {

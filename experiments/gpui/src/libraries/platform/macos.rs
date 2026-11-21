@@ -72,10 +72,10 @@ mod tests {
             "/Applications/Picto.app/Contents/Frameworks/Picto Helper (Renderer).app/Contents/MacOS/Picto Helper (Renderer)"
         ));
         assert!(is_picto(
-            "/Users/me/Downloads/Picto 2.app/Contents/MacOS/Picto"
+            "/home/me/Downloads/Picto 2.app/Contents/MacOS/Picto"
         ));
         assert!(!is_picto(
-            "/Users/me/Code/experiments/gpui/target/Picto GPUI.app/Contents/MacOS/picto-gpui-spike"
+            "/home/me/Code/experiments/gpui/target/Picto GPUI.app/Contents/MacOS/picto-gpui-spike"
         ));
         assert!(!is_picto("/usr/bin/pictor"));
         // The process this test runs in is not the Electron app.

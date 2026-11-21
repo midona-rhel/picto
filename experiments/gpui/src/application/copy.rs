@@ -498,7 +498,7 @@ mod tests {
             .unwrap()
             .execute_batch(
                 "INSERT INTO folder_definition (folder_id, stable_key, name, watch_path, watch_enabled, display_order)
-                 VALUES (1, 'f1', 'Watched', '/Users/me/Downloads', 1, 0);",
+                 VALUES (1, 'f1', 'Watched', '/home/me/Downloads', 1, 0);",
             )
             .unwrap();
         let before = crate::libraries::admission::tests::snapshot(&root);
@@ -563,9 +563,9 @@ mod tests {
         // The copy's marker names the library it was made from.
         // An absolute path of this platform's own form.
         let source = PathBuf::from(if cfg!(windows) {
-            r"C:\Users\me\Pictures\Real.library"
+            r"C:\Work\Pictures\Real.library"
         } else {
-            "/Users/me/Pictures/Real.library"
+            "/home/me/Pictures/Real.library"
         });
         let stored = |library: &Path, hash: &str| {
             library
@@ -589,9 +589,9 @@ mod tests {
         connection
             .execute_batch(
                 "UPDATE cloud_state SET provider = 'dropbox', account_label = 'me',
-                        remote_root = '/Users/me/Dropbox', state = 'idle', paused = 0;
+                        remote_root = '/home/me/Dropbox', state = 'idle', paused = 0;
                  INSERT INTO folder_definition (folder_id, stable_key, name, watch_path, watch_enabled, display_order)
-                 VALUES (1, 'f1', 'Watched', '/Users/me/Downloads', 1, 0);
+                 VALUES (1, 'f1', 'Watched', '/home/me/Downloads', 1, 0);
                  INSERT INTO subscription (subscription_id, subscription_key, name, schedule, next_run_at, created_at)
                  VALUES (1, 's1', 'Daily', 'daily', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
                  INSERT INTO subscription_run (run_id, subscription_id, requested_by, status, created_at)
@@ -599,9 +599,9 @@ mod tests {
                         (2, 1, 'user', 'succeeded', '2026-01-01T00:00:00Z');
                  INSERT INTO ingest_job (ingest_job_id, job_key, source_kind, source_path, payload_json,
                                          delete_after_ingest, status, available_at, created_at, updated_at)
-                 VALUES (1, 'moving', 'file', '/Users/me/Downloads/only-copy.png', '{}', 1, 'pending', 'now', 'now', 'now'),
-                        (2, 'claimed', 'file', '/Users/me/Downloads/claimed.png', '{}', 1, 'running', 'now', 'now', 'now'),
-                        (3, 'done', 'file', '/Users/me/Downloads/done.png', '{}', 1, 'succeeded', 'now', 'now', 'now');",
+                 VALUES (1, 'moving', 'file', '/home/me/Downloads/only-copy.png', '{}', 1, 'pending', 'now', 'now', 'now'),
+                        (2, 'claimed', 'file', '/home/me/Downloads/claimed.png', '{}', 1, 'running', 'now', 'now', 'now'),
+                        (3, 'done', 'file', '/home/me/Downloads/done.png', '{}', 1, 'succeeded', 'now', 'now', 'now');",
             )
             .unwrap();
         for (file, hash, library) in [(1, "aa", &source), (2, "bb", &neighbour)] {
@@ -623,7 +623,7 @@ mod tests {
             .execute_batch(
                 "INSERT INTO ingest_job (ingest_job_id, job_key, source_kind, source_path, payload_json,
                                          delete_after_ingest, status, available_at, created_at, updated_at)
-                 VALUES (4, 'own', 'file', '/Users/me/Desktop/own.png', '{}', 1, 'pending', 'now', 'now', 'now');",
+                 VALUES (4, 'own', 'file', '/home/me/Desktop/own.png', '{}', 1, 'pending', 'now', 'now', 'now');",
             )
             .unwrap();
         // Again, on the next launch.

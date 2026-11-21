@@ -801,7 +801,7 @@ mod tests {
         assert!(!inside(
             "/private/tmp/picto-gpui-library.a1/Main.library/../Main.library2/x.jpg"
         ));
-        assert!(!inside("/Users/someone/Pictures/Main.library/blobs/x.jpg"));
+        assert!(!inside("/home/someone/Pictures/Main.library/blobs/x.jpg"));
         assert!(!inside("blobs/x.jpg"));
         // Names differ by case on Linux and on a case-sensitive Mac volume;
         // the canonical path has the case the disk has, so no folding.
@@ -816,27 +816,27 @@ mod tests {
     #[test]
     fn only_paths_below_the_copy_are_the_copys() {
         let root =
-            Path::new(r"\\?\C:\Users\me\AppData\Local\Temp\picto-gpui-library.a1\Main.library");
+            Path::new(r"\\?\C:\Work\Temp\picto-gpui-library.a1\Main.library");
         let inside = |path: &str| super::inside(root, Path::new(path));
         assert!(inside(
-            r"C:\Users\me\AppData\Local\Temp\picto-gpui-library.a1\Main.library\blobs\f\x.jpg"
+            r"C:\Work\Temp\picto-gpui-library.a1\Main.library\blobs\f\x.jpg"
         ));
         assert!(inside(
-            r"\\?\c:\users\me\appdata\local\temp\picto-gpui-library.a1\main.library\blobs\x.jpg"
+            r"\\?\c:\work\temp\picto-gpui-library.a1\main.library\blobs\x.jpg"
         ));
         assert!(!inside(
-            r"C:\Users\me\AppData\Local\Temp\picto-gpui-library.a1\Main.library"
+            r"C:\Work\Temp\picto-gpui-library.a1\Main.library"
         ));
         assert!(!inside(
-            r"C:\Users\me\AppData\Local\Temp\picto-gpui-library.a1\Main.library.old\x.jpg"
+            r"C:\Work\Temp\picto-gpui-library.a1\Main.library.old\x.jpg"
         ));
         assert!(!inside(
-            r"C:\Users\me\AppData\Local\Temp\picto-gpui-library.a1\Main.library\..\x.jpg"
+            r"C:\Work\Temp\picto-gpui-library.a1\Main.library\..\x.jpg"
         ));
         assert!(!inside(
-            r"D:\Users\me\AppData\Local\Temp\picto-gpui-library.a1\Main.library\x.jpg"
+            r"D:\Work\Temp\picto-gpui-library.a1\Main.library\x.jpg"
         ));
-        assert!(!inside(r"C:\Users\me\Pictures\Main.library\blobs\x.jpg"));
+        assert!(!inside(r"C:\Work\Pictures\Main.library\blobs\x.jpg"));
         // A copy on a network share.
         let share = Path::new(r"\\?\UNC\server\share\picto-gpui-library.a1\Main.library");
         assert!(super::inside(

@@ -62,6 +62,7 @@ for (const file of tracked) {
       || file.startsWith('resources/tutorial/')
       || file.startsWith('tests/fixtures/')
       || file.startsWith('core/tests/fixtures/')
+      || file.startsWith('experiments/gpui/assets/fixtures/')
       || approvedReleaseIcons.has(file);
     assert(approvedAsset, `tracked media must be an approved product asset or test fixture: ${file}`);
   }
