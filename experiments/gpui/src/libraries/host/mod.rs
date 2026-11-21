@@ -86,11 +86,11 @@ pub fn host(cx: &mut App) -> Entity<Host> {
     entity
 }
 
-/// Returns what the host asks whether another Picto is running. A debug or
-/// release build asks the system. A test build takes the answer from the
-/// environment variable `PICTO_GPUI_TEST_PICTO_RUNNING`, so that the
-/// off-screen tool never depends on what runs on the machine. When the
-/// variable is not set, no other Picto is running. With the value
+/// Returns the object through which the host asks whether another Picto is
+/// running. A debug or release build asks the system. A test build takes the
+/// answer from the environment variable `PICTO_GPUI_TEST_PICTO_RUNNING`, so
+/// that the off-screen tool never depends on what runs on the machine. When
+/// the variable is not set, no other Picto is running. With the value
 /// `after-open`, no other Picto is running the first time the host asks,
 /// which is when it opens the library, and one is running every time after
 /// that, as when a Picto is started while a library is open. With any other
