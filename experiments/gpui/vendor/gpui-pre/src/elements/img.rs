@@ -365,7 +365,19 @@ impl Element for Img {
 
                             let image_size = data.render_size(frame_index);
 
-                            if style.aspect_ratio.is_none() {
+                            // The picture's own shape decides the element's
+                            // shape only when the caller left the width or
+                            // the height open. When both are given (for
+                            // example `size_full`), the element takes that
+                            // box, and `object_fit` places the picture in
+                            // it. Setting the ratio in that case made the
+                            // layout replace the given height with one
+                            // worked out from the width, so a tall picture
+                            // that fills a square box showed its top part
+                            // and not its middle.
+                            let open = matches!(style.size.width, Length::Auto)
+                                || matches!(style.size.height, Length::Auto);
+                            if style.aspect_ratio.is_none() && open {
                                 style.aspect_ratio = Some(image_size.width / image_size.height);
                             }
 

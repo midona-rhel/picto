@@ -1,45 +1,57 @@
-//! The app's network features checked end to end in the running app, on
-//! whatever system it runs on (debug builds only):
-//! `PICTO_GPUI_NET_CHECK=<folder>` with
+//! A check of the app's network features, run from start to finish in the
+//! running app on whatever system it runs on. It exists in debug builds only
+//! and is started with `PICTO_GPUI_NET_CHECK=<folder>` together with
 //! `PICTO_GPUI_NET_ORIGIN=http://127.0.0.1:<port>`.
 //!
-//! The check serves, at that origin, what the features would reach: GitHub's
-//! list of releases with one newer application release, its `latest.yml`
-//! and `latest-linux.yml` and an installer, a harmless stand-in the check
-//! builds itself (on Windows a small program compiled with the system's C#
-//! compiler, elsewhere a shell script) that only writes what it was started
-//! with (its path, its arguments, the AppImage variables) to
-//! `installer-ran.txt` in the folder; each search engine's page with its
-//! upload control and results page, recording the bytes, name and type of
-//! every file uploaded to it; and services' icons (a touch icon, a favicon,
-//! a page where an icon should be, nothing). Then it runs:
+//! The check runs a small server at that origin. The server answers with
+//! what the features would otherwise fetch from the internet:
 //!
-//! - the services' icons through `site_icons`: two found and kept in the
-//!   cache, two not (the globe);
-//! - an update check through `updates` as this system runs it: on Windows
-//!   and Linux the installer downloaded and verified against the feed; a
-//!   feed whose checksum does not match, which must end in an error with
-//!   no installer kept, and Restart and Install then starting nothing; the
-//!   good installer again, changed on disk after its verification, which
-//!   Restart and Install must refuse, starting nothing and leaving the app
-//!   running with the error shown; then downloaded once more. On macOS the
-//!   release page offered;
-//! - a search on every engine through `search_by_image`, in its hidden web
-//!   view: nothing reaches an engine before the search starts, the engine
-//!   receives exactly the file's bytes, name and type, and the results
-//!   address is production's;
-//! - last, the install: Restart and Install, which starts the stand-in as
-//!   production starts its installer and quits the app; or, when the
-//!   folder holds a file `install-on-quit`, the app quits with the update
-//!   waiting (icons and searches are skipped then), which installs it
-//!   silently. On macOS, Open Download Page writes the release page down;
-//!   following another system's flow (`PICTO_GPUI_UPDATE_PLATFORM`), the
-//!   installer is verified but not started.
+//! - GitHub's list of releases, with one release newer than the app, its
+//!   `latest.yml` and `latest-linux.yml`, and an installer. The installer is
+//!   a harmless stand-in that the check builds itself: on Windows a small
+//!   program compiled with the system's C# compiler, elsewhere a shell
+//!   script. It only writes what it was started with (its path, its
+//!   arguments, the AppImage variables) to `installer-ran.txt` in the folder.
+//! - Each search engine's page with its upload control and its results page.
+//!   The server records the bytes, name and type of every file uploaded.
+//! - Icons for services: one touch icon, one favicon, one page where an
+//!   icon should be, and one address that answers with nothing.
 //!
-//! It writes `net-check.log`, whose last line is `result: pass` or
-//! `result: fail`, to the folder, then the app quits. Whether the stand-in
-//! ran, and how, is for the caller to read in `installer-ran.txt` once the
-//! app has ended (the workflow's Network features step).
+//! Then the check runs these steps:
+//!
+//! 1. The services' icons, through `site_icons`. Two are found and kept in
+//!    the cache. Two are not found, and the globe icon is used for them.
+//! 2. An update check, through `updates`, in the way this system does it.
+//!    On Windows and Linux:
+//!    - The installer is downloaded and verified against the feed.
+//!    - A feed whose checksum does not match the installer must end in an
+//!      error, with no installer kept, and Restart and Install must then
+//!      start nothing.
+//!    - The good installer is downloaded again and changed on disk after it
+//!      was verified. Restart and Install must refuse it, start nothing, and
+//!      leave the app running with the error shown.
+//!    - The installer is downloaded once more.
+//!
+//!    On macOS the update is offered as a link to the release page.
+//! 3. A search on every engine, through `search_by_image`, in its hidden web
+//!    view. Nothing may reach an engine before the search starts. The engine
+//!    must receive exactly the file's bytes, name and type. The results
+//!    address must be the one the Electron app opens.
+//! 4. The install, which is the last step. Restart and Install starts the
+//!    stand-in installer the way the Electron app starts its installer, and
+//!    quits the app. When the folder holds a file named `install-on-quit`,
+//!    the app instead quits with the update waiting, which installs it
+//!    silently; the icons and the searches are skipped in that case. On
+//!    macOS, Open Download Page writes the address of the release page to
+//!    the log. When the check follows another system's steps
+//!    (`PICTO_GPUI_UPDATE_PLATFORM`), the installer is verified but not
+//!    started.
+//!
+//! The check writes `net-check.log` to the folder. The log's last line is
+//! `result: pass` or `result: fail`. Then the app quits. Whether the
+//! stand-in installer ran, and with what, is for the caller to read in
+//! `installer-ran.txt` after the app has ended (the workflow's Network
+//! features step does this).
 use crate::grid::menu::{ENGINES, Engine};
 use base64::Engine as _;
 use gpui::*;
@@ -59,7 +71,7 @@ const ICONS: [(&str, bool); 4] = [
     ("absent.example", false),
 ];
 
-/// A file an engine received.
+/// One file that an engine's page received.
 #[derive(Clone, Debug)]
 struct Received {
     engine: String,
@@ -77,7 +89,7 @@ struct Server {
     installer: Arc<Vec<u8>>,
     bad_checksum: Arc<AtomicBool>,
     received: Arc<Mutex<Vec<Received>>>,
-    /// Every request's path, in order.
+    /// The path of every request, in the order the requests arrived.
     requests: Arc<Mutex<Vec<String>>>,
 }
 
@@ -117,8 +129,8 @@ pub fn start(cx: &mut App) {
             return;
         }
     };
-    // Always ready: WebView2 runs the thread's messages while its web view
-    // is being made.
+    // This must be ready at all times, because WebView2 runs the thread's
+    // messages while its web view is being made.
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor()
@@ -243,8 +255,9 @@ async fn updates(
     cx: &mut AsyncApp,
 ) -> bool {
     let mut passed = true;
-    // A first start of this version shows its bundled notes, which hold
-    // checks back until they are read.
+    // On the first start of a version the app shows that version's release
+    // notes, and it does not check for updates until the notes have been
+    // read.
     let state = cx.update(crate::updates::state);
     passed &= report.expect(
         state.status == crate::updates::Status::Installed
@@ -288,7 +301,8 @@ async fn updates(
                 state.status, state.downloaded, state.error
             ),
         );
-        // The same release whose feed no longer matches its installer.
+        // The same release, with a feed whose checksum no longer matches the
+        // installer.
         server.bad_checksum.store(true, Ordering::SeqCst);
         let folder = state
             .downloaded
@@ -308,7 +322,7 @@ async fn updates(
                 state.status, state.error
             ),
         );
-        // Restart and Install has nothing to start.
+        // There is no installer, so Restart and Install must start nothing.
         cx.update(crate::updates::install);
         pause(cx, 1500).await;
         let state = cx.update(crate::updates::state);
@@ -317,7 +331,8 @@ async fn updates(
             "Restart and Install after the refused download started nothing",
         );
 
-        // The good installer again, then changed on disk before it starts.
+        // The good installer is downloaded again and then changed on disk
+        // before it is started.
         server.bad_checksum.store(false, Ordering::SeqCst);
         let state = check_update(cx).await;
         let downloaded = state.downloaded.clone();
@@ -436,8 +451,9 @@ async fn searches(
     passed
 }
 
-/// The last step: the update installed as this system installs it (the
-/// app then quits, which ends the check), or the release page on macOS.
+/// The last step. On Windows and Linux the update is installed in the way
+/// that system installs it; the app then quits, which ends the check. On
+/// macOS the release page is offered.
 async fn install(
     out: &std::path::Path,
     on_quit: bool,
@@ -466,7 +482,8 @@ async fn install(
         _ => "linux",
     };
     if state.platform != system {
-        // Another system's flow: verified, never started.
+        // The check follows another system's steps: the installer is
+        // verified but never started.
         cx.update(crate::updates::install);
         pause(cx, 1500).await;
         let state = cx.update(crate::updates::state);
@@ -482,8 +499,8 @@ async fn install(
         report.line("quitting with the update waiting: it installs as the app quits");
         return true;
     }
-    // The app quits once the installer has started; what the log says
-    // must be written first.
+    // The app quits as soon as the installer has started, so the log is
+    // written before that.
     report.line("Restart and Install: the installer starts and the app quits");
     finish(out, &report.lines, passed);
     cx.update(crate::updates::install);
@@ -498,10 +515,11 @@ async fn install(
     )
 }
 
-/// The stand-in installer, whose only effect is to write what it was
-/// started with to [`MARKER`] in `out`: on Windows a program compiled with
-/// the C# compiler of the .NET Framework every Windows has, elsewhere a
-/// shell script (the AppImage's stand-in; never run on macOS).
+/// Builds the stand-in installer. Its only effect is to write what it was
+/// started with to [`MARKER`] in `out`. On Windows it is a program compiled
+/// with the C# compiler of the .NET Framework, which every Windows has.
+/// Elsewhere it is a shell script, which stands in for the AppImage and is
+/// never run on macOS.
 fn stand_in(out: &std::path::Path) -> Result<Vec<u8>, String> {
     let marker = out.join(MARKER);
     let _ = std::fs::remove_file(&marker);
@@ -559,7 +577,8 @@ fn stand_in(out: &std::path::Path) -> Result<Vec<u8>, String> {
     std::fs::read(&program).map_err(|error| error.to_string())
 }
 
-/// A check from Check Now, followed to its end.
+/// Runs one update check as Check Now starts it, and waits until it has
+/// finished.
 async fn check_update(cx: &mut AsyncApp) -> crate::updates::State {
     use crate::updates::Status;
     cx.update(crate::updates::check);
@@ -585,7 +604,6 @@ fn engine_key(engine: Engine) -> &'static str {
         Engine::TinEye => "tineye",
         Engine::SauceNao => "saucenao",
         Engine::Yandex => "yandex",
-        Engine::Sogou => "sogou",
         Engine::Bing => "bing",
     }
 }
@@ -611,7 +629,7 @@ fn expected_result(engine: Engine, origin: &str) -> Expected {
 }
 
 /// Each engine's page and the results address its upload leads to.
-const ENGINE_PAGES: [(&str, &str, &str); 5] = [
+const ENGINE_PAGES: [(&str, &str, &str); 4] = [
     ("tineye", "/tineye.com/", "/tineye.com/search/abc123"),
     ("saucenao", "/saucenao.com/", "/saucenao.com/search.php"),
     (
@@ -620,26 +638,20 @@ const ENGINE_PAGES: [(&str, &str, &str); 5] = [
         "/yandex.com/images/search?rpt=imageview&cbir_id=42",
     ),
     (
-        "sogou",
-        "/pic.sogou.com/",
-        "/pic.sogou.com/ris?query=x&flag=1",
-    ),
-    (
         "bing",
         "/www.bing.com/images",
         "/www.bing.com/search?view=detailv2&iss=sbiupload&bcid=XYZ",
     ),
 ];
 
-/// The engine's page: its upload control where production's script looks
-/// for it, behind a button where the engine hides it, and an upload that
-/// leads to the results address.
+/// The page the server gives for an engine. Its upload control is where the
+/// Electron app's script looks for it, behind a button for the engines that
+/// hide it behind one. An upload leads to the results address.
 fn engine_page(key: &str, result: &str) -> String {
     let control = match key {
         "tineye" => r#"<div id="upload-box"><input type="file" id="f"></div>"#.to_owned(),
         "saucenao" => r#"<form id="searchForm" method="post" enctype="multipart/form-data" action="/saucenao.com/search.php"><input type="file" id="fileInput" name="file"></form>"#.to_owned(),
         "yandex" => r#"<button class="input__cbir-button" id="b">image</button>"#.to_owned(),
-        "sogou" => r#"<span id="cameraIco">camera</span>"#.to_owned(),
         _ => r#"<div id="sb_sbi">camera</div>"#.to_owned(),
     };
     let script = match key {
@@ -647,10 +659,9 @@ fn engine_page(key: &str, result: &str) -> String {
             "document.getElementById('f').addEventListener('change', e => send(e.target, '{result}'));"
         ),
         "saucenao" => String::new(),
-        "yandex" | "sogou" | "bing" => {
+        "yandex" | "bing" => {
             let (button, id) = match key {
                 "yandex" => ("b", ""),
-                "sogou" => ("cameraIco", ""),
                 _ => ("sb_sbi", "i.id = 'sb_fileinput';"),
             };
             format!(

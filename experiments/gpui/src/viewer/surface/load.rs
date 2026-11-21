@@ -186,6 +186,11 @@ impl MediaSurface {
                     },
                 ));
                 self.player = Some(player);
+                // The player is drawn from now on. It asks the decoder for
+                // its first picture each time it is drawn, so without this
+                // the first picture would only appear at the next redraw
+                // from some other cause, such as a pointer movement.
+                cx.notify();
             }
         }
     }
