@@ -23,6 +23,8 @@
 #   variable `APPIMAGETOOL`. `APPIMAGE_RUNTIME` may name the runtime file
 #   that appimagetool puts into the AppImage; without it appimagetool
 #   downloads one.
+# - On macOS with Xcode 26 or later: Node.js and the repository's packages
+#   (`npm ci`), for the script that draws the layer of the app's icon.
 # - On macOS, to sign: the certificate in `MAC_CSC_LINK` and its password in
 #   `MAC_CSC_KEY_PASSWORD`, and Node.js. Without them the app is not signed
 #   with the project's certificate, and the script says so.
@@ -117,6 +119,11 @@ mac_icon() {
 	actool_version="$(xcrun actool --version 2>/dev/null |
 		sed -n '/short-bundle-version/{n;s/.*<string>\([0-9]*\).*/\1/p;}' || true)"
 	if [[ -n "$actool_version" && "$actool_version" -ge 26 ]]; then
+		# The picture of the icon's one layer is not kept in the
+		# repository. The script that makes the Electron app's icons draws
+		# it from `build/icons/picto-macos-book.svg`.
+		node "$repository/scripts/generate-app-icons.mjs" ||
+			fail "the icon's layer could not be drawn. Run \`npm ci\` in the repository's root first."
 		cp -R "$repository/build/Picto.icon" "$work/Icon.icon"
 		mkdir "$work/out"
 		xcrun actool "$work/Icon.icon" --compile "$work/out" \
@@ -200,9 +207,10 @@ package_windows() {
 	rm -rf "$out/win-x64" "$installer"
 	mkdir -p "$stage/resources"
 
-	# The program, the libraries that the build put beside it (the
-	# application core's ONNX Runtime and DirectML, which the program loads
-	# when it starts), `ffmpeg` and `ffprobe`, and the icon of pack files.
+	# The program, the libraries that the build put beside it
+	# (`DirectML.dll`, which the application core's ONNX Runtime uses and
+	# which the program loads when it starts), `ffmpeg` and `ffprobe`, and
+	# the icon of pack files.
 	cp "$program" "$stage/Picto.exe"
 	for library in target/release/*.dll; do
 		[[ -e "$library" ]] || continue
