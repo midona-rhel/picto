@@ -116,8 +116,9 @@ fn widest<'a>(
         + 8.
 }
 
-/// Whether the pointer is on a source's row or on one of the row's buttons,
-/// and the fade that shows and hides the buttons accordingly.
+/// Whether the pointer is on a source's row or on one of the row's buttons.
+/// While either is true, the row is drawn with its hover background and its
+/// buttons are shown; `fade` fades the buttons in and out.
 #[derive(Default)]
 struct RowHover {
     /// The pointer is on the row, outside its buttons.
@@ -877,15 +878,17 @@ impl SubscriptionsScreen {
         for query in &subscription.queries {
             let query_id = query.id as usize;
             let id = query.id;
-            // The row's buttons are shown while the pointer is on the row or
-            // on one of the buttons. A button covers the part of the row
-            // under it, so the row alone does not count as hovered while the
-            // pointer is on a button; both are recorded.
+            // The row has its hover background, and shows its buttons, while
+            // the pointer is on the row or on one of the buttons. A button
+            // covers the part of the row under it, so the row alone does not
+            // count as hovered while the pointer is on a button. Both are
+            // recorded, and the row's background is set from the record.
             let fade =
                 window.use_keyed_state(("subscription-query-hover", query_id), cx, |_, _| {
                     RowHover::default()
                 });
             let hover = fade.read(cx).fade.value_with(motion::EASE);
+            let highlighted = fade.read(cx).fade.on();
             if fade.read(cx).fade.animating() {
                 window.request_animation_frame();
             }
@@ -1093,6 +1096,7 @@ impl SubscriptionsScreen {
             );
             rows.push(
                 self.body_row(("subscription-query", query_id).into(), row, cx)
+                    .when(highlighted, |row| row.bg(theme.surface_hover()))
                     // When assistive technology presses the row, the source's
                     // details open, as they do on a double-click.
                     .role(Role::Row)
