@@ -1,9 +1,10 @@
 #!/bin/bash
-# Makes a complete, private copy of a library and opens the GPUI app on it.
+# Makes a complete, private copy of a library and opens a debug build of the
+# app on it.
 #
 # The copy is the app's own `--make-copy` (`application::make_copy`): the
 # database through SQLite's online backup, which includes committed WAL data
-# and never touches the live files the Electron app may have open; everything
+# and never touches the files that a running Picto may have open; everything
 # else through the system's file copy, which on APFS is a `clonefile` that is
 # instant and takes no space until either side changes a file; a library that
 # holds a symbolic link is refused; the copy is marked, detached and checked.

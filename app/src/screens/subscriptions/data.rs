@@ -1,9 +1,13 @@
-//! What the Subscriptions screen shows, read from the library on its own
-//! thread. The library keeps subscriptions in its own tables and their
-//! lifetime counts in the projection's outcome index; these reads are the ones
-//! the application's subscription catalog makes (`subscriptions.list`,
-//! `subscriptions.runs.list`, `subscriptions.issues.list`), run through the
-//! library's consistent auxiliary read.
+//! Reads what the Subscriptions screen shows from the library. The screen
+//! runs these functions on the library's thread (`Session::run`).
+//!
+//! The library keeps subscriptions in tables of its database, and keeps their
+//! lifetime counts in the projection (`subscription_counts`). The functions
+//! here read what the application commands `subscriptions.list`,
+//! `subscriptions.runs.list` and `subscriptions.issues.list` read.
+//! [`subscriptions`] runs the SQL files that `subscriptions.list` runs, and
+//! reads the tables and the projection together with
+//! `Library::auxiliary_read_consistent`.
 use picto_library::database::WorkPriority;
 use picto_library::{Library, ProjectionSnapshot, Result};
 use rusqlite::{Transaction, params};
@@ -16,17 +20,23 @@ pub struct Subscription {
     pub id: i64,
     pub name: String,
     pub schedule: String,
-    /// Held: future runs do not start.
+    /// Whether the subscription is paused. A paused subscription starts no
+    /// new runs.
     pub paused: bool,
-    /// The run in progress or waiting to continue.
+    /// The id of the subscription's run that is pending or running, when
+    /// there is one.
     pub active_run_id: Option<i64>,
-    /// The status of the active run, else of the latest one.
+    /// The status of the active run, or of the latest run when no run is
+    /// active. For an active run that is pending and has a failure kind, it
+    /// is that failure kind.
     pub run_status: Option<String>,
-    /// Library items the subscription has added, over its lifetime.
+    /// The number of posts that the subscription has added to the library
+    /// since it was created.
     pub items: i64,
     pub open_issues: i64,
     pub posts_per_run: i64,
-    /// Counts of the active run, else of the latest one.
+    /// The counts of the active run, or of the latest run when no run is
+    /// active.
     pub progress: Progress,
     pub folder_ids: Vec<i64>,
     pub automatic_tags: Vec<String>,
@@ -43,22 +53,25 @@ pub struct Progress {
     pub files_already_in_library: i64,
 }
 
-/// The image a subscription shows, and the square of it the user framed.
+/// The image that a subscription shows as its cover: a thumbnail file, and
+/// the square part of it that is shown.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Cover {
     pub thumbnail: PathBuf,
-    /// The source's size in pixels, when it is known.
+    /// The width and height in pixels of the cover's source image, when the
+    /// library has them. It is `None` for a pre-cropped rendering.
     pub size: Option<(u32, u32)>,
     pub crop: crate::cover::Crop,
 }
 
-/// One source a subscription follows.
+/// One source that a subscription follows.
 #[derive(Clone, Debug, Default)]
 pub struct Query {
     pub id: i64,
     pub site_id: String,
     pub text: String,
-    /// Shown instead of the query text where the user named it.
+    /// The name that the user gave the source. When it is set, it is shown
+    /// instead of the query text.
     pub display_name: Option<String>,
     pub notes: Option<String>,
     pub group_posts: bool,
@@ -92,13 +105,14 @@ pub struct Issue {
     pub id: i64,
     pub kind: String,
     pub message: String,
-    /// More about the failure, shown with the message in the row's
-    /// tooltip.
+    /// More text about the failure. The row's tooltip shows it with the
+    /// message.
     pub detail: Option<String>,
     pub last_seen_at: String,
     pub target: Option<String>,
     pub url: Option<String>,
-    /// The source the problem is about, when it is one source's.
+    /// The id of the source that the problem is about, when it is about a
+    /// single source.
     pub query: Option<i64>,
 }
 
@@ -107,11 +121,13 @@ pub struct Issue {
 pub struct Issues {
     pub items: Vec<Issue>,
     pub total: i64,
-    /// Where the next page starts: the last row's time and id.
+    /// The `last_seen_at` and the id of the page's last row, when more issues
+    /// follow it. [`more_issues`] takes it to read the next page.
     pub next: Option<(String, i64)>,
 }
 
-/// The History and Problems tabs of one subscription.
+/// What the History and Problems tabs of one subscription show: its latest
+/// runs and the first page of its open issues.
 #[derive(Clone, Debug)]
 pub struct Detail {
     pub subscription: i64,
@@ -119,12 +135,14 @@ pub struct Detail {
     pub issues: Issues,
 }
 
-/// `subscriptions.runs.list` with the limit the detail view asks for.
+/// The number of runs that [`detail`] reads for the History tab, latest
+/// first.
 const RUN_LIMIT: i64 = 20;
-/// `subscriptions.issues.list` with the page size the detail view asks for.
+/// The number of open issues in one page of the Problems tab.
 const ISSUE_PAGE: i64 = 50;
 
-/// Every subscription, in name order.
+/// Returns every subscription, ordered by name. `blobs` is the library's blob
+/// folder, in which the cover thumbnails are looked up.
 pub fn subscriptions(library: &Library, blobs: &Path) -> Result<Vec<Subscription>> {
     library.auxiliary_read_consistent(WorkPriority::VisibleRead, |connection, projection| {
         let mut queries = queries(connection, projection)?;
@@ -220,14 +238,16 @@ struct Setting {
     cover: Option<Cover>,
 }
 
-/// The destination and cover each subscription keeps in the settings table.
+/// Returns, by subscription id, the destination (folders and automatic tags)
+/// and the cover that each subscription stores in the `setting` table.
 fn settings(
     connection: &Transaction<'_>,
     projection: &ProjectionSnapshot,
     blobs: &Path,
 ) -> Result<HashMap<i64, Setting>> {
-    // The cover's source is the chosen media item, while the subscription
-    // still links it and it is ingested.
+    // The cover's source file is the file of the media item that the stored
+    // cover names. It is found only while a post of the subscription links
+    // that media item through a source item whose state is `ingested`.
     let mut statement = connection.prepare(
         "SELECT s.subscription_id, destination.value_json, cover.value_json,
                 file.content_hash, file.width, file.height
@@ -304,9 +324,12 @@ fn parse(json: &str) -> Option<serde_json::Value> {
     serde_json::from_str(json).ok()
 }
 
-/// A stored cover, while its media item is still in the library. A
-/// pre-cropped rendering, when one was saved and still exists, is shown as it
-/// is; otherwise the source's thumbnail is framed by the stored crop.
+/// Returns the cover that `stored` describes. When `stored` names a
+/// pre-cropped rendering (`rendered_hash`) whose thumbnail file exists, the
+/// cover is that file with the default crop. Otherwise the cover is the
+/// thumbnail of `source`, the hash of the source file, with the stored crop.
+/// Returns `None` when the library item that owns the cover's media item is
+/// not in `projection.active()`, or when the thumbnail file does not exist.
 fn cover_of(
     stored: &serde_json::Value,
     source: &str,
@@ -345,7 +368,12 @@ fn cover_of(
     })
 }
 
-/// A thumbnail in the blob store, `.jpg` first, then the older `.png`.
+/// Returns the path of the thumbnail file of `hash` in the blob folder. The
+/// file is `t/<first two characters of the hash>/<next two>/<hash>.jpg`. When
+/// that file does not exist, it is the file of the same name ending in
+/// `.png`, which is the older thumbnail format. Returns `None` when neither
+/// file exists, or when `hash` is shorter than four characters or is not
+/// hexadecimal.
 pub fn thumbnail(blobs: &Path, hash: &str) -> Option<PathBuf> {
     if hash.len() < 4 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
@@ -357,7 +385,8 @@ pub fn thumbnail(blobs: &Path, hash: &str) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-/// The latest runs and the first page of open issues of one subscription.
+/// Returns the latest runs and the first page of open issues of one
+/// subscription.
 pub fn detail(library: &Library, subscription: i64) -> Result<Detail> {
     library.auxiliary_read(WorkPriority::VisibleRead, |connection| {
         Ok(Detail {
@@ -368,7 +397,8 @@ pub fn detail(library: &Library, subscription: i64) -> Result<Detail> {
     })
 }
 
-/// The page of open issues after `after`.
+/// Returns the page of open issues that follows the row `after`, which is the
+/// `next` of the page before.
 pub fn more_issues(library: &Library, subscription: i64, after: (String, i64)) -> Result<Issues> {
     library.auxiliary_read(WorkPriority::VisibleRead, |connection| {
         issues(connection, subscription, Some(after))
@@ -437,8 +467,8 @@ fn issues(
         |row| row.get(0),
     )?;
     let (after_time, after_id) = after.unzip();
-    // A download issue's key names its source item; its post gives the row
-    // a title and an address.
+    // The key of a `download_item` issue contains the id of its source item.
+    // The post of that source item gives the row its title and its URL.
     let mut statement = connection.prepare(
         "SELECT issue.issue_id, issue.issue_kind, issue.message,
                 issue.last_seen_at, item.item_key, post.post_key, post.title,

@@ -1,6 +1,7 @@
 #!/bin/bash
-# Makes a synthetic library of generated pictures and opens the GPUI app on
-# it, for checking scrolling, resizing and loading at scale.
+# Makes a synthetic library of generated pictures and opens a debug build of
+# the app on it, for checking scrolling, resizing and loading with many
+# items.
 #
 #   million.sh [items]        (default 1000000)
 #

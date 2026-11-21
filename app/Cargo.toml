@@ -43,8 +43,7 @@ debug-assertions = false
 # 1,100 packages.
 lto = "thin"
 # The packaged program carries neither symbol names nor debug information,
-# which makes it several times smaller. The root workspace's release profile
-# strips the Electron app's native addon in the same way.
+# which makes it several times smaller.
 strip = "symbols"
 # A panic unwinds, which is Cargo's default. A panic on a background thread
 # then ends that thread only: the app keeps running and shows the panic in
@@ -65,7 +64,7 @@ harness = false
 gpui = { package = "gpui-pre", version = "=0.3.12" }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["font-kit", "runtime_shaders", "wayland", "x11"] }
 picto_library = { path = "../picto-library" }
-# The application layer the Electron app talks to: commands, workers, events.
+# The application core: the commands, the background workers and the events.
 picto_core = { path = "../core" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 # The library's auxiliary reads hand out its own SQLite connection; the same
@@ -98,8 +97,8 @@ ruffle_common = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5
 ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f" }
 wgpu = "27.0.1"
 # Document viewers, all pure Rust so they build on every platform. PDF pages
-# are rasterized by hayro, DjVu by djvu-rs (the crate the Electron app runs as
-# WebAssembly), JPEG XL by jxl-oxide (the decoder core/ thumbnails with).
+# are rasterized by hayro, DjVu by djvu-rs, and JPEG XL by jxl-oxide, which is
+# also the decoder that the application core makes thumbnails with.
 hayro = "0.9"
 djvu-rs = "0.45"
 jxl-oxide = { version = "0.12.6", features = ["image"] }

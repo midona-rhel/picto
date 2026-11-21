@@ -10,8 +10,9 @@
 ;   UNINSTALL_LIST     a file of NSIS instructions that delete every file of
 ;                      SOURCE from the installation folder, one by one
 ;
-; The installer takes the place of the installer that electron-builder made
-; for the Electron app, and it upgrades an installation made by that
+; Picto 0.6.19 and earlier were built with Electron and installed by an
+; installer that electron-builder made. This installer takes the place of
+; that installer, and it upgrades an installation made by that
 ; installer in place. For that it uses the same registry keys, the same
 ; installation folder, the same shortcuts and the same command-line arguments
 ; as electron-builder's installer. Where a value below has to match, the
@@ -88,7 +89,7 @@ Var machineFolder
 ; The folder given on the command line with `/D=`, or "".
 Var givenFolder
 ; "1" when the installer was started with `--updated`, which the app's
-; updater and the Electron app's updater pass.
+; updater passes, and the updater of Picto 0.6.19 and earlier too.
 Var isUpdated
 ; "1" when the installer was started with `--force-run`: start Picto after a
 ; silent installation.
@@ -423,8 +424,8 @@ FunctionEnd
 ; Removes the version that is installed now, by running its own uninstaller
 ; in the way electron-builder's installer runs it: silently, from a copy
 ; outside the installation folder, and with `--updated`, which tells the
-; uninstaller that this is an upgrade. The uninstaller of the Electron app
-; removes the Electron app's files, and the uninstaller of this app removes
+; uninstaller that this is an upgrade. The uninstaller of Picto 0.6.19 or
+; earlier removes that version's files, and the uninstaller of this app removes
 ; this app's. Neither deletes the user's application data.
 Function RemovePreviousVersion
   StrCpy $keepShortcuts "0"

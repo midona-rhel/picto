@@ -5,8 +5,9 @@
   this file into the bundle and replaces the two version values with the
   version in the repository's `package.json`.
 
-  The name and the identifier are the Electron app's, because the packaged
-  app is installed over the Electron app as its next version. The bundle that
+  The name and the identifier are the ones that Picto 0.6.19 and earlier
+  have, because the packaged app is installed over such a version as its next
+  version. The bundle that
   `run.sh` makes for a debug build has its own Info.plist, with another name
   and another identifier.
 -->
@@ -49,7 +50,7 @@
 	<array>
 		<!--
 		  A pack is a file the app opens: it shows the pack's import dialog.
-		  The entry is the one the Electron app declares.
+		  Picto 0.6.19 and earlier declare the same entry.
 		-->
 		<dict>
 			<key>CFBundleTypeExtensions</key>

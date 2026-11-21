@@ -1,15 +1,16 @@
 #!/bin/bash
 # Builds the release program and makes the package of Picto for the system
-# this script runs on. The packages have the file names of the Electron
-# app's packages, which they replace:
+# this script runs on. The packages have the file names that every release
+# of Picto has had:
 #
 #   macOS (arm64):  Picto-<version>-arm64.dmg, Picto-<version>-arm64-mac.zip
 #                   and latest-mac.yml
 #   Windows (x64):  Picto-Setup-<version>.exe and latest.yml
 #   Linux (x64):    Picto-<version>.AppImage and latest-linux.yml
 #
-# The `.yml` files are the update feeds that the app's updater and the
-# Electron app's updater read. Everything is written to `target/package/`.
+# The `.yml` files are the update feeds that the app's updater reads. The
+# updater of Picto 0.6.19 and earlier, which electron-updater provided, reads
+# them too. Everything is written to `target/package/`.
 # The version is the one in the repository's `package.json`. Arguments given
 # to this script are passed on to `cargo build`; `./package.sh --offline`
 # builds without the network.
@@ -89,8 +90,8 @@ size() {
 # is the one electron-builder writes: the version, each file with its
 # SHA-512 and its size, and once more the name and SHA-512 of the first
 # file, which older updaters read. The app's updater (`src/updates/feed.rs`)
-# and the Electron app's updater take the file to download from this feed
-# and check the download against the SHA-512 and the size.
+# and the updater of Picto 0.6.19 and earlier take the file to download from
+# this feed and check the download against the SHA-512 and the size.
 write_feed() {
 	local feed="$1" file
 	shift
@@ -110,8 +111,7 @@ write_feed() {
 
 # Puts the app's icon into the bundle's Resources folder `$1`. With Xcode 26
 # or later, `actool` compiles the Icon Composer file `build/Picto.icon` into
-# `Assets.car` and `Icon.icns`, with the arguments electron-builder gives it
-# for the Electron app. Without it, `Icon.icns` is made from
+# `Assets.car` and `Icon.icns`. Without it, `Icon.icns` is made from
 # `build/icon-flat.png`, and the bundle has no `Assets.car`.
 mac_icon() {
 	local resources="$1" work actool_version pixels
@@ -120,8 +120,8 @@ mac_icon() {
 		sed -n '/short-bundle-version/{n;s/.*<string>\([0-9]*\).*/\1/p;}' || true)"
 	if [[ -n "$actool_version" && "$actool_version" -ge 26 ]]; then
 		# The picture of the icon's one layer is not kept in the
-		# repository. The script that makes the Electron app's icons draws
-		# it from `build/icons/picto-macos-book.svg`.
+		# repository. `scripts/generate-app-icons.mjs` draws it from
+		# `build/icons/picto-macos-book.svg`.
 		node "$repository/scripts/generate-app-icons.mjs" ||
 			fail "the icon's layer could not be drawn. Run \`npm ci\` in the repository's root first."
 		cp -R "$repository/build/Picto.icon" "$work/Icon.icon"

@@ -1,19 +1,21 @@
-//! The interface's languages, as production's `src/i18n/index.ts` has them.
+//! The interface's languages and the translation of its texts.
 //!
-//! The catalogs are production's own files (`src/i18n/locales/*.json`),
-//! included when the app is built: flat maps keyed by the English text, with
-//! `{value0}`, `{value1}` … for what is filled in. A message is looked up by
-//! its English text, so the English written in the code must be exactly
-//! production's key; a message no catalog holds shows in English.
+//! The translations are the JSON files in `locales/` beside this file, one
+//! for each language. They are included in the app when it is built. Each
+//! file is a flat map from an English text to its translation, with
+//! `{value0}`, `{value1}` … where values are filled in. A message is looked
+//! up by its English text, so the English text written in the code must be
+//! exactly a key of `locales/en.json`. A message that no catalog holds is
+//! shown in English, as it is written in the code.
 //!
-//! The language is the one chosen in Settings (kept per machine as
-//! production's `picto:locale`), else the system's language when it is one
-//! of the eight, else English. Choosing a language in Settings applies it
-//! at once in every window, as production's `setLocale` does.
+//! The language shown is the one chosen in Settings. When none was chosen,
+//! it is the system's language if that is one of the eight, and English
+//! otherwise. The choice is stored for the machine, in the app's state
+//! (`crate::state`), and not in a library. Choosing a language in Settings
+//! shows it at once in every window.
 //!
-//! Numbers and dates are not written in the chosen language: production
-//! writes them with `toLocaleString()` and `Intl` without a locale, so in
-//! the system's (`format.rs`).
+//! Numbers and dates are not written in the chosen language. They are
+//! written in the system's language (`format.rs`).
 pub mod format;
 #[cfg(test)]
 mod guard;
@@ -24,7 +26,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-/// The interface languages, in Settings' order (`LOCALES`).
+/// The interface languages, in the order in which Settings lists them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Locale {
     En,
@@ -49,7 +51,8 @@ impl Locale {
         Locale::Fi,
     ];
 
-    /// The value production stores (`picto:locale`).
+    /// Returns the language's code. It is the value stored as the chosen
+    /// language, and the name of the language's file in `locales/`.
     pub fn code(self) -> &'static str {
         match self {
             Locale::En => "en",
@@ -63,8 +66,8 @@ impl Locale {
         }
     }
 
-    /// The language's own name, as Settings lists it (`LOCALE_OPTIONS`);
-    /// never translated.
+    /// Returns the language's name in that language, as Settings lists it.
+    /// The name is never translated.
     pub fn label(self) -> &'static str {
         match self {
             Locale::En => "English",
@@ -78,8 +81,10 @@ impl Locale {
         }
     }
 
-    /// `normalizeLocale`: a stored value or a system language tag by its
-    /// first letters; `None` for any other language.
+    /// Returns the language that `value` names. `value` is a stored code or
+    /// a system language tag (`de-AT`, `pt_BR`). Only its first two letters
+    /// are compared, ignoring case. Returns `None` when they are the letters
+    /// of none of the eight languages.
     pub fn normalize(value: &str) -> Option<Locale> {
         let value = value.to_lowercase();
         [
@@ -103,7 +108,7 @@ impl Locale {
             .unwrap_or(0)
     }
 
-    /// The source text of this language's catalog.
+    /// Returns the text of this language's file in `locales/`.
     fn source(self) -> &'static str {
         match self {
             Locale::En => include_str!("locales/en.json"),
@@ -120,7 +125,9 @@ impl Locale {
 
 type Catalog = HashMap<String, String>;
 
-/// Every catalog, parsed the first time a message is looked up.
+/// Every language's catalog, in the order of `Locale::ALL`. The catalogs are
+/// parsed the first time a message is looked up. A file that cannot be
+/// parsed causes a panic then.
 static CATALOGS: LazyLock<Vec<Catalog>> = LazyLock::new(|| {
     Locale::ALL
         .iter()
@@ -131,11 +138,12 @@ static CATALOGS: LazyLock<Vec<Catalog>> = LazyLock::new(|| {
         .collect()
 });
 
-/// `messageKeyByTranslation`: the English key of each translation, the
-/// first catalog's when two share a text.
+/// The English key of each translation, for every language. When two keys
+/// have the same translation, the map holds the key that was read first.
 static KEY_BY_TRANSLATION: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
-    // In a fixed order (catalogs in `Locale::ALL`'s, keys sorted), so a
-    // translation two keys share is always told back to the same one.
+    // The catalogs are read in the order of `Locale::ALL` and the keys of
+    // each catalog in sorted order, so a translation that two keys share
+    // always maps to the same key.
     let mut keys = HashMap::new();
     for catalog in CATALOGS.iter() {
         let mut entries: Vec<_> = catalog.iter().collect();
@@ -151,13 +159,14 @@ fn catalog(locale: Locale) -> &'static Catalog {
     &CATALOGS[locale.index()]
 }
 
-/// Whether `key` is one of production's messages.
+/// Returns whether `key` is a key of the English catalog
+/// (`locales/en.json`).
 pub fn is_key(key: &str) -> bool {
     catalog(Locale::En).contains_key(key)
 }
 
-/// The shown language. One per process, as the theme is: every window
-/// reads it while it draws.
+/// The language shown, as its index in `Locale::ALL`. The process has one
+/// language for all its windows, and every window reads it while it draws.
 static CURRENT: AtomicU8 = AtomicU8::new(0);
 
 pub fn current() -> Locale {
@@ -167,53 +176,58 @@ pub fn current() -> Locale {
         .unwrap_or(Locale::En)
 }
 
-/// `getLocale`: the stored choice, else the system's language, else English.
+/// Returns the language to show: the stored choice `stored` when it names
+/// one of the eight languages, otherwise the system's language `system` when
+/// it names one, otherwise English.
 pub fn resolve(stored: &str, system: Option<&str>) -> Locale {
     Locale::normalize(stored)
         .or_else(|| system.and_then(Locale::normalize))
         .unwrap_or(Locale::En)
 }
 
-/// Sets the language the app starts in from the kept choice (empty when
-/// none was made).
+/// Sets the language that the app starts in. `stored` is the stored choice,
+/// which is empty when no language was chosen.
 pub fn init(stored: &str) {
     let system = sys_locale::get_locale();
     let locale = resolve(stored, system.as_deref());
     CURRENT.store(locale.index() as u8, Ordering::Relaxed);
 }
 
-/// `setLocale`: shows `locale` in every window at once, if it is not the
-/// one shown. The caller keeps the choice.
+/// Shows `locale` in every window at once, unless it is the language already
+/// shown. It does not store the choice; the caller does.
 pub fn show(locale: Locale, cx: &mut gpui::App) {
     if current() != locale {
         CURRENT.store(locale.index() as u8, Ordering::Relaxed);
-        // Cached views paint again only when the window refreshes.
+        // A cached view is painted again only when its window is refreshed.
         cx.refresh_windows();
     }
 }
 
-/// `translateMessage` in `locale`: the catalog's text for the English
-/// `message`, else the English, else the message itself.
+/// Returns `message` in `locale`. When `message` is a key of `locale`'s
+/// catalog, the result is its text there. Otherwise, when `message` is not
+/// an English key but is a translation in some language, the result is the
+/// text of that translation's key in `locale`, or the key itself when
+/// `locale`'s catalog lacks it. Any other `message` is returned as it is.
 pub fn translate(locale: Locale, message: &str) -> &str {
     if let Some(text) = catalog(locale).get(message) {
         return text;
     }
-    // A label kept from while another language was shown is told back to
-    // its English key, so it is shown again in this one.
+    // A label that was translated while another language was shown is mapped
+    // back to its English key here, so that it is shown in `locale`.
     match KEY_BY_TRANSLATION.get(message) {
         Some(key) if !is_key(message) => catalog(locale).get(*key).map_or(key, |text| text),
         _ => message,
     }
 }
 
-/// `t(message)`: `message`, production's English text, in the shown
-/// language.
+/// Returns `message`, an English key, in the language shown.
 pub fn t(message: &str) -> &str {
     translate(current(), message)
 }
 
-/// `translateMessage` for a label a shared control is handed (a menu row,
-/// a select's choice): the key's text, or the label as it came.
+/// Returns a label that a shared control was given (a menu row, a select's
+/// choice, a text field's placeholder) in the language shown. A label that
+/// has no translation is returned as it came.
 pub fn t_shared(label: gpui::SharedString) -> gpui::SharedString {
     let shown = t(&label);
     if shown == label.as_ref() {
@@ -223,8 +237,9 @@ pub fn t_shared(label: gpui::SharedString) -> gpui::SharedString {
     }
 }
 
-/// Fills `{value0}`, `{value1}` … with `values` in order; any other token,
-/// or one with no value, is left as it is (production's `replace`).
+/// Replaces each `{value0}`, `{value1}` … in `template` with the value at
+/// that index in `values`. Any other text in braces, and a token whose index
+/// has no value, is left as it is.
 pub fn fill(template: &str, values: &[&dyn std::fmt::Display]) -> String {
     let mut out = String::with_capacity(template.len() + 16);
     let mut rest = template;
@@ -252,18 +267,20 @@ pub fn fill(template: &str, values: &[&dyn std::fmt::Display]) -> String {
     out
 }
 
-/// `t(message, { value0, value1, … })` in `locale`.
+/// Returns `message` in `locale`, with `values` filled in by [`fill`].
 pub fn translate_with(locale: Locale, message: &str, values: &[&dyn std::fmt::Display]) -> String {
     fill(translate(locale, message), values)
 }
 
-/// `t(message, { value0, value1, … })` in the shown language; the macro
-/// [`tf!`](crate::tf) writes it.
+/// Returns `message` in the language shown, with `values` filled in by
+/// [`fill`]. The macro [`tf!`](crate::tf) calls it.
 pub fn t_with(message: &str, values: &[&dyn std::fmt::Display]) -> String {
     translate_with(current(), message, values)
 }
 
-/// `tf!("Delete {value0} items", count)`: `t` with its values in order.
+/// `tf!("Delete {value0} items", count)` returns the message in the language
+/// shown, with the arguments after the message filled in as `{value0}`,
+/// `{value1}` … in order.
 #[macro_export]
 macro_rules! tf {
     ($message:literal $(, $value:expr)* $(,)?) => {
@@ -271,14 +288,16 @@ macro_rules! tf {
     };
 }
 
-/// A text only this app shows, with no key in production's catalogs: it
-/// stays English in every language. Each is listed in `gpui_only.txt`.
+/// Marks a text that has no key in the catalogs and is therefore shown in
+/// English in every language. It returns `text` unchanged. Every such text
+/// is listed in `gpui_only.txt`, and the guard (`guard.rs`) checks the list.
 pub const fn en(text: &'static str) -> &'static str {
     text
 }
 
-/// The English plural suffix production passes as a message's value
-/// (`count === 1 ? '' : 's'`), in every language.
+/// Returns the English plural suffix: an empty text when `count` is 1, and
+/// `s` otherwise. A message such as `{value0} subscription{value1}` takes it
+/// as a value. The suffix is the same whichever language is shown.
 pub fn plural_s(count: impl Into<i128>) -> &'static str {
     if count.into() == 1 { "" } else { "s" }
 }
