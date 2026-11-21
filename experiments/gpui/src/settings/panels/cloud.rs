@@ -58,8 +58,8 @@ impl SettingsWindow {
         cx.spawn(async move |this, cx| {
             let points = answer.await.ok().and_then(Result::ok);
             let _ = this.update(cx, |this, cx| {
-                if let Some(points) =
-                    points.and_then(|points| serde_json::from_value::<Vec<RestorePoint>>(points).ok())
+                if let Some(points) = points
+                    .and_then(|points| serde_json::from_value::<Vec<RestorePoint>>(points).ok())
                 {
                     this.cloud_panel.restore_points = points;
                     cx.notify();
@@ -132,9 +132,8 @@ impl SettingsWindow {
             dialog.presence,
             dialog.focus.clone(),
         );
-        let close = cx.listener(|this: &mut Self, _: &(), _, cx| {
-            this.cloud_panel.asking.dismiss(cx)
-        });
+        let close =
+            cx.listener(|this: &mut Self, _: &(), _, cx| this.cloud_panel.asking.dismiss(cx));
         let cancel = cx.listener(|this: &mut Self, _: &(), _, cx| {
             this.cloud_panel.asking.close(cx);
         });

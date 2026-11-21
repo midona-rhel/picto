@@ -33,7 +33,6 @@ Show Subfolder Content
 Animate zoom in the grid
 Frosted glass sidebar and inspector
 Acrylic sidebar and inspector
-The sidebar and the inspector show what is behind the window, blurred.
 T
 W
 All your images are already assigned to folders

@@ -182,19 +182,8 @@ impl SettingsWindow {
                                     .name(rail_material_label)
                                     .on_toggle(move |window, cx| {
                                         toggle_rail_material(window, cx);
-                                        ui::window_chrome::want_rail_material(
-                                            !rail_material,
-                                            cx,
-                                        );
+                                        ui::window_chrome::want_rail_material(!rail_material, cx);
                                     }),
-                            )
-                        }))
-                        .children(rail_material_supported.then(|| {
-                            hint(
-                                theme,
-                                en(
-                                    "The sidebar and the inspector show what is behind the window, blurred.",
-                                ),
                             )
                         })),
                 )
