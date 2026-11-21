@@ -1234,7 +1234,10 @@ Not done:
   so on Windows and Linux a pack opened from the file manager while Picto
   runs is not imported. The Electron app imports it in both cases.
 - The packages (section 3): the project's releases are not built from them
-  yet. No `*.blockmap` files are made. The installer's texts are in English
+  yet. Until they are, the update check of a packaged build reads the
+  project's releases as before, and the newest release's feed names the
+  Electron app's installer, which the app would download and start. No
+  `*.blockmap` files are made. The installer's texts are in English
   only. The AppImage needs libraries of the system. The windows of the app
   carry no application id on Linux, so a desktop cannot match a window to
   the app's launcher entry. `.library` folders get no icon on Windows.
@@ -1293,15 +1296,8 @@ Not verified:
   installed from a published feed, and logins read from a keychain entry
   that the Electron app made.
 
-### Waiting on the owner
+### Open questions
 
-- Whether Picto adopts the core's `.picto-library.lock`; until it does only
-  the process probe keeps the two apps apart.
-- AI model download.
-- Making the releases from these packages. Until then the update check of a
-  packaged build reads the project's releases as before, and the newest
-  release's feed names the Electron app's installer, which the app would
-  download and start.
 - Whether a disposable copy may connect to a cloud folder at all.
 
 ## 8. Attribution
