@@ -211,8 +211,10 @@ cargo run --locked -- <that path>
 database, copies the rest with the system's file copy (clones on APFS,
 btrfs, XFS and ReFS, a full copy elsewhere), refuses a library holding a
 symbolic link, writes the marker, detaches and guards the copy, and leaves
-nothing behind if it fails. On Linux run through `cargo run`, which puts the
-core's ONNX Runtime libraries on the loader's path.
+nothing behind if it fails. On Linux, start the app through `cargo run`,
+which puts the core's ONNX Runtime libraries on the loader's search path. To
+start the built program directly, put `target/debug` and `target/debug/deps`
+in `LD_LIBRARY_PATH` first, as the CI workflow does.
 
 With no argument the app opens the library it had open last, if it may, and
 otherwise shows production's gate. `<copy> --detach` detaches and exits
@@ -869,14 +871,24 @@ same size, content, scroll, selection and focus.
 
 ### CI
 
-`.github/workflows/gpui-experiment.yml` builds and tests on Ubuntu 24.04 and
-Windows, plays `ci/smoke.txt` and `ci/cloud.txt` with the off-screen tool on
-a generated library, and runs the sign-in and network checks in a real
-window; each step's comments say what it checks, and its pictures and logs
-are the run's artifacts (`gh run download <run> -n pictures-linux`). There is
-no macOS job. The workflow starts by itself only for a push to a branch
-whose name starts with `feature/163-`. For any other branch it has to be
-started by hand from the Actions page (`workflow_dispatch`).
+`.github/workflows/gpui-experiment.yml` builds and tests the app on Ubuntu
+24.04 and Windows. It plays `ci/smoke.txt` and `ci/cloud.txt` with the
+off-screen tool, and it runs the sign-in and network checks in a real
+window. The comment above each step says what the step checks. The pictures
+and logs are the run's artifacts (`gh run download <run> -n
+pictures-linux`). There is no macOS job.
+
+The workflow runs for every pull request into `dev` that changes
+`experiments/gpui/`, `core/`, `picto-library/` or `picto-sources/`, and it
+can be started by hand for any branch from the Actions page.
+
+The job builds once. `cargo test --no-run` builds the test program and the
+app together, and every later step starts one of those two programs
+directly, so nothing is compiled a second time. The library of 2,000
+generated pictures that the pictures are taken in is kept in the Actions
+cache and is generated again only when a shared crate changes. The last step
+runs `cargo check`, which checks that the app also compiles without the GPUI
+features that only the tests switch on.
 
 ## 7. Status
 

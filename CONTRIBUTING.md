@@ -52,9 +52,8 @@ only issue-owned changes.
 - A change to the GPUI app (`experiments/gpui/`), or to a shared crate that
   it uses (`core`, `picto-library`, `picto-sources`), must also build and
   pass its tests on Windows and Linux. `verify` does not build the GPUI app.
-  The `GPUI experiment` workflow does, and it takes about an hour. It starts
-  by itself only for a push to a branch named `feature/163-…`; for any other
-  branch, start it by hand from the Actions page and wait for it before
+  The `GPUI experiment` workflow does. It runs by itself for every pull
+  request into `dev` that changes one of those folders. Wait for it before
   merging. Its pictures of the app on both systems are attached to the run.
   [`experiments/gpui/README.md`](experiments/gpui/README.md), section 6,
   says how to check a change locally. Give the issue the `area: gpui` label.
