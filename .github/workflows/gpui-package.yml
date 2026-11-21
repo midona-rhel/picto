@@ -381,11 +381,15 @@ jobs:
           $old = Join-Path $env:RUNNER_TEMP 'electron'
           gh release download $env:ELECTRON_RELEASE --repo $env:GITHUB_REPOSITORY --pattern 'Picto-Setup-*.exe' --dir $old
           $oldInstaller = (Get-ChildItem $old -Filter 'Picto-Setup-*.exe')[0].FullName
-          # The exit code of the Electron app's installer is printed and not
-          # checked: what matters here is that the Electron app is installed,
-          # which the next lines check.
-          $process = Start-Process -FilePath $oldInstaller -ArgumentList '/S' -Wait -PassThru
-          "the Electron app's installer ended with code $($process.ExitCode)"
+          # On the runner the Electron app's installer sometimes ends with
+          # the code -1073741819 (an access violation inside that installer)
+          # and installs nothing. It is then run again, three times at most.
+          # Its exit code is printed and not checked: what matters here is
+          # that the Electron app is installed, which the next lines check.
+          for ($attempt = 1; $attempt -le 3 -and -not (Test-Path "$folder\resources\app.asar"); $attempt++) {
+            $process = Start-Process -FilePath $oldInstaller -ArgumentList '/S' -Wait -PassThru
+            "attempt ${attempt}: the Electron app's installer ended with code $($process.ExitCode)"
+          }
           Expect (Test-Path "$folder\resources\app.asar") "the Electron app is installed in $folder"
           Expect ((Get-ItemProperty $installKey).InstallLocation -eq $folder) "the Electron app's installer wrote InstallLocation"
           "the Electron app's uninstall entry: $((Get-ItemProperty $uninstallKey).UninstallString)"
