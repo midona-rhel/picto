@@ -1,9 +1,10 @@
-//! The Folders dialog (`FolderPickerModal.tsx`) that F, ⌘⇧J and the grid
-//! menu's Add to Folder open: a centred dialog with a search, a rail of
-//! Recent, Members and All, and the folder tree with check boxes. Clicks
-//! only mark folders to add the items to or take them out of; Apply does
-//! it, Cancel and Escape forget it. The folders checked at first are those
-//! of the item the inspector shows or last showed.
+//! The Folders dialog (`FolderPickerModal.tsx`). The F key, Command or Control
+//! with Shift and J, and Add to Folder in the grid's menu open it. It is a
+//! dialog in the middle of the window with a search field, a rail with Recent,
+//! Members and All, and the tree of folders with check boxes. A click only
+//! marks a folder for the items to be added to or taken out of. Apply does it.
+//! Cancel and Escape discard the marks. The folders that are ticked when the
+//! dialog opens are those of the item the inspector shows or last showed.
 use super::folder_picker::{Folder, Row, folders, rows};
 use super::membership;
 use crate::i18n::format;
@@ -24,16 +25,16 @@ use gpui::*;
 use picto_library::FolderId;
 use std::collections::{BTreeSet, HashSet};
 
-/// `.panelBody`'s height.
+/// The height of `.panelBody`.
 const BODY: f32 = 480.;
-/// `.sidebar`'s width.
+/// The width of `.sidebar`.
 const RAIL: f32 = 180.;
-/// `useRecentFolders(15)`
+/// `useRecentFolders(15)`: how many recent folders the Recent view shows.
 const RECENT_SHOWN: usize = 15;
-/// A level of the tree indents a row this much.
+/// How far one level of the tree moves a row to the right.
 const INDENT: f32 = 20.;
 
-/// `SidebarMode`
+/// `SidebarMode`: which row of the rail is chosen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
     Recent,
@@ -42,8 +43,8 @@ pub enum View {
 }
 
 pub enum Event {
-    /// Apply: the folders to add the selected items to and to take them
-    /// out of.
+    /// Apply: the folders to add the selected items to, and the folders to
+    /// take them out of.
     Apply {
         add: Vec<FolderId>,
         remove: Vec<FolderId>,
@@ -61,13 +62,14 @@ pub struct FolderDialog {
     members: BTreeSet<FolderId>,
     add: Vec<FolderId>,
     remove: Vec<FolderId>,
-    /// The folded branches. Every branch opens again whenever the folders
-    /// change (`setExpanded` on each new tree), not on each opening.
+    /// The branches that are collapsed. Every branch is expanded again
+    /// whenever the set of folders changes (`setExpanded` on each new tree),
+    /// and not each time the dialog opens.
     collapsed: HashSet<FolderId>,
-    /// The folders the fold state belongs to.
+    /// The set of folders that `collapsed` was recorded for.
     tree_of: Vec<Folder>,
     view: View,
-    /// How many items are selected, for the footer.
+    /// How many items are selected. The footer shows it.
     selected: usize,
     scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
@@ -100,8 +102,8 @@ impl FolderDialog {
         }
     }
 
-    /// Opens on the shown item's folders for `selected` items, the search
-    /// empty and nothing marked.
+    /// Opens the dialog for `selected` items, with the folders of the shown
+    /// item ticked, an empty search field and nothing marked.
     pub fn open(&mut self, members: BTreeSet<FolderId>, selected: usize, cx: &mut Context<Self>) {
         self.members = members;
         self.selected = selected;
@@ -128,7 +130,8 @@ impl FolderDialog {
         cx.notify();
     }
 
-    /// `applyFolders`
+    /// `applyFolders`: sends the marked folders to the owner and closes the
+    /// dialog.
     fn apply(&mut self, cx: &mut Context<Self>) {
         if self.add.is_empty() && self.remove.is_empty() {
             return;
@@ -140,8 +143,8 @@ impl FolderDialog {
         self.close(cx);
     }
 
-    /// The search field's keys: Enter is the dialog's Apply, while there is
-    /// something to apply; the others are the browser's own.
+    /// The keys of the search field. Enter does what Apply does, when there is
+    /// something to apply. Every other key is handled by the field itself.
     fn key(&mut self, key: Key, cx: &mut Context<Self>) {
         match key {
             Key::Confirm => self.apply(cx),
@@ -150,7 +153,8 @@ impl FolderDialog {
         }
     }
 
-    /// A click on the rail or the list leaves the search.
+    /// A click on the rail or on the list takes the keyboard focus out of the
+    /// search field.
     fn leave_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(focus) = self.host.get_mut().map(|dialog| dialog.focus.clone()) {
             window.focus(&focus, cx);
@@ -201,8 +205,9 @@ impl FolderDialog {
             ))
     }
 
-    /// `FolderRow`: in the tree with its fold button (or the room for one)
-    /// and indent; flat in the Recent and Members views.
+    /// `FolderRow`: one folder's row. In the tree it is at its level, with its
+    /// fold button or, for a folder without subfolders, an empty space of the
+    /// same size. In the Recent and Members views the rows are not indented.
     fn row(
         &self,
         index: usize,
@@ -216,16 +221,21 @@ impl FolderDialog {
         let removing = member && self.remove.contains(&id);
         let checked = (member && !removing) || self.add.contains(&id);
         let group = SharedString::from(format!("folder-dialog-row-{index}"));
-        // A check box named by the folder, ticked while the items will be
-        // in it.
+        // For assistive technology the row is a check box whose name is the
+        // folder's name. It is ticked while the items will be in the folder.
         let mut row = shell::item_row(("folder-dialog-row", index), group.clone(), false, cx)
             .role(Role::CheckBox)
             .aria_label(folder.name.clone())
             .aria_toggled(crate::ui::a11y::toggled(checked));
         if let Some(line) = tree {
-            if line.depth > 0 {
-                row = row.pl(px(8. + line.depth as f32 * INDENT));
-            }
+            // In the tree a row's fill starts at the row's own level: the
+            // row is moved right by its indent, where the shared row would
+            // only pad its contents. The row has no padding on the left, so
+            // the fold button is at the left edge of the fill, and its hover
+            // fill has the same corners as the row's.
+            row = row
+                .ml(px(4. + line.depth as f32 * INDENT))
+                .pl(px(0.));
             let slot = div().size(px(ROW)).flex_none();
             row = row.child(if line.children {
                 let expanded = line.expanded;
@@ -268,14 +278,11 @@ impl FolderDialog {
             });
         }
         let tint = folder.color.map_or(theme.text(), rgb);
+        // A folder that the items will leave has an empty box, as a tag
+        // that will be taken off has in the Add Tags dialog. The Electron
+        // app's `.checkRemove` draws a red box with a minus there.
         row.child(check::check_box(
-            if removing {
-                Mark::Removed
-            } else if checked {
-                Mark::Checked
-            } else {
-                Mark::Empty
-            },
+            if checked { Mark::Checked } else { Mark::Empty },
             CheckSize::Compact,
         ))
         // TODO: a folder with its own glyph shows that glyph, filled, as

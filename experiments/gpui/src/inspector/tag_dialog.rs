@@ -1,9 +1,11 @@
-//! The Add Tags dialog (`TagSelectModal.tsx`) that T and the grid menu's
-//! Add Tags open: a centred dialog with a search, a rail of Recent,
-//! Selected, All and the tag groups, and a list of the library's tags with
-//! check boxes. Clicks only mark tags to add or remove; Apply puts them on
-//! the selected items, Cancel and Escape forget them. The tags checked at
-//! first are those of the item the inspector shows or last showed.
+//! The Add Tags dialog (`TagSelectModal.tsx`). The T key and Add Tags in the
+//! grid's menu open it. It is a dialog in the middle of the window with a
+//! search field, a rail with Recent, Selected, All and each tag group, and a
+//! list of the library's tags with check boxes. A click only marks a tag to be
+//! added or removed. Apply puts the marked tags on the selected items and
+//! takes the others off. Cancel and Escape discard the marks. The tags that
+//! are ticked when the dialog opens are those of the item the inspector shows
+//! or last showed.
 use crate::i18n::format;
 use crate::i18n::t;
 use crate::session::Session;
@@ -25,24 +27,28 @@ use picto_library::{TagNamespaceRecord, TagRecord};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-/// `PAGE_SIZE`
+/// `PAGE_SIZE`: how many tags are loaded at a time.
 const PAGE: usize = 100;
-/// `.panelBody`'s height.
+/// The height of `.panelBody`.
 const BODY: f32 = 520.;
-/// `.sidebar`'s width and `.sidebarName`'s widest.
+/// The width of `.sidebar`, and the largest width of a name in it
+/// (`.sidebarName`).
 const RAIL: f32 = 220.;
 const NAME: f32 = 140.;
-/// The search waits this long after each change before it asks.
+/// How long the search waits after the last change of its text before it asks
+/// the library.
 const SEARCH_DELAY: Duration = Duration::from_millis(150);
-/// More tags load once the list is scrolled this near its end.
+/// The next page of tags is loaded when the rows in view come within this many
+/// pixels of the last loaded row.
 const LOAD_AHEAD: f32 = 200.;
-/// Rows drawn beyond the visible ones (`overscan`).
+/// How many rows are drawn above and below the visible ones (`overscan`).
 const OVERSCAN: usize = 15;
-/// The Recent view shows at most this many.
+/// The Recent view shows at most this many tags.
 const RECENT_SHOWN: usize = 30;
 
 pub enum Event {
-    /// Apply: the tags to put on the selected items and to take off.
+    /// Apply: the tags to put on the selected items and the tags to take off
+    /// them.
     Apply {
         add: Vec<String>,
         remove: Vec<String>,
@@ -51,8 +57,9 @@ pub enum Event {
 
 impl EventEmitter<Event> for TagDialog {}
 
-/// `displayTags`: the items' tags by group then name, the recent tags among
-/// those loaded, or the loaded page.
+/// `displayTags`: the rows for a view. Selected gives the items' tags, ordered
+/// by group and then by name. Recent gives the recently used tags that are
+/// among the loaded ones. Every other view gives the loaded page.
 pub fn display_tags(
     view: &View,
     tags: &[TagRecord],
@@ -70,8 +77,9 @@ pub fn display_tags(
     }
 }
 
-/// `estimatedTotal`: how many rows the list may reach while more pages are
-/// left, so its scrollbar is the size of the whole list.
+/// `estimatedTotal`: how many rows the list will have when every page is
+/// loaded, as far as that is known. The list is given that height while more
+/// pages remain, so that its scrollbar has the size of the whole list.
 fn estimated_total(
     view: &View,
     query: &str,
@@ -101,12 +109,13 @@ pub struct TagDialog {
     namespaces: Vec<TagNamespaceRecord>,
     /// `entityTagKeys`: the tags of the item the inspector shows.
     entity: BTreeSet<String>,
-    /// `checked` and `unchecked`, in the order they were clicked.
+    /// `checked` and `unchecked`: the tags ticked and the tags unticked in
+    /// this dialog, in the order they were clicked.
     add: Vec<String>,
     remove: Vec<String>,
     view: View,
     focus_index: Option<usize>,
-    /// How many items are selected, for the footer.
+    /// How many items are selected. The footer shows it.
     selected: usize,
     scroll: ScrollHandle,
     search_timer: Option<Task<()>>,
@@ -142,9 +151,9 @@ impl TagDialog {
         }
     }
 
-    /// Opens on the shown item's tags for `selected` items, the search
-    /// empty and nothing marked. The tags loaded last stay until the new
-    /// ones arrive.
+    /// Opens the dialog for `selected` items, with the tags of the shown item
+    /// ticked, an empty search field and nothing marked. The tags that were
+    /// loaded last stay in the list until the new ones arrive.
     pub fn open(&mut self, entity: BTreeSet<String>, selected: usize, cx: &mut Context<Self>) {
         self.entity = entity;
         self.selected = selected;
@@ -179,8 +188,9 @@ impl TagDialog {
         });
     }
 
-    /// One request per change of the search or view, once 150 ms pass
-    /// without another; an older answer never replaces a newer one.
+    /// Sends one request for each change of the search text or the view, 150
+    /// ms after the last change. An answer to an older request never replaces
+    /// the answer to a newer one.
     fn request(&mut self, cx: &mut Context<Self>) {
         if !self.host.is_open() {
             return;
@@ -208,7 +218,7 @@ impl TagDialog {
         cx.notify();
     }
 
-    /// The next page, once the list nears its end.
+    /// Loads the next page of tags.
     fn load_more(&mut self, cx: &mut Context<Self>) {
         let Some(page) = self.pager.next() else {
             return;
@@ -223,11 +233,23 @@ impl TagDialog {
 
     // ── Choosing ────────────────────────────────────────────────
 
+    /// The rows of the list for the view that is shown. The Selected view
+    /// lists the tags the items have and the tags ticked in this dialog, so
+    /// that it shows everything that is ticked now. A tag that was unticked
+    /// here stays in that list with an empty box, so that it can be ticked
+    /// again.
     fn rows(&self, cx: &App) -> Vec<TagRecord> {
+        let selected: BTreeSet<String>;
+        let entity = if self.view == View::Selected && !self.add.is_empty() {
+            selected = self.entity.iter().chain(&self.add).cloned().collect();
+            &selected
+        } else {
+            &self.entity
+        };
         display_tags(
             &self.view,
             &self.pager.tags,
-            &self.entity,
+            entity,
             &self.session.read(cx).recent_tags,
         )
     }
@@ -247,7 +269,7 @@ impl TagDialog {
         self.request(cx);
     }
 
-    /// `applyTags`
+    /// `applyTags`: sends the marked tags to the owner and closes the dialog.
     fn apply(&mut self, cx: &mut Context<Self>) {
         if self.add.is_empty() && self.remove.is_empty() {
             return;
@@ -291,7 +313,8 @@ impl TagDialog {
         cx.notify();
     }
 
-    /// `scrollToIndex(focusIdx, { align: 'auto' })`
+    /// Scrolls the list just far enough to show the row the keyboard is on
+    /// (`scrollToIndex(focusIdx, { align: 'auto' })`).
     fn reveal_focus(&mut self) {
         let Some(at) = self.focus_index else { return };
         let top = at as f32 * ROW;
@@ -307,8 +330,9 @@ impl TagDialog {
         self.scroll.set_offset(point(px(0.), px(-next.max(0.))));
     }
 
-    /// A click on the rail or the list leaves the search, as a click on
-    /// something that cannot take the keyboard does in the browser.
+    /// A click on the rail or on the list takes the keyboard focus out of the
+    /// search field, as a click on something that cannot take the focus does
+    /// in a browser.
     fn leave_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(focus) = self.host.get_mut().map(|dialog| dialog.focus.clone()) {
             window.focus(&focus, cx);
@@ -352,7 +376,9 @@ impl TagDialog {
             .child(item(
                 "tag-dialog-selected",
                 t("Selected").into(),
-                self.entity.len().to_string(),
+                // The number of tags that are ticked now: those the items
+                // have, less those unticked here, plus those ticked here.
+                (self.entity.len() + self.add.len() - self.remove.len()).to_string(),
                 View::Selected,
                 None,
                 cx,
@@ -398,7 +424,7 @@ impl TagDialog {
         rail
     }
 
-    /// `.tagRow`
+    /// `.tagRow`: one tag's row in the list.
     fn row(
         &self,
         index: usize,
@@ -419,7 +445,8 @@ impl TagDialog {
             self.focus_index == Some(index),
             cx,
         )
-        // A check box named by the tag, ticked while the items will have it.
+        // For assistive technology the row is a check box whose name is the
+        // tag's name. It is ticked while the items will have the tag.
         .role(Role::CheckBox)
         .aria_label(full.clone())
         .aria_toggled(crate::ui::a11y::toggled(checked))
@@ -427,7 +454,7 @@ impl TagDialog {
             if checked { Mark::Checked } else { Mark::Empty },
             CheckSize::Compact,
         ))
-        // `.tagDot`
+        // `.tagDot`: the dot in the colour of the tag's group.
         .child(
             div()
                 .size(px(10.))
@@ -438,7 +465,8 @@ impl TagDialog {
                 .group_hover(group.clone(), |style| style.opacity(1.)),
         );
         if !namespace.is_empty() && namespace != "general" {
-            // `.tagNs`
+            // `.tagNs`: the name of the tag's group, before the tag's own
+            // name.
             row = row.child(
                 div()
                     .flex_none()
@@ -482,9 +510,14 @@ impl TagDialog {
         let preferences = Preferences::from_settings(&settings);
         let rows = self.rows(cx);
         let query = self.query.trim().to_owned();
-        let max = f32::from(self.scroll.max_offset().y);
+        // The next page is loaded when the rows in view come within
+        // `LOAD_AHEAD` pixels of the last row that is loaded. The list's
+        // height is that of the estimated total, so that its scrollbar has
+        // the size of the whole list; the distance to the end of that
+        // height says nothing about how many rows are loaded.
         let scrolled = -f32::from(self.scroll.offset().y);
-        if max - scrolled < LOAD_AHEAD {
+        let in_view = f32::from(self.scroll.bounds().size.height).max(BODY);
+        if scrolled + in_view > rows.len() as f32 * ROW - LOAD_AHEAD {
             self.load_more(cx);
         }
         let count = if self.pager.cursor.is_some() {
@@ -514,8 +547,9 @@ impl TagDialog {
                 cx,
             ));
         } else {
-            // Only the rows in view, and fifteen either side, are drawn, each
-            // at its place in the whole list's height.
+            // Only the rows in view, and fifteen above and below them, are
+            // drawn. Each is placed at its position within the height of the
+            // whole list.
             let viewport = f32::from(self.scroll.bounds().size.height).max(BODY);
             let first = ((scrolled / ROW).floor().max(0.) as usize).saturating_sub(OVERSCAN);
             let last = (((scrolled + viewport) / ROW).ceil() as usize + OVERSCAN).min(rows.len());
@@ -549,8 +583,8 @@ impl TagDialog {
     }
 }
 
-/// `highlightMatch`: the first match of the search in bold, in the primary
-/// colour.
+/// `highlightMatch`: draws the first match of the search text in bold and in
+/// the primary colour.
 fn highlight(label: String, query: &str, cx: &App) -> StyledText {
     let theme = theme::theme(cx);
     let range = crate::text::match_range(&label, query);

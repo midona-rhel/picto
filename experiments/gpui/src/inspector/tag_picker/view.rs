@@ -135,7 +135,12 @@ impl TagPicker {
             0,
             |_| bookmark(self.view == View::Selected),
             t("Selected").into(),
-            self.entity.len() as u64,
+            // The number of tags the items have. In the filter mode it is
+            // the number of tags the filter includes or excludes now.
+            match &self.filter {
+                Some(filter) => (self.selected.len() + filter.excluded.len()) as u64,
+                None => self.entity.len() as u64,
+            },
             View::Selected,
             cx,
         ))
@@ -179,15 +184,20 @@ impl TagPicker {
         let starred = preferences.is_starred(&tag_name);
         let color = crate::tags::group_color(&tag.namespace, preferences);
         let group = SharedString::from(format!("picker-row-{index}"));
+        // A chosen row has the neutral fill that a chosen folder has in the
+        // folder picker, not a fill in the primary colour. The row the
+        // keyboard is on has an outline; when that row is not chosen it has
+        // the weaker hover fill, so that it is not mistaken for a chosen
+        // row.
         let fill = if checked {
-            theme.primary_at(20.)
-        } else if focused {
             theme.surface_active()
+        } else if focused {
+            theme.surface_hover()
         } else {
             gpui::transparent_black().into()
         };
         let outline = match (checked, focused) {
-            (true, true) => Some(theme.primary_at(50.)),
+            (true, true) => Some(theme.contrast(40.)),
             (false, true) => Some(theme.contrast(25.)),
             _ => None,
         };

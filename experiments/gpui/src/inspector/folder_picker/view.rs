@@ -1,5 +1,5 @@
-//! The folder picker's drawing: the tree's guide lines, the folder rows and
-//! the Library row, the new-folder dialog and the picker itself.
+//! How the folder picker is drawn: the tree's guide lines, a folder's row, the
+//! Library row, the dialog for a new folder, and the picker as a whole.
 use super::{FolderPicker, HEIGHT, ROW, Row, View, WIDTH};
 use crate::i18n::t;
 use crate::theme;
@@ -16,9 +16,10 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use picto_library::predicate::SetMatchMode;
 
-/// `FolderTree`'s guide lines: a line down through the rows of each
-/// ancestor that continues, and this row's branch, which ends in a curve on
-/// the last child.
+/// The guide lines of `FolderTree` for one row. For each ancestor that has
+/// more children below this row, a vertical line runs through the row. The
+/// row's own branch runs from its parent's line to the row, and ends in a
+/// curve when the row is its parent's last child.
 fn guides(depth: usize, continues: Vec<bool>, last: bool, color: Rgba) -> impl IntoElement {
     canvas(
         |_, _, _| {},
@@ -86,7 +87,10 @@ impl FolderPicker {
         let focused = self.focus_index == Some(index + self.key_offset());
         let indent = 4. + row.depth as f32 * 24.;
         let group = SharedString::from(format!("folder-row-{index}"));
-        // `.row::before`: the highlight, kept clear of the tree's indent.
+        // `.row::before`: the row's fill and outline. They start after the
+        // tree's indent. They are one pixel shorter than the row at the top
+        // and at the bottom, so that two chosen rows, one above the other,
+        // have two pixels between their outlines and are seen as two rows.
         let (fill, outline) = if selected {
             (theme.surface_active(), Some(theme.contrast(25.)))
         } else if focused {
@@ -96,8 +100,8 @@ impl FolderPicker {
         };
         let mut highlight_box = div()
             .absolute()
-            .top_0()
-            .bottom_0()
+            .top(px(1.))
+            .bottom(px(1.))
             .right_0()
             .left(px(indent))
             .rounded(px(theme::RADIUS_MD))
@@ -177,8 +181,9 @@ impl FolderPicker {
             right.child(div().size(px(26.)).flex_none())
         };
         let menu_folder = folder.clone();
-        // A check box named by its folder, at its level of the tree; the
-        // row the keys are on reads as focused.
+        // For assistive technology the row is a check box whose name is the
+        // folder's name, at its level of the tree. The row the keyboard is on
+        // is the one that is read as focused.
         div()
             .id(("folder-row", index))
             .role(Role::CheckBox)
@@ -240,12 +245,14 @@ impl FolderPicker {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    // `.rowExcluded .name`
+                    // `.rowExcluded .name`: the name of a folder that the
+                    // filter excludes.
                     .when(excluded, |name| name.opacity(0.7))
                     .child(name),
             )
             .child(right.relative())
-            // `.rowExcluded`
+            // `.rowExcluded`: the whole row of a folder that the filter
+            // excludes.
             .when(excluded, |row| row.opacity(0.58))
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 this.focus_index = Some(index);
@@ -264,7 +271,8 @@ impl FolderPicker {
             )
     }
 
-    /// Move mode's Library row (`.checkRow`): the top level.
+    /// The Library row of the move mode (`.checkRow`). It stands for the top
+    /// level, above all folders.
     fn root_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = theme::theme(cx);
         let chosen = self.parent_mode.as_ref().is_some_and(|mode| mode.root);
@@ -472,7 +480,8 @@ impl Render for FolderPicker {
                         .child(overlay_shell::kbd("↵", cx)),
                 )
         };
-        // The filter mode's match rule follows the view tabs.
+        // In the filter mode the buttons for the match rule come after the
+        // view tabs.
         let logic = self.filter.as_ref().map(|filter| {
             let modes = [SetMatchMode::Any, SetMatchMode::All, SetMatchMode::Exact];
             let logic = cx.entity().downgrade();

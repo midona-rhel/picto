@@ -446,8 +446,19 @@ impl TagPicker {
             .map_or(("", None), |(query, group)| {
                 (query.as_str(), group.as_deref())
             });
-        let entity = self.entity.iter().map(name).collect::<Vec<_>>();
-        let rows = display_tags(&Sources {
+        // The Selected view lists the tags of the items. In the filter mode
+        // there are no items: it lists the tags that the filter includes and
+        // the tags that it excludes, as they are chosen now.
+        let entity = match &self.filter {
+            Some(filter) => self
+                .selected
+                .iter()
+                .chain(&filter.excluded)
+                .cloned()
+                .collect::<Vec<_>>(),
+            None => self.entity.iter().map(name).collect::<Vec<_>>(),
+        };
+        let mut rows = display_tags(&Sources {
             view: &self.view,
             query: &self.query,
             settled,
@@ -457,6 +468,24 @@ impl TagPicker {
             tags: &self.pager.tags,
             starred,
         });
+        // A row of the Selected view is made from a tag's name alone, so it
+        // has no id and a count of zero. The filter needs the id, which is
+        // filled in from the ids the filter already holds. The count is
+        // taken from the same tag among the loaded pages, when it is there.
+        if let Some(filter) = &self.filter {
+            for tag in &mut rows {
+                if tag.tag_id.0 != 0 {
+                    continue;
+                }
+                let tag_name = name(tag);
+                if let Some(id) = filter.ids.get(&tag_name) {
+                    tag.tag_id = *id;
+                }
+                if let Some(loaded) = self.pager.tags.iter().find(|known| name(known) == tag_name) {
+                    tag.active_count = loaded.active_count;
+                }
+            }
+        }
         // The filter mode offers only tags that exist, so it never shows the
         // create row.
         let create = create_candidate(&self.view, settled, settled_group, &self.pager.tags)

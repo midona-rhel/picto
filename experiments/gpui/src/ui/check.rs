@@ -8,37 +8,38 @@ type ToggleHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
 /// How a check box is filled.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mark {
-    /// Unticked: the control surface inside a ring.
+    /// Not ticked: the control surface colour inside a ring.
     Empty,
-    /// `OverlayShell`'s `.checkBoxChecked`: the primary text colour with the
-    /// app background's tick.
+    /// `OverlayShell`'s `.checkBoxChecked`: filled with the primary text
+    /// colour, with a tick in the app's background colour.
     Checked,
-    /// The primary colour in a 10% black ring with a white tick: a ticked
-    /// settings check, or `FolderTree`'s `.checkSelected`.
+    /// Filled with the primary colour, inside a ring of black at 10%, with a
+    /// white tick. A ticked check box in Settings, and `FolderTree`'s
+    /// `.checkSelected`.
     Selected,
-    /// `.checkBoxFilterChecked`: a filter includes it; the primary colour
-    /// with a white tick and no ring.
+    /// A filter includes it: green with a white tick and no ring. The
+    /// Electron app's `.checkBoxFilterChecked` is the primary colour, the
+    /// same blue as an ordinary ticked box. Green is used here so that
+    /// "included by the filter" is told apart from "ticked", and so that it
+    /// pairs with the red of `Excluded`.
     Included,
-    /// `.checkBoxExcluded`: a filter leaves it out; the negative colour with
+    /// `.checkBoxExcluded`: a filter excludes it. The negative colour with
     /// a white cross.
     Excluded,
-    /// `FolderPickerModal`'s `.checkRemove`: a folder the items will leave;
-    /// the negative colour with a white minus.
-    Removed,
 }
 
-/// Which of the two check boxes.
+/// Which of the two sizes of check box.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Size {
-    /// `OverlayShell.module.css` `.checkBox`: 14px, ringed by the pressed
-    /// overlay until it is filled.
+    /// `OverlayShell.module.css` `.checkBox`: 14px. Until it is filled it has
+    /// a ring in the pressed overlay colour.
     Compact,
-    /// `Settings.module.css` `.checkboxItem`'s indicator: 16px, ringed by
-    /// `--color-contrast-30` until it is ticked.
+    /// The indicator of `Settings.module.css` `.checkboxItem`: 16px. Until it
+    /// is ticked it has a ring in `--color-contrast-30`.
     Regular,
 }
 
-/// A check box, square or (as a radio button) round.
+/// A check box. It is square, or round when it is a radio button.
 #[derive(IntoElement)]
 pub struct CheckBox {
     mark: Mark,
@@ -55,7 +56,8 @@ pub fn check_box(mark: Mark, size: Size) -> CheckBox {
 }
 
 impl CheckBox {
-    /// A radio button: round, with a dot for its tick.
+    /// Makes it a radio button: round, with a dot where a check box has a
+    /// tick.
     pub fn round(mut self, round: bool) -> Self {
         self.round = round;
         self
@@ -91,14 +93,18 @@ impl RenderOnce for CheckBox {
                 rgba(theme::BLACK_10).into(),
                 Some((tick, theme.on_primary())),
             ),
-            Mark::Included => (theme.primary(), clear, Some((tick, theme.on_primary()))),
+            Mark::Included => (
+                rgb(theme::SUCCESS),
+                clear,
+                Some((tick, theme.on_primary())),
+            ),
             // i18n: an icon's name
             Mark::Excluded => (theme.negative(), clear, Some(("x", theme.on_primary()))),
-            Mark::Removed => (theme.negative(), clear, Some(("minus", theme.on_primary()))),
         };
         let base = base.bg(fill).border_color(border);
         match glyph {
-            // `::after { inset: 3px }` inside the border, with a 10% ring.
+            // `::after { inset: 3px }`: the dot is 3px inside the border, and
+            // the border is black at 10%.
             Some((_, color)) if self.round => base.child(
                 div()
                     .absolute()
@@ -118,16 +124,17 @@ impl RenderOnce for CheckBox {
     }
 }
 
-/// A labelled checkbox or radio row (`.checkboxItem` in
-/// `Settings.module.css`): a 16px indicator and a label, over a highlight
-/// that fades in over 100 ms under the pointer. The row reaches 6px left of
-/// its slot, so the indicator lines up with text above it and the highlight
-/// has room around it. Disabled, it dims to half and takes no clicks.
+/// A row with a check box or a radio button and its label (`.checkboxItem` in
+/// `Settings.module.css`): a 16px indicator and the label. Under the pointer
+/// the row gets a fill that fades in over 100 ms. The row starts 6px to the
+/// left of its place in the layout, so that the indicator lines up with the
+/// text above it and the fill has space around the indicator. A disabled row
+/// is drawn at half strength and does not react to clicks.
 #[derive(IntoElement)]
 pub struct Check {
     id: ElementId,
     label: SharedString,
-    /// A radio button rather than a checkbox.
+    /// Whether this is a radio button and not a check box.
     radio: bool,
     checked: bool,
     disabled: bool,
@@ -165,12 +172,12 @@ impl RenderOnce for Check {
         let theme = theme::theme(cx);
         let (strength, set_hover) =
             motion::hover_fade(self.id.clone(), motion::ROW_HOVER, motion::EASE, window, cx);
-        // A radio group is one stop, at its chosen button, as the browser
-        // makes it; a disabled row is none.
+        // A group of radio buttons is one Tab stop, at the button that is
+        // chosen, as in a browser. A disabled row is not a Tab stop.
         let focus = (!self.disabled && (!self.radio || self.checked))
             .then(|| super::focus::control(&self.id, window, cx));
-        // `.checkboxItem > input:focus-visible + .checkboxIndicator`: 1px of
-        // the primary colour, 2px out from the indicator.
+        // `.checkboxItem > input:focus-visible + .checkboxIndicator`: a 1px
+        // ring in the primary colour, 2px outside the indicator.
         let ring = focus.as_ref().and_then(|focus| {
             focus.ring(
                 super::focus::Ring {
@@ -210,7 +217,8 @@ impl RenderOnce for Check {
             .aria_disabled(self.disabled)
             .relative()
             .min_h(px(26.))
-            // `margin-left: -6px` on a full-width row: shifted, not widened.
+            // `margin-left: -6px` on a row as wide as its container: the row
+            // is moved to the left and keeps its width.
             .ml(px(-6.))
             .mr(px(6.))
             .pl(px(6.))

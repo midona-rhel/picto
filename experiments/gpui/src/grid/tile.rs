@@ -345,7 +345,13 @@ pub(crate) fn tile_art(
         }
     }
     let animated = item.mime == "image/gif" && item.frame_count.unwrap_or(0) > 1;
-    if let Some(duration) = item.duration_ms.filter(|ms| *ms > 0 && (timed || animated)) {
+    // A collection has no duration of its own. Its cover can be a video, but
+    // the collection may hold several videos, or pictures and one video, so
+    // a duration on its tile would not say what it is the duration of.
+    if let Some(duration) = item
+        .duration_ms
+        .filter(|ms| *ms > 0 && (timed || animated) && !collection)
+    {
         cell = cell.child(
             ui::badge(2.)
                 .right(px(tile.w - x - w + 5.))
