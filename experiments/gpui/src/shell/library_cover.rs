@@ -1,11 +1,12 @@
-//! `LibraryCoverDialogHost`: the open library's cover, chosen from its own
-//! media in the shared cover dialog (`MediaCoverDialog`) and framed there.
-//! "Set as Library Cover" opens it on one item, already being framed.
-//! Saving does what `setLibraryMeta` does to the library's folder: the
-//! item's thumbnail is copied beside the database as
-//! `.picto-library-cover.<ext>` and the frame written to
-//! `.picto-library-cover.json`; the sidebar and the library list then show
-//! the new cover.
+//! The cover of the open library (`LibraryCoverDialogHost`). The user chooses
+//! it from the library's own pictures in the cover dialog that a
+//! subscription's cover also uses (`MediaCoverDialog`), and frames it there.
+//! "Set as Library Cover" on an item opens the dialog with that item already
+//! in the frame. Saving does what `setLibraryMeta` does to the library's
+//! folder: the item's thumbnail is copied next to the database as
+//! `.picto-library-cover.<ext>`, and the frame is written to
+//! `.picto-library-cover.json`. The sidebar and the list of libraries then
+//! show the new cover.
 use crate::grid::thumbnails::{self, Thumbnails};
 use crate::i18n::{en, t};
 use crate::session::{Change, Session};
@@ -21,10 +22,12 @@ const INSTRUCTIONS: &str =
 const EMPTY: &str = en("This library has no media available for a cover.");
 /// `PAGE_SIZE` in `libraryAppearance.ts`.
 const PAGE: usize = 200;
-/// The cover file's names beside the library's database.
+/// The extensions the cover file can have. The file is next to the library's
+/// database.
 const COVER_EXTENSIONS: [&str; 2] = ["jpg", "png"];
 
-/// A media item as the dialog offers it.
+/// An item of the library as a candidate for the dialog. `None` for an item
+/// that is not a single media file or has no file.
 pub fn candidate(item: &RootSummary, session: &Session) -> Option<Candidate> {
     (item.kind == RootKind::Media && !item.content_hash.is_empty()).then(|| Candidate {
         media_item: i64::from(item.root_id.0),
@@ -36,10 +39,12 @@ pub fn candidate(item: &RootSummary, session: &Session) -> Option<Candidate> {
 
 pub struct LibraryCover {
     session: Entity<Session>,
-    /// The candidates decode into a cache of their own.
+    /// The cache that the candidates' thumbnails are decoded into. The grid's
+    /// cache is not used for them.
     thumbnails: Entity<Thumbnails>,
     dialog: ui::modal::Host<Cover>,
-    /// Where the keyboard goes back to.
+    /// What had the keyboard focus before the dialog opened. The focus goes
+    /// back there when the dialog closes.
     back: FocusHandle,
     saving: bool,
 }
@@ -55,8 +60,9 @@ impl LibraryCover {
         }
     }
 
-    /// `openCurrentLibraryCoverPicker`: the dialog, framing `initial` at
-    /// once when it is given, with the library's media loading behind it.
+    /// `openCurrentLibraryCoverPicker`: opens the dialog. When `initial` is
+    /// given, that picture is in the frame at once, and the library's pictures
+    /// load in the meantime.
     pub fn open(&mut self, initial: Option<Candidate>, cx: &mut Context<Self>) {
         if self.session.read(cx).library_root().is_none() {
             ui::notify::error(
@@ -75,8 +81,8 @@ impl LibraryCover {
         self.load(None, cx);
     }
 
-    /// `loadLibraryCoverCandidates`: the All destination's media, newest
-    /// import first, a page at a time.
+    /// `loadLibraryCoverCandidates`: loads one page of the library's media
+    /// (the All destination), most recently imported first.
     fn load(&mut self, cursor: Option<String>, cx: &mut Context<Self>) {
         let more = cursor.is_some();
         let answer = self.session.read(cx).run(move |library| {
@@ -117,8 +123,8 @@ impl LibraryCover {
                     Err(error) => {
                         cover.loading = false;
                         cover.loading_more = false;
-                        // Production's words, from the subscription dialog
-                        // it shares.
+                        // The same sentence as the subscription's dialog,
+                        // which the Electron app also uses here.
                         let title = if more {
                             t("Unable to load more subscription media")
                         } else {
@@ -139,11 +145,11 @@ impl LibraryCover {
     }
 }
 
-/// `setLibraryMeta` for an image: the thumbnail of `hash` copied beside the
-/// database as the cover (replacing one of the other type), and the frame
-/// written beside it. Only the library open in the window is written to
-/// (`libraries::writable`), and each file only inside its folder
-/// (`libraries::confine`).
+/// `setLibraryMeta` for a picture. Copies the thumbnail of `hash` next to the
+/// database as the cover, removing a cover with the other extension, and
+/// writes the frame next to it. Only the library that is open in the window is
+/// written to (`libraries::writable`), and each file is written only inside
+/// that library's folder (`libraries::confine`).
 fn write_cover(
     library: &Path,
     blobs_thumbnail: &Path,
@@ -193,7 +199,8 @@ fn write_cover(
     })
 }
 
-/// `writeMaterializedCoverMetadata`: the frame as production writes it.
+/// `writeMaterializedCoverMetadata`: the frame in the form the Electron app
+/// writes it.
 fn cover_frame(hash: &str, crop: crate::cover::Crop) -> String {
     let number = |value: f32| {
         if value.fract() == 0. {
@@ -222,6 +229,10 @@ impl CoverHost for LibraryCover {
 
     fn cover_thumbnails(&self) -> Entity<Thumbnails> {
         self.thumbnails.clone()
+    }
+
+    fn cover_blobs(&self, cx: &App) -> std::path::PathBuf {
+        self.session.read(cx).blobs().to_path_buf()
     }
 
     fn load_more_candidates(&mut self, cx: &mut Context<Self>) {
@@ -270,7 +281,8 @@ impl CoverHost for LibraryCover {
         cx.notify();
         let work = cx.background_spawn(async move {
             write_cover(&library, &thumbnail, &selected.hash, crop)?;
-            // A file of its own each time, so no image cache shows the old.
+            // The cover is read from a new file name each time, so that no
+            // image cache shows the old cover.
             let stamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |since| since.as_millis());
@@ -322,8 +334,9 @@ mod tests {
     use super::cover_frame;
     use crate::cover::Crop;
 
-    /// The cover is written into the library's folder only: a cover file
-    /// that is a link out of it is neither followed nor replaced.
+    /// The cover is written only into the library's folder. A cover file that
+    /// is a link to a place outside the folder is not followed and not
+    /// replaced.
     #[cfg(unix)]
     #[test]
     fn the_cover_is_written_only_inside_the_library() {
@@ -344,7 +357,8 @@ mod tests {
             b"jpeg"
         );
         assert!(root.join(".picto-library-cover.json").is_file());
-        // The frame's file a link to another folder: refused, untouched.
+        // The frame's file is a link to another folder: the save is refused
+        // and the link's target is left as it was.
         std::fs::remove_file(root.join(".picto-library-cover.json")).unwrap();
         let target = elsewhere.path().join("frame.json");
         std::fs::write(&target, b"theirs").unwrap();

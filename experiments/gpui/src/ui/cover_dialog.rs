@@ -8,6 +8,7 @@
 //! (`LibraryCoverDialogHost`) both use it. [`CoverHost`] is what each of those
 //! two owners provides, and [`cover_layer`] draws the dialog for either.
 use crate::cover::Crop;
+use crate::grid::originals::{Originals, THUMBNAIL_LONG_EDGE, Want};
 use crate::grid::thumbnails::Thumbnails;
 use crate::i18n::t;
 use crate::theme::Text as _;
@@ -15,7 +16,12 @@ use crate::ui::{self, action_button::Look as ButtonLook, modal::Size};
 use crate::{theme, ui::modal::Presence};
 use gpui::*;
 use serde_json::Value;
-use std::{cell::Cell, path::PathBuf, rc::Rc};
+use std::{
+    cell::Cell,
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::Arc,
+};
 
 /// The squares (`.candidate`) are at least 104px wide with 8px between them,
 /// which gives `floor((width + 8) / 112)` columns.
@@ -60,6 +66,14 @@ pub struct Cover {
     pub crop: Crop,
     drag: Drag,
     list: UniformListScrollHandle,
+    /// Loads the original file of the picture in the frame. It is made when
+    /// a picture is first framed and dropped when the user goes back to the
+    /// candidates, which frees the decoded picture.
+    originals: Option<Entity<Originals>>,
+    /// The content hash of the picture in the frame and the path of its
+    /// original file, once that has been looked up. The path is `None` when
+    /// the file is missing or is not a picture.
+    original: Option<(String, Option<PathBuf>)>,
     /// The text above the squares (`instructions`), and the text shown when
     /// there is nothing to choose from (`empty`).
     instructions: &'static str,
@@ -86,10 +100,86 @@ impl Cover {
             crop: Crop::default(),
             drag: Rc::default(),
             list: UniformListScrollHandle::new(),
+            originals: None,
+            original: None,
             instructions,
             empty,
         }
     }
+
+    /// The original of the picture in the frame, decoded for a frame `side`
+    /// wide on a display with `scale` pixels per point. Returns `None` until
+    /// the decode has finished; the frame shows the thumbnail until then.
+    ///
+    /// A thumbnail's long edge is 512 pixels, and the frame enlarges the
+    /// picture up to three times, so the thumbnail alone looks blurred. The
+    /// original is decoded once, at the number of pixels the frame shows at
+    /// the largest zoom and never more than the file has. It is read after
+    /// the picture has been in the frame for a fifth of a second, the wait
+    /// the grid and the viewers also use.
+    fn framed_original<V: 'static>(
+        &mut self,
+        side: f32,
+        scale: f32,
+        blobs: &Path,
+        cx: &mut Context<V>,
+    ) -> Option<Arc<RenderImage>> {
+        let selected = self.selected.as_ref()?;
+        let (width, height) = selected.size;
+        // The size is not known, so the pixels needed cannot be worked out.
+        if width <= 1 || height <= 1 {
+            return None;
+        }
+        let shown = side * (ZOOM_MAX / 100.) / width.min(height) as f32 * scale.max(1.);
+        let part = shown.min(1.);
+        if width.max(height) as f32 * part <= THUMBNAIL_LONG_EDGE {
+            return None;
+        }
+        if self.original.as_ref().map(|(hash, _)| hash) != Some(&selected.hash) {
+            self.original = Some((selected.hash.clone(), original_in(blobs, &selected.hash)));
+        }
+        let path = self.original.as_ref()?.1.clone()?;
+        let originals = self
+            .originals
+            .get_or_insert_with(|| {
+                let originals = cx.new(Originals::new);
+                // The dialog is drawn again when the decode finishes.
+                cx.observe(&originals, |_, _, cx| cx.notify()).detach();
+                originals
+            })
+            .clone();
+        let want = Want {
+            hash: selected.hash.clone(),
+            path,
+            size: (
+                ((width as f32 * part).ceil() as u32).clamp(1, width),
+                ((height as f32 * part).ceil() as u32).clamp(1, height),
+            ),
+        };
+        let hash = want.hash.clone();
+        originals.update(cx, |originals, cx| originals.plan(vec![want], cx));
+        originals.read(cx).get(&hash)
+    }
+}
+
+/// The original file with content hash `hash` in a library's `blobs` folder,
+/// when it is a picture. Originals are stored as
+/// `blobs/f/<ab>/<cd>/<hash>.<extension>`, and a candidate does not carry
+/// its file's type, so the file is found by its name without the extension.
+/// A file whose extension is not a picture format (a video, for example) is
+/// not returned: the frame then keeps the thumbnail.
+fn original_in(blobs: &Path, hash: &str) -> Option<PathBuf> {
+    if hash.len() < 4 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let folder = blobs.join("f").join(&hash[..2]).join(&hash[2..4]);
+    std::fs::read_dir(folder)
+        .ok()?
+        .filter_map(|entry| Some(entry.ok()?.path()))
+        .find(|path| {
+            path.file_stem().and_then(|stem| stem.to_str()) == Some(hash)
+                && image::ImageFormat::from_path(path).is_ok()
+        })
 }
 
 /// What an owner of the dialog provides.
@@ -101,6 +191,8 @@ pub trait CoverHost: Sized + 'static {
     fn cover_busy(&self) -> bool;
     /// The cache that the candidates' thumbnails are decoded into.
     fn cover_thumbnails(&self) -> Entity<Thumbnails>;
+    /// The `blobs` folder of the library the candidates are in.
+    fn cover_blobs(&self, cx: &App) -> PathBuf;
     /// Called when the grid has been scrolled near its end. Loads the next
     /// page.
     fn load_more_candidates(&mut self, cx: &mut Context<Self>);
@@ -129,6 +221,8 @@ pub trait CoverHost: Sized + 'static {
     fn unselect_candidate(&mut self, cx: &mut Context<Self>) {
         if let Some(cover) = self.cover() {
             cover.selected = None;
+            cover.originals = None;
+            cover.original = None;
             cx.notify();
         }
     }
@@ -219,23 +313,32 @@ pub fn cover_layer<V: CoverHost>(
         }
     };
     let cache = host.cover_thumbnails();
+    let blobs = host.cover_blobs(cx);
     let Some(cover) = host.cover() else {
         return Empty.into_any_element();
     };
     let theme = theme::theme(cx);
     let viewport = window.viewport_size();
+    // `.cropViewport`: a square of `min(58vh, 420px)`, and no wider than the
+    // body.
+    let side = (f32::from(viewport.height) * 0.58).min(420.);
+    let inner = side - 2.;
+    let original = cover.framed_original(inner, window.scale_factor(), &blobs, cx);
     match &cover.selected {
         Some(selected) => {
-            // `.cropViewport`: a square of `min(58vh, 420px)`, and no wider
-            // than the body.
-            let side = (f32::from(viewport.height) * 0.58).min(420.);
-            let inner = side - 2.;
             let (x, y, square) =
                 crate::cover::square(selected.size.0 as f32, selected.size.1 as f32, cover.crop);
             let scale = inner / square.max(1.);
-            let image = selected.thumbnail.clone().map(|path| {
-                img(path)
-                    .image_cache(&cache)
+            // The original takes the thumbnail's place when it is ready.
+            let image = match original {
+                Some(original) => Some(img(original)),
+                None => selected
+                    .thumbnail
+                    .clone()
+                    .map(|path| img(path).image_cache(&cache)),
+            }
+            .map(|image| {
+                image
                     .absolute()
                     .left(px(-x * scale))
                     .top(px(-y * scale))

@@ -1,6 +1,6 @@
 //! A subscription's cover (`SubscriptionCoverDialog`:
-//! `subscriptions.cover.candidates`, `subscriptions.cover.set`) in the shared
-//! cover dialog, `ui::cover_dialog`.
+//! `subscriptions.cover.candidates`, `subscriptions.cover.set`). It is chosen
+//! in the cover dialog that the library's cover also uses, `ui::cover_dialog`.
 use super::dialogs::Dialog;
 use super::{SubscriptionsScreen, data, requests};
 use crate::grid::thumbnails::Thumbnails;
@@ -16,7 +16,8 @@ const INSTRUCTIONS: &str =
 const EMPTY: &str = crate::i18n::en("No images have been added yet.");
 
 impl SubscriptionsScreen {
-    /// The menu's Set Cover Photo….
+    /// Opens the dialog for the subscription `id`. Called by Set Cover Photo…
+    /// in the subscription's menu.
     pub(super) fn open_cover(&mut self, id: i64, cx: &mut Context<Self>) {
         self.show_dialog(
             Dialog::Cover(Box::new(Cover::new(
@@ -31,7 +32,9 @@ impl SubscriptionsScreen {
         self.load_candidates(id, None, cx);
     }
 
-    /// A page of candidates, after `cursor`, for the dialog of `id`.
+    /// Loads a page of candidates for the dialog of the subscription `id`.
+    /// `cursor` says where the previous page ended; `None` loads the first
+    /// page.
     fn load_candidates(&mut self, id: i64, cursor: Option<Value>, cx: &mut Context<Self>) {
         let more = cursor.is_some();
         let answer = self.send(requests::cover_candidates(id, cursor), cx);
@@ -43,7 +46,8 @@ impl SubscriptionsScreen {
                     serde_json::from_value::<SubscriptionCoverCandidatePage>(page)
                         .map_err(|error| error.to_string())
                 });
-            // Where each thumbnail is, found off the thread that draws.
+            // Whether each candidate has a thumbnail file is checked on a
+            // background thread, not on the thread that draws.
             let page = match page {
                 Ok(page) => Ok(cx
                     .background_spawn(async move {
@@ -127,6 +131,10 @@ impl CoverHost for SubscriptionsScreen {
 
     fn cover_thumbnails(&self) -> Entity<Thumbnails> {
         self.covers.clone()
+    }
+
+    fn cover_blobs(&self, cx: &App) -> std::path::PathBuf {
+        self.session.read(cx).blobs().to_path_buf()
     }
 
     fn load_more_candidates(&mut self, cx: &mut Context<Self>) {
