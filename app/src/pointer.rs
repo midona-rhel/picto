@@ -1,8 +1,9 @@
-//! Opt-in pointer playback, so hover and pressed states can be checked in the
-//! running app without taking the real pointer. Set `PICTO_GPUI_POINTER` to a
-//! FIFO (a plain file is read again from its start each time it ends); each
-//! line written to it is replayed into the window. Debug builds only (see
-//! `seams.rs`); the off-screen tool plays the same lines (`offscreen.rs`):
+//! Plays recorded input into the app's windows, so that hover and pressed
+//! states can be checked in the running app without moving the real pointer.
+//! Set `PICTO_GPUI_POINTER` to a FIFO or to a file. Each line written to it
+//! is played into the window. A plain file is read again from its start each
+//! time its end is reached. Only debug builds read the variable (see
+//! `seams.rs`). The off-screen tool plays the same lines (`offscreen.rs`):
 //!
 //!     move 320 24
 //!     down 320 24
@@ -20,55 +21,66 @@
 //!     dropdata 600 400 image=/path/photo.png uri=https://e.test/photo.png
 //!     window 1
 //!
-//! `window <n>` sends the lines after it to the app's nth window (0 is the
-//! main one, the others in the order they opened, as the off-screen tool
-//! counts them); when that window closes they go to the main one again.
-//! Coordinates are window points (the system's, which a zoomed window
-//! divides by its interface zoom). A fourth number is the click count for
-//! `down` and `up`, and the distance in points for `scroll`. `key` takes a
-//! keystroke as GPUI writes them (`secondary-` is Command on macOS and
-//! Control elsewhere, so one script serves every platform) and `type` the text to enter in the focused
-//! field. `dragfiles` brings files from the system over the window at a
-//! point, as a drag from Finder does (the platform's file-drop entered and
-//! pending events), `drop` also lets them go there (a release, then
-//! exited; not the platform's drop, which would bring the app forward),
-//! and `dragexit` takes them out of the window again; the paths are
-//! separated by spaces, so a path cannot hold one. `dropdata` drops what a
-//! web browser drags, with no files: each `image=<path>` is an in-memory
-//! file holding that file's bytes, `uri=`, `text=` and `download=` an
-//! address list, text and a Chromium `DownloadURL`, and `html=<path>` that
-//! file's text as HTML; it is let go with a release rather than the
-//! platform's drop, which would bring the app forward. Nothing is read when
-//! the variable is unset.
+//! `window <n>` sends the lines after it to the nth window of the app. Window
+//! 0 is the main window, and the others are numbered in the order they
+//! opened, as the off-screen tool numbers them. When that window closes, the
+//! lines go to the main window again.
+//!
+//! Coordinates are in window points as the system counts them; a zoomed
+//! window divides them by its interface zoom. A fourth number is the click
+//! count for `down` and `up`, and the distance in points for `scroll`. `key`
+//! takes a keystroke in GPUI's notation. In it, `secondary-` stands for
+//! Command on macOS and for Control elsewhere, so that one script works on
+//! every platform. `type` takes the text to enter in the focused field.
+//!
+//! `dragfiles` holds files from the system over the window at a point, as a
+//! drag from Finder does: it sends the platform's file-drop events `Entered`
+//! and `Pending`. `drop` does the same and then lets the files go at that
+//! point. It sends a mouse release and then `Exited`, and not the platform's
+//! drop event, which would bring the app to the front. `dragexit` takes the
+//! files out of the window again. The paths are separated by spaces, so a
+//! path cannot contain a space.
+//!
+//! `dropdata` drops what a web browser drags, which holds no files. Each
+//! `image=<path>` is a file in memory that holds the bytes of that file.
+//! `uri=`, `text=` and `download=` give an address list, a text and a
+//! Chromium `DownloadURL`. `html=<path>` gives the text of that file as HTML.
+//! This data is let go with a mouse release too.
+//!
+//! Nothing is read when the variable is not set.
 use gpui::*;
 use std::io::{BufRead, BufReader};
 use std::sync::mpsc;
 use std::time::Duration;
 
-/// One line of playback.
+/// One line of the input.
 pub enum Line {
     Input(PlatformInput),
-    /// Several events in a row, as the platform sends them for one gesture.
+    /// Several events that are delivered one after the other, as the platform
+    /// sends them for one gesture.
     Inputs(Vec<PlatformInput>),
-    /// Pressed as though typed: bindings first, then the focused text field.
+    /// Keystrokes that are delivered as typed keys are: first to the key
+    /// bindings, then to the focused text field.
     Keys(Vec<Keystroke>),
-    /// A drop of what is not a file: the drag comes over, the platform's
-    /// reading of it is handed over, and it is let go.
+    /// A drop of data that is not a file. The events in `over` bring the drag
+    /// over the window, `data` is then set as what the platform read from the
+    /// drag, and the events in `release` let it go.
     DropData {
         over: Vec<PlatformInput>,
         data: ExternalDropData,
         release: Vec<PlatformInput>,
     },
-    /// The lines after it go to this window (`window <n>`).
+    /// The lines after this one go to this window (`window <n>`).
     Window(usize),
 }
 
 impl Line {
-    /// Gives the line to the window as though it came from the system.
+    /// Delivers the line to the window as though it came from the system.
     pub fn deliver(self, window: &mut Window, cx: &mut App) {
         match self {
-            // Positions are the window's screen points, which the window
-            // divides by the interface zoom as it does the system's.
+            // Positions are in the window's points as the system counts them.
+            // The window divides them by the interface zoom, as it does for
+            // the system's own events.
             Line::Input(event) => {
                 window.dispatch_platform_input(event, cx);
             }
@@ -93,9 +105,11 @@ impl Line {
             Line::Window(_) => {}
             Line::Keys(keys) => {
                 for key in keys {
-                    // The system reports held modifiers before the key and
-                    // their release after it, which `Window::modifiers`
-                    // follows (Shift with an arrow extends the selection).
+                    // The system reports the held modifiers before the key
+                    // and their release after it, and `Window::modifiers`
+                    // follows these reports. A view reads it, for example to
+                    // extend the selection when Shift is held with an arrow
+                    // key.
                     let modifiers = key.modifiers;
                     let held = modifiers != Modifiers::default();
                     if held {
@@ -150,8 +164,9 @@ pub fn parse(line: &str) -> Option<Line> {
     pointer(line).map(Line::Input)
 }
 
-/// GPUI parses keystrokes from static text: each distinct one is kept for
-/// the rest of the run, once.
+/// Returns `text` as static text, which is the only kind of text that GPUI
+/// parses a keystroke from. Each distinct text is kept once, for the rest of
+/// the run.
 fn interned(text: String) -> &'static str {
     static SEEN: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
     let mut seen = SEEN.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -163,11 +178,12 @@ fn interned(text: String) -> &'static str {
     kept
 }
 
-/// Files from the system over the window at a point (`dragfiles`), and let
-/// go there (`drop`): the events a drag from Finder makes, except that the
-/// files are let go with a release rather than the platform's drop, which
-/// GPUI answers by bringing the app forward over whatever the user is
-/// working in.
+/// Returns the events for files from the system held over the window at a
+/// point (`dragfiles`) and, with `submit`, also let go there (`drop`). They
+/// are the events a drag from Finder makes, except that the files are let go
+/// with a mouse release and not with the platform's drop event. GPUI answers
+/// the platform's drop event by bringing the app to the front, over whatever
+/// the user is working in.
 fn file_drop(submit: bool, rest: &str) -> Option<Vec<PlatformInput>> {
     let mut parts = rest.split_whitespace();
     let position = point(
@@ -194,7 +210,8 @@ fn file_drop(submit: bool, rest: &str) -> Option<Vec<PlatformInput>> {
     Some(events)
 }
 
-/// What a web browser drags, dropped at a point (`dropdata`).
+/// Returns the line for a drop, at a point, of what a web browser drags
+/// (`dropdata`).
 fn drop_data(rest: &str) -> Option<Line> {
     let mut parts = rest.split_whitespace();
     let position = point(
@@ -296,8 +313,8 @@ fn pointer(line: &str) -> Option<PlatformInput> {
     })
 }
 
-/// Plays the lines written to `PICTO_GPUI_POINTER` into `window`, if it
-/// is set.
+/// Plays the lines written to the file that `PICTO_GPUI_POINTER` names into
+/// `window`. Does nothing when the variable is not set.
 #[cfg(debug_assertions)]
 pub fn start(window: AnyWindowHandle, cx: &mut App) {
     let Some(path) = crate::seams::pointer_file() else {
@@ -305,7 +322,8 @@ pub fn start(window: AnyWindowHandle, cx: &mut App) {
     };
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        // A FIFO reports end of file each time its writer closes; reopen it.
+        // A FIFO reports the end of the file each time its writer closes it,
+        // so the file is opened again.
         loop {
             let Ok(file) = std::fs::File::open(&path) else {
                 return;
@@ -329,8 +347,8 @@ pub fn start(window: AnyWindowHandle, cx: &mut App) {
                 .await;
             while let Ok(event) = receiver.try_recv() {
                 if let Line::Window(index) = event {
-                    // The main window first, the others in the order they
-                    // opened.
+                    // The main window is first, and the others follow in the
+                    // order they opened.
                     let mut windows = cx.update(|cx| cx.windows());
                     windows.sort_by_key(|handle| (*handle != main, handle.window_id().as_u64()));
                     target = windows.get(index).copied().unwrap_or(main);

@@ -511,9 +511,9 @@ mod tests {
         }
     }
 
-    /// `--detach` and every launch detach only a marked copy: a library
-    /// the user keeps is refused before its database is opened, and left
-    /// exactly as it was.
+    /// [`detach`] changes only a marked copy. A library the user keeps is
+    /// refused before its database is opened, and is left exactly as it
+    /// was.
     #[test]
     fn detach_never_touches_a_library_without_the_marker() {
         let folder = tempfile::tempdir().unwrap();

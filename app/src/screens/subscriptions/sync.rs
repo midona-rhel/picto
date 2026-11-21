@@ -1,12 +1,15 @@
-//! The screen's reads and its following of the library: loading the
-//! subscriptions, polling runs and gallery downloads while they go,
-//! commands on chosen subscriptions, an opened subscription's detail and
-//! issues, and the screen's place in the navigation.
+//! The part of the Subscriptions screen that reads from the library and
+//! sends the commands of the run and hold controls. It reads the list of
+//! subscriptions, reads it again every 1.5 s while a run or a gallery
+//! download is in progress, reads the runs and problems of the open
+//! subscription, and follows the session's navigation.
 use super::*;
 
 impl SubscriptionsScreen {
-    /// Reads every subscription again, and the sites' logins. What shows
-    /// stays until the answer arrives.
+    /// Reads every subscription from the library again, and the sites'
+    /// logins and the checks of those logins from the application. The
+    /// screen shows the earlier list until the answer arrives. The answer
+    /// is not used when a later read has been started since.
     pub(super) fn load(&mut self, cx: &mut Context<Self>) {
         self.generation += 1;
         let generation = self.generation;
@@ -50,9 +53,12 @@ impl SubscriptionsScreen {
         .detach();
     }
 
-    /// What follows a new read of the list: a subscription just created
-    /// opens, a deleted one that was open gives way to the grid, and runs
-    /// and gallery downloads are followed.
+    /// Called after each read of the list. It opens the page of a
+    /// subscription that the "Add subscription" dialog has just created,
+    /// once the list contains it. When the subscription whose page is shown
+    /// is no longer in the list, it goes back to the tiles. It then sets
+    /// the name in the scope title (`name_place`) and follows the runs and
+    /// the gallery downloads (`follow_runs`, `follow_galleries`).
     pub(super) fn settled(&mut self, cx: &mut Context<Self>) {
         let exists = |id: i64| {
             self.list
@@ -65,8 +71,8 @@ impl SubscriptionsScreen {
             self.open(id, cx);
         } else if self.shown && self.list.is_some() && self.place_seen.is_some_and(|id| !exists(id))
         {
-            // `refreshSubscriptionsWorkspace`: the workspace of a
-            // subscription that is gone closes.
+            // The subscription whose page is shown is no longer in the
+            // list, so the screen goes back to the tiles.
             self.session
                 .update(cx, |session, cx| session.open_place(None, cx));
         }
@@ -75,7 +81,8 @@ impl SubscriptionsScreen {
         self.follow_galleries(cx);
     }
 
-    /// Reads the list again, and the open subscription's runs and issues.
+    /// Reads the list again and, when a subscription's page is shown, that
+    /// subscription's runs and problems.
     pub(super) fn reload(&mut self, cx: &mut Context<Self>) {
         self.load(cx);
         if let Some(id) = self.place_seen {
@@ -83,8 +90,11 @@ impl SubscriptionsScreen {
         }
     }
 
-    /// Reads progress again in 1.5 s while a run is going (or was just
-    /// started) and the screen shows.
+    /// Starts a timer of 1.5 s (`session::SUBSCRIPTION_POLL`), after which
+    /// the screen reads the subscriptions again (`reload`). The timer runs
+    /// only while the screen is shown and either a run is in progress or
+    /// `grace_until` has not passed. Otherwise a timer that is running is
+    /// dropped.
     pub(super) fn follow_runs(&mut self, cx: &mut Context<Self>) {
         let running = self
             .list
@@ -109,10 +119,14 @@ impl SubscriptionsScreen {
         }
     }
 
-    /// Gallery downloads: a running one's progress is read, with its total
-    /// kept once known (`retainGalleryProgressTotals`). One whose run has
-    /// settled is announced and removed by the session, for the whole app
-    /// (`session::settle`).
+    /// Reads the progress of every gallery download that is running
+    /// (`subscriptions.progress.get`) and stores it in `gallery_progress`.
+    /// Once the site has reported the number of images in the gallery for a
+    /// run, that number is kept when a later answer has none, and the
+    /// larger of two reported numbers is kept. The entry of a download that
+    /// is no longer running is removed. The session, not this screen, shows
+    /// the notification for a download that has ended and removes the
+    /// download from the library (`session::settle`).
     pub(super) fn follow_galleries(&mut self, cx: &mut Context<Self>) {
         let jobs: Vec<(i64, bool)> = self
             .list
@@ -161,8 +175,13 @@ impl SubscriptionsScreen {
         }
     }
 
-    /// Sends `command` for each of `ids`, then reads what changed. The
-    /// controls of a subscription wait while its command is on its way.
+    /// Sends the command that `command` returns for each of `ids`, and
+    /// reads the subscriptions again when every answer has arrived. A
+    /// subscription for which a command is already waiting for its answer
+    /// is left out. Each subscription's id is in `acting` until the answers
+    /// have arrived, which disables its run button and its hold button. A
+    /// command that fails is shown as the error notification "Subscription
+    /// action failed".
     pub(super) fn perform(
         &mut self,
         ids: Vec<i64>,
@@ -207,7 +226,9 @@ impl SubscriptionsScreen {
         cx.notify();
     }
 
-    /// The run control of one subscription.
+    /// Sends the command of the run button for the subscription `id`
+    /// (`Command::primary`): `Pause`, `Resume` or `Run`, depending on the
+    /// state of the subscription's run.
     pub(super) fn run_control(&mut self, id: i64, cx: &mut Context<Self>) {
         let Some(command) = self.subscription(id).map(|subscription| {
             Command::primary(
@@ -220,7 +241,9 @@ impl SubscriptionsScreen {
         self.perform(vec![id], |_| command, cx);
     }
 
-    /// The hold or stop control of one subscription.
+    /// Sends the command of the hold button for the subscription `id`
+    /// (`Command::hold`): `Stop` while the subscription has an active run,
+    /// and otherwise `Hold`, which puts it on hold or releases the hold.
     pub(super) fn hold_control(&mut self, id: i64, cx: &mut Context<Self>) {
         let Some(command) = self.subscription(id).map(|subscription| {
             Command::hold(subscription.active_run_id.is_some(), subscription.paused)
@@ -238,7 +261,10 @@ impl SubscriptionsScreen {
         self.list.as_mut()?.iter_mut().find(|entry| entry.id == id)
     }
 
-    /// Reads the open subscription's runs and issues.
+    /// Reads the runs and the open problems of the subscription `id` into
+    /// `detail`, and then tells the application that the subscription's
+    /// open problems have been seen (`subscriptions.issues.acknowledge`).
+    /// The answer is not used when a later read has been started since.
     pub(super) fn load_detail(&mut self, id: i64, cx: &mut Context<Self>) {
         self.detail_generation += 1;
         let generation = self.detail_generation;
@@ -264,9 +290,10 @@ impl SubscriptionsScreen {
                 }
                 Err(_) => return,
             };
-            // `refreshDetail`: looking at a subscription acknowledges its
-            // open issues, so its badge stops warning; the Problems tab
-            // still lists them until they are resolved.
+            // Opening a subscription's page acknowledges its open problems.
+            // When the application has accepted that, the subscription's
+            // count of open problems in `list` is set to 0. The Problems tab
+            // still lists the problems until they are resolved.
             let Ok(acknowledged) = this.update(cx, |this, cx| {
                 this.send(
                     Request {
@@ -292,7 +319,8 @@ impl SubscriptionsScreen {
         .detach();
     }
 
-    /// Adds the next page of open issues to the Problems tab.
+    /// Reads the next page of open problems and adds it to the Problems
+    /// tab. The tab's "Load more" button calls it.
     pub(super) fn load_more_issues(&mut self, cx: &mut Context<Self>) {
         let Some((id, after)) = self
             .detail
@@ -322,7 +350,8 @@ impl SubscriptionsScreen {
                         detail.issues.next = page.next;
                         detail.issues.total = page.total;
                     }
-                    // `loadMoreHealth` runs through `act`.
+                    // A read that fails is shown with the same notification
+                    // as a command that fails.
                     (Ok(Err(error)), _) => {
                         ui::notify::error(t("Subscription action failed"), error, cx)
                     }
@@ -334,8 +363,12 @@ impl SubscriptionsScreen {
         .detach();
     }
 
-    /// Follows the session's navigation: reads the list each time the
-    /// screen is opened, and the detail when a subscription is.
+    /// Called when the session reports a navigation. It reads the list
+    /// each time the Subscriptions screen becomes the destination shown.
+    /// When the screen is opened or its place changes, it closes the
+    /// context menu, clears the selection, and reads the runs and problems
+    /// of the subscription whose page is now shown. While the screen is
+    /// shown, it copies the session's place into `place_seen`.
     pub(super) fn navigated(&mut self, cx: &mut Context<Self>) {
         let (showing, place) = {
             let session = self.session.read(cx);
@@ -355,10 +388,11 @@ impl SubscriptionsScreen {
         self.shown = showing;
         if showing {
             if entering || place != self.place_seen {
-                // A menu belongs to the surface it was opened on.
+                // A context menu that was opened on the tiles or on another
+                // subscription's page is closed.
                 self.close_menu(cx);
-                // The grid opens with nothing selected, as it does each time
-                // the Electron grid mounts.
+                // No tile is selected when the screen is opened, and none
+                // after a subscription's page has been opened or closed.
                 self.selected.clear();
                 self.anchor = None;
                 if let Some(id) = place {

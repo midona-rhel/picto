@@ -35,12 +35,12 @@ use std::{
 
 /// The stage of the fade that plays when the grid's contents are replaced:
 /// when another destination opens, or when a change of view preferences, such
-/// as a new sort, reads the open destination again. The stages run in the
-/// order `WorkspaceSurface.tsx` runs them. `FadingOut`: what is on screen
-/// fades out over 170 ms (`motion::SCOPE_FADE`). `Waiting`: the grid stays
-/// invisible until the new results have arrived. `FadingIn`: the new results
-/// fade in over 170 ms. `Idle`: no fade is running. The two fading stages hold
-/// the time at which the fade started.
+/// as a new sort, reads the open destination again. The stages run in this
+/// order. `FadingOut`: what is on screen fades out over 170 ms
+/// (`motion::SCOPE_FADE`). `Waiting`: the grid stays invisible until the new
+/// results have arrived. `FadingIn`: the new results fade in over 170 ms.
+/// `Idle`: no fade is running. The two fading stages hold the time at which
+/// the fade started.
 #[derive(Clone, Copy)]
 pub enum Transition {
     Idle,
@@ -64,6 +64,7 @@ impl Transition {
         }
     }
 
+    /// Whether the grid is fading out or fading in at this stage.
     pub fn animating(&self) -> bool {
         matches!(self, Transition::FadingOut(_) | Transition::FadingIn(_))
     }
@@ -103,8 +104,7 @@ pub enum Change {
 
 /// The state of subscriptions that the sidebar's Subscriptions row shows with
 /// its pause and resume button. `running` is true while any subscription has a
-/// run in progress (`runningSubscriptionIds`). `paused` is true while all
-/// subscriptions are paused (`globalPaused`).
+/// run in progress. `paused` is true while all subscriptions are paused.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SubscriptionActivity {
     pub running: bool,
@@ -116,10 +116,10 @@ pub struct SubscriptionActivity {
 }
 
 impl SubscriptionActivity {
-    /// Builds the state from the answer of the `subscriptions.list` command,
-    /// the way `getSubscriptionOverview` does. A subscription counts as
-    /// running when it has an `active_run_id` and its `status` is `pending` or
-    /// `running`. `paused` is the answer's `global_paused` field.
+    /// Builds the state from the answer of the `subscriptions.list` command.
+    /// A subscription counts as running when it has an `active_run_id` and
+    /// its `status` is `pending` or `running`. `paused` is the answer's
+    /// `global_paused` field.
     pub fn from_list(list: &serde_json::Value) -> Self {
         let running = list
             .get("subscriptions")
@@ -145,23 +145,23 @@ impl SubscriptionActivity {
 }
 
 /// How often the session reads `subscriptions.list` again while a subscription
-/// run is in progress: every 1.5 seconds, as `subscriptionsSettle.ts` does.
+/// run is in progress: every 1.5 seconds.
 pub const SUBSCRIPTION_POLL: Duration = Duration::from_millis(1500);
 /// The session checks for events from the application layer every 30 ms.
 /// Replies from the library's thread do not wait for this: the thread wakes
 /// the session each time it sends one.
 const RECEIVE_INTERVAL: Duration = Duration::from_millis(30);
 /// A zoom change is saved to the destination's view preferences 500 ms after
-/// the last change (`VIEW_PREFS_SAVE_DEBOUNCE_MS`).
+/// the last change.
 const VIEW_SAVE_DELAY: Duration = Duration::from_millis(500);
 /// When the app quits while a zoom change is not saved yet, the main thread
 /// waits at most 200 ms for the library's thread to write it.
 const QUIT_WAIT: Duration = Duration::from_millis(200);
 /// The shortest delay before the grid's results are read again after a
-/// background change: 40 ms (`gridController.scheduleRefresh`). The delay is
-/// three times as long as the previous refresh took, limited to the range from
-/// `REFRESH_MIN` to `REFRESH_MAX`, and it is counted from the moment the
-/// previous refresh finished (see `refresh_delay` in `results.rs`).
+/// background change: 40 ms. The delay is three times as long as the previous
+/// refresh took, limited to the range from `REFRESH_MIN` to `REFRESH_MAX`,
+/// and it is counted from the moment the previous refresh finished (see
+/// `refresh_delay` in `results.rs`).
 const REFRESH_MIN: Duration = Duration::from_millis(40);
 /// The longest that delay can be: 1 second.
 const REFRESH_MAX: Duration = Duration::from_millis(1000);
@@ -218,8 +218,7 @@ struct Visit {
     place: Option<i64>,
     /// The filter bar's filters that the grid had at this entry, as an index
     /// into `Session::filter_steps`. Changing the filters adds a history entry
-    /// of its own (`navigateWithGridFilters`), so Back returns to the previous
-    /// filters.
+    /// of its own, so Back returns to the previous filters.
     filters: usize,
 }
 
@@ -393,9 +392,9 @@ pub struct Session {
     /// The combined file size in bytes of all those items, not only of the
     /// ones in the window.
     pub total_size_bytes: u128,
-    /// The state of the requests for another window of results
-    /// (`requestWindowAt`). `window_request` is the number given to the newest
-    /// request. `window_active` is the request that was sent to the library's
+    /// The state of the requests for another window of results.
+    /// `window_request` is the number given to the newest request.
+    /// `window_active` is the request that was sent to the library's
     /// thread and has not been answered yet, as its number and the start
     /// ordinal of its window. `window_queued` is the one request that waits
     /// until the active one is answered. A window that arrives is shown only
@@ -411,7 +410,7 @@ pub struct Session {
     /// An item that becomes the only selected item when the refresh in
     /// progress reports its ordinal. It is used for an item that an edit has
     /// just created, for example a new collection, which the window does not
-    /// hold yet (production calls `replace_items` with the new collection).
+    /// hold yet.
     pending_select: Option<RootId>,
     /// The ordinal of an item that the grid scrolls into view the next time it
     /// lays out a window that holds it. The grid then clears it.
@@ -452,18 +451,17 @@ pub struct Session {
     /// query-wide selection: every item of the destination (Select All), or
     /// ranges of the destination's order (Shift-click), which can include
     /// items the window does not hold. An edit of a query-wide selection sends
-    /// the query to the library, which finds the items (`selection_target`),
-    /// as production does.
+    /// the query to the library, which finds the items (`selection_target`).
     pub selection: Selection,
-    /// The subfolder tiles selected in the grid (`folderNodeIds`), as node ids
-    /// such as `folder:5`. Items and subfolder tiles are never selected
+    /// The subfolder tiles selected in the grid, as node ids such as
+    /// `folder:5`. Items and subfolder tiles are never selected
     /// together: selecting an item empties this list, and selecting a
     /// subfolder tile empties `selection`.
     pub folder_selection: Vec<String>,
     /// Items to select when the destination's results, which are being read
     /// again from the first page, arrive. The grid sets it after a drag that
     /// reordered items in a folder, so that the dragged items are still
-    /// selected afterwards, as in production.
+    /// selected afterwards.
     pub reselect: Option<Vec<RootId>>,
     /// The query that the results in `items` were read with. Requests for
     /// another window and refreshes in place send it again.
@@ -529,13 +527,12 @@ pub struct Session {
     pub place_label: Option<SharedString>,
     /// The folders that items were most recently added to, newest first, at
     /// most 30. The folder picker's Recent view and the grid menu's "Add to
-    /// “…”" row use them (`useRecentFolders`). Production stores them per
-    /// library in the renderer's localStorage. This app stores them in its
-    /// state (`crate::state`) under `library_key`.
+    /// “…”" row use them. They are stored per library in the app's state
+    /// (`crate::state`), under `library_key`.
     pub recent_folders: Vec<picto_library::FolderId>,
     /// The tags most recently added to items, newest first, at most 30. The
-    /// Add Tags dialog's Recent view shows them (`picto-recent-tags`). They
-    /// are stored in the app's state.
+    /// Add Tags dialog's Recent view shows them. They are stored in the app's
+    /// state, one list for all libraries.
     pub recent_tags: Vec<String>,
     /// True when `recent_folders` or `recent_tags` changed and has not been
     /// written to the app's state yet. `keep_recents` writes them the next
@@ -557,8 +554,8 @@ pub struct Session {
     pub pointer_busy: bool,
     /// `refresh_wanted` is true when a change made in the background (an
     /// import, a subscription run) means the shown results must be read again
-    /// (`requestReconcile`) and that read has not started yet. `refresh_timer`
-    /// is the timer that starts the read.
+    /// and that read has not started yet. `refresh_timer` is the timer that
+    /// starts the read.
     refresh_wanted: bool,
     refresh_timer: Option<Task<()>>,
     /// When the last background refresh started, how long it took, and when it
@@ -880,8 +877,8 @@ impl Session {
         )
     }
 
-    /// The path of the thumbnail of the file with content hash `hash` in the
-    /// open library.
+    /// Returns the path of the thumbnail of the file with content hash `hash`
+    /// in the open library.
     pub fn thumbnail(&self, hash: &str) -> PathBuf {
         thumbnail_in(&self.blobs, hash)
     }
@@ -992,10 +989,9 @@ impl Session {
         receiver
     }
 
-    /// Sends a command to the application layer, as the Electron renderer's
-    /// `invoke(command, args)` does, and returns a receiver for its JSON
-    /// answer. The command runs on the application's runtime, never on the
-    /// main thread. The command names and their arguments are those of
+    /// Sends a command to the application layer and returns a receiver for
+    /// its JSON answer. The command runs on the application's runtime, never
+    /// on the main thread. The command names and their arguments are those of
     /// `core/src/ipc.rs`.
     pub fn dispatch(
         &self,

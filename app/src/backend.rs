@@ -11,30 +11,40 @@ use std::sync::{
 #[derive(Clone)]
 pub struct Navigation {
     pub label: String,
-    /// Rows without a count (Random, Subscriptions) show none.
+    /// The number of items shown on the row. It is `None` for the rows that
+    /// show no number (Random, Subscriptions and smart folders without
+    /// rules).
     pub count: Option<u64>,
     pub scope: ItemScope,
-    /// A destination that is its own screen, not a grid of this scope.
+    /// The screen this destination opens, when it opens a screen of its
+    /// own instead of a grid of the items in `scope`.
     pub screen: Option<Screen>,
-    /// The All scope in a shuffled order.
+    /// Whether this is the Random row, which shows the items of the All
+    /// scope in a random order.
     pub random: bool,
-    /// The row's glyph: a system row's own, or the one the user chose for
-    /// a folder (a name from the icon picker's registry, such as `IconPhoto`).
+    /// The name of the row's icon. A system row has a fixed icon. A folder
+    /// or smart folder has the icon the user chose for it in the icon
+    /// picker (a name such as `IconPhoto`), or none.
     pub icon: Option<String>,
-    /// The colour the user gave a folder, which tints its glyph.
+    /// The colour the user gave a folder or smart folder. Its icon is
+    /// drawn in this colour.
     pub tint: Option<u32>,
-    /// A smart folder with no rules of its own. It only holds others: it
-    /// has no count and cannot be opened.
+    /// Whether this is a smart folder without rules. Such a smart folder
+    /// only contains other smart folders: it shows no count and cannot be
+    /// opened.
     pub group: bool,
-    /// A folder that watches a directory for new files.
+    /// Whether this is a folder that watches a directory on disk for new
+    /// files.
     pub watched: bool,
     pub depth: usize,
     pub parent: Option<usize>,
 }
 impl Navigation {
-    /// The id the Electron sidebar gives this destination (`system:inbox`,
-    /// `folder:5`, `smart:3`). It stays the same when the list is rebuilt,
-    /// where a position does not.
+    /// Returns an id for this destination, such as `system:inbox`,
+    /// `folder:5` or `smart:3`. The id stays the same when the list of
+    /// destinations is rebuilt, which the destination's position in the list
+    /// does not. Picto 0.6.19 and earlier named the destinations by the
+    /// same ids, and ids are kept on disk (the sidebar's folded rows).
     pub fn id(&self) -> String {
         match (&self.scope, self.screen, self.random) {
             (_, Some(Screen::Tags), _) => "system:tag_manager".into(),
@@ -58,7 +68,8 @@ impl Navigation {
     }
 }
 
-/// The destinations that are screens of their own.
+/// The destinations that open a screen of their own instead of a grid of
+/// items.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
     Tags,
@@ -66,65 +77,76 @@ pub enum Screen {
     Duplicates,
 }
 
-/// Work for the library's thread: a screen's own reads and edits.
+/// A piece of work that runs on the library's thread. The screens use it
+/// for their own reads and edits of the library.
 pub type Job = Box<dyn FnOnce(&Library) + Send>;
 
 pub enum Request {
     Job(Job),
-    /// A destination's results, read afresh: the query's generation, its
-    /// scope and filter, whether to shuffle, and which window of them. The
-    /// sort comes from the scope's saved view.
+    /// Asks for the results of a destination that is being opened. The
+    /// fields are the query's generation, its scope, its filter, whether to
+    /// sort the results randomly, and which window of the results to read.
+    /// The sort comes from the view settings saved for the scope.
     Query(u64, ItemScope, FilterExpr, bool, WindowRequest),
-    /// Another window of results already shown, read with the query they
-    /// were read with: its generation, the query, the window, and why.
+    /// Asks for another window of results that are already shown, read
+    /// with the same query as before. The fields are the query's
+    /// generation, the query, the window to read, and the reason for the
+    /// read.
     Window(u64, Box<RootQuery>, WindowRequest, Fetch),
-    /// The application finished opening (its recovery passes ran and its
-    /// workers started), or failed to.
+    /// Says that the application finished opening the library (its
+    /// recovery passes ran and its workers started), or that the open
+    /// failed.
     Opened(Result<(), String>),
 }
 
-/// How the open of the library is going, as the library thread waits for it.
+/// What the thread that opens the library reports to the library's thread,
+/// which waits for it.
 enum Opening {
     /// The database is open and can be read.
     Readable(Arc<Library>),
-    /// The open failed before that.
+    /// The open failed before the database could be read.
     Failed(String),
 }
 
-/// Why a window of results is read.
+/// The reason a window of results is read.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Fetch {
-    /// The first window of a destination read afresh.
+    /// It is the first window of a destination that is being opened.
     Open,
-    /// The grid scrolled to items outside the window; the number orders
-    /// the requests, so only the latest one is shown.
+    /// The grid scrolled to items outside the window it holds. The number
+    /// counts these requests, so that only the result of the latest one is
+    /// shown.
     Move(u64),
-    /// The window shown, read again in place after the library changed,
-    /// with where these items (the selection's) are now.
+    /// The library changed, so the window that is shown is read again at
+    /// the same position. The read also returns the current positions of
+    /// the given items, which are the selected ones.
     Refresh(Vec<RootId>),
 }
 
-/// A window of results that arrived.
+/// A window of results that the library's thread has read.
 pub struct Arrived {
     pub generation: u64,
     pub fetch: Fetch,
     pub window: RootWindow,
-    /// The view the results were read under, for a destination read
-    /// afresh.
+    /// The view settings the results were read with. It is set only for
+    /// the first window of a destination that is being opened.
     pub prefs: Option<crate::grid::prefs::ViewPrefs>,
     pub query: RootQuery,
-    /// For a refresh, where each of its items is now (`None`: gone).
+    /// For a `Fetch::Refresh`, the current position of each of its items
+    /// in the results, or `None` for an item that is no longer in them.
     pub places: Vec<Option<u64>>,
 }
 
 pub enum Reply {
     Ready(Vec<Navigation>, Vec<TagRecord>),
     Arrived(Box<Arrived>),
-    /// A read of results failed: its generation and why it was read.
+    /// A read of results failed. The fields are the query's generation,
+    /// the reason for the read, and the error message.
     Failed(u64, Fetch, String),
     Error(String),
 }
-/// Whether a smart folder's filter has no rules, which makes it a group.
+/// Returns whether a smart folder's filter has no rules. A smart folder
+/// without rules only contains other smart folders (`Navigation::group`).
 fn is_empty_filter(filter: &FilterExpr) -> bool {
     matches!(filter, FilterExpr::All(rules) if rules.is_empty())
 }
@@ -154,9 +176,11 @@ pub fn text_filter(text: &str) -> FilterExpr {
         })
     }
 }
-/// The sidebar's destinations in the Electron order: the system rows, then
-/// the folder tree, then the smart-folder tree; and the tags. Built when the
-/// library opens, and again whenever the library reports they changed.
+/// Returns the sidebar's destinations and the library's tags. The
+/// destinations are in the order the sidebar shows them: the system rows,
+/// then the tree of folders, then the tree of smart folders. This is read
+/// when the library opens, and again whenever the library reports that
+/// they changed.
 pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, Vec<TagRecord>)> {
     let counts = library.sidebar_counts()?;
     let tags = library.tags()?;
@@ -177,7 +201,7 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
         screen: Some(screen),
         ..system(label, icon, count, ItemScope::All)
     };
-    // The order of the Electron sidebar's system rows.
+    // The system rows, in the order the sidebar shows them.
     let mut nav = vec![
         system(t("All"), "IconPhoto", Some(counts.all), ItemScope::All),
         system(t("Inbox"), "inbox", Some(counts.inbox), ItemScope::Inbox),
@@ -274,14 +298,15 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
     append_tree(&smart, None, None, &mut nav);
     Ok((nav, tags))
 }
-/// Runs a screen's read or edit, timed for the stats.
+/// Runs a job and reports to `stats.rs` how long it took.
 fn run(job: Job, library: &Library) {
     let started = std::time::Instant::now();
     job(library);
     crate::stats::job_ran(started.elapsed());
 }
 
-/// The first ordinal a window asks for.
+/// Returns the position of the first item a window request asks for, or 0
+/// for a request that gives a fraction of the results instead.
 fn first(window: &WindowRequest) -> usize {
     match window.position {
         picto_library::query::WindowPosition::Ordinal(start) => start,
@@ -289,9 +314,11 @@ fn first(window: &WindowRequest) -> usize {
     }
 }
 
-/// A destination's first window, read afresh. The scope's saved view
-/// decides the sort, exactly as it does for the Electron grid reading the
-/// same rows; `seed` keeps a random sort stable while paging.
+/// Reads the first window of a destination that is being opened. The sort
+/// comes from the view settings saved in the library for the scope, which
+/// may have been written by Picto 0.6.19 or earlier. `seed` is the seed of a
+/// random sort; using the same seed for every window keeps the order the
+/// same from one window to the next.
 fn read_open(
     library: &Library,
     seed: &str,
@@ -307,8 +334,8 @@ fn read_open(
         })
     };
     let mut defaults = saved("grid:defaults")?;
-    // A view without a spacing of its own takes the `gridSpacing` setting
-    // (`gridSpacingAtom`).
+    // When the saved defaults give no spacing, the spacing is the
+    // application setting `gridSpacing`.
     if defaults.get("spacing").is_none_or(|v| v.is_null())
         && let Ok(Some(app)) = library.read_auxiliary_json("setting", "application")
         && let Ok(app) = serde_json::from_str::<serde_json::Value>(&app)
@@ -326,8 +353,8 @@ fn read_open(
             random_seed: Some(seed.to_owned()),
         };
     }
-    // A folder without its subfolders' items (`show_subfolders` off) is the
-    // folder alone.
+    // When `show_subfolders` is off, a folder shows only the items that
+    // are directly in it, not the items of its subfolders.
     let scope = match scope {
         ItemScope::FolderTree { folder_id } if !prefs.show_subfolders => {
             ItemScope::Folder { folder_id }
@@ -347,9 +374,11 @@ fn read_open(
     Ok((read?, prefs, query))
 }
 
-/// Another window of results already shown, read with their query. A
-/// refresh learns where the selection's items are now in the same visit,
-/// from the order the window was just read from.
+/// Reads another window of results that are already shown, with the query
+/// they were first read with. For a `Fetch::Refresh` it also reads the
+/// current positions of the given items in the results, in the same call on
+/// the library's thread, so that the positions belong to the same state of
+/// the library as the window.
 fn read_window(
     library: &Library,
     query: &RootQuery,
@@ -376,13 +405,13 @@ fn read_window(
     read
 }
 
-/// Starts the library's thread, which opens the application on the copy and
-/// then answers requests with the application's own `Library`.
+/// Starts the library's thread. The thread has the application open the
+/// library and then answers requests with the application's `Library`.
 ///
 /// The destinations and their results are read as soon as the database is
-/// open, while the application still runs its recovery passes; the screens'
-/// own reads and edits (`Request::Job`) wait for the whole open, as the
-/// application's commands do.
+/// open, while the application still runs its recovery passes. The screens'
+/// own reads and edits (`Request::Job`) are held until the whole open has
+/// finished, as the application's commands are.
 pub fn start(
     application: Arc<crate::application::Application>,
 ) -> (Sender<Request>, Receiver<Reply>, Wake) {
@@ -417,7 +446,9 @@ pub fn start(
             let (nav, tags) = navigation(library)?;
             crate::stats::opening("navigation-read");
             replies.send(Reply::Ready(nav, tags))?;
-            // One seed per session keeps a random sort stable while paging.
+            // The same seed is used for every random sort until the app
+            // quits, so that the order stays the same from one window of
+            // results to the next.
             let seed = crate::now_ms().to_string();
             let mut held: Option<Vec<Job>> = Some(Vec::new());
             for request in requests {
@@ -473,18 +504,20 @@ pub fn start(
         if let Err(error) = work() {
             let _ = replies.send(Reply::Error(error.to_string()));
         }
-        // `work` has dropped the library: this app holds none of its
-        // connections now.
+        // `work` has returned and dropped the library, so the app no longer
+        // holds any connection to its database.
         holder.release();
     });
     (tx, rx, woken)
 }
 
-/// Told each time the library's thread has sent a reply, so the session
-/// takes it in at once rather than at its next look.
+/// Receives one message each time the library's thread has sent a reply,
+/// so that the session reads the reply at once and does not wait until it
+/// next checks for replies.
 pub type Wake = futures::channel::mpsc::UnboundedReceiver<()>;
 
-/// Where the library's thread sends its replies, waking the session.
+/// Sends the replies of the library's thread, and a message on `wake` after
+/// each one so that the session reads it.
 struct Replies {
     sender: Sender<Reply>,
     wake: futures::channel::mpsc::UnboundedSender<()>,
@@ -555,13 +588,15 @@ mod acceptance {
         assert_eq!(text_filter("日本"), FilterExpr::default());
         assert_ne!(text_filter("日本語"), FilterExpr::default());
     }
-    /// Every read the grid makes, timed on a real copy (any size), and a
-    /// guard that a window deep in a destination costs about what its first
-    /// window costs: the grid holds one window at a time, so a read that
-    /// grows with where it is in a million items would show as a stall on
-    /// every jump and fling. Also times what the screens read at that size:
-    /// each sort, each smart folder, searches, the summary of everything
-    /// selected and the sidebar's counts. Prints one line each.
+    /// Times every kind of read the grid makes, on a copy of a real library
+    /// of any size, and prints one line for each. It fails when reading a
+    /// window far into a destination takes much longer than reading the
+    /// destination's first window. The grid holds one window at a time, so
+    /// a read that gets slower with its position in a million items would
+    /// make the grid stop for a moment at every jump and every fast scroll.
+    /// It also times what the screens read on that library: each sort, each
+    /// smart folder, searches, the summary of everything selected and the
+    /// sidebar's counts.
     ///
     /// ```sh
     /// PICTO_GPUI_TEST_LIBRARY=<copy> cargo test --offline \
@@ -578,8 +613,10 @@ mod acceptance {
         let library = Library::open(root.join("library.sqlite")).unwrap();
         eprintln!("open the library: {:?}", opening.elapsed());
         let timed = |what: &str, query: &RootQuery, start: usize| {
-            // The first read, and the best of three for the guard, so
-            // another process's burst is not counted.
+            // The read is made three times. The first time is printed, and
+            // the shortest of the three is what the test compares, so that a
+            // moment in which another process kept the machine busy does not
+            // fail the test.
             let mut times = Vec::new();
             let mut total = 0;
             for _ in 0..3 {

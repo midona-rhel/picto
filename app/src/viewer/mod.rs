@@ -1,9 +1,9 @@
-//! The three ways to look at an item, each a host of the one media surface
-//! ([`surface::MediaSurface`]): the media view that replaces the grid while
-//! an item is open (`MediaView.tsx`, this module), Quick Look over the whole
-//! window ([`quick_look`]), and the detail window ([`detail`]). The media
-//! view's controls are in the titlebar, where [`toolbar::ViewerToolbar`]
-//! takes the grid toolbar's place.
+//! The three ways to look at an item. Each of them hosts a media surface
+//! ([`surface::MediaSurface`]): the media view, which replaces the grid while
+//! an item is open (this module); Quick Look, which covers the whole window
+//! ([`quick_look`]); and the detail window ([`detail`]). The media view's
+//! controls are in the titlebar, where [`toolbar::ViewerToolbar`] takes the
+//! place of the grid's toolbar.
 pub mod camera;
 pub mod capture;
 pub mod detail;
@@ -33,9 +33,9 @@ use surface::MediaSurface;
 use toolbar::ViewerToolbar;
 
 // The viewer's actions. Their keys come from the shortcut registry
-// (`crate::keymap`): they apply while the viewer has the keyboard and win
-// over the grid's bindings of the same keys; Flash keeps its keys for the
-// movie.
+// (`crate::keymap`). They apply while the viewer has keyboard focus, and
+// they take precedence over the grid's bindings of the same keys. While a
+// Flash movie has keyboard focus, the keys go to the movie instead.
 actions!(
     viewer,
     [
@@ -49,35 +49,40 @@ actions!(
     ]
 );
 
-/// The viewer was right-clicked at this window position; `member` says a
-/// collection's member was.
+/// Emitted when the viewer is right-clicked, to ask the shell to open a
+/// context menu. `position` is where the pointer was, in window coordinates.
+/// `member` is true when a member of a collection was right-clicked.
 #[derive(Default)]
 pub struct MenuRequested {
     pub position: Point<Pixels>,
     pub member: bool,
-    /// The members a member's menu acts on, by their place in the
-    /// collection: the editor's selection, or the one right-clicked.
+    /// The members that a member's menu acts on, as indexes into the
+    /// collection's order: the editor's selection, or the one member that
+    /// was right-clicked.
     pub members: Vec<usize>,
-    /// The collection's editor opened it (`selectionEnabled`): its contents
-    /// can be sorted and the view rows show.
+    /// True when the collection's editor asked for the menu. The menu then
+    /// has the rows that sort the collection's contents and the view rows.
     pub editor: bool,
-    /// The space between a collection's members: the collection's own menu
-    /// (`openEmptyMenu`).
+    /// True when the space between a collection's members was
+    /// right-clicked. The menu is then the collection's own menu.
     pub collection: bool,
-    /// A member open by itself: `MediaView`'s menu for a file with no item
-    /// to edit (`ratingItemId={null}`).
+    /// True when a member that is opened by itself was right-clicked. The
+    /// menu is then the one for a file that has no item to edit.
     pub alone: bool,
 }
 
 impl EventEmitter<MenuRequested> for Viewer {}
 
-/// Quick Look on a member of the collection the editor shows.
+/// Emitted to ask the shell to open Quick Look on a member of the collection
+/// that the editor shows. The number is the member's index in the
+/// collection's order.
 pub struct MemberQuickLook(pub usize);
 
 impl EventEmitter<MemberQuickLook> for Viewer {}
 
 impl MenuRequested {
-    /// The menu of a collection's member: `member` is the one it acts on.
+    /// Returns the request for the menu of a member of a collection.
+    /// `member` is the index of the member that the menu acts on.
     fn member(position: Point<Pixels>, member: usize) -> Self {
         Self {
             position,
@@ -87,10 +92,12 @@ impl MenuRequested {
         }
     }
 
-    /// A right click on a host at `position`: on a member open by itself,
-    /// `MediaView`'s menu for a file with no item to edit; on a
-    /// collection's reader none (its members and the space between them
-    /// have their own); otherwise the item's.
+    /// Returns the request for a right-click on the viewer at `position`.
+    /// When a member is opened by itself (`alone` is its index), the menu is
+    /// the one for a file that has no item to edit. When a collection is
+    /// shown, there is no request, because the members and the space between
+    /// them ask for their own menus. Otherwise the menu is the selected
+    /// item's.
     fn on_host(position: Point<Pixels>, alone: Option<usize>, session: &Session) -> Option<Self> {
         match alone {
             Some(member) => Some(Self {
@@ -106,15 +113,15 @@ impl MenuRequested {
     }
 }
 
-/// Which end of the results a step ran into.
+/// The end of the results that a step went past.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum End {
     First,
     Last,
 }
 
-/// Where a step of `delta` from `current` lands among `count` places, or
-/// the end it ran into.
+/// Returns the index that a step of `delta` from `current` reaches among
+/// `count` entries, or the end that the step went past.
 pub fn step_within(current: usize, delta: isize, count: usize) -> Result<usize, End> {
     match current as isize + delta {
         target if target < 0 => Err(End::First),
@@ -123,8 +130,10 @@ pub fn step_within(current: usize, delta: isize, count: usize) -> Result<usize, 
     }
 }
 
-/// Points the session at the open collection's member at `member`, the one
-/// the single-file rows and a member opened by itself show.
+/// Makes the member at index `member` the session's shown member of the open
+/// collection. The shown member is the one that the menu rows for a single
+/// file act on, and the one the surface shows when a member is opened by
+/// itself.
 fn point_at_member(session: &Entity<Session>, member: usize, cx: &mut App) {
     session.update(cx, |session, cx| {
         let delta = member as isize - session.member as isize;
@@ -134,9 +143,9 @@ fn point_at_member(session: &Entity<Session>, member: usize, cx: &mut App) {
     });
 }
 
-/// The "First item" and "Last item" notices of the media view and the
-/// detail window, and a count that lets only the latest notice's timer hide
-/// it.
+/// The "First item" and "Last item" notices of the media view and the detail
+/// window. `notice` counts the notices that were shown, so that only the
+/// timer of the latest notice hides it.
 #[derive(Default)]
 pub struct Boundary {
     first: motion::Fade,
@@ -154,8 +163,8 @@ impl Boundary {
         self.first.animating() || self.last.animating()
     }
 
-    /// Shows the notice for `end` for 800 ms. `of` finds this boundary in
-    /// the view that owns it.
+    /// Shows the notice for `end` for 800 ms. `of` returns this boundary
+    /// from the view that owns it.
     pub fn show<T: 'static>(
         &mut self,
         end: End,
@@ -180,8 +189,8 @@ impl Boundary {
         cx.notify();
     }
 
-    /// `.boundaryLeft` / `.boundaryRight`: a dark pill at the middle of
-    /// either side.
+    /// Draws the notice for `end`: a dark rounded label at the middle of the
+    /// left side for the first item, or of the right side for the last item.
     pub fn notice(&self, end: End, cx: &App) -> Div {
         let theme = theme::theme(cx);
         let (fade, label) = match end {
@@ -209,8 +218,9 @@ impl Boundary {
     }
 }
 
-/// An item as a surface opens it: its name, key, thumbnail, size, file and
-/// type.
+/// What a media surface needs to open one file: the item's name, the file's
+/// key (its content hash), the path of its thumbnail, its size in pixels
+/// when that is known, the path of the file and its MIME type.
 pub struct Media {
     pub name: SharedString,
     pub key: String,
@@ -221,7 +231,8 @@ pub struct Media {
 }
 
 impl Media {
-    /// The media of `details`' member, once its details have arrived.
+    /// Returns the file at index `member` of the item in `details`, or
+    /// `None` when the item has no file at that index.
     pub fn of(
         session: &Session,
         details: &picto_library::RootDetails,
@@ -252,14 +263,15 @@ impl Media {
     }
 }
 
-/// What the session's viewer shows: the shown member of the selected item,
-/// once its details have arrived.
+/// Returns what the media view shows: the shown member of the selected item.
+/// Returns `None` until the item's details have arrived.
 fn session_media(session: &Session) -> Option<Media> {
     Media::of(session, session.details.as_ref()?, session.member)
 }
 
-/// Shows the selected item's thumbnail at once; the original follows when a
-/// viewer is open.
+/// Shows the selected item's thumbnail on `surface` at once. The original
+/// file is opened afterwards, by the `present` function of the host that
+/// owns the surface.
 fn show_selection(session: &Entity<Session>, surface: &Entity<MediaSurface>, cx: &mut App) {
     let shown = {
         let session = session.read(cx);
@@ -276,8 +288,9 @@ fn show_selection(session: &Entity<Session>, surface: &Entity<MediaSurface>, cx:
     }
 }
 
-/// The preview settings every host follows (`usePreviewPreferences`), with
-/// what the host itself draws.
+/// Returns the options of a media surface: the preview settings, which every
+/// host follows, and `navigator` and `follows_resize`, which each host
+/// chooses for itself.
 pub fn options(cx: &App, navigator: bool, follows_resize: bool) -> surface::Options {
     let settings = crate::settings::current(cx);
     surface::Options {
@@ -291,15 +304,17 @@ pub fn options(cx: &App, navigator: bool, follows_resize: bool) -> surface::Opti
     }
 }
 
-/// `useRecordMediaView`: opening an item records it for Recently Viewed.
+/// Records that the item was opened, so that it appears in Recently Viewed.
 pub fn record_view(session: &Session, root: RootId) {
     let now = crate::now_ms();
-    // Nothing waits for the answer; a failed record changes nothing shown.
+    // Nothing waits for the result. A record that fails changes nothing on
+    // screen.
     drop(session.run(move |library| library.record_recent_view(root, now)));
 }
 
-/// Whether the grid shows Recently Viewed, where the grid's viewers do not
-/// record views, so its order holds while it is browsed.
+/// Returns whether the grid shows Recently Viewed. The viewers that are
+/// opened from that grid do not record views, so that the order of the list
+/// does not change while the user browses it.
 pub fn browsing_recent(session: &Session) -> bool {
     session
         .nav
@@ -310,30 +325,37 @@ pub fn browsing_recent(session: &Session) -> bool {
 pub struct Viewer {
     session: Entity<Session>,
     surface: Entity<MediaSurface>,
-    /// A collection's members, while one is open.
+    /// Shows the members of a collection for reading, while a collection is
+    /// open.
     group: Entity<group::GroupReader>,
-    /// The same members as a grid to arrange, in the editor.
+    /// Shows the same members as a grid in which they can be rearranged.
     editor: Entity<group_editor::GroupEditor>,
-    /// How the open collection shows, and the collection that is for:
-    /// another one opens in the reader.
+    /// Whether the open collection is shown in the reader or in the editor.
+    /// `mode_root` is the collection that this applies to. Another
+    /// collection opens in the reader.
     mode: group::Mode,
     mode_root: Option<RootId>,
-    /// A member opened by itself from the collection (`viewerIndex`): the
-    /// media view shows it, "Back to group" returning to the collection.
+    /// Whether a member of the collection is opened by itself. The media
+    /// view then shows that member, and "Back to group" returns to the
+    /// collection.
     member_open: bool,
-    /// Why the last edit of the collection failed (`.inlineError`).
+    /// Why the last change to the collection failed. It is shown in a red
+    /// strip above the members.
     error: Option<SharedString>,
     toolbar: Entity<ViewerToolbar>,
     focus: FocusHandle,
-    /// Whether the viewer was open at the last change.
+    /// Whether the viewer was open when the session last reported a change
+    /// of the viewer.
     open: bool,
-    /// Closed by going to another destination: the shell keeps the viewer
-    /// in the pane while it fades out, so what it shows stays until then.
+    /// True when the viewer was closed by going to another destination. The
+    /// shell keeps the viewer in the pane while it fades out, so the viewer
+    /// goes on showing the same media until the fade has ended.
     leaving: bool,
-    /// Where the keyboard was before the viewer opened, to give it back.
+    /// The element that had keyboard focus before the viewer opened. Focus
+    /// returns to it when the viewer closes.
     return_focus: Option<FocusHandle>,
     boundary: Boundary,
-    /// The item last recorded as viewed while open.
+    /// The item that was last recorded as viewed while the viewer was open.
     recorded: Option<RootId>,
     _subscriptions: Vec<Subscription>,
 }
@@ -379,7 +401,8 @@ impl Viewer {
                 });
             }),
             cx.subscribe(&editor, |this, _, event: &group_editor::MemberMenu, cx| {
-                // The member the single-file rows act on is the first.
+                // The menu's rows for a single file act on the session's shown
+                // member, so the first of the members is made the shown member.
                 if let Some(first) = event.members.first() {
                     point_at_member(&this.session, *first, cx);
                 }
@@ -416,8 +439,8 @@ impl Viewer {
                     }
                     Change::Viewer => {
                         this.take_keyboard(window, cx);
-                        // Each opening starts fitted, as a fresh
-                        // `MediaView` does.
+                        // The media is fitted to the pane each time the viewer
+                        // opens.
                         let (open, fading_out) = {
                             let session = this.session.read(cx);
                             (
@@ -430,8 +453,8 @@ impl Viewer {
                         }
                         this.leaving = !open && this.open && fading_out;
                         if !open {
-                            // Closed, the next collection opens in the
-                            // reader.
+                            // After the viewer has closed, the next collection
+                            // opens in the reader.
                             this.mode = group::Mode::Reader;
                             this.mode_root = None;
                             this.member_open = false;
@@ -480,24 +503,28 @@ impl Viewer {
         }
     }
 
-    /// The toolbar the titlebar shows while the viewer is open.
+    /// Returns the toolbar that the titlebar shows while the viewer is open.
     pub fn toolbar(&self) -> Entity<ViewerToolbar> {
         self.toolbar.clone()
     }
 
-    /// The media surface, for the viewer's context menu.
+    /// Returns the media surface. The shell needs it to build the viewer's
+    /// context menu.
     pub fn surface(&self) -> Entity<MediaSurface> {
         self.surface.clone()
     }
 
-    /// A collection member was right-clicked: the viewer's menu for it.
+    /// Handles a right-click on a member in the reader: makes it the
+    /// session's shown member and asks for the member's menu.
     fn member_menu(&mut self, event: &group::MemberMenu, cx: &mut Context<Self>) {
         point_at_member(&self.session, event.member, cx);
         cx.emit(MenuRequested::member(event.position, event.member));
     }
 
-    /// The toolbar shows the collection's controls: it draws again once
-    /// whatever changed them, which may be the toolbar itself, is done.
+    /// Draws the toolbar again. The toolbar shows the collection's controls,
+    /// which depend on the viewer's state. The redraw is deferred until the
+    /// current update has finished, because the toolbar itself may be what
+    /// called the viewer.
     fn refresh_toolbar(&self, cx: &mut Context<Self>) {
         let toolbar = self.toolbar.downgrade();
         cx.defer(move |cx| {
@@ -505,14 +532,15 @@ impl Viewer {
         });
     }
 
-    /// How the open collection shows, and whether a member of it is open
-    /// by itself.
+    /// Returns whether the open collection is shown in the reader or in the
+    /// editor, and whether a member of it is opened by itself.
     pub fn collection_view(&self) -> (group::Mode, bool) {
         (self.mode, self.member_open)
     }
 
-    /// "Edit group" and the item menu's "Edit Group": the collection opens,
-    /// or switches, to the editor (`setMode('editor')`).
+    /// Shows the selected collection in the editor, whether it is already
+    /// open in the reader or not open yet. The toolbar's "Edit group" button
+    /// and the item menu's "Edit Group" row run this.
     pub fn edit_collection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let root = self
             .session
@@ -530,7 +558,7 @@ impl Viewer {
         cx.notify();
     }
 
-    /// A member opens by itself (`setViewerIndex`).
+    /// Opens the member at index `member` by itself in the media view.
     fn open_member(&mut self, member: usize, window: &mut Window, cx: &mut Context<Self>) {
         point_at_member(&self.session, member, cx);
         self.member_open = true;
@@ -542,8 +570,9 @@ impl Viewer {
         cx.notify();
     }
 
-    /// "Back to group": the member closes and the collection shows again,
-    /// as it was.
+    /// Closes the member that is opened by itself and shows the collection
+    /// again, as it was before the member was opened. "Back to group" runs
+    /// this.
     pub fn close_member(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.member_open {
             return;
@@ -556,8 +585,9 @@ impl Viewer {
         cx.notify();
     }
 
-    /// Steps through the members while one is open by itself; a step past
-    /// either end shows the notice instead.
+    /// Goes to the previous or the next member while a member is opened by
+    /// itself. A step past the first or the last member shows the notice
+    /// instead.
     pub fn step_member(&mut self, delta: isize, cx: &mut Context<Self>) {
         let (member, count) = {
             let session = self.session.read(cx);
@@ -578,10 +608,11 @@ impl Viewer {
         }
     }
 
-    /// `detachMembers`: the members at these places leave the collection,
-    /// into the Trash when `trash`. With one member or none left the
-    /// collection is gone, and the media view closes; otherwise the
-    /// selection clears. A failure shows over the members.
+    /// Removes the members at these indexes from the collection, and moves
+    /// them to the Trash when `trash` is true. When one member or none is
+    /// left, the collection no longer exists, and the media view closes.
+    /// Otherwise the editor's selection is cleared. A failure is shown above
+    /// the members.
     pub fn detach_members(&mut self, members: Vec<usize>, trash: bool, cx: &mut Context<Self>) {
         let Some(details) = shown_collection(self.session.read(cx)).cloned() else {
             return;
@@ -602,7 +633,8 @@ impl Viewer {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                // The viewer has moved on to another item since.
+                // Nothing is done when the viewer has gone on to another item
+                // in the meantime.
                 if !this.shows_collection(root, cx) {
                     return;
                 }
@@ -627,7 +659,7 @@ impl Viewer {
         .detach();
     }
 
-    /// Sorts the open collection's contents by `field` (`saveOrder`).
+    /// Sorts the open collection's members by `field` and saves the order.
     pub fn sort_collection(
         &mut self,
         field: picto_library::ContentSortField,
@@ -638,8 +670,9 @@ impl Viewer {
         };
         let answer = group::sort(&self.session, &details, field, cx);
         let root = details.root.root_id;
-        // A failed sort shows over the members, while they are still
-        // shown; one that went through takes the last failure away.
+        // A sort that fails is shown above the members, if the collection is
+        // still shown. A sort that succeeds removes the message of an earlier
+        // failure.
         cx.spawn(async move |this, cx| {
             let Ok(result) = answer.await else {
                 return;
@@ -654,16 +687,17 @@ impl Viewer {
         .detach();
     }
 
-    /// Whether the viewer still shows the collection `root`, for a reply to
-    /// an edit of it.
+    /// Returns whether the viewer still shows the collection `root`. The
+    /// result of a change to a collection is applied only while this is true.
     fn shows_collection(&self, root: RootId, cx: &App) -> bool {
         let session = self.session.read(cx);
         session.viewer
             && shown_collection(session).is_some_and(|details| details.root.root_id == root)
     }
 
-    /// The viewer has the keyboard while it is open, so its shortcuts apply,
-    /// and gives it back when it closes.
+    /// Gives the viewer keyboard focus while it is open, so that its
+    /// shortcuts apply, and returns focus to where it was before when the
+    /// viewer closes.
     fn take_keyboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let open = self.session.read(cx).viewer;
         if open && !self.focus.contains_focused(window, cx) {
@@ -672,9 +706,9 @@ impl Viewer {
         } else if !open && let Some(focus) = self.return_focus.take() {
             window.focus(&focus, cx);
         }
-        // The editor's grid has the keyboard while it shows, so its keys
-        // (select all, remove, Quick Look) apply; the viewer's own keys
-        // still reach the viewer around it.
+        // While the editor is shown, its grid has keyboard focus, so that its
+        // keys (select all, remove, Quick Look) apply. The grid is inside the
+        // viewer, so the viewer's own keys still reach the viewer.
         if open {
             let editing = self.mode == group::Mode::Editor
                 && !self.member_open
@@ -688,7 +722,7 @@ impl Viewer {
         }
     }
 
-    /// Opens what the session points at, if the viewer is showing, and
+    /// Shows what the session's selection is, if the viewer is open, and
     /// records the item as viewed.
     fn present(&mut self, cx: &mut Context<Self>) {
         let (target, viewing) = {
@@ -708,8 +742,8 @@ impl Viewer {
             )
         };
         self.recorded = viewing;
-        // A collection shows its members in the reader once its details
-        // are there (`GroupSurface`); the surface then shows nothing.
+        // A collection is shown by the reader or the editor once its details
+        // have arrived. The media surface then shows nothing.
         let collection = {
             let session = self.session.read(cx);
             session
@@ -719,8 +753,8 @@ impl Viewer {
                 .cloned()
         };
         if let Some(details) = collection {
-            // Another collection opens in the reader, with nothing open by
-            // itself.
+            // A collection other than the previous one opens in the reader,
+            // with no member opened by itself.
             if self.mode_root != Some(details.root.root_id) {
                 self.mode = group::Mode::Reader;
                 self.mode_root = Some(details.root.root_id);
@@ -728,8 +762,9 @@ impl Viewer {
                 self.error = None;
             }
             if self.member_open {
-                // A member by itself: the surface shows it, the collection
-                // keeps its place underneath.
+                // A member is opened by itself, so the surface shows it. The
+                // reader or the editor keeps its state, so that the collection
+                // is as it was when the member is closed.
                 let media = Media::of(
                     self.session.read(cx),
                     &details,
@@ -763,7 +798,8 @@ impl Viewer {
             }
             return;
         }
-        // A collection whose details are on their way keeps its mode.
+        // While the details of a selected collection have not arrived yet, the
+        // mode that was chosen for the collection is kept.
         if !collection_selected(self.session.read(cx)) {
             self.mode_root = None;
             self.member_open = false;
@@ -784,9 +820,9 @@ impl Viewer {
         });
     }
 
-    /// Escape, Enter and Space: a member open by itself goes back to its
-    /// collection; the editor clears its selection first; anything else
-    /// closes the media view.
+    /// Handles Escape, Enter and Space. A member that is opened by itself is
+    /// closed, and its collection is shown again. In the editor, a selection
+    /// is cleared first. In every other case the media view closes.
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.member_open {
             self.close_member(window, cx);
@@ -799,15 +835,16 @@ impl Viewer {
             .update(cx, |session, cx| session.close_viewer(cx));
     }
 
-    /// Whether the editor shows.
+    /// Returns whether the editor is shown.
     fn editing(&self, cx: &App) -> bool {
         self.mode == group::Mode::Editor
             && !self.member_open
             && collection_selected(self.session.read(cx))
     }
 
-    /// The arrow keys: through the members of one open by itself, through
-    /// the results otherwise; the editor's grid does not move with them.
+    /// Handles the arrow keys. While a member is opened by itself, they step
+    /// through the collection's members. Otherwise they step through the
+    /// results, except in the editor, where they do nothing.
     fn arrow(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         if self.member_open {
             self.step_member(delta, cx);
@@ -816,9 +853,9 @@ impl Viewer {
         }
     }
 
-    /// `navigate` in `MediaView.tsx`: a step past either end of the results
-    /// shows a notice for 800 ms instead; otherwise the shell moves the
-    /// selection, as the arrow keys in the grid do.
+    /// Goes to the previous or the next result. A step past the first or the
+    /// last result shows a notice for 800 ms instead. Otherwise the shell
+    /// moves the selection, as the arrow keys do in the grid.
     fn step(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         let (index, total) = {
             let session = self.session.read(cx);
@@ -832,8 +869,9 @@ impl Viewer {
             return;
         }
         self.boundary.clear();
-        // The grid's move reads the item's window first when it is not
-        // held; the item shown stays until it arrives.
+        // When the item to move to is not loaded, the shell first reads the
+        // window of results that holds it. The item that is shown stays on
+        // screen until that window has arrived.
         if delta < 0 {
             window.dispatch_action(Box::new(crate::shell::Previous), cx);
         } else {
@@ -843,14 +881,15 @@ impl Viewer {
     }
 }
 
-/// Whether the selected item is a collection.
+/// Returns whether the selected item is a collection.
 pub fn collection_selected(session: &Session) -> bool {
     session
         .selected_item()
         .is_some_and(|item| item.kind == picto_library::RootKind::Collection)
 }
 
-/// The selected collection's details, once they have arrived.
+/// Returns the selected collection's details, or `None` when the selected
+/// item is not a collection or its details have not arrived yet.
 fn shown_collection(session: &Session) -> Option<&picto_library::RootDetails> {
     if !collection_selected(session) {
         return None;
@@ -860,7 +899,8 @@ fn shown_collection(session: &Session) -> Option<&picto_library::RootDetails> {
         .filter(|details| details.root.kind == picto_library::RootKind::Collection)
 }
 
-/// An item's size in image pixels, when the library knows it.
+/// Returns an item's size in image pixels, or `None` when the library does
+/// not know it.
 fn size_of(width: Option<u32>, height: Option<u32>) -> Option<camera::Size> {
     Some((width? as f32, height? as f32)).filter(|size| size.0 > 0. && size.1 > 0.)
 }
@@ -872,8 +912,9 @@ impl Render for Viewer {
             window.request_animation_frame();
         }
         let collection = collection_selected(self.session.read(cx));
-        // A collection's reader is not a document: its pages do not scroll
-        // by the keys.
+        // A collection's reader is not a paged document, so it does not get
+        // the keys that scroll a document's pages. A member that is opened by
+        // itself does get them.
         let context = self
             .surface
             .read(cx)
@@ -938,7 +979,7 @@ mod tests {
         assert_eq!(step_within(2, -2, 3), Ok(0));
         assert_eq!(step_within(0, -1, 3), Err(End::First));
         assert_eq!(step_within(2, 1, 3), Err(End::Last));
-        // Nothing to step through: every step runs into an end.
+        // With nothing to step through, every step goes past an end.
         assert_eq!(step_within(0, 1, 0), Err(End::Last));
     }
 }

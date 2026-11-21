@@ -5,8 +5,9 @@ use gpui::*;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
-/// `EmptyState`: a framed glyph that fades out toward the bottom, a title, a
-/// description, and optional buttons, centred in the space it is given.
+/// Returns what a view shows when it has nothing to list: a glyph in a frame
+/// that fades out toward the bottom, a title, a description and, optionally,
+/// buttons. It is centred in the space it is given.
 pub fn empty_state(
     glyph: &'static str,
     title: impl Into<SharedString>,
@@ -16,9 +17,9 @@ pub fn empty_state(
 ) -> Div {
     let theme = theme::theme(cx);
     let (title, description) = (title.into(), description.into());
-    // One border colour per element: the sides, the top and the bottom are
-    // each their own edge laid over the box, and the box keeps a pixel of
-    // padding where its border would be.
+    // An element's border has one colour. So the sides, the top and the bottom
+    // are each drawn as a separate element with its own border colour over the
+    // box, and the box has 1px of padding where its border would be.
     let bevel = |radius: f32, top: Rgba, bottom: Rgba| {
         let edge = || div().absolute().inset_0().rounded(px(radius));
         [
@@ -57,9 +58,9 @@ pub fn empty_state(
             rgba(theme::BLACK_20),
         ))
         .child(inner);
-    // `mask-image: linear-gradient(black 30%, transparent)`. There are no
-    // masks, so the app background is laid over the frame instead, clear at
-    // 30% and solid at the bottom.
+    // The frame fades out toward the bottom. GPUI has no masks, so a gradient
+    // of the app's background colour is drawn over the frame: transparent down
+    // to 30% of the height, and opaque at the bottom.
     let background = theme.background();
     let fade = div().absolute().inset_0().bg(linear_gradient(
         180.,
@@ -72,8 +73,8 @@ pub fn empty_state(
         ),
         linear_color_stop(background, 1.),
     ));
-    // The frame is 120px tall with a -40px bottom margin: it takes 80px of
-    // the column and the title overlaps its faded end.
+    // The frame is 120px high, but its element takes only 80px of the column,
+    // so the title is drawn over the frame's faded lower part.
     let frame = div().relative().flex_none().w(px(90.)).h(px(80.)).child(
         div()
             .absolute()
@@ -94,7 +95,7 @@ pub fn empty_state(
         .p(px(40.))
         .text_center()
         .child(frame)
-        // Read as a heading and its text.
+        // Assistive technology reads the title as a heading.
         .child(
             super::a11y::heading(div().id("empty-title"), title.clone(), 2)
                 .text_size(px(theme::TEXT_XL))
@@ -125,8 +126,8 @@ pub fn empty_state(
         })
 }
 
-/// `EmptyStateAction`: a 32px bordered button with a glyph and a label whose
-/// background deepens over 250 ms on hover.
+/// A button of an empty state: 32px high, with a border, a glyph and a label.
+/// Its background becomes stronger over 250 ms while the pointer is over it.
 #[derive(IntoElement)]
 pub struct EmptyStateAction {
     id: ElementId,
@@ -151,7 +152,8 @@ pub fn empty_state_action(
 }
 
 impl EmptyStateAction {
-    /// `.action:disabled`: 35% and no pointer.
+    /// Disables the button: it is drawn at 35% and does not react to the
+    /// pointer.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self

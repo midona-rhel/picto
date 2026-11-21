@@ -1,6 +1,7 @@
 // Adapted from gpui 0.2.2 examples/input.rs (Apache-2.0).
-//! The editing commands of a field: caret moves by character, word, row and
-//! paragraph, deletes, the kill buffer, Undo and Redo, and the clipboard.
+//! This file holds the editing commands of a text field: the commands that
+//! move the caret by character, word, row and paragraph, the commands that
+//! delete, the kill buffer, Undo and Redo, and the clipboard.
 use std::ops::Range;
 
 use super::editing::{self, Platform, Snapshot, Typing};
@@ -8,13 +9,15 @@ use super::element::{hit_row, row_index, rows_of, x_in};
 use super::*;
 use gpui::{ClipboardItem, KeyDownEvent};
 thread_local! {
-    /// What Control-K last cut, which Control-Y puts back: one buffer for
-    /// every field, as the Mac keeps one per app.
+    /// The text that Control-K last cut, which Control-Y puts back. All
+    /// fields share this one buffer, as the text fields of one app do on a
+    /// Mac.
     static KILL_BUFFER: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
 }
 
 impl TextInput {
-    /// The text and selection, as the history keeps them.
+    /// Returns the text and the selection in the form in which the history
+    /// stores them.
     pub(super) fn snapshot(&self) -> Snapshot {
         Snapshot {
             text: self.content.to_string(),
@@ -22,7 +25,8 @@ impl TextInput {
         }
     }
 
-    /// Where the selection is held from: the end the caret is not at.
+    /// Returns the end of the selection that the caret is not at. That end
+    /// stays in place when the selection is extended.
     pub(super) fn anchor(&self) -> usize {
         if self.selection_reversed {
             self.selected_range.end
@@ -31,8 +35,9 @@ impl TextInput {
         }
     }
 
-    /// An offset no further than the text and on a character's edge, for
-    /// positions read from a layout drawn before the last edit.
+    /// Returns `offset` moved back so that it is not past the end of the
+    /// text and not inside a character. An offset that was read from a
+    /// layout drawn before the last edit can be either.
     pub(super) fn clamp(&self, offset: usize) -> usize {
         let mut offset = offset.min(self.content.len());
         while !self.content.is_char_boundary(offset) {
@@ -41,8 +46,10 @@ impl TextInput {
         offset
     }
 
-    /// The caret moved or the selection changed by itself: typing that
-    /// follows starts a new step to undo, and a kill is not added to.
+    /// Records that the caret moved or the selection changed without an
+    /// edit. What is typed next then starts a new step in the history, the
+    /// next Control-K replaces the kill buffer, and the caret is drawn at
+    /// once and starts its blinking again.
     pub(super) fn moved(&mut self) {
         self.history.close();
         self.killing = false;
@@ -51,8 +58,9 @@ impl TextInput {
         self.blink = std::time::Instant::now();
     }
 
-    /// Replaces `range` with `text`, as one step to undo, or as part of the
-    /// run of typing it continues. The caret goes after the new text.
+    /// Replaces `range` with `text` and records the edit in the history, as
+    /// a step of its own or as part of the run of typing that it continues
+    /// (`typing`). The caret is put after the new text.
     pub(super) fn edit(
         &mut self,
         range: Range<usize>,
@@ -68,7 +76,8 @@ impl TextInput {
         self.splice(range, text, cx);
     }
 
-    /// Replaces `range` with `text`, outside the history.
+    /// Replaces `range` with `text` without recording the edit in the
+    /// history. The caret is put after the new text.
     pub(super) fn splice(&mut self, range: Range<usize>, text: &str, cx: &mut Context<Self>) {
         self.content =
             (self.content[0..range.start].to_owned() + text + &self.content[range.end..]).into();
@@ -83,8 +92,10 @@ impl TextInput {
         cx.notify();
     }
 
-    /// Takes the text back to a state from the history. What Undo brings
-    /// back is selected from its end, as Chromium leaves it.
+    /// Sets the text and the selection to `state`, a state from the
+    /// history. With `reversed`, which Undo passes, the caret is put at the
+    /// start of the selection, so the text that Undo brought back is
+    /// selected from its end to its start.
     fn restore(&mut self, state: Snapshot, reversed: bool, cx: &mut Context<Self>) {
         self.content = state.text.into();
         self.selected_range = self.clamp(state.selection.start)..self.clamp(state.selection.end);
@@ -109,9 +120,11 @@ impl TextInput {
         self.edit(range, "", typing, cx);
     }
 
-    /// Moves the caret to `offset`, or with `extend` moves the selection's
-    /// free end there. `upstream` draws a caret at a wrap after the upper
-    /// line rather than before the lower.
+    /// Moves the caret to `offset`. With `extend` it moves only the end of
+    /// the selection that the caret is at, and the other end stays in
+    /// place. When `upstream` is true and `offset` is a place where a line
+    /// wraps, the caret is drawn at the end of the upper row and not at the
+    /// start of the lower row.
     pub(super) fn go(
         &mut self,
         offset: usize,
@@ -183,10 +196,13 @@ impl TextInput {
         self.select_to(self.content.len(), cx);
     }
 
-    /// Option-Left (Control-Left elsewhere) moves from the caret's end of a
-    /// selection, as Chromium does, rather than from its start.
+    /// Moves the caret to the start of the word before it, or with `extend`
+    /// extends the selection to there. Option-Left on a Mac and Control-Left
+    /// on Windows and Linux call it. When text is selected, the move starts
+    /// from the end of the selection that the caret is at.
     pub(super) fn word_left(&mut self, extend: bool, cx: &mut Context<Self>) {
-        // A password field's words cannot be seen: its start.
+        // The words of a password field cannot be seen, so the caret goes
+        // to the start of the text.
         let target = if self.masked {
             0
         } else {
@@ -204,8 +220,10 @@ impl TextInput {
         self.go(target, false, extend, cx);
     }
 
-    /// The row the caret is on as drawn: its range, and whether its end is
-    /// a wrap rather than the end of a line.
+    /// Returns the row on which a caret at `offset` is drawn: the row's
+    /// byte range, and whether the row ends at a wrap and not at the end of
+    /// a line. When the text is drawn on one line, the row is the whole
+    /// text.
     fn row_at(&self, offset: usize) -> (Range<usize>, bool) {
         match self.last_lines.as_ref() {
             Some(lines) => {
@@ -217,8 +235,10 @@ impl TextInput {
         }
     }
 
-    /// Command-Left and -Right (Home and End elsewhere): the start or end
-    /// of the row the caret is on, which in wrapped text is not the line's.
+    /// Moves the caret to the start of the row it is on, or with `end` to
+    /// the end of that row. In wrapped text a row is not the same as a
+    /// line. Command-Left and Command-Right on a Mac, and Home and End on
+    /// Windows and Linux, call it.
     pub(super) fn line_edge(&mut self, end: bool, extend: bool, cx: &mut Context<Self>) {
         let (row, wrapped) = self.row_at(self.cursor_offset());
         if end {
@@ -228,8 +248,9 @@ impl TextInput {
         }
     }
 
-    /// Control-A and -E: the start or end of the paragraph, the text
-    /// between line breaks.
+    /// Moves the caret to the start of the paragraph it is in, or with
+    /// `end` to the end of that paragraph. A paragraph is the text between
+    /// two line breaks. Control-A and Control-E on a Mac call it.
     pub(super) fn paragraph_edge(&mut self, end: bool, extend: bool, cx: &mut Context<Self>) {
         let cursor = self.cursor_offset();
         let target = if end {
@@ -240,13 +261,17 @@ impl TextInput {
         self.go(target, false, extend, cx);
     }
 
-    /// Option-Up and -Down: to the start or end of the paragraph, or of
-    /// the one before or after when already there.
+    /// Moves the caret to the start of the paragraph it is in, or with
+    /// `forward` to the end of that paragraph. When the caret is already
+    /// there, it goes to the start of the paragraph before, or to the end
+    /// of the paragraph after. Option-Up and Option-Down on a Mac call it.
     pub(super) fn paragraph_step(&mut self, forward: bool, extend: bool, cx: &mut Context<Self>) {
         let cursor = self.cursor_offset();
         let range = self.selected_range.clone();
-        // With a selection and no Shift, the first step only collapses it
-        // to its end (or start), as Option-Down does in production.
+        // When text is selected and Shift is not held, the move starts from
+        // the end of the selection (from its start for a move backward) and
+        // does not first step over a line break. A selection that ends at
+        // the end of a paragraph is therefore only collapsed to that end.
         let target = match (forward, extend || range.is_empty()) {
             (true, true) => editing::paragraph_end(&self.content, self.next_boundary(cursor)),
             (false, true) => {
@@ -276,8 +301,9 @@ impl TextInput {
         self.delete_or_selection(cursor..self.next_boundary(cursor), Some(Typing::Delete), cx);
     }
 
-    /// Control-Delete: the last code point of the character before the
-    /// caret, so an accent comes off its letter.
+    /// Deletes the last code point of the character before the caret, so
+    /// that an accent is removed and its letter stays. Control-Delete on a
+    /// Mac calls it.
     pub(super) fn delete_decomposing(
         &mut self,
         _: &DeleteBackwardDecomposing,
@@ -319,8 +345,9 @@ impl TextInput {
         self.delete_or_selection(cursor..end, None, cx);
     }
 
-    /// Command-Delete: back to the start of the row, or the character
-    /// before when already there.
+    /// Deletes from the caret back to the start of its row. When the caret
+    /// is already at the start of the row, it deletes the character before
+    /// the caret. Command-Delete on a Mac calls it.
     pub(super) fn delete_to_line_start(
         &mut self,
         _: &DeleteToLineStart,
@@ -335,9 +362,12 @@ impl TextInput {
         self.delete_or_selection(start..cursor, None, cx);
     }
 
-    /// Control-K: to the end of the paragraph, or the line break when
-    /// already there, into the kill buffer that Control-Y yanks back.
-    /// Kills one after another add to it.
+    /// Deletes from the caret to the end of its paragraph and puts the
+    /// deleted text in the kill buffer, from which Control-Y puts it back.
+    /// When the caret is already at the end of the paragraph, the line
+    /// break is deleted. When text is selected, the selection is deleted
+    /// instead. A Control-K directly after another adds its text to the
+    /// kill buffer. Control-K on a Mac calls it.
     pub(super) fn kill(
         &mut self,
         _: &DeleteToParagraphEnd,
@@ -382,7 +412,9 @@ impl TextInput {
         }
     }
 
-    /// Control-T: the characters either side of the caret swap.
+    /// Makes the character before the caret and the character after it
+    /// change places (`editing::transpose`). It does nothing while text is
+    /// selected. Control-T on a Mac calls it.
     pub(super) fn transpose(&mut self, _: &Transpose, _: &mut Window, cx: &mut Context<Self>) {
         if !self.selected_range.is_empty() {
             return;
@@ -394,7 +426,8 @@ impl TextInput {
         }
     }
 
-    /// Control-O in a field of several lines: a line break after the caret.
+    /// Puts a line break after the caret in a field that takes line breaks,
+    /// and leaves the caret where it was. Control-O on a Mac calls it.
     pub(super) fn open_line(&mut self, _: &OpenLine, _: &mut Window, cx: &mut Context<Self>) {
         if !self.multiline {
             return;
@@ -404,11 +437,10 @@ impl TextInput {
         self.selected_range = start..start;
     }
 
-    /// Takes back the last step of editing in the field. With nothing left
-    /// to take back it does nothing: as in production
-    /// (`runNativeEditHistory`), Undo in a text field is the field's alone
-    /// and never reaches the library's history, so an extra ⌘Z while typing
-    /// in a dialog cannot undo a library edit behind it.
+    /// Takes back the last step of editing in the field. When there is no
+    /// step left, it does nothing. Undo in a text field never reaches the
+    /// library's history, so pressing Undo once too often while typing in a
+    /// dialog cannot undo a change to the library.
     pub(super) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
         if self.marked_range.is_some() {
             return;
@@ -427,9 +459,10 @@ impl TextInput {
         }
     }
 
-    /// Up and Down in a field of one line, which have no binding there so
-    /// that lists around the field keep them: to the start or the end
-    /// (nothing on Windows).
+    /// Handles Up and Down in a field whose text is drawn on one line. The
+    /// two keys have no binding in such a field, so that a list around the
+    /// field can bind them. Up moves the caret to the start of the text and
+    /// Down moves it to the end. On Windows they do nothing here.
     pub(super) fn on_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -465,8 +498,9 @@ impl TextInput {
         window.show_character_palette();
     }
 
-    /// Pasted text keeps its line breaks in a field of several lines; a
-    /// field of one line keeps what `<input>` does of it.
+    /// Replaces the selection with the text on the clipboard. A field that
+    /// takes line breaks keeps the line breaks of the pasted text. A
+    /// one-line field keeps what `editing::one_line` returns for it.
     pub(super) fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             let text = if self.multiline {
@@ -478,16 +512,20 @@ impl TextInput {
         }
     }
 
-    /// Shift+Enter in a multi-line field: a line break at the caret.
+    /// Puts a line break at the caret in a field that takes line breaks.
+    /// Shift+Enter calls it.
     pub(super) fn newline(&mut self, _: &Newline, _: &mut Window, cx: &mut Context<Self>) {
         if self.multiline {
             self.edit(self.selected_range.clone(), "\n", Some(Typing::Insert), cx);
         }
     }
 
-    /// The caret one row up or down in wrapped text, keeping to the same
-    /// distance from the left over rows that are shorter; past the first
-    /// or last row, to the start or end (on Windows it stays).
+    /// Moves the caret one row up, or with `down` one row down, in wrapped
+    /// text. The caret keeps the same distance from the left edge, also
+    /// after it has passed through rows that are shorter. From the first
+    /// row a move up goes to the start of the text, and from the last row a
+    /// move down goes to the end. On Windows the caret stays where it is in
+    /// those two cases.
     pub(super) fn vertical(&mut self, down: bool, extend: bool, cx: &mut Context<Self>) {
         let from = if extend || self.selected_range.is_empty() {
             self.cursor_offset()
@@ -496,7 +534,9 @@ impl TextInput {
         } else {
             self.selected_range.start
         };
-        // Past the first or last row: to the text's end, or where it is.
+        // For a move past the first or the last row, this returns the end
+        // of the text that the move goes to (`end`), or on Windows the
+        // place the caret is at.
         let past = |end: usize| {
             if Platform::CURRENT.up_down_reach_the_ends() {
                 end
@@ -533,7 +573,7 @@ impl TextInput {
     }
 
     pub(super) fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        // A password field's text is not copied, as the system's are not.
+        // The text of a password field is not copied.
         if !self.selected_range.is_empty() && !self.masked {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),

@@ -1,24 +1,24 @@
-//! The Duplicates screen. It is a port of the Electron app's
-//! `DuplicatesScreen.tsx` and shows the library's queue of pairs of files
+//! The Duplicates screen. It shows the library's queue of pairs of files
 //! that a scan found to be perceptually similar, one pair at a time.
 //!
 //! The two pictures are side by side and are zoomed and panned together.
 //! Above each picture is a row with the file's name and its Keep left or
 //! Keep right button. Under each picture is a list of the file's facts.
 //!
+//! Above the two files are two rows. The first row holds the Smart merge,
+//! Not duplicates, Keep both and Show Difference buttons. The second row
+//! holds one line of text with the similarity and with how many of the two
+//! originals' pixels differ.
+//!
 //! The titlebar holds the rest of the screen's controls
 //! ([`DuplicatesToolbar`]): the position in the queue with the Previous pair
-//! and Next pair buttons, one line of text with the similarity and the pixel
-//! measurement, the Smart merge, Not duplicates, Keep both and Show
-//! Difference buttons, and the Zoom to fit and Actual pixels buttons. The
-//! Electron screen has those four buttons in a footer. This app puts every
-//! main screen's buttons in the titlebar, so this screen does too.
+//! and Next pair buttons, and the Zoom to fit and Actual pixels buttons.
 //!
-//! Three things here are not in the Electron screen. The pixel difference is
-//! also shown while the D key is held down. The titlebar says how many of
-//! the two originals' pixels differ. The pictures of the pair that follows
-//! the pair on screen are decoded in advance, so that when a decision moves
-//! to that pair its originals are drawn at once.
+//! The pixel difference is shown while the pointer is on the Show Difference
+//! button, after a click on that button, and while the D key is held down.
+//! The pictures of the pair that follows the pair on screen are decoded in
+//! advance, so that when a decision moves to that pair its originals are
+//! drawn at once.
 mod compare;
 mod decisions;
 mod difference;
@@ -41,8 +41,7 @@ use std::{path::PathBuf, sync::Arc, time::Instant};
 
 // The screen's actions. The shortcut registry (`crate::keymap`) binds their
 // keys in the `Duplicates` key context, so they take priority over the
-// grid's keys while this screen has keyboard focus. The Electron screen does
-// the same with `useShortcutScope`.
+// grid's keys while this screen has keyboard focus.
 actions!(
     duplicates,
     [
@@ -61,11 +60,9 @@ actions!(
 
 // i18n: a key context
 const CONTEXT: &str = "Duplicates";
-/// The number of pairs read from the library at a time. The Electron app's
-/// `getDuplicatePairs` reads the same number.
+/// The number of pairs read from the library at a time.
 const QUEUE_LIMIT: usize = 500;
-/// The distance threshold passed to `duplicates.scan`. It is the default of
-/// the Electron app's `scanDuplicates`.
+/// The distance threshold passed to `duplicates.scan`.
 const SCAN_DISTANCE: u32 = 16;
 
 /// One of the two files of the pair on screen.
@@ -76,8 +73,8 @@ struct Side {
     /// The details of the first item that holds this file. This is `None`
     /// when the details could not be read.
     details: Option<RootDetails>,
-    /// That item's media record for this file. The Electron screen finds it
-    /// with `mediaForFile`.
+    /// That item's media record for this file. When the item has no record
+    /// for this file, this is the item's first media record.
     media: Option<MediaRecord>,
     /// The time at which this file's original was decoded, if that happened
     /// while the file was on screen. The original then fades in over the
@@ -175,8 +172,8 @@ struct Shown {
     /// from the file's original (`true`) or from its thumbnail (`false`).
     difference: Option<(Arc<RenderImage>, [bool; 2])>,
     /// The result of comparing the two originals pixel by pixel. It is set
-    /// once and then never changes, so the titlebar's line of text does not
-    /// change while the pair is on screen.
+    /// once and then never changes, so the line of text under the decision
+    /// buttons does not change while the pair is on screen.
     counted: Counted,
 }
 
@@ -203,8 +200,7 @@ impl Shown {
     }
 }
 
-/// A decision on the pair on screen. The Electron app calls it a
-/// `DuplicateAction`.
+/// A decision on the pair on screen.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Decision {
     /// Records that the two files are different. Neither file is changed.
@@ -280,8 +276,7 @@ struct Drag {
     center: (f32, f32),
 }
 
-/// What the titlebar controls show. The Electron app calls it a
-/// `DuplicateToolbarModel`.
+/// What the titlebar controls show.
 struct ToolbarModel {
     index: usize,
     total: usize,
@@ -340,13 +335,12 @@ pub struct DuplicatesScreen {
     /// True while the pointer is on the Show Difference button.
     difference_hovered: bool,
     /// True while the Show Difference button has keyboard focus. On this
-    /// screen the Tab key toggles the panels, as it does in production, so
+    /// screen the Tab key hides and shows the sidebar and the inspector, so
     /// only assistive technology can give the button keyboard focus.
     difference_focused: bool,
     /// True after a click on the Show Difference button, until the next
-    /// press of a mouse button anywhere in the window. In the Electron app a
-    /// click gives the button keyboard focus, and the difference stays on
-    /// screen until something else is clicked.
+    /// press of a mouse button anywhere in the window. The difference stays
+    /// on screen during that time.
     difference_pressed: bool,
     /// True while the key bound to Show Difference (D) is held down.
     difference_held: bool,
@@ -362,8 +356,7 @@ pub struct DuplicatesScreen {
     /// True while a scan of the library is running.
     scanning: bool,
     /// True once the scan has taken longer than 200 ms. The scan's progress
-    /// bar is shown only then, as the Electron screen's `useDelayedFlag`
-    /// does.
+    /// bar is shown only then.
     scan_progress: bool,
     scan_task: Option<Task<()>>,
     /// The number of the read of the queue that follows a scan. The scan is
@@ -373,8 +366,8 @@ pub struct DuplicatesScreen {
     smart_hovered: bool,
     /// True while the Smart merge button has keyboard focus.
     smart_focused: bool,
-    /// The context menu of a file. The Electron screen's `MediaCard` opens
-    /// the same menu.
+    /// The context menu of a file. A click with the right mouse button on a
+    /// file's panel opens it.
     menu: ui::menu::Host,
     _session: Vec<Subscription>,
 }
@@ -869,8 +862,9 @@ impl DuplicatesScreen {
         self.difference_task = None;
         self.ahead_task = None;
         // If this pair was the pair in `ahead`, its originals may already
-        // have been compared. The result is carried over, so the titlebar's
-        // line of text is complete as soon as the pair is on screen.
+        // have been compared. The result is carried over, so the line of
+        // text under the decision buttons is complete as soon as the pair is
+        // on screen.
         if let Some(ahead) = self.ahead.take_if(|ahead| ahead.key == pending.shown.key) {
             pending.shown.difference = ahead.difference;
             pending.shown.counted = ahead.counted;
@@ -1139,8 +1133,8 @@ impl DuplicatesScreen {
     }
 
     /// Stores a computed difference picture in the pair with this key, which
-    /// is the pair on screen or the pair in `ahead`. `from_originals` says for each
-    /// file whether its original was used.
+    /// is the pair on screen or the pair in `ahead`. `from_originals` says
+    /// for each file whether its original was used.
     fn store_difference(
         &mut self,
         key: PairKey,
@@ -1186,8 +1180,8 @@ impl DuplicatesScreen {
         let bounds = self.panes[side];
         let delta = event.delta.pixel_delta(window.line_height());
         let offset = event.position - bounds.center();
-        // GPUI reports how far the content should move. The DOM's `deltaY`,
-        // which the zoom arithmetic expects, has the opposite sign.
+        // GPUI reports how far the content should move. `LinkedZoom::wheel`
+        // expects the opposite sign, so the value is negated.
         self.zoom.wheel(
             self.pane_extent(side),
             self.image(side),

@@ -1,7 +1,8 @@
-//! `ColorFilterEditor.tsx`: a saturation and brightness square beside a hue
-//! strip, an optional tolerance slider, twelve preset colours and "no
-//! colour", and the hex code. Dragging and typing settle for 250 ms before
-//! the colour is committed; a preset commits at once.
+//! The colour editor: a square for saturation and brightness beside a strip
+//! for the hue, a tolerance slider when the caller asks for one, twelve preset
+//! colours and a "no colour" swatch, and a field for the hex code. A change
+//! made by dragging or typing is committed 250 ms after the last change.
+//! Choosing a preset commits at once.
 use super::field::{self, Look};
 use super::text_input::{Kind, TextInput};
 use crate::i18n::t;
@@ -11,33 +12,40 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use std::{cell::Cell, rc::Rc, time::Duration};
 
-/// `COLOR_FILTER_SETTLE_MS`.
+/// How long after the last change by dragging or typing the colour is
+/// committed.
 const SETTLE: Duration = Duration::from_millis(250);
-/// `.saturation`: white toward the hue across, and black up from the
-/// bottom to clear, which make the saturation and brightness square.
+/// The two colours of the saturation and brightness square. From left to right
+/// the square goes from white to the hue. Over that lies black, which is
+/// opaque at the bottom and transparent at the top.
 const SQUARE_WHITE: u32 = 0xffffff;
 const SQUARE_BLACK: u32 = 0x000000;
 
-/// `PRESETS`.
+/// The twelve preset colours.
 const PRESETS: [u32; 12] = [
     0x111111, 0xFFFFFF, 0x9E9E9E, 0xA48057, 0xFC85B3, 0xFF2727, 0xFFA34B, 0xFFD534, 0x47C595,
     0x51C4C4, 0x2B76E7, 0x6D50ED,
 ];
 
-/// `.saturation` and `.hue`.
+/// The width and the height of the saturation and brightness square. The hue
+/// strip is `HUE_W` wide and as high as the square.
 const SQUARE_W: f32 = 181.;
 const SQUARE_H: f32 = 174.;
 const HUE_W: f32 = 13.;
-/// `.editor`: two columns 8px apart, centred with 6px above and 8px below.
+/// The editor's width: the square, the gap of 8px and the hue strip. The
+/// editor is centred in its row, with 6px above it and 8px below it. `GAP` is
+/// also the distance between the editor's rows.
 const WIDTH: f32 = 202.;
 const GAP: f32 = 8.;
-/// `.sensitivity`: its padding, the caption line, a 6px gap and the 12px
-/// slider.
+/// The height of the tolerance slider's part: 2px of padding above, the 13px
+/// line with the caption, a 6px gap, the 12px slider and 1px of padding below.
 const SENSITIVITY: f32 = 2. + 13. + 6. + 12. + 1.;
-/// `.presets`: two rows of 20px swatches, 5px apart.
+/// The height of the presets: two rows of swatches that are 20px high, 5px
+/// apart.
 const PRESETS_H: f32 = 20. + 5. + 20.;
 
-/// The editor's height inside a menu row.
+/// Returns the editor's height inside a menu row. `sensitivity` says whether
+/// the tolerance slider is shown.
 pub fn height(sensitivity: bool) -> f32 {
     6. + SQUARE_H
         + GAP
@@ -48,7 +56,8 @@ pub fn height(sensitivity: bool) -> f32 {
         + 8.
 }
 
-/// Hue in degrees, saturation and value from 0 to 1.
+/// A colour as hue, saturation and value. The hue is in degrees, and the
+/// saturation and the value are from 0 to 1.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hsv {
     pub hue: f32,
@@ -56,7 +65,8 @@ pub struct Hsv {
     pub value: f32,
 }
 
-/// `hexToHsv`; anything that is not `#rrggbb` is mid grey.
+/// Returns the colour of the code `hex` (`#rrggbb`). Anything that is not such
+/// a code gives mid grey.
 fn hex_to_hsv(hex: &str) -> Hsv {
     let rgb = theme::parse_hex_code(hex).unwrap_or(0x808080);
     let channel = |shift: u32| ((rgb >> shift) & 0xff) as f32 / 255.;
@@ -80,7 +90,7 @@ fn hex_to_hsv(hex: &str) -> Hsv {
     }
 }
 
-/// `hsvToHex`, in capitals.
+/// Returns the code of `hsv` as `#RRGGBB`, with capital letters.
 fn hsv_to_hex(hsv: Hsv) -> String {
     let chroma = hsv.value * hsv.saturation;
     let segment = hsv.hue / 60.;
@@ -103,10 +113,11 @@ fn hsv_to_hex(hsv: Hsv) -> String {
     format!("#{:02X}{:02X}{:02X}", byte(red), byte(green), byte(blue))
 }
 
-/// The colour committed: a code or none, and the tolerance.
+/// The event that the editor emits when a colour is committed. It holds the
+/// colour's code, or `None` for "no colour", and the tolerance.
 pub struct ColorCommitted(pub Option<String>, pub f32);
 
-/// What a drag started on.
+/// The part of the editor that a drag started on.
 #[derive(Clone, Copy, PartialEq)]
 enum Drag {
     Square,
@@ -116,17 +127,20 @@ enum Drag {
 pub struct ColorEditor {
     hsv: Hsv,
     hex: Entity<TextInput>,
-    /// The code the field and swatches show, in capitals.
+    /// The code that the field shows and that the preset swatches are compared
+    /// with, in capital letters.
     shown: String,
     has_color: bool,
-    /// The colour last committed or given, for the "no colour" swatch.
+    /// The colour that was last committed, or last set with `set_value`. The
+    /// "no colour" swatch is marked as chosen when it is `None`.
     value: Option<String>,
     delta_e: f32,
     sensitivity: bool,
-    /// The "no colour" swatch (`allowClear`).
+    /// Whether the "no colour" swatch is shown.
     clear: bool,
     settle: Option<Task<()>>,
-    /// Whether the square and the hue strip are held.
+    /// Whether the pointer is pressed on the square, and whether it is pressed
+    /// on the hue strip.
     drag: (Rc<Cell<bool>>, Rc<Cell<bool>>),
     _subscriptions: Vec<Subscription>,
 }
@@ -177,15 +191,15 @@ impl ColorEditor {
         }
     }
 
-    /// Without the "no colour" swatch (`allowClear={false}`), for a colour
-    /// that must be one.
+    /// Removes the "no colour" swatch, for a place where a colour must be
+    /// chosen.
     pub fn without_clear(mut self) -> Self {
         self.clear = false;
         self
     }
 
-    /// Follows a colour set elsewhere, as the component's effect on `value`
-    /// does.
+    /// Shows a colour and a tolerance that were set elsewhere, without
+    /// committing them.
     pub fn set_value(&mut self, value: Option<String>, delta_e: f32, cx: &mut Context<Self>) {
         self.delta_e = delta_e;
         if value == self.value {
@@ -219,7 +233,8 @@ impl ColorEditor {
         cx.notify();
     }
 
-    /// Commits after the settling time; a newer change starts it again.
+    /// Commits `value` after `SETTLE`. A newer change replaces the waiting
+    /// task, so the time starts again.
     fn schedule(&mut self, value: Option<String>, cx: &mut Context<Self>) {
         let delta_e = self.delta_e;
         self.settle = Some(cx.spawn(async move |this, cx| {
@@ -251,7 +266,9 @@ impl ColorEditor {
         self.commit_now(Some(hex), cx);
     }
 
-    /// A point in the square or on the strip, from the window position.
+    /// Applies the position `at` in the window to the part `drag`, whose
+    /// bounds are `bounds`: it sets the saturation and the value from a
+    /// position in the square, or the hue from a position on the strip.
     fn point(
         &mut self,
         drag: Drag,
@@ -267,7 +284,7 @@ impl ColorEditor {
                 value: 1. - y,
                 ..self.hsv
             },
-            // The strip is a range input of whole degrees, 0 to 359.
+            // The hue is a whole number of degrees from 0 to 359.
             Drag::Hue => Hsv {
                 hue: (y * 359.).round(),
                 ..self.hsv
@@ -276,8 +293,10 @@ impl ColorEditor {
         self.apply_hsv(hsv, cx);
     }
 
-    /// A drag surface: a press starts the drag there, and moves anywhere
-    /// in the window follow it until the button is released.
+    /// Returns an invisible element that covers its parent and handles a drag
+    /// on it. A press on it starts the drag. After that, every move of the
+    /// pointer anywhere in the window is applied, until the mouse button is
+    /// released.
     fn drag_surface(&self, drag: Drag, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let held = match drag {
             Drag::Square => self.drag.0.clone(),
@@ -314,8 +333,9 @@ impl Render for ColorEditor {
         }))
         .unwrap_or(0xff0000));
         let clear = |color: Rgba| Rgba { a: 0., ..color };
-        // `linear-gradient(to top, #000, transparent)` over
-        // `linear-gradient(to right, #fff, <hue>)`.
+        // Two gradients, one over the other: from white on the left to the hue
+        // on the right, and over it from transparent at the top to black at
+        // the bottom.
         let square = div()
             .id("color-square")
             .role(Role::Slider)
@@ -338,8 +358,8 @@ impl Render for ColorEditor {
                 linear_color_stop(clear(rgb(SQUARE_BLACK)), 1.),
             )))
             .child(
-                // `.cursor`: a 9px white ring with a dark halo, centred on the
-                // colour.
+                // The marker of the chosen colour: a white ring 9px across
+                // with a dark line around it, centred on the colour.
                 div()
                     .absolute()
                     .left(px(self.hsv.saturation * SQUARE_W - 4.5))
@@ -354,8 +374,9 @@ impl Render for ColorEditor {
                     ]),
             )
             .child(self.drag_surface(Drag::Square, cx));
-        // Red, yellow, green, cyan, blue, magenta and red again, top to
-        // bottom, as six two-stop bands.
+        // From top to bottom the strip goes through red, yellow, green, cyan,
+        // blue, magenta and red again. It is drawn as six bands, each a
+        // gradient between two neighbouring colours.
         let stops = [
             0xff0000, 0xffff00, 0x00ff00, 0x00ffff, 0x0000ff, 0xff00ff, 0xff0000,
         ];
@@ -388,7 +409,8 @@ impl Render for ColorEditor {
                     )),
             );
         }
-        // The range input's 3px thumb: a light line over a dark one.
+        // The marker of the hue is 3px high: a light 1px line, a 1px gap and a
+        // dark 1px line.
         let thumb_top = (self.hsv.hue.round() / 359.) * (SQUARE_H - 3.);
         strip = strip
             .child(
@@ -434,7 +456,7 @@ impl Render for ColorEditor {
                     .text(theme::TEXT_CAPTION)
                     .text_color(theme.text_secondary())
                     .child(
-                        // `.sensitivityHeader` keeps the body's line height.
+                        // The caption's line has the line height of body text.
                         div()
                             .flex()
                             .items_center()
@@ -469,7 +491,8 @@ impl Render for ColorEditor {
                     ),
             );
         }
-        // `.presets`: "no colour" then the twelve, seven to a row.
+        // The swatches are "no colour" and then the twelve presets, seven in a
+        // row.
         let none_active = self.value.is_none();
         let mut swatches = Vec::new();
         swatches.extend(self.clear.then(|| {
@@ -538,7 +561,8 @@ impl Render for ColorEditor {
                 .relative()
                 .child(field::field("color-hex", &self.hex, Look::Hex))
                 .child(
-                    // `.preview`: the colour typed, 9px in from the left.
+                    // A swatch of the colour that the field holds, 9px from
+                    // the field's left edge.
                     div()
                         .absolute()
                         .left(px(9.))
@@ -571,7 +595,7 @@ mod tests {
                 value: 1.
             }
         );
-        // Anything else is mid grey.
+        // A text that is not a colour code gives mid grey.
         assert_eq!(hsv_to_hex(hex_to_hsv("nope")), "#808080");
     }
 }

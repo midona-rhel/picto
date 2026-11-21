@@ -1,7 +1,8 @@
-//! The font viewer (`FontViewer.tsx`): the file loaded into GPUI's text
-//! system, then a page with its name, four modes (a sample, a waterfall of
-//! sizes, the glyphs, and facts about the file), five paper colours and a
-//! size control floating at the bottom.
+//! The font viewer. It adds the font file to GPUI's text system and then
+//! shows a page with the item's name and four modes: Preview (a sample
+//! text), Waterfall (one line at eleven sizes), Glyphs, and Information
+//! (facts about the file). The user picks the page's colours from five
+//! swatches, and a size control lies over the bottom of the view.
 use crate::i18n::{en, t};
 use crate::theme::Text as _;
 use crate::ui::text_input::{Face, Kind, TextInput};
@@ -28,7 +29,9 @@ const TABS: [(Tab, &str); 4] = [
     (Tab::Information, "Information"),
 ];
 
-/// The page's colours (`data-preview-theme`).
+/// The colours of the page that the font is shown on, which the user picks
+/// with one of five swatches. `Auto` is the app theme's background and text
+/// colours.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Paper {
     Auto,
@@ -58,12 +61,15 @@ const GLYPH_GROUPS: [(&str, &str); 4] = [
     ),
 ];
 
-/// The preview's size, from 50% to 300% in 10% steps.
+/// The smallest scale of the font preview, 50%. The largest is `MAX_SCALE`
+/// (300%), and the scale changes in steps of `SCALE_STEP` (10%).
 pub const MIN_SCALE: f32 = 0.5;
 pub const MAX_SCALE: f32 = 3.;
 const SCALE_STEP: f32 = 0.1;
 
-/// `fontFormat`
+/// Returns the name of the font format that the media type `mime` stands
+/// for. The viewer shows it under the item's name and in the Information
+/// mode. Any type that is not listed is named "TrueType".
 pub fn format_name(mime: &str) -> &'static str {
     match mime {
         "font/collection" => "TrueType Collection",
@@ -73,21 +79,26 @@ pub fn format_name(mime: &str) -> &'static str {
     }
 }
 
-/// A font file ready for the text system: its tables (a WOFF unpacked) and
-/// the family names it may be registered under, most specific first.
+/// Holds a font file in the form that GPUI's text system takes. `data` is
+/// the file's content, unpacked when the file is a WOFF. `families` holds
+/// the family names that the text system may know the font by: the
+/// typographic family names first, then the plain family names.
 pub struct LoadedFont {
     pub data: Vec<u8>,
     pub families: Vec<String>,
 }
 
-/// Reads a font file and the names of its first face.
+/// Reads the font file at `path` and the family names of its first face.
+/// It fails for a WOFF2 file, for a file that is not a font, and for a
+/// font without a family name.
 pub fn load(path: &std::path::Path) -> Result<LoadedFont> {
     let bytes = std::fs::read(path)?;
     let data = if bytes.starts_with(b"wOFF") {
         unpack_woff(&bytes)?
     } else if bytes.starts_with(b"wOF2") {
-        // TODO: unpack WOFF2 (Brotli and transformed tables) so these
-        // fonts preview; Picto does not import WOFF2 today.
+        // TODO: unpack WOFF2 files (Brotli compression and transformed
+        // tables) so that these fonts can be previewed. Picto does not
+        // import WOFF2 files today.
         bail!("WOFF2 fonts cannot be previewed yet.")
     } else {
         bytes
@@ -112,14 +123,16 @@ pub fn load(path: &std::path::Path) -> Result<LoadedFont> {
     Ok(LoadedFont { data, families })
 }
 
-/// The most a WOFF file unpacks to, and the most tables it may hold (a
-/// real font has a few dozen).
+/// The largest size, 64 MB, that a WOFF file may unpack to. `MAX_TABLES`
+/// is the largest number of tables that a WOFF file may hold; a real font
+/// has a few dozen.
 const MAX_FONT: usize = 64 << 20;
 const MAX_TABLES: usize = 1024;
 
-/// A WOFF 1.0 file as the sfnt it wraps: the table directory rebuilt and
-/// each table inflated where it was compressed. Every size is the file's
-/// claim, so each is checked against the file and against [`MAX_FONT`].
+/// Converts a WOFF 1.0 file to the sfnt font that it contains. It writes
+/// the sfnt header and table directory, and decompresses each table that
+/// is compressed. Every size is read from the file and can be wrong, so
+/// each is checked against the file's length and against [`MAX_FONT`].
 pub fn unpack_woff(woff: &[u8]) -> Result<Vec<u8>> {
     use std::io::Read;
     let read = |at: usize, width: usize| -> Result<u32> {
@@ -135,8 +148,9 @@ pub fn unpack_woff(woff: &[u8]) -> Result<Vec<u8>> {
     if count == 0 || count > MAX_TABLES {
         bail!("This WOFF file has {count} tables.");
     }
-    // The largest power of two not above the count, as the sfnt header's
-    // binary search fields give it.
+    // The sfnt header holds three fields for a binary search of the table
+    // directory. They are computed from the largest power of two that is
+    // not above the number of tables.
     let entry_selector = count.ilog2() as usize;
     let search_range = (1 << entry_selector) * 16;
     let mut out = Vec::new();
@@ -197,9 +211,10 @@ pub fn unpack_woff(woff: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// The fonts added to the text system, by file, with the family each
-/// answers to. GPUI cannot take a font out again, so a file viewed again is
-/// not added again.
+/// Holds the fonts that have been added to the text system: for each
+/// file's path, the family name under which the text system finds the
+/// font. GPUI cannot remove a font, so a file that is viewed again is not
+/// added again.
 #[derive(Default)]
 struct Registered(std::collections::HashMap<PathBuf, SharedString>);
 
@@ -219,10 +234,11 @@ pub struct FontViewer {
     paper: Paper,
     scale: f32,
     scroll: ScrollHandle,
-    /// The preview's sample, editable in place (`contentEditable`): its
-    /// heading, its paragraph and its alphabet.
+    /// The three texts of the Preview mode: the heading, the paragraph and
+    /// the alphabet. The user can edit each of them where it is shown.
     sample: [Entity<TextInput>; 3],
-    /// The waterfall's lines, each editable on its own.
+    /// The lines of the Waterfall mode, one for each size in
+    /// `WATERFALL_SIZES`. The user can edit each line separately.
     waterfall: Vec<Entity<TextInput>>,
     _task: Task<()>,
 }
@@ -284,7 +300,9 @@ impl FontViewer {
         viewer
     }
 
-    /// The editable samples' faces: the font at the preview's size.
+    /// Sets the font, size and line height of the texts of the Preview and
+    /// Waterfall modes for the loaded font and the preview's scale. It does
+    /// nothing while the font has not loaded.
     fn apply_faces(&mut self, cx: &mut Context<Self>) {
         let Some(family) = self.family() else {
             return;
@@ -306,8 +324,9 @@ impl FontViewer {
         }
     }
 
-    /// Reads the font off the drawing thread and adds it to the text
-    /// system.
+    /// Reads the font file at `path` on a background thread, then adds the
+    /// font to the text system and stores in the viewer whether that
+    /// succeeded.
     fn load(path: PathBuf, cx: &mut Context<Self>) -> Task<()> {
         let file = path.clone();
         let read = cx
@@ -331,13 +350,14 @@ impl FontViewer {
         })
     }
 
-    /// Cmd+= and Cmd+−: the preview grows or shrinks by 10%.
+    /// Makes the preview 10% larger when `larger` is true and 10% smaller
+    /// when it is false. The scale stays between 50% and 300%.
     pub fn step_scale(&mut self, larger: bool, cx: &mut Context<Self>) {
         let step = if larger { SCALE_STEP } else { -SCALE_STEP };
         self.set_scale(self.scale + step, cx);
     }
 
-    /// Cmd+0: the preview at its own size.
+    /// Sets the preview back to 100%, the scale it opens with.
     pub fn reset_scale(&mut self, cx: &mut Context<Self>) {
         self.set_scale(1., cx);
     }
@@ -348,7 +368,9 @@ impl FontViewer {
         cx.notify();
     }
 
-    /// The family the preview is drawn in, once loaded.
+    /// Returns the family name of the font that the preview is drawn in.
+    /// Returns `None` while the font has not loaded and when it could not
+    /// be loaded.
     pub fn family(&self) -> Option<SharedString> {
         match &self.status {
             Status::Ready(family) => Some(family.clone()),
@@ -361,7 +383,8 @@ impl FontViewer {
         !matches!(self.status, Status::Loading)
     }
 
-    /// `--font-page-bg` and `--font-page-fg`.
+    /// Returns the background colour and the text colour of the page for
+    /// the chosen `Paper`.
     fn colors(&self, cx: &App) -> (Rgba, Rgba) {
         let app = theme::theme(cx);
         match self.paper {
@@ -383,8 +406,11 @@ impl FontViewer {
     }
 }
 
-/// The preview's sample in `family` at `scale`: the heading at 38 px on a
-/// 1.25 line in the medium weight, the paragraphs at 18 px on a 1.6 line.
+/// Returns the faces of the three texts of the Preview mode in the font
+/// `family`. The heading is 38 px with a line height of 1.25 times its
+/// size, in medium weight. The paragraph and the alphabet are 18 px with a
+/// line height of 1.6 times their size. Every size is multiplied by
+/// `scale`.
 pub fn sample_faces(family: &SharedString, scale: f32) -> [Face; 3] {
     let heading = 38. * scale;
     let body = 18. * scale;
@@ -406,7 +432,9 @@ pub fn sample_faces(family: &SharedString, scale: f32) -> [Face; 3] {
     ]
 }
 
-/// Adds the font to the text system and finds the family name it answers to.
+/// Adds the font to the text system and returns the first of its family
+/// names under which the text system finds it. It fails when the text
+/// system finds the font under none of them.
 fn register(font: LoadedFont, cx: &mut App) -> Result<SharedString> {
     let text_system = cx.text_system().clone();
     text_system.add_fonts(vec![Cow::Owned(font.data)])?;
@@ -414,8 +442,9 @@ fn register(font: LoadedFont, cx: &mut App) -> Result<SharedString> {
         .into_iter()
         .map(SharedString::from)
         .find(|family| {
-            // A family the text system cannot load resolves to a fallback,
-            // which is cached under another font.
+            // For a family name that the text system cannot load,
+            // `resolve_font` returns a fallback font, whose family name is
+            // not the one asked for.
             let id = text_system.resolve_font(&gpui::font(family.clone()));
             text_system
                 .get_font_for_id(id)
@@ -424,7 +453,7 @@ fn register(font: LoadedFont, cx: &mut App) -> Result<SharedString> {
         .ok_or_else(|| anyhow!("The text system did not take this font."))
 }
 
-/// `color-mix(in srgb, <fg> N%, transparent)`.
+/// Returns `color` with its opacity multiplied by `percent` / 100.
 fn faded(color: Rgba, percent: f32) -> Rgba {
     Rgba {
         a: color.a * percent / 100.,
@@ -618,7 +647,8 @@ impl Render for FontViewer {
             (Status::Loading, _) => message(t("Loading font…")).into_any_element(),
             (Status::Failed, _) => message(en("This font cannot be previewed.")).into_any_element(),
             (Status::Ready(_), Tab::Preview) => {
-                // `.article h2` and `.article p`, each edited in place.
+                // The heading, the paragraph and the alphabet. The user
+                // can edit each of them where it is shown.
                 let [heading, paragraph, alphabet] = self.sample.clone();
                 div()
                     .child(div().mb(px(24.)).child(heading))
@@ -626,8 +656,8 @@ impl Render for FontViewer {
                     .child(div().mb(px(20.)).child(alphabet))
                     .into_any_element()
             }
-            // `.waterfall`: lines that run past the page are cut at its
-            // edge.
+            // A line of the Waterfall mode that is wider than the page is
+            // cut off at the page's edge.
             (Status::Ready(_), Tab::Waterfall) => div()
                 .overflow_hidden()
                 .flex()
@@ -659,8 +689,9 @@ impl Render for FontViewer {
                         )
                         .child(div().flex().flex_wrap().gap(px(1.)).children(
                             glyphs.chars().enumerate().map(|(index, glyph)| {
-                                // TODO: production also scales the hovered
-                                // glyph to 135%; GPUI cannot scale an element.
+                                // TODO: also enlarge the glyph under the
+                                // pointer to 135%. GPUI cannot scale an
+                                // element.
                                 div()
                                     .id(SharedString::from(format!("{label}-{index}")))
                                     .size(px(50.))
@@ -690,8 +721,9 @@ impl Render for FontViewer {
                 .into_any_element(),
         };
 
-        // `.zoom`: a glass bar fixed at the bottom centre while a mode
-        // that uses the size is shown.
+        // The size control is a glass bar at the bottom centre of the view.
+        // It is shown in every mode but Information, which does not use
+        // the preview's scale.
         let zoom = (self.tab != Tab::Information).then(|| {
             let step =
                 |id: &'static str, icon: &'static str, larger: bool, cx: &mut Context<Self>| {
@@ -716,7 +748,7 @@ impl Render for FontViewer {
                         .occlude()
                         .w(px(164.))
                         .h(px(32.))
-                        // `.zoom`'s 4px padding inside its 1px glass border.
+                        // 4 px of padding plus the panel's 1 px border.
                         .px(px(5.))
                         .flex()
                         .items_center()
@@ -761,9 +793,10 @@ impl Render for FontViewer {
                     .overflow_y_scroll()
                     .size_full()
                     .child(
-                        // `.page`: `min(900px, 100% - 96px)` wide, centred in
-                        // the view less its scrollbar's gutter
-                        // (`scrollbar-gutter: stable`), 24px from the top.
+                        // The page is at most 900 px wide and leaves at least
+                        // 48 px free on each side. It is centred in the
+                        // view's width less the scrollbar's gutter, and it
+                        // starts 24 px below the view's top.
                         div()
                             .w_full()
                             .min_h_full()
@@ -800,8 +833,9 @@ mod tests {
     fn the_sample_is_edited_in_the_font_at_the_preview_size() {
         let family = SharedString::from("Fira Mono");
         let [heading, paragraph, alphabet] = sample_faces(&family, 1.5);
-        // `.article h2`: 38px on a 1.25 line, medium; `.article p`: 18px on
-        // a 1.6 line; both times the preview's scale.
+        // The heading is 38 px with a line height of 1.25 times its size,
+        // in medium weight. The paragraph is 18 px with a line height of
+        // 1.6 times its size. Both are multiplied by the scale, 1.5 here.
         assert_eq!((heading.size, heading.line_height), (57., 71.25));
         assert_eq!(heading.weight, FontWeight::MEDIUM);
         assert_eq!((paragraph.size, paragraph.line_height), (27., 43.2));
@@ -810,7 +844,7 @@ mod tests {
     }
 
     #[test]
-    fn formats_are_named_as_production_names_them() {
+    fn formats_are_named_as_the_earlier_version_named_them() {
         assert_eq!(format_name("font/collection"), "TrueType Collection");
         assert_eq!(format_name("font/otf"), "OpenType");
         assert_eq!(format_name("font/woff"), "Web Open Font Format");
@@ -824,7 +858,9 @@ mod tests {
         assert!(font.families.iter().any(|family| family == "Fira Mono"));
     }
 
-    /// A WOFF header claiming `count` tables, followed by `entries`.
+    /// Returns a WOFF file whose header says that it has `count` tables,
+    /// followed by the table directory entries `entries` and then by
+    /// `data`.
     fn woff(count: u16, entries: &[[u32; 5]], data: &[u8]) -> Vec<u8> {
         let mut woff = b"wOFF".to_vec();
         woff.extend_from_slice(&0x0001_0000u32.to_be_bytes());
@@ -843,13 +879,13 @@ mod tests {
     #[test]
     fn a_damaged_woff_is_refused_without_overflow_or_a_vast_allocation() {
         use std::io::Write;
-        // More tables than the sfnt header can count, with or without the
-        // entries behind them.
+        // A file that says it has more tables than `MAX_TABLES`, without
+        // and with the entries for them, and a file that says it has none.
         assert!(unpack_woff(&woff(u16::MAX, &[], &[])).is_err());
         assert!(unpack_woff(&woff(4096, &[[0; 5]; 4096], &[])).is_err());
         assert!(unpack_woff(&woff(0, &[], &[])).is_err());
-        // A table that claims 4 GB, and one whose place runs past the end
-        // of the file (and of the address space).
+        // A table whose entry says that it unpacks to 4 GB, and a table
+        // whose offset and length are far past the end of the file.
         let huge = [u32::from_be_bytes(*b"glyf"), 64, 4, u32::MAX, 0];
         assert!(unpack_woff(&woff(1, &[huge], &[0; 4])).is_err());
         let past = [
@@ -860,7 +896,8 @@ mod tests {
             0,
         ];
         assert!(unpack_woff(&woff(1, &[past], &[])).is_err());
-        // A compressed table that inflates to more than it claims.
+        // A compressed table that decompresses to more bytes than its
+        // entry says.
         let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
         encoder.write_all(&vec![0; 1 << 20]).unwrap();
         let bomb = encoder.finish().unwrap();
@@ -872,7 +909,8 @@ mod tests {
             0,
         ];
         assert!(unpack_woff(&woff(1, &[entry], &bomb)).is_err());
-        // Cut short anywhere.
+        // A valid file is accepted, and the same file cut off at any
+        // length is refused.
         let whole = woff(
             1,
             &[[u32::from_be_bytes(*b"head"), 64, 4, 4, 0]],

@@ -1,11 +1,15 @@
-//! Page geometry of the document viewers (`documentPageGeometry.ts`, the
-//! scale arithmetic of `PdfViewer.tsx`, and the continuous column of pages
-//! the paged viewer scrolls). Sizes are (width, height).
+//! The arithmetic of the document viewers' layout: the width of a page that
+//! has a largest width, the scale of a PDF's pages, and the column in which
+//! the paged viewer puts all the pages of a document one under the other.
+//! Every size is a pair of a width and a height.
 
 pub type PageSize = (f32, f32);
 
-/// `boundDocumentPageWidth`: fixed-width documents scroll instead of
-/// shrinking to the viewport's height.
+/// Returns the size of a page that is as wide as `available_width`, but at
+/// most `maximum_width` wide, and that has the proportions of `natural`.
+/// Only the width is limited. A page that is higher than the viewport is
+/// not made smaller; the viewport scrolls. Returns `None` when
+/// `available_width` or a side of `natural` is not above 0.
 pub fn bound_page_width(
     available_width: f32,
     natural: PageSize,
@@ -18,7 +22,10 @@ pub fn bound_page_width(
     Some((width, width * natural.1 / natural.0))
 }
 
-/// How a PDF page is scaled (`scaleMode` in `PdfViewer.tsx`).
+/// How the pages of a PDF are scaled. With `PageFit`, a page that is wider
+/// than the viewport has room for is scaled down to fit. With `Actual`,
+/// every page has its natural size. With `Custom`, every page is scaled by
+/// the factor it holds.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ScaleMode {
     PageFit,
@@ -26,20 +33,26 @@ pub enum ScaleMode {
     Custom(f32),
 }
 
-/// The smallest and largest custom PDF zoom, and one zoom step.
+/// The smallest factor of `ScaleMode::Custom`, 25%. `MAX_SCALE` is the
+/// largest, 800%. `STEP` is the factor by which one step of zooming in
+/// multiplies the scale and one step of zooming out divides it.
 pub const MIN_SCALE: f32 = 0.25;
 pub const MAX_SCALE: f32 = 8.;
 pub const STEP: f32 = 1.2;
 
 impl ScaleMode {
-    /// `setZoomScale`.
+    /// Returns the mode that scales every page by `scale`, which is first
+    /// limited to the range from `MIN_SCALE` to `MAX_SCALE`.
     pub fn custom(scale: f32) -> Self {
         ScaleMode::Custom(scale.clamp(MIN_SCALE, MAX_SCALE))
     }
 
-    /// A page's scale in the continuous column: fitted, it is as wide as the
-    /// viewport's content box but never larger than its natural size; at
-    /// 100% or a custom zoom every page takes the same scale.
+    /// Returns the factor by which a page of the natural size `natural` is
+    /// scaled in the column. With `PageFit`, the page is scaled down to
+    /// `available_width`, the viewport's width less its padding, and a page
+    /// that is not wider than that keeps its natural size. With `Actual`
+    /// the factor is 1, and with `Custom` it is the custom factor, for
+    /// every page. The factor returned is never below 0.1.
     pub fn column_scale(self, available_width: f32, natural: PageSize) -> f32 {
         match self {
             ScaleMode::PageFit if natural.0 > 0. => (available_width / natural.0).min(1.),
@@ -51,21 +64,28 @@ impl ScaleMode {
     }
 }
 
-/// A page's place in the column: left, top, width, height.
+/// The place of a page in the column: its left edge, its top edge, its
+/// width and its height, in pixels from the column's top-left corner.
 pub type PageRect = (f32, f32, f32, f32);
 
-/// The pages of a document one under the other, as a viewer scrolls them.
+/// The layout of all the pages of a document one under the other, which is
+/// the content that the paged viewer scrolls. `pages` holds the place of
+/// each page.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Column {
     pub pages: Vec<PageRect>,
-    /// The content's size, padding included.
+    /// The width and height of the whole content, with the padding around
+    /// the pages.
     pub size: PageSize,
 }
 
-/// Lays `sizes` (each page's size on screen) out in a column: `padding`
-/// around, `gap` between, each page centred across the wider of the
-/// content and the viewport, and the whole column centred in a viewport
-/// taller than it.
+/// Lays the pages out in a column. `sizes` holds the size of each page on
+/// screen. There are `padding` pixels around the pages and `gap` pixels
+/// between two pages. The content is as wide as the widest page with its
+/// padding, or as wide as `viewport` when that is wider, and each page is
+/// centred in that width. When the pages with their gaps and padding are
+/// less high than `viewport`, the content is as high as `viewport` and the
+/// pages are centred in that height.
 pub fn column(sizes: &[PageSize], viewport: PageSize, padding: f32, gap: f32) -> Column {
     let widest = sizes.iter().map(|size| size.0).fold(0., f32::max);
     let width = (widest + 2. * padding).max(viewport.0);
@@ -89,8 +109,8 @@ pub fn column(sizes: &[PageSize], viewport: PageSize, padding: f32, gap: f32) ->
 }
 
 impl Column {
-    /// The pages any part of which lies between `from` and `to` (content
-    /// coordinates, top down).
+    /// Returns the indexes of the pages of which a part lies between `from`
+    /// and `to`, which are distances in pixels from the content's top.
     pub fn between(&self, from: f32, to: f32) -> std::ops::Range<usize> {
         let first = self
             .pages
@@ -105,32 +125,44 @@ impl Column {
         first..end
     }
 
-    /// The page at `y`: the one it falls on, or, in a gap or the padding,
-    /// the last one starting above it (the first one above the column).
+    /// Returns the index of the page at `y`, a distance in pixels from the
+    /// content's top. That is the last page whose top edge is at or above
+    /// `y`, so a `y` in the gap or the padding under a page gives that
+    /// page. A `y` above the first page gives the first page.
     pub fn page_at(&self, y: f32) -> usize {
         self.pages.iter().rposition(|page| page.1 <= y).unwrap_or(0)
     }
 
-    /// Where `y` is, as a page and a fraction of its height, for keeping a
-    /// place when the zoom changes.
+    /// Returns where `y` is as the index of a page (`page_at`) and the
+    /// distance of `y` below that page's top edge as a fraction of the
+    /// page's height. The paged viewer takes it before the zoom changes and
+    /// gives it to `resolve` on the new layout, so that the same part of
+    /// the document stays in view. Returns `None` when there are no pages.
     pub fn anchor(&self, y: f32) -> Option<(usize, f32)> {
         let index = self.page_at(y);
         let page = self.pages.get(index)?;
         Some((index, (y - page.1) / page.3.max(1.)))
     }
 
-    /// The `y` of an anchor taken in another layout of the same pages.
+    /// Returns the distance from this content's top, in pixels, of the
+    /// point that `anchor` names. `anchor` comes from `anchor` on another
+    /// layout of the same pages. Returns `None` when this layout has no
+    /// page with the anchor's index.
     pub fn resolve(&self, anchor: (usize, f32)) -> Option<f32> {
         let page = self.pages.get(anchor.0)?;
         Some(page.1 + anchor.1 * page.3)
     }
 }
 
-/// Whether a drawn page that arrives is kept: the size now wanted for that
-/// page, if it is still wanted, and the size of the picture it already has.
-/// A picture at the wanted size is kept; one drawn for an earlier zoom or
-/// width that arrives late is kept only while the page has no picture at
-/// all, so a page is never blank but never goes back to an older drawing.
+/// Returns whether the paged viewer keeps a drawing of a page that has just
+/// arrived. `arrived` is the size the drawing was asked for. `wanted` is
+/// the size at which the page is wanted now, or `None` when the page is not
+/// wanted any more. `held` is the size of the drawing the page already has,
+/// or `None` when it has none. A drawing at the wanted size is kept. A
+/// drawing that was asked for at an earlier zoom or width is kept only
+/// while the page has no drawing at all. So a wanted page shows a drawing
+/// as soon as one arrives, and a later drawing is never replaced by an
+/// earlier one. A drawing of a page that is not wanted is discarded.
 pub fn keep_drawn(
     arrived: (u32, u32),
     wanted: Option<(u32, u32)>,
@@ -143,8 +175,11 @@ pub fn keep_drawn(
     }
 }
 
-/// The pixels a page is drawn at for its size on screen and the display's
-/// pixel ratio (`documentCanvasGeometry`).
+/// Returns the width and height in device pixels of the drawing that a page
+/// needs: its size on screen, `size`, multiplied by `pixel_ratio`, the
+/// number of device pixels in one logical pixel, and rounded up. Each side
+/// is at least 1. Returns `None` when a side of `size` or `pixel_ratio` is
+/// not above 0.
 pub fn page_pixels(size: PageSize, pixel_ratio: f32) -> Option<(u32, u32)> {
     if size.0 <= 0. || size.1 <= 0. || pixel_ratio <= 0. {
         return None;
@@ -192,10 +227,12 @@ mod tests {
                 size: (300., 364.),
             }
         );
-        // A short column is centred in a taller viewport.
+        // A column that is less high than the viewport is centred in the
+        // viewport's height.
         let short = column(&[(100., 100.)], (300., 400.), 24., 16.);
         assert_eq!(short.pages, vec![(100., 150., 100., 100.)]);
-        // A page wider than the viewport makes the content wider.
+        // A page that is wider than the viewport makes the content wider
+        // than the viewport.
         let wide = column(&[(500., 100.)], (300., 400.), 24., 16.);
         assert_eq!(wide.size.0, 548.);
         assert_eq!(wide.pages[0].0, 24.);
@@ -204,7 +241,7 @@ mod tests {
     #[test]
     fn finds_the_pages_in_view() {
         let laid = column(&[(100., 100.); 5], (100., 0.), 0., 10.);
-        // Tops 0, 110, 220, 330, 440.
+        // The tops of the five pages are at 0, 110, 220, 330 and 440.
         assert_eq!(laid.between(0., 100.), 0..1);
         assert_eq!(laid.between(105., 225.), 1..3);
         assert_eq!(laid.between(1000., 1100.), 5..5);
@@ -224,13 +261,13 @@ mod tests {
 
     #[test]
     fn late_drawings_never_replace_a_newer_one() {
-        // The page's drawing for the zoom now on screen is kept.
+        // A drawing at the size that the page is wanted at now is kept.
         assert!(keep_drawn((200, 300), Some((200, 300)), Some((100, 150))));
-        // One for an earlier zoom arriving late is dropped while the page
-        // has a picture, and kept while it has none.
+        // A drawing at a size that was wanted earlier is discarded when the
+        // page has a drawing, and kept when it has none.
         assert!(!keep_drawn((100, 150), Some((200, 300)), Some((200, 300))));
         assert!(keep_drawn((100, 150), Some((200, 300)), None));
-        // A page scrolled away keeps nothing.
+        // A drawing of a page that is not wanted any more is discarded.
         assert!(!keep_drawn((100, 150), None, None));
         assert_eq!(page_pixels((612., 792.), 2.), Some((1224, 1584)));
         assert_eq!(page_pixels((0., 792.), 2.), None);

@@ -1,35 +1,39 @@
-//! What a panic leaves behind. Production's main process logs a renderer
-//! that went away (`render-process-gone`) and its own uncaught exceptions
-//! as errors, which reach the log window while the app still runs. Here the
-//! whole app is one process, so a panic is recorded with its backtrace
-//! twice: as an error line in the log window at once (the app goes on when
-//! the panic was on a worker thread), and as a file in the app's log folder
-//! (`logs/` in its own folder for what it keeps per machine), written
-//! before the process can end, which the next launch shows in the log
-//! window as the previous session's panic.
+//! Records panics. A panic is recorded twice, each time with its backtrace.
+//! It is added to the log window at once as an error line; the app goes on
+//! running when the panic was on a worker thread, and the line can then be
+//! read. It is also written to a file in the app's log folder before the
+//! process can end. The log folder is `logs/` in the folder where the app
+//! keeps its state for this machine. The next start of the app shows the
+//! file's text in the log window as a panic of the previous session.
 use super::{Level, Line, Source};
 use std::path::{Path, PathBuf};
 
-/// A recorded panic not yet shown: `panic-<ms>-<process>.log`.
+/// A panic that was recorded and not shown yet is the file
+/// `panic-<milliseconds>-<process id>.log`. `PREFIX` is the start of that
+/// name and `PENDING` is its end.
 const PREFIX: &str = "panic-";
 const PENDING: &str = ".log";
-/// Shown at a launch, kept for a support request.
+/// The end of the name of a panic's file after a start of the app has shown
+/// the panic. The file is kept so that the user can send it when asking for
+/// support.
 const SHOWN: &str = ".shown.log";
-/// Panics kept once shown.
+/// How many files of shown panics are kept. Older ones are deleted.
 const KEEP_SHOWN: usize = 20;
 
-/// The app's log folder, if it keeps one (not in tests without a state
-/// folder).
+/// Returns the app's log folder, or `None` when the app keeps no state, as in
+/// a test build that names no folder for it.
 pub fn folder() -> Option<PathBuf> {
     crate::state::location().map(|folder| folder.join("logs"))
 }
 
-/// The panic as a text: where, what, and the backtrace.
+/// Returns the text that is recorded for a panic: the thread, the place in
+/// the code, the panic's message and the backtrace.
 pub fn record_text(thread: &str, location: &str, payload: &str, backtrace: &str) -> String {
     format!("thread '{thread}' panicked at {location}:\n{payload}\nstack backtrace:\n{backtrace}")
 }
 
-/// What a panic's payload says.
+/// Returns the message of a panic, or `Box<dyn Any>` when the panic's
+/// payload is not a text.
 fn payload(info: &std::panic::PanicHookInfo<'_>) -> String {
     let payload = info.payload();
     payload
@@ -39,8 +43,9 @@ fn payload(info: &std::panic::PanicHookInfo<'_>) -> String {
         .unwrap_or_else(|| "Box<dyn Any>".to_owned())
 }
 
-/// Shows the panics of earlier sessions in the log window, then records
-/// every panic from now on, before the default hook prints it.
+/// Adds the panics of earlier sessions to the log window. Then installs a
+/// panic hook that records every panic and afterwards calls the hook that
+/// was installed before it, which prints the panic.
 pub fn install() {
     let folder = folder();
     if let Some(folder) = &folder {
@@ -64,8 +69,9 @@ pub fn install() {
         if let Some(folder) = &folder {
             let _ = write(folder, &timestamp, &record);
         }
-        // The store may be what panicked while it was held; then the file
-        // is the only record.
+        // `try_add` is used because the panic may have happened while the
+        // store's lock was held. The line is then dropped, and the file is
+        // the only record.
         super::try_add(Line {
             level: Level::Error,
             source: Source::Renderer,
@@ -79,7 +85,8 @@ pub fn install() {
     }));
 }
 
-/// Writes one panic's record: its time on the first line, then the text.
+/// Writes the record of one panic to a new file in `folder`: `timestamp` on
+/// the first line, then `record`. Returns the file's path.
 pub fn write(folder: &Path, timestamp: &str, record: &str) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(folder)?;
     let path = folder.join(format!(
@@ -91,8 +98,10 @@ pub fn write(folder: &Path, timestamp: &str, record: &str) -> std::io::Result<Pa
     Ok(path)
 }
 
-/// The panics recorded in `folder` and not yet shown, oldest first, as log
-/// lines; each is then marked shown, and only the latest shown are kept.
+/// Returns the panics that are recorded in `folder` and were not shown yet,
+/// as log lines, oldest first. The file of each is renamed to end in
+/// `.shown.log`. Of the files with that ending, only the newest `KEEP_SHOWN`
+/// are kept.
 pub fn take_previous(folder: &Path) -> Vec<Line> {
     let Ok(listing) = std::fs::read_dir(folder) else {
         return Vec::new();
@@ -110,8 +119,9 @@ pub fn take_previous(folder: &Path) -> Vec<Line> {
             pending.push(entry.path());
         }
     }
-    // The names start with the time in milliseconds, all of one length for
-    // centuries to come.
+    // Sorting the names sorts the files by time. Each name starts with the
+    // time in milliseconds, and that number has 13 digits until the year
+    // 2286.
     pending.sort();
     let mut lines = Vec::new();
     for path in pending {
@@ -179,7 +189,8 @@ mod tests {
         assert_eq!(line.timestamp, "2026-08-26T12:00:00.000Z");
         assert!(line.message.contains(&path.display().to_string()));
         assert!(line.message.ends_with(&record));
-        // Shown once: kept, but not shown again.
+        // The file is kept under its new name, and the panic is not returned
+        // a second time.
         assert!(!path.exists());
         assert!(take_previous(&logs).is_empty());
         assert_eq!(std::fs::read_dir(&logs).unwrap().count(), 1);

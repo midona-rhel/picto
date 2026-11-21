@@ -1,50 +1,55 @@
-//! Swallows the tail of a scroll gesture that started on a view now replaced
-//! (`scrollMomentum.ts`).
+//! Stops the rest of a scroll gesture from reaching a view that has replaced
+//! the view the gesture started on.
 //!
-//! After a trackpad flick the system keeps sending scroll events (momentum)
-//! for a second or more, aimed at whatever is under the pointer. When the
-//! view changes underneath (the next item after an Inbox review), that
-//! momentum would pan or zoom the new view. As production does, scroll input
-//! that keeps arriving without a pause, in the same direction and no
-//! stronger, is taken for the old gesture and swallowed until a short pause,
-//! a clearly stronger push or a reversal (a new gesture), or a time limit.
-//! The rule reads only the deltas and their timing, so it holds the same
-//! for every platform's wheel and trackpad.
+//! After a flick on a trackpad the system keeps sending scroll events
+//! (momentum) for a second or more, to whatever is under the pointer. When the
+//! view under the pointer is replaced (for example by the next item after an
+//! Inbox review), these events would pan or zoom the new view. So after a call
+//! to [`suppress`], scroll events that keep arriving without a pause, in the
+//! same direction and not clearly stronger, are taken to belong to the old
+//! gesture and are swallowed: they are stopped before any view receives them.
+//! This ends at a pause of 90 ms, at a clearly stronger event or an event in
+//! the opposite direction (either one is a new gesture), or after 1.2 seconds.
+//! The rule reads only the deltas and their timing, so it is the same for the
+//! wheel and the trackpad of every platform.
 use gpui::*;
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
-/// No scroll input for this long ends the old gesture.
+/// When no scroll event has arrived for this long, the old gesture has ended.
 const QUIET: Duration = Duration::from_millis(90);
-/// Input is never swallowed for longer than this.
+/// Scroll events are never swallowed for longer than this.
 const LIMIT: Duration = Duration::from_millis(1_200);
-/// A push this much stronger than the last event is a new gesture.
+/// An event that is more than this many times as strong as the last one starts
+/// a new gesture.
 const NEW_GESTURE_RATIO: f32 = 1.6;
-/// What a line of a wheel's delta counts for, so that its strength compares
-/// with a trackpad's pixels.
+/// The number of pixels that one line of a wheel's delta counts as, so that
+/// its strength can be compared with a trackpad's delta in pixels.
 const LINE: f32 = 16.;
 
-/// The swallowing under way.
+/// The state while scroll events are being swallowed.
 #[derive(Clone, Copy)]
 struct Swallow {
     started: Instant,
-    /// The last event swallowed, or the call that started it.
+    /// The time of the last event that was swallowed, or of the call that
+    /// started the swallowing.
     last_at: Instant,
     last_magnitude: f32,
     direction: i8,
 }
 
-/// The scroll input seen, and the swallowing it is under.
+/// Holds the last scroll event and, while scroll events are being swallowed,
+/// the state of that.
 #[derive(Default)]
 pub struct Momentum {
-    /// The last scroll event: when, how strong and which way, so that the
-    /// first event after a switch is judged against the old gesture rather
-    /// than assumed to be part of it.
+    /// The last scroll event: its time, its strength and its direction. With
+    /// it, the first event after a call to `suppress` is compared with the old
+    /// gesture, and is not simply assumed to belong to it.
     last: Option<(Instant, f32, i8)>,
     swallow: Option<Swallow>,
 }
 
-/// Which way a delta moves along its main axis: -1, 0 or 1.
+/// Returns the direction of a delta along its main axis: -1, 0 or 1.
 fn direction(dx: f32, dy: f32) -> i8 {
     let main = if dy.abs() >= dx.abs() { dy } else { dx };
     if main > 0. {
@@ -57,14 +62,15 @@ fn direction(dx: f32, dy: f32) -> i8 {
 }
 
 impl Momentum {
-    /// `suppressScrollMomentum`: from now on, swallow what is left of the
-    /// gesture under way, if one is.
+    /// Starts swallowing what is left of the scroll gesture that is in
+    /// progress at `now`. Does nothing when no gesture is in progress.
     pub fn suppress(&mut self, now: Instant) {
         self.swallow = None;
         let Some((at, magnitude, direction)) = self.last else {
             return;
         };
-        // Without recent scroll input there is no gesture to swallow.
+        // When no scroll event arrived within the last `QUIET`, no gesture is
+        // in progress and there is nothing to swallow.
         if now.duration_since(at) > QUIET {
             return;
         }
@@ -76,7 +82,8 @@ impl Momentum {
         });
     }
 
-    /// A scroll event of `dx`, `dy` pixels: whether it is swallowed.
+    /// Records a scroll event of `dx`, `dy` pixels at `now`, and returns
+    /// whether it is swallowed.
     pub fn scrolled(&mut self, dx: f32, dy: f32, now: Instant) -> bool {
         let magnitude = dx.abs() + dy.abs();
         let way = direction(dx, dy);
@@ -103,13 +110,15 @@ thread_local! {
     static MOMENTUM: RefCell<Momentum> = RefCell::default();
 }
 
-/// Swallows the rest of the scroll gesture under way (see the module).
+/// Starts swallowing the rest of the scroll gesture that is in progress; see
+/// the module's description.
 pub fn suppress() {
     MOMENTUM.with(|momentum| momentum.borrow_mut().suppress(Instant::now()));
 }
 
-/// Watches the window's scroll input, before any view sees it, and stops
-/// what [`suppress`] swallows. Drawn once in a window, before its content.
+/// Returns an element that reads the window's scroll events before any view
+/// receives them, and stops the ones that are swallowed after a call to
+/// [`suppress`]. A window draws it once, before its content.
 pub fn watcher() -> impl IntoElement {
     canvas(
         |_, _, _| (),
@@ -151,10 +160,11 @@ mod tests {
         let mut momentum = Momentum::default();
         assert!(!momentum.scrolled(0., -40., at(start, 0)));
         momentum.suppress(at(start, 16));
-        // The tail, weakening, in the same direction.
+        // The rest of the gesture: weaker events in the same direction.
         assert!(momentum.scrolled(0., -30., at(start, 32)));
         assert!(momentum.scrolled(0., -20., at(start, 48)));
-        // A pause ends it; what follows is a new gesture.
+        // A pause ends the swallowing. The event after it belongs to a new
+        // gesture.
         assert!(!momentum.scrolled(0., -20., at(start, 200)));
     }
 
@@ -164,13 +174,13 @@ mod tests {
         let mut momentum = Momentum::default();
         momentum.scrolled(0., -40., at(start, 0));
         momentum.suppress(at(start, 16));
-        // A clearly stronger push.
+        // A clearly stronger event is a new gesture.
         assert!(!momentum.scrolled(0., -80., at(start, 32)));
         let mut reversed = Momentum::default();
         reversed.scrolled(0., -40., at(start, 0));
         reversed.suppress(at(start, 16));
         assert!(!reversed.scrolled(0., 10., at(start, 32)));
-        // No gesture under way when the view changed.
+        // No gesture was in progress when the view changed.
         let mut idle = Momentum::default();
         idle.scrolled(0., -40., at(start, 0));
         idle.suppress(at(start, 500));

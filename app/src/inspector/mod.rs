@@ -1,7 +1,7 @@
-//! The inspector rail's scrolling body (`Inspector.tsx`): the destination
-//! showing when nothing is selected, the selected item, or a summary of
-//! several. Layout follows InspectorSkeleton, InspectorField, TagChip and
-//! PropertyRow.
+//! Draws the scrolling content of the inspector rail. The rail describes the
+//! item that is selected or open in the viewer, or gives a summary of
+//! several selected items, or, when nothing is selected, describes the
+//! destination the grid shows.
 mod colors;
 mod edits;
 pub mod folder_dialog;
@@ -41,25 +41,31 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-/// The id of the destination showing, which outlives its position.
+/// Returns the id of the destination the grid shows. The id stays the same
+/// when the list of destinations is rebuilt, which the destination's position
+/// in the list does not.
 fn displayed_id(session: &Session) -> Option<String> {
     session.nav.get(session.displayed).map(|entry| entry.id())
 }
 
-/// What the rail describes.
+/// Says what the rail describes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
-    /// A destination that is a screen of its own: nothing.
+    /// The rail describes nothing, because the destination is a screen of its
+    /// own and not a grid.
     Empty,
-    /// Nothing selected: the destination showing.
+    /// Nothing is selected, and the rail describes the destination the grid
+    /// shows.
     Scope,
     Item,
-    /// Several items selected.
+    /// Several items are selected, and the rail gives a summary of them.
     Selection,
 }
 
-/// What the rail should describe (`liveInspectorTargetAtom`): an item open in
-/// the viewer, else what the grid has selected, else the grid's destination.
+/// Returns what the rail describes when it follows the selection: nothing on
+/// a destination that is a screen of its own, otherwise the item that is open
+/// in the viewer or is the only one selected, otherwise the summary of
+/// several selected items, otherwise the grid's destination.
 fn wanted(screen: bool, viewer: bool, selected: usize) -> Mode {
     if screen {
         Mode::Empty
@@ -72,25 +78,27 @@ fn wanted(screen: bool, viewer: bool, selected: usize) -> Mode {
     }
 }
 
-/// The preview was right-clicked at this window position.
+/// The event the inspector emits when its preview is right-clicked. It holds
+/// the position of the pointer in the window.
 pub struct PreviewMenuRequested(pub Point<Pixels>);
 
 impl EventEmitter<PreviewMenuRequested> for Inspector {}
 
-/// Where a click on a star applies its rating.
+/// Says what a click on a star rates: one item, or every selected item.
 #[derive(Clone, Copy)]
 enum Rate {
     Item(RootId),
     Selection,
 }
 
-/// A folder chip without a colour of its own.
+/// The colour of the chip of a folder that has no colour of its own.
 pub const FOLDER_COLOR: u32 = theme::FOLDER_DEFAULT;
-/// The preview fits this square.
+/// The width and height, in pixels, of the square that the preview fits in.
 const PREVIEW: f32 = 200.;
 
-/// A tag's chip in its namespace's colour (`TagChip`). With the
-/// `showTagPrefixes` setting off, it shows the tag without its group.
+/// Returns the chip of a tag, in the colour of the tag's namespace. When the
+/// setting `show_tag_prefixes` is off, the chip shows the tag without its
+/// namespace.
 pub(crate) fn tag_chip(tag: &picto_library::TagRecord, cx: &App) -> ui::Chip {
     let show_prefixes = crate::settings::current(cx).show_tag_prefixes;
     ui::chip(
@@ -104,7 +112,9 @@ pub(crate) fn tag_chip(tag: &picto_library::TagRecord, cx: &App) -> ui::Chip {
     )
 }
 
-/// A preview's size: the media scaled down to fit the square, never up.
+/// Returns the width and height of a preview: the media's dimensions scaled
+/// down to fit the square of `PREVIEW` pixels, and never scaled up. Without
+/// dimensions it is the whole square.
 fn fitted(dimensions: Option<(u32, u32)>) -> (f32, f32) {
     match dimensions {
         Some((width, height)) if width > 0 && height > 0 => {
@@ -117,24 +127,24 @@ fn fitted(dimensions: Option<(u32, u32)>) -> (f32, f32) {
     }
 }
 
-/// `YYYY/MM/DD HH:MM` in local time.
+/// Returns the time as `YYYY/MM/DD HH:MM` in local time.
 fn format_date(milliseconds: i64) -> Option<String> {
     use chrono::TimeZone;
     let date = chrono::Local.timestamp_millis_opt(milliseconds).single()?;
     Some(date.format(crate::text::date_format::INSPECTOR).to_string())
 }
 
-/// What a chip's context menu was opened for.
+/// Says what the open context menu belongs to.
 #[derive(Clone)]
 enum ChipMenu {
     Tag(TagRecord),
     Folder(FolderId),
-    /// A palette swatch; its menu keeps the colour itself.
+    /// A palette swatch. The menu's handler holds the swatch's colour.
     Swatch,
 }
 
-/// A change to every selected item that would replace what some of them
-/// already have, waiting for the confirmation (`confirmSelectionOverwrite`).
+/// Holds a change to every selected item that would replace notes or sources
+/// that some of them already have. It waits here until the user confirms it.
 enum Overwrite {
     Notes(String),
     Sources(Vec<String>),
@@ -148,43 +158,48 @@ struct Confirm {
 pub struct Inspector {
     session: Entity<Session>,
     thumbnails: Entity<Thumbnails>,
-    /// The torn page drawn for a cover that has no thumbnail.
+    /// The picture of a torn page that is drawn for a cover whose thumbnail
+    /// cannot be loaded.
     art: Option<crate::grid::art::Art>,
     name: Entity<TextInput>,
     notes: Entity<TextInput>,
     collapsed: HashSet<&'static str>,
-    /// While pinned the rail keeps what it shows instead of following the
-    /// selection (`inspectorPinnedAtom`).
+    /// While this is true, the rail keeps what it shows and does not follow
+    /// the selection.
     pinned: bool,
-    /// After unpinning, what the rail shows stays until the selection or the
-    /// destination next changes, as the Electron inspector waits for its
-    /// live target to change; the destination it was unpinned on.
+    /// After the rail is unpinned, it keeps what it shows until the selection
+    /// or the destination next changes. This holds the position of the
+    /// destination that was shown when the rail was unpinned, and `None` when
+    /// the rail is not waiting for such a change.
     holding: Option<usize>,
     tag_picker: Entity<TagPicker>,
     folder_picker: Entity<FolderPicker>,
     /// The AI tagger's review, which opens beside the rail as the pickers do.
     ai_tagger: Entity<crate::ai_tagger::AiTagger>,
-    /// The Add Tags and Folders dialogs the grid's shortcuts and menu open.
+    /// The Add Tags dialog and the Folders dialog, which the grid's shortcuts
+    /// and menu open.
     tag_dialog: Entity<TagDialog>,
     folder_dialog: Entity<FolderDialog>,
     /// Where the rail and its add buttons, sections and fields were last
-    /// drawn, in window coordinates, to open the pickers beside them.
+    /// drawn, in window coordinates. The pickers open beside these places.
     places: Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>,
     sources: sources::SourcesState,
     menu: menu::Host,
     menu_target: Option<ChipMenu>,
-    /// The swatch colour copied last, whose tooltip says so for 1.5 s.
+    /// The colour of the swatch that was copied last. Its tooltip says
+    /// "Copied!" for 1.5 seconds.
     copied: Option<u32>,
     confirm: modal::Host<Confirm>,
-    /// The destination the pickers were opened on; they close when it changes.
+    /// The id of the destination that was shown when the pickers were opened.
+    /// The pickers close when the destination changes.
     picker_destination: Option<String>,
-    /// The star under the pointer, which previews that rating.
+    /// The star the pointer is over. The stars up to it are drawn filled.
     hovered_star: Option<usize>,
     scroll: ScrollHandle,
-    /// The item the rail describes, or last described.
+    /// The item the rail describes, or the one it described last.
     item: Option<RootDetails>,
-    /// What the rail shows. A new state takes its place only once that
-    /// state's data is there, so the rail never goes blank in between.
+    /// What the rail shows. A new state replaces it only when the data of the
+    /// new state has arrived, so that the rail is never blank in between.
     shown: Mode,
     scope: scope::ScopeState,
     selection: selection::SelectionState,
@@ -245,7 +260,8 @@ impl Inspector {
                     this.apply_folder_dialog(add.clone(), remove.clone(), cx);
                 },
             ),
-            // Enter, or leaving the address being edited, saves it.
+            // The address being edited is saved when the user presses Enter and
+            // when its field loses the focus.
             cx.subscribe(&source_input, |this, _, _: &text_input::Submitted, cx| {
                 this.save_source(cx)
             }),
@@ -254,15 +270,16 @@ impl Inspector {
                 window,
                 |this, _, cx| this.save_source(cx),
             ),
-            // A thumbnail written again (regenerated, or a captured frame)
-            // is drawn again in the preview.
+            // When a thumbnail is written again, because it was regenerated or
+            // a frame was captured, the preview is drawn again.
             cx.subscribe(&session, |_, _, event: &crate::application::Event, cx| {
                 if matches!(event, crate::application::Event::Thumbnail(_)) {
                     cx.notify();
                 }
             }),
-            // The pickers close when the destination changes. It is told by
-            // its id, which stays when the destination list is rebuilt.
+            // The pickers close when the destination changes. The destination
+            // is compared by its id, which stays the same when the list of
+            // destinations is rebuilt.
             cx.subscribe_in(
                 &session,
                 window,
@@ -303,7 +320,7 @@ impl Inspector {
                 },
             ),
             cx.subscribe(&session, |this, session, change: &Change, cx| {
-                // After unpinning, the rail lets go of what it holds once the
+                // After the rail is unpinned, it keeps what it shows until the
                 // selection or the destination changes.
                 let released = match (this.holding, change) {
                     (Some(_), Change::Selection | Change::Viewer) => true,
@@ -318,13 +335,17 @@ impl Inspector {
                 let held = this.holds();
                 match change {
                     Change::Selection => {
-                        // A pending edit belongs to what it was typed for.
+                        // An edit that is not saved yet belongs to the item or
+                        // items it was typed for, so it is saved before the
+                        // fields change to the new selection.
                         for field in [&this.name, &this.notes, &this.selection.notes] {
                             field.update(cx, |field, cx| field.commit(cx));
                         }
                         this.sync_item(false, cx);
                         this.selection_changed(cx);
-                        // A subfolder tile chosen or let go in the grid.
+                        // The selection also changes when a subfolder tile is
+                        // selected or deselected in the grid, and the rail
+                        // then describes that subfolder.
                         if !held {
                             this.refresh_scope(cx);
                         }
@@ -341,8 +362,8 @@ impl Inspector {
                         cx.notify();
                     }
                     Change::Navigation if !held => {
-                        // A folder changed: what a selected subfolder holds
-                        // is read again.
+                        // The folders changed, so the contents of a selected
+                        // subfolder are read again.
                         this.forget_holdings(cx);
                         this.refresh_scope(cx);
                         cx.notify();
@@ -389,31 +410,34 @@ impl Inspector {
         }
     }
 
-    /// Whether the rail keeps what it shows rather than following the
-    /// selection: while pinned, and for a moment after.
+    /// Returns true if the rail keeps what it shows and does not follow the
+    /// selection: while it is pinned, and after it is unpinned until the
+    /// selection or the destination changes.
     fn holds(&self) -> bool {
         self.pinned || self.holding.is_some()
     }
 
-    /// The pickers, which the window draws above everything.
+    /// Returns the two pickers. The window draws them above everything else.
     pub fn pickers(&self) -> (Entity<TagPicker>, Entity<FolderPicker>) {
         (self.tag_picker.clone(), self.folder_picker.clone())
     }
 
-    /// The AI tagger's review, which the window draws above everything.
+    /// Returns the AI tagger's review. The window draws it above everything
+    /// else.
     pub fn ai_tagger(&self) -> Entity<crate::ai_tagger::AiTagger> {
         self.ai_tagger.clone()
     }
 
-    /// The Add Tags and Folders dialogs, which the window draws above
-    /// everything.
+    /// Returns the Add Tags dialog and the Folders dialog. The window draws
+    /// them above everything else.
     pub fn dialogs(&self) -> (Entity<TagDialog>, Entity<FolderDialog>) {
         (self.tag_dialog.clone(), self.folder_dialog.clone())
     }
 
     /// Pins the rail to what it shows, or lets it follow the selection
-    /// again. A multi-selection is read again at once (its summary request
-    /// follows the pin); anything else stays until the selection changes.
+    /// again. When the rail is unpinned while several items are selected, it
+    /// reads their summary at once. Otherwise it keeps what it shows until
+    /// the selection or the destination changes.
     pub fn set_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
         if self.pinned == pinned {
             return;
@@ -438,7 +462,7 @@ impl Inspector {
         self.live_mode(cx)
     }
 
-    /// What the rail would describe if it followed the selection.
+    /// Returns what the rail would describe if it followed the selection.
     fn live_mode(&self, cx: &App) -> Mode {
         let session = self.session.read(cx);
         wanted(
@@ -448,10 +472,12 @@ impl Inspector {
         )
     }
 
-    /// Takes the selected item's details once they are there and the rail
-    /// is to describe it. `edited` takes them even when they are for the
-    /// item already shown, after an edit. True when it took them, which
-    /// changed the name and notes fields and the open pickers.
+    /// Copies the selected item's details into the rail, if they have arrived
+    /// and the rail is to describe that item. When they are for the item
+    /// already shown at the same revision, they are copied only if `edited`
+    /// is true, which callers pass after an edit. Returns true if the details
+    /// were copied, which also set the name field, the notes field and the
+    /// open pickers.
     fn sync_item(&mut self, edited: bool, cx: &mut Context<Self>) -> bool {
         if self.holds() || self.wanted(cx) != Mode::Item {
             return false;
@@ -481,8 +507,10 @@ impl Inspector {
         true
     }
 
-    /// What to draw: the state wanted once its data is there, else the one
-    /// shown so far, else (`None`) the wanted state's skeleton.
+    /// Returns the state to draw, and whether its data has arrived. It is the
+    /// wanted state if its data has arrived, otherwise the state shown so
+    /// far if the rail still has its data. Otherwise it is the wanted state
+    /// with `false`, for which the skeleton is drawn.
     fn decide(&mut self, window: &mut Window, cx: &mut Context<Self>) -> (Mode, bool) {
         if self.holds() {
             let held = match self.shown {
@@ -504,10 +532,12 @@ impl Inspector {
             }
         };
         if ready {
-            // The session's own changes take the details first; when the
-            // rail only learns of them here (a screen closing onto a
-            // selected item), the fields and pickers it changes are drawn
-            // in the next frame, as nothing else asks for one.
+            // When the session reports a change, the rail copies the details
+            // in its handler for that change. When the rail finds out only
+            // here that the details have arrived, for example when a screen
+            // closes and an item is still selected, the fields and pickers
+            // it changes are drawn in the next frame. Nothing else asks for
+            // that frame, so it is asked for here.
             if wanted == Mode::Item && self.sync_item(false, cx) {
                 window.request_animation_frame();
             }
@@ -527,7 +557,8 @@ impl Inspector {
         }
     }
 
-    /// Puts the caret in the name field, as Rename does.
+    /// Puts the focus in the name field and selects the whole name. The
+    /// Rename command calls this.
     pub fn edit_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let handle = self.name.read(cx).focus_handle(cx);
         window.focus(&handle, cx);
@@ -555,7 +586,8 @@ impl Inspector {
             }))
     }
 
-    /// Records where an element was drawn, under `key`.
+    /// Returns an element that records the bounds it is drawn at under `key`
+    /// in `places`. It covers the element it is a child of.
     fn place(&self, key: &'static str) -> impl IntoElement + use<> {
         let places = self.places.clone();
         canvas(
@@ -568,8 +600,9 @@ impl Inspector {
         .inset_0()
     }
 
-    /// `openPortal`: a picker opens beside the rail, its top at the
-    /// control's top.
+    /// Returns the point a picker opens at for the control recorded under
+    /// `key`: the left edge of the rail and the top of the control. The
+    /// picker opens beside the rail from there.
     fn anchor(&self, key: &'static str) -> Option<Point<f32>> {
         let places = self.places.borrow();
         let rail = places.get("rail")?;
@@ -577,7 +610,7 @@ impl Inspector {
         Some(point(f32::from(rail.left()), f32::from(control.top())))
     }
 
-    /// The small "+" that ends a row of chips (`.tagAddBtn`).
+    /// Returns the small "+" button that follows a row of chips.
     fn add_button(
         &self,
         id: &'static str,
@@ -592,8 +625,8 @@ impl Inspector {
             .on_click(cx.listener(move |this, _, window, cx| open(this, id, window, cx)))
     }
 
-    /// One wide "Add …" button for a section with nothing in it
-    /// (`.emptySectionActionBtn`).
+    /// Returns the one wide "Add …" button of a section that has nothing in
+    /// it.
     fn add_row(
         &self,
         id: &'static str,
@@ -625,10 +658,10 @@ impl Inspector {
         .into_any_element()
     }
 
-    /// The in-flow Auto Tag action after the properties
-    /// (`InspectorAutoTagAction`): "Auto Tag N Images" for more than one,
-    /// dimmed, with a tooltip that says why, when nothing in it is an
-    /// image.
+    /// Returns the Auto Tag action that follows the properties. Its label is
+    /// "Auto Tag N Images" for more than one item. When `enabled` is false,
+    /// which is the case when none of the items is an image, the action is
+    /// dimmed and its tooltip gives the reason.
     fn auto_tag(
         &self,
         id: &'static str,
@@ -650,15 +683,15 @@ impl Inspector {
         .glyph(14.)
         .height(theme::CONTROL_MD)
         .disabled(!enabled)
-        // `openPortal`: the review opens beside the rail at the button, on
-        // the selection.
+        // A click opens the AI tagger's review for the selection, beside the
+        // rail and at the height of the button.
         .on_click(cx.listener(move |this, _, window, cx| {
             let anchor = this.anchor(id);
             this.ai_tagger
                 .update(cx, |tagger, cx| tagger.open(anchor, None, window, cx));
         }));
         let row = div().relative().child(row).child(self.place(id));
-        // Disabled, the tooltip says why.
+        // The tooltip of a disabled action says why it is disabled.
         let tip = if enabled {
             t("Suggest tags with AI")
         } else {
@@ -676,8 +709,8 @@ impl Inspector {
         .into_any_element()
     }
 
-    /// The Folders section's content: the chips and a "+" after them, or one
-    /// wide "Add to Folder" button when there are none.
+    /// Returns the content of the Folders section: the chips and a "+" button
+    /// after them, or one wide "Add to Folder" button when there are none.
     fn folders_row(
         &self,
         chips: Div,
@@ -702,8 +735,8 @@ impl Inspector {
         }
     }
 
-    /// The Tags section's content: the chips and a "+" after them, or one
-    /// wide "Add Tags" button when there are none.
+    /// Returns the content of the Tags section: the chips and a "+" button
+    /// after them, or one wide "Add Tags" button when there are none.
     fn tags_row(
         &self,
         chips: Div,
@@ -728,8 +761,9 @@ impl Inspector {
         }
     }
 
-    /// The Folders and Tags sections, by their English title; a right-click
-    /// in one opens its picker (`onContextMenu`).
+    /// Returns the Folders section or the Tags section. `title` is the
+    /// section's English title, which selects the section and is shown
+    /// translated. A right-click in the section opens its picker.
     fn picker_section(
         &self,
         title: &'static str,
@@ -753,8 +787,9 @@ impl Inspector {
         )
     }
 
-    /// The status line under the sections (`.status`): a quiet note, or an
-    /// error with its icon.
+    /// Returns the status line under the sections. It is a note in small
+    /// grey text, or, when `error` is true, an error in the colour for
+    /// errors with an alert icon before it.
     fn status(message: impl Into<SharedString>, error: bool, cx: &App) -> Div {
         let theme = theme::theme(cx);
         let status = div()
@@ -801,13 +836,14 @@ impl Inspector {
             .font_family(theme::FONT_INSPECTOR)
     }
 
-    /// `.contentStack`: a flex column as tall as its content, so the fields'
-    /// and sections' margins add up instead of collapsing.
+    /// Returns the column that holds the fields and sections. It is as wide
+    /// as the rail's content and as tall as what it holds.
     fn panel() -> Div {
         div().w_full().flex().flex_col()
     }
 
-    /// The scrolling column of fields and sections for the selected item.
+    /// Draws the scrolling column of fields and sections for the selected
+    /// item.
     fn body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let scroller = self.scroller();
         let mut panel = Self::panel();
@@ -835,7 +871,8 @@ impl Inspector {
             });
             (details, session.nav.clone(), tags, cover_thumbnail)
         };
-        // The preview stays decoded while the grid scrolls past it.
+        // The thumbnail cache keeps the preview's thumbnail decoded while the
+        // grid scrolls, so that the preview does not have to be decoded again.
         let pinned = cover_thumbnail
             .clone()
             .map(|path| Resource::Path(path.into()));
@@ -853,8 +890,9 @@ impl Inspector {
             .find(|media| media.media_id == root.cover_media_id)
             .or(details.media.first());
         if let (Some(media), Some(thumbnail)) = (cover, cover_thumbnail) {
-            // `.formatBadge`: opaque white on the grid's badge surface. A
-            // collection shows the group glyph instead of a format.
+            // The format badge has opaque white text on the same surface as
+            // the grid's badges. A collection shows the group glyph in place
+            // of a format.
             let label = if root.kind == picto_library::RootKind::Collection {
                 ui::badge(0.)
                     .top(px(5.))
@@ -870,7 +908,7 @@ impl Inspector {
                     .text_color(rgb(theme::BADGE_STRONG_TEXT))
                     .child(format::format_label(&media.facts.mime))
             };
-            // `.previewTypeLabel`'s `backdrop-filter`.
+            // The badge blurs the part of the preview that is behind it.
             let label = ui::GlassPanel::new(label.id("preview-type-label"), theme::TILE_RADIUS)
                 .backdrop_blur(theme::preview_label_blur())
                 .into_any_element();
@@ -896,15 +934,16 @@ impl Inspector {
             )))
             .child(self.source(Some(&root.source_urls), cx));
 
-        // Folders: a chip each, then "+"; or one wide button when there are none.
+        // The Folders section holds a chip for each folder and then a "+"
+        // button, or one wide button when the item is in no folder.
         let folders = self.folder_chips(&entries, &details.folder_ids, window, cx);
-        // i18n: the section's English title; picker_section shows it in the language
+        // i18n: the section's English title, which picker_section translates
         panel = panel.child(self.picker_section("Folders", folders, cx));
         let tags = self.tag_chips(tags, true, window, cx);
-        // i18n: the section's English title; picker_section shows it in the language
+        // i18n: the section's English title, which picker_section translates
         panel = panel.child(self.picker_section("Tags", tags, cx));
 
-        // `normalizedCoreProperties`: a row with nothing to say is left out.
+        // A property row whose value is missing is left out.
         let mut properties = div()
             .child(self.rating(Rate::Item(id), details.rating.bitmap_key() as usize, cx))
             .child(Self::property(
@@ -985,7 +1024,8 @@ impl Inspector {
 }
 
 impl Inspector {
-    /// `InspectorExportAction`: the Export dialog for `count` items.
+    /// Returns the Export action. A click opens the Export dialog for the
+    /// `count` items of `target`.
     fn export_row(
         id: &'static str,
         target: SelectionTarget,
@@ -1003,8 +1043,8 @@ impl Inspector {
             }))
     }
 
-    /// `UnavailableInspectorSkeleton`: the rows a state will have, with
-    /// dashes for values, while there is nothing to show yet.
+    /// Draws the rows that a state will have, with dashes in place of the
+    /// values, while the state's data has not arrived.
     fn skeleton(
         &mut self,
         mode: Mode,
@@ -1021,8 +1061,9 @@ impl Inspector {
             panel = panel.child(self.source(None, cx));
         }
         panel = panel.child(self.section(t("Properties"), Some(div().into_any_element()), cx));
-        // An item's or a selection's details are on their way; a
-        // destination's skeleton says nothing unless something failed.
+        // The skeleton of an item or a selection says "Loading...", because
+        // their details have been asked for. The skeleton of a destination
+        // has no status line unless there is an error.
         let status = match error {
             Some(error) => Some(Self::status(error, true, cx)),
             None if mode != Mode::Scope => Some(Self::status(t("Loading..."), false, cx)),
@@ -1036,7 +1077,8 @@ impl Render for Inspector {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::stats::rendered(crate::stats::View::Inspector);
         let (mode, ready) = self.decide(window, cx);
-        // A state that is not drawn gives back the thumbnails it kept.
+        // A state that is not drawn releases the thumbnails that it kept
+        // decoded.
         if (mode, ready) != (Mode::Item, true) {
             self.thumbnails.update(cx, |thumbnails, _| {
                 thumbnails.pin("inspector-preview", None)
@@ -1049,7 +1091,7 @@ impl Render for Inspector {
             self.release_stack(cx);
         }
         // Before the first destination has loaded there is nothing to
-        // describe, and the Electron rail is empty too.
+        // describe, so the rail is empty and shows no skeleton.
         let launching = self.session.read(cx).results_epoch == 0;
         let body = match (mode, ready) {
             (Mode::Empty, _) => self.scroller(),

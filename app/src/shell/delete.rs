@@ -1,5 +1,6 @@
-//! Permanent deletion of items: the confirmation that says whether it can
-//! be undone, Empty Trash, and the delete through the library.
+//! Deletes items permanently. This file has the confirmation dialog, which
+//! says whether the deletion can be undone, the Empty Trash command, and the
+//! call to the library that deletes the items.
 use super::item_menu::{Run, Target};
 use crate::i18n::format::grouped;
 use crate::i18n::t;
@@ -10,24 +11,28 @@ use picto_library::query::ItemScope;
 use picto_library::selection::SelectionTarget;
 use std::rc::Rc;
 
-/// A permanent delete that was confirmed, and what to ask if it must be
-/// confirmed again.
+/// A permanent deletion that is ready to run: what it deletes, and the title
+/// and the button label of its confirmation dialog, which are used again if
+/// the user has to confirm a second time.
 #[derive(Clone)]
 struct Deletion {
     selection: SelectionTarget,
-    /// Rejected from the Inbox rather than deleted from the Trash.
+    /// True when the items are deleted because the user rejected them in
+    /// the Inbox, and false for Delete Permanently and Empty Trash.
     reject: bool,
     title: String,
     label: &'static str,
-    /// Told whether the delete went through, once it has or has not.
+    /// Called once the deletion has been carried out, cancelled or failed,
+    /// with whether it was carried out.
     done: Option<Done>,
 }
 
-/// Hears whether a delete went through: false when it was cancelled or
-/// failed.
+/// A function that is told whether a deletion was carried out. It is told
+/// false when the user cancelled the deletion and when the deletion failed.
 pub(super) type Done = Rc<dyn Fn(&mut Shell, bool, &mut Window, &mut Context<Shell>)>;
 
-/// What tells `done` a delete was turned down.
+/// Returns the function that the confirmation dialog runs when the user
+/// cancels. It calls `done` with false. Returns `None` when `done` is `None`.
 fn cancelled(done: &Option<Done>) -> Option<Run> {
     let done = done.clone()?;
     Some(Rc::new(move |this, window, cx| {
@@ -35,7 +40,10 @@ fn cancelled(done: &Option<Done>) -> Option<Run> {
     }))
 }
 
-/// `permanentDeleteMessage`, for a delete of `media` media items.
+/// Returns the message of the confirmation dialog for a deletion of `media`
+/// media items. It says that the deletion cannot be undone when `undo_limit`
+/// is 0 or `media` is greater than `undo_limit`, and otherwise that it can be
+/// undone until Picto closes.
 fn permanent_delete_message(media: u128, undo_limit: i64) -> String {
     let limit = grouped(undo_limit.max(0) as u64);
     match media {
@@ -51,17 +59,20 @@ fn permanent_delete_message(media: u128, undo_limit: i64) -> String {
 }
 
 impl Shell {
-    /// `requestPermanentDelete`: asks first, saying whether the delete can
-    /// be undone, and deletes through the library. A rejection (the
-    /// setting that skips the Trash) asks only when it cannot be undone.
+    /// Asks the user to confirm the permanent deletion of `target`, in a
+    /// dialog that says whether the deletion can be undone, and then deletes
+    /// through the library. When `reject` is true, the items were rejected
+    /// and the settings say that rejected items are deleted; the user is
+    /// then asked only if the deletion cannot be undone.
     ///
-    /// Only the library open in this window is changed (`libraries::writable`),
-    /// a disposable copy or a library the user keeps, through the core's own
-    /// delete (`Library::permanently_delete` and `delete_rejected`, which the
-    /// `items.delete` and `items.reject_delete` commands production sends
-    /// run). The library keeps the files of an undoable delete until it
-    /// leaves the history; the application's media worker removes the files
-    /// a larger delete frees. Nothing here removes a file.
+    /// Only the library that is open in this window is changed
+    /// (`libraries::writable`), whether it is a disposable copy or a library
+    /// the user keeps. The library deletes the items itself
+    /// (`Library::permanently_delete` and `Library::delete_rejected`). It
+    /// keeps the files of a deletion that can be undone until that deletion
+    /// leaves the history. The files of a deletion that cannot be undone
+    /// are removed by the application's media worker. Nothing in this file
+    /// removes a file.
     pub(super) fn request_permanent_delete(
         &mut self,
         target: Target,
@@ -72,9 +83,10 @@ impl Shell {
         self.request_deletion(target.selection(), reject, false, None, window, cx);
     }
 
-    /// `rejectTarget` when the setting deletes rejected items: deletes
-    /// `selection` as the Reject row does, asking first only when it cannot
-    /// be undone, and tells `done` whether it went through.
+    /// Deletes `selection` because its items were rejected and the settings
+    /// say that rejected items are deleted. The user is asked to confirm
+    /// only when the deletion cannot be undone. `done` is called with
+    /// whether the deletion was carried out.
     pub(super) fn reject_by_deleting(
         &mut self,
         selection: SelectionTarget,
@@ -85,8 +97,9 @@ impl Shell {
         self.request_deletion(selection, true, false, Some(done), window, cx);
     }
 
-    /// The sidebar's Empty Trash: everything in the Trash, after the same
-    /// confirmation, titled "Empty Trash" with "Delete All".
+    /// Carries out the sidebar's Empty Trash command. It deletes everything
+    /// in the Trash after the same confirmation dialog, whose title is
+    /// "Empty Trash" and whose button is "Delete All".
     pub(super) fn empty_trash(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let selection = SelectionTarget::Query {
             query: picto_library::query::RootQuery {
@@ -170,7 +183,8 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Only the library open in this window, however it was admitted.
+        // Items are deleted only from the library that is open in this
+        // window (`Session::writable_root`). Without one, an error is shown.
         if self.session.read(cx).writable_root(cx).is_none() {
             crate::ui::notify::error(
                 t("Delete Permanently"),
@@ -184,8 +198,9 @@ impl Shell {
         }
         let undo_limit = crate::settings::current(cx).undo_delete_limit.max(0) as usize;
         let (selection, reject) = (delete.selection.clone(), delete.reject);
-        // The viewer closes when what it shows is deleted (`deleteTarget`);
-        // an Inbox review has already moved it on.
+        // The viewer is closed when the item it shows is among the deleted
+        // items, and always when the selection is a query. After an Inbox
+        // review the viewer already shows another item, so it stays open.
         let shows_deleted = {
             let session = self.session.read(cx);
             match &selection {
@@ -199,10 +214,10 @@ impl Shell {
             self.session
                 .update(cx, |session, cx| session.close_viewer(cx));
         }
-        // `deleteTarget` announces what it deleted, with Undo. The files a
-        // delete that cannot be undone frees are removed from the library's
-        // blobs by the application's media worker (`drain_blob_cleanup`), as
-        // in production.
+        // A notification with an Undo button reports the deletion
+        // (`Report::announce`). The files that are no longer needed after a
+        // deletion that cannot be undone are removed from the library's
+        // blobs by the application's media worker (`drain_blob_cleanup`).
         let command = if reject {
             "items.reject"
         } else {
@@ -230,8 +245,10 @@ impl Shell {
                         done(this, true, window, cx);
                     }
                 }
-                // The library resolved a different selection or limit: never
-                // drop the promise of undo silently; ask again.
+                // The dialog said that this deletion can be undone, but the
+                // library found that it cannot: the selection or the limit
+                // has changed since the dialog was built. The user is asked
+                // again before anything is deleted without undo.
                 Err(picto_library::LibraryError::UndoLimitExceeded) if require_undoable => {
                     let cancel = cancelled(&delete.done);
                     this.ask_with(

@@ -2,9 +2,9 @@ use super::{Entry, Keys, MenuContext, Platform, ScopeKind, Status, TopMenu, acce
 use crate::settings::registry::{KeyboardPreset, Override, Overrides};
 
 /// Rewrites keys so that the same keys are always written the same way: the
-/// modifiers in a fixed order, followed by the key. Production writes
-/// `CmdOrCtrl`, or `Command` in a menu role, where the registry writes
-/// `Mod`.
+/// modifiers in a fixed order, followed by the key. The expected rows in
+/// this file write `CmdOrCtrl`, `CommandOrControl` or `Command` where the
+/// registry writes `Mod`.
 fn normalized(keys: &str) -> String {
     let parts: Vec<&str> = keys.split('+').collect();
     let (key, modifiers) = parts.split_last().unwrap();
@@ -68,14 +68,14 @@ fn rows(menus: &[TopMenu]) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
-/// Returns the menus of production's template for macOS (`menu.mjs` with
-/// `isMac`, not a development build), copied by hand. The rows of Electron's
-/// menu roles have Electron's own titles and keys. The other rows have the
-/// registry's default keys, which production's `accelerator()` uses when the
-/// user has not changed them. A menu written as `$` changes with the
-/// context, and the caller gives its rows in `variable`. The View menu also
-/// has this app's own Quick Search… row, which production does not have.
-fn production(variable: &[(&str, Vec<&str>)]) -> Vec<(String, Vec<String>)> {
+/// Returns the menus that the model must build on macOS, written out by
+/// hand as lines in the form that [`rows`] produces. They are the menus of
+/// Picto 0.6.19 and earlier, with the Quick Search… row added to the View
+/// menu. The keys are the default keys, which a row has when the user has
+/// not changed them. The "Picto", Window and Help menus are the same in
+/// every context and are written here. The caller gives the rows of the
+/// other menus, which change with the context, in `variable`.
+fn earlier_version(variable: &[(&str, Vec<&str>)]) -> Vec<(String, Vec<String>)> {
     let fixed =
         |rows: &[&str]| -> Vec<String> { rows.iter().map(|row| (*row).to_owned()).collect() };
     let picto = fixed(&[
@@ -153,7 +153,7 @@ fn view(single_media: &str, single: &str) -> Vec<String> {
         "Inbox|CmdOrCtrl+2|on".into(),
         "Untagged|CmdOrCtrl+3|on".into(),
         "Trash|CmdOrCtrl+4|on".into(),
-        // This app's own row. Production's template does not have it.
+        // Picto 0.6.19 and earlier did not have this row.
         "Quick Search…|CmdOrCtrl+T|on".into(),
         "---".into(),
         "Duplicates||on".into(),
@@ -179,7 +179,7 @@ fn rating(on: &str) -> Vec<&'static str> {
 }
 
 #[test]
-fn nothing_selected_in_all_images_matches_production() {
+fn nothing_selected_in_all_images_matches_the_earlier_version() {
     let context = MenuContext {
         library: Some("Main".into()),
         ..MenuContext::default()
@@ -192,7 +192,7 @@ fn nothing_selected_in_all_images_matches_production() {
     ];
     organize.extend(rating("off"));
     organize.extend(["---", "Tags||on"]);
-    let expected = production(&[
+    let expected = earlier_version(&[
         ("Library", library(true)),
         (
             "File",
@@ -244,7 +244,7 @@ fn nothing_selected_in_all_images_matches_production() {
 }
 
 #[test]
-fn several_selected_in_a_folder_match_production() {
+fn several_selected_in_a_folder_match_the_earlier_version() {
     let context = MenuContext {
         selection: 3,
         scope: ScopeKind::Folder,
@@ -360,9 +360,9 @@ fn smart_folders_take_no_new_folders_and_running_imports_block_imports() {
     assert_eq!(file[5], "Import Picto Pack...||off");
 }
 
-/// Quit has the keys that Electron's `quit` role has on each platform.
+/// Quit has ⌘Q on macOS and Ctrl+Q on Linux, and no keys on Windows.
 #[test]
-fn quit_takes_the_keys_electrons_quit_role_has() {
+fn quit_takes_the_keys_the_earlier_versions_quit_row_had() {
     assert_eq!(Platform::Mac.quit_keys(), Some("Mod+Q"));
     assert_eq!(Platform::Linux.quit_keys(), Some("Mod+Q"));
     assert_eq!(Platform::Windows.quit_keys(), None);
@@ -392,11 +392,11 @@ fn titled(menus: &[TopMenu], title: &str) -> Vec<String> {
         .collect()
 }
 
-/// On Windows and Linux, production's template has no "Picto" menu. The File
-/// menu ends with Settings…, Check for Updates… and the quit role, the
-/// Window menu has a Close row, and the key of Toggle Full Screen is F11.
+/// On Windows and Linux, the model has no "Picto" menu. The File menu ends
+/// with Settings…, Check for Updates… and the Quit row, the Window menu has
+/// a Close row, and the key of Toggle Full Screen is F11.
 #[test]
-fn windows_and_linux_take_productions_other_template() {
+fn windows_and_linux_take_the_earlier_versions_other_template() {
     let context = MenuContext::default();
     for platform in [Platform::Windows, Platform::Linux] {
         let menus = model(&context, platform);

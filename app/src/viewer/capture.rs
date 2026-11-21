@@ -1,14 +1,14 @@
-//! "Set as Thumbnail": the picture a video or Flash movie shows now, as the
-//! PNG production's `captureVideoFrame` and `captureCurrentWindowRect` make,
-//! written as the file's thumbnail (`setThumbnail`).
+//! The "Set as Thumbnail" command. It takes the picture that a video or a
+//! Flash movie shows at that moment, encodes it as a PNG and writes it as
+//! the file's thumbnail.
 use gpui::RenderImage;
 use std::path::Path;
 
-/// `setThumbnail`'s limit on what it writes.
+/// The largest PNG, in bytes, that [`write_thumbnail`] writes.
 const LARGEST: usize = 32 * 1024 * 1024;
 const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
-/// A captured picture, RGBA, before it is encoded.
+/// A captured picture as RGBA pixels, before it is encoded.
 pub struct Picture {
     pub width: u32,
     pub height: u32,
@@ -16,7 +16,8 @@ pub struct Picture {
 }
 
 impl Picture {
-    /// From pixels held as GPUI holds them (BGRA).
+    /// Makes a picture from BGRA pixels, which is the order GPUI holds them
+    /// in.
     pub fn from_bgra(width: u32, height: u32, bgra: &[u8]) -> Self {
         let mut rgba = bgra.to_vec();
         for pixel in rgba.chunks_exact_mut(4) {
@@ -29,7 +30,7 @@ impl Picture {
         }
     }
 
-    /// The first frame of a decoded image.
+    /// Makes a picture from the first frame of a decoded image.
     pub fn from_image(image: &RenderImage) -> Result<Self, String> {
         let size = image.size(0);
         let bytes = image.as_bytes(0).ok_or("The frame is not ready yet.")?;
@@ -40,7 +41,7 @@ impl Picture {
         ))
     }
 
-    /// `canvas.toDataURL('image/png')`.
+    /// Encodes the picture as a PNG.
     pub fn png(self) -> Result<Vec<u8>, String> {
         let image = image::RgbaImage::from_raw(self.width, self.height, self.rgba)
             .ok_or("The frame is not ready yet.")?;
@@ -52,8 +53,10 @@ impl Picture {
     }
 }
 
-/// Full-range 4:2:0 luma and interleaved chroma (`420f`, what the video
-/// player draws) to RGBA, by the BT.709 matrix.
+/// Converts a frame in the `420f` format, which is the format the video
+/// player draws, to RGBA with the BT.709 matrix. The frame has one plane of
+/// full-range luma and one plane of interleaved chroma at half the width and
+/// half the height. Each plane is given as its bytes and its bytes per row.
 #[cfg(any(test, target_os = "macos"))]
 pub fn rgba_from_biplanar(
     (width, height): (usize, usize),
@@ -79,13 +82,14 @@ pub fn rgba_from_biplanar(
     rgba
 }
 
-/// A CoreVideo frame at the video's own size.
+/// Makes a picture from a CoreVideo frame, at the video's own size.
 #[cfg(target_os = "macos")]
 pub fn from_pixel_buffer(buffer: &objc2_core_video::CVPixelBuffer) -> Result<Picture, String> {
     use objc2_core_video::*;
     let not_ready = || "The video frame is not ready yet.".to_owned();
-    // Only the format the player asks for is read: another biplanar one
-    // (video range, 10-bit) would read in bounds but in wrong colours.
+    // Only the format the player asks for is read. Another biplanar format
+    // (video range, or 10-bit) would be read within bounds but would give
+    // wrong colours.
     if CVPixelBufferGetPlaneCount(buffer) != 2
         || CVPixelBufferGetPixelFormatType(buffer) != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
     {
@@ -120,11 +124,11 @@ pub fn from_pixel_buffer(buffer: &objc2_core_video::CVPixelBuffer) -> Result<Pic
     }
 }
 
-/// "Set as Thumbnail" on what `surface` shows, the file `hash`: the picture
-/// is taken now, then encoded and written off the thread that draws, and
-/// every view showing the thumbnail reads it again. Only the library open
-/// in the window is written to (`libraries::writable`), and only inside its
-/// folder.
+/// Runs "Set as Thumbnail" on what `surface` shows, which is the file
+/// `hash`. The picture is taken at once. It is encoded and written on a
+/// background thread, and afterwards every view that shows the thumbnail
+/// reads it again. Only the library that is open in the window is written
+/// to (`libraries::writable`), and only inside its folder.
 pub fn set_as_thumbnail(
     surface: &gpui::Entity<super::surface::MediaSurface>,
     session: &gpui::Entity<crate::session::Session>,
@@ -159,10 +163,10 @@ pub fn set_as_thumbnail(
     .detach();
 }
 
-/// `setThumbnail`: `png` becomes the thumbnail whose `.jpg` path is `jpeg`,
-/// written beside it as `.png` (through a temporary file), and the `.jpg`
-/// goes so the `.png` is the one read. Both must lie inside the library at
-/// `root` (`libraries::confine`).
+/// Makes `png` the thumbnail whose `.jpg` path is `jpeg`. The PNG is written
+/// beside that path with the extension `.png`, through a temporary file, and
+/// the `.jpg` is deleted so that the `.png` is the one that is read. Both
+/// paths must lie inside the library at `root` (`libraries::confine`).
 pub fn write_thumbnail(root: &Path, jpeg: &Path, png: &[u8]) -> Result<(), String> {
     if png.is_empty() || png.len() > LARGEST {
         return Err("Invalid thumbnail size".into());
@@ -200,12 +204,12 @@ mod tests {
 
     #[test]
     fn grey_and_colour_come_through_the_video_matrix() {
-        // Mid grey: no chroma.
+        // Mid grey has no chroma, so all three channels are 128.
         assert_eq!(
             rgba_from_biplanar((1, 1), (&[128], 1), (&[128, 128], 2)),
             [128, 128, 128, 255]
         );
-        // Strong red difference makes red.
+        // A large red difference gives red.
         let red = rgba_from_biplanar((2, 2), (&[54, 54, 54, 54], 2), (&[99, 255], 2));
         assert!(red[0] > 200 && red[1] < 40 && red[2] < 40);
         assert_eq!(red.len(), 16);
@@ -222,7 +226,8 @@ mod tests {
         write_thumbnail(&root, &jpeg, &png).unwrap();
         assert!(!jpeg.exists());
         let written = image::open(jpeg.with_extension("png")).unwrap().to_rgba8();
-        // BGRA blue-green-red in, red out.
+        // The pixel was given as BGRA with only its red byte set, so the pixel
+        // of the PNG is red.
         assert_eq!(written.get_pixel(0, 0).0, [255, 0, 0, 255]);
         assert_eq!(
             write_thumbnail(&root, &jpeg, b"not a png"),
@@ -230,8 +235,9 @@ mod tests {
         );
     }
 
-    /// A thumbnail whose folder leads out of the library (a link) is not
-    /// written, and nothing is removed or written where it leads.
+    /// A thumbnail whose folder leads out of the library through a symbolic
+    /// link is not written, and nothing is removed or written in the folder
+    /// the link leads to.
     #[cfg(unix)]
     #[test]
     fn a_thumbnail_is_written_only_inside_the_library() {
@@ -249,7 +255,7 @@ mod tests {
             b"kept"
         );
         assert!(!elsewhere.path().join("abcd.png").exists());
-        // Another library's thumbnail, by its own path.
+        // A thumbnail path inside another library is refused as well.
         let other = tempfile::tempdir().unwrap();
         assert!(write_thumbnail(&root, &other.path().join("x.jpg"), &png).is_err());
         assert!(!other.path().join("x.png").exists());

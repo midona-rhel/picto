@@ -1,13 +1,18 @@
-//! EPUB books as `ArchiveDocumentViewer.tsx` reads them: the package
-//! document named by `META-INF/container.xml`, its spine of XHTML chapters,
-//! one chapter to a page, and the pictures each chapter refers to.
+//! Reads EPUB books. It finds the package document that
+//! `META-INF/container.xml` names, lists the XHTML chapters of the package's
+//! spine in reading order, and parses one chapter at a time together with
+//! the pictures that the chapter refers to. The reader shows each chapter as
+//! one page.
 use super::pages::{ENTRY_LIMIT, read_entry};
 use super::rich::{self, Block, Picture};
 use anyhow::{Context as _, Result, anyhow, bail};
 use std::collections::HashMap;
 use std::path::Path;
 
-/// The book's chapters, as paths inside the archive, in reading order.
+/// Returns the chapters of the book at `path` in reading order, each as the
+/// path of its file inside the archive. It fails when the file is not a zip
+/// archive, when the container file or the package document is missing or
+/// damaged, and when the book has no chapters.
 pub fn chapters(path: &Path) -> Result<Vec<String>> {
     let mut archive = open(path)?;
     let container = read_text(&mut archive, "META-INF/container.xml")
@@ -31,7 +36,12 @@ pub fn chapters(path: &Path) -> Result<Vec<String>> {
     Ok(chapters)
 }
 
-/// The spine's XHTML chapters, resolved against the package document.
+/// Returns the chapters that the spine of `package`, the text of the
+/// package document, lists, in the spine's order. An entry of the spine is
+/// a chapter when the media type of its manifest item contains "html". Each
+/// chapter is returned as a path inside the archive: the address in its
+/// manifest item, resolved against the folder of `rootfile`, the path of
+/// the package document.
 pub fn spine(package: &str, rootfile: &str) -> Result<Vec<String>> {
     let document =
         roxmltree::Document::parse(package).map_err(|_| anyhow!("The EPUB package is damaged."))?;
@@ -58,12 +68,14 @@ pub fn spine(package: &str, rootfile: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-/// The most a chapter's pictures take decoded, together; pictures past it
-/// are left out.
+/// The most memory, 256 MB, that the decoded pictures of one chapter may
+/// take together. A picture that would go over it is left out.
 const PICTURE_BUDGET: u64 = 256 << 20;
 
-/// One chapter's blocks, with its pictures decoded. A picture used more
-/// than once is decoded once.
+/// Reads the chapter at `chapter`, a path inside the archive at `path`, and
+/// returns its content as blocks with its pictures decoded. A picture that
+/// the chapter uses more than once is decoded once. A picture that is
+/// missing or cannot be decoded is left out.
 pub fn chapter(path: &Path, chapter: &str) -> Result<Vec<Block>> {
     let mut archive = open(path)?;
     let markup = read_text(&mut archive, chapter)?;
@@ -106,13 +118,17 @@ fn read_text(archive: &mut zip::ZipArchive<std::fs::File>, name: &str) -> Result
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// `dirname`: the folder part of an archive path, with its slash.
+/// Returns the folder part of a path inside the archive, with the slash at
+/// its end. A path without a slash gives the empty string.
 fn dirname(path: &str) -> &str {
     path.rfind('/').map_or("", |slash| &path[..=slash])
 }
 
-/// `resolveArchivePath`: a relative reference resolved against a folder in
-/// the archive, without its fragment or query, percent-decoded.
+/// Returns the path inside the archive that the reference `relative` names
+/// when a file in the folder `base` uses it. The reference's fragment and
+/// query are removed, `.` and `..` are resolved, and percent escapes are
+/// decoded. A reference that starts with a slash is counted from the
+/// archive's root. No reference gives a path outside the archive's root.
 pub fn resolve(base: &str, relative: &str) -> String {
     let relative = relative.split(['#', '?']).next().unwrap_or("");
     let joined = if relative.starts_with('/') {
@@ -166,7 +182,8 @@ mod tests {
         );
         assert_eq!(resolve("OEBPS/", "ch1.xhtml"), "OEBPS/ch1.xhtml");
         assert_eq!(resolve("", "./ch1.xhtml"), "ch1.xhtml");
-        // Nothing climbs out of the archive's root.
+        // A reference with more `..` than there are folders, and one that
+        // starts with a slash, still name a path inside the archive's root.
         assert_eq!(resolve("OEBPS/", "../../../etc/passwd"), "etc/passwd");
         assert_eq!(resolve("OEBPS/", "/etc/passwd"), "etc/passwd");
     }

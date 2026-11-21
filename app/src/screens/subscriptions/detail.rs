@@ -1,9 +1,10 @@
-//! One subscription's page (`SubscriptionDetail.tsx`). At the top is a header
-//! with the subscription's cover, name and state. Under it are three tables as
-//! wide as the page: its sources, its runs and its problems. The run's counts,
-//! the schedule, and the folders and tags that new files receive are in the
-//! right rail, which is built from the same parts as the inspector. Run now,
-//! Hold and the menu of further commands are in the titlebar (`toolbar.rs`).
+//! One subscription's page. At the top is a header with the subscription's
+//! cover, name and state. Under it are three tabs, each with a table as wide
+//! as the page: the subscription's sources, its runs and its problems. The
+//! run's counts, the schedule, and the folders and tags that new files
+//! receive are in the right rail, which is built from the same parts as the
+//! inspector. Run now, Hold and the menu of further commands are in the
+//! titlebar (`toolbar.rs`).
 use super::data::{self, Detail};
 use super::format::{self, Track};
 use super::{HISTORY, SOURCES, SubscriptionsScreen, TABS, home, place_of};
@@ -15,7 +16,8 @@ use crate::{motion, theme};
 use gpui::{prelude::FluentBuilder as _, *};
 use picto_library::query::ItemScope;
 
-/// The padding at the page's left and right edges, the same as the grid's.
+/// The padding at the page's left and right edges. The grid has the same
+/// padding.
 const INSET: f32 = 16.;
 /// The padding at the left and right inside a table row. A row's hover
 /// background covers this padding, and a row's text starts where the column
@@ -52,9 +54,9 @@ fn minimum(track: Track) -> f32 {
     }
 }
 
-/// The width of each column when the table is `width` wide, or `None` for a
-/// column that is removed. Columns are removed, the lowest `drops` first,
-/// until the remaining ones fit at their minimum widths.
+/// Returns the width of each column when the table is `width` wide, or
+/// `None` for a column that is removed. Columns are removed, the lowest
+/// `drops` first, until the remaining ones fit at their minimum widths.
 fn fit(width: f32, columns: &[Column]) -> Vec<Option<f32>> {
     let mut shown = vec![true; columns.len()];
     loop {
@@ -93,8 +95,9 @@ fn fit(width: f32, columns: &[Column]) -> Vec<Option<f32>> {
         .collect()
 }
 
-/// The width of the widest of `texts` in the table's font, and at least
-/// `floor`. Used for a column that is as wide as its contents.
+/// Returns the width of the widest of `texts` in the table's font at the
+/// size `size`, or `floor` when that is larger. A column that is as wide as
+/// its contents gets this width.
 fn widest<'a>(
     texts: impl IntoIterator<Item = &'a str>,
     floor: f32,
@@ -116,14 +119,15 @@ fn widest<'a>(
         + 8.
 }
 
-/// Whether the pointer is on a source's row or on one of the row's buttons.
-/// While either is true, the row is drawn with its hover background and its
-/// buttons are shown; `fade` fades the buttons in and out.
+/// Records whether the pointer is on a source's row or on one of the row's
+/// buttons. While either is true, the row is drawn with its hover background
+/// and its buttons are shown. `fade` fades the buttons in and out.
 #[derive(Default)]
 struct RowHover {
-    /// The pointer is on the row, outside its buttons.
+    /// True while the pointer is on the row and not on one of its buttons.
     row: bool,
-    /// One bit for each button the pointer is on.
+    /// One bit for each of the row's buttons. A button's bit is set while
+    /// the pointer is on that button.
     buttons: u8,
     fade: motion::Fade,
 }
@@ -152,7 +156,8 @@ impl RowHover {
     }
 }
 
-/// The widest badge among `labels`, at least `floor`.
+/// Returns the width of the widest status badge among `labels`, or `floor`
+/// when that is larger.
 fn widest_badge<'a>(labels: impl IntoIterator<Item = &'a str>, floor: f32, window: &Window) -> f32 {
     labels
         .into_iter()
@@ -161,8 +166,8 @@ fn widest_badge<'a>(labels: impl IntoIterator<Item = &'a str>, floor: f32, windo
         .ceil()
 }
 
-/// One row of a table: one cell for each column that is shown, at that
-/// column's width.
+/// Builds one row of a table. The row holds one cell for each column that
+/// is shown, at that column's width.
 fn table_row(widths: &[Option<f32>], cells: Vec<AnyElement>) -> Div {
     let mut row = div()
         .w_full()
@@ -185,7 +190,8 @@ fn table_row(widths: &[Option<f32>], cells: Vec<AnyElement>) -> Div {
     row
 }
 
-/// The heading of a column.
+/// Builds the heading of a column. With `right`, the label is at the right
+/// edge of the column.
 fn heading(label: &'static str, right: bool) -> AnyElement {
     div()
         .w_full()
@@ -196,8 +202,8 @@ fn heading(label: &'static str, right: bool) -> AnyElement {
         .into_any_element()
 }
 
-/// A cell that holds a number: right-aligned, in the font that the sidebar and
-/// the inspector use for numbers.
+/// Builds a cell that holds a number. The number is right-aligned and drawn
+/// in the font that the sidebar and the inspector use for numbers.
 fn number(value: i64, cx: &App) -> AnyElement {
     div()
         .w_full()
@@ -210,7 +216,8 @@ fn number(value: i64, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// A cell that holds a time or a note, in the tertiary text colour.
+/// Builds a cell that holds a time or a note. The text is drawn in the
+/// tertiary text colour.
 fn quiet(text: String, cx: &App) -> AnyElement {
     div()
         .w_full()
@@ -220,7 +227,8 @@ fn quiet(text: String, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// A line in a table that says the table has nothing to show.
+/// Builds the line of text that a table shows in place of its rows, for
+/// example "No runs yet.".
 fn table_note(text: &'static str, cx: &App) -> AnyElement {
     div()
         .h(px(ROW))
@@ -232,8 +240,8 @@ fn table_note(text: &'static str, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// A row in the rail's Properties section that holds a control: the property's
-/// label on the left and the control on the right.
+/// Builds a row of the rail's Properties section that holds a control. The
+/// property's label is on the left and the control is on the right.
 fn control_row(label: &'static str, control: impl IntoElement) -> Div {
     div()
         .h(px(theme::CONTROL_SM))
@@ -292,11 +300,11 @@ impl SubscriptionsScreen {
             .child(div().relative().flex_1().min_h_0().mt(px(8.)).child(table))
     }
 
-    // ── The header ──────────────────────────────────────────────
+    // The functions below build the page's header.
 
-    /// The cover, the name (a double-click renames it), the state badge, whose
-    /// tooltip says what is wrong, and the progress of a run while one is
-    /// active.
+    /// Builds the page's header. It holds the cover, the name, the state
+    /// badge and, while a run is active, the run's progress. A double-click
+    /// on the name opens the "Rename Subscription" dialog.
     fn header(
         &mut self,
         subscription: &data::Subscription,
@@ -397,8 +405,10 @@ impl SubscriptionsScreen {
             )
     }
 
-    /// While a run is active: how far the run has got. It is shown after the
-    /// state badge.
+    /// Builds the text that says how far the active run has got: the number
+    /// of posts processed out of the run's target, and the number of files
+    /// downloaded. The text is shown after the state badge. Returns `None`
+    /// when no run is active.
     fn run_progress(subscription: &data::Subscription, cx: &App) -> Option<Div> {
         subscription.active_run_id?;
         let progress = subscription.progress;
@@ -421,8 +431,9 @@ impl SubscriptionsScreen {
         )
     }
 
-    /// The line under the state that shows the run's progress. It always takes
-    /// up its space, and it is invisible while no run is active.
+    /// Builds the progress bar under the state badge. It shows the share of
+    /// the run's target of posts that has been processed. The bar always
+    /// takes up its space, and it is invisible while no run is active.
     fn run_bar(subscription: &data::Subscription, cx: &App) -> Div {
         let theme = theme::theme(cx);
         let active = subscription.active_run_id.is_some();
@@ -449,10 +460,11 @@ impl SubscriptionsScreen {
             )
     }
 
-    // ── The rail ────────────────────────────────────────────────
+    // The functions below build the rail beside the page.
 
-    /// The rail beside the page. It is built from the same parts as the
-    /// inspector: a scrolling column, sections and property rows.
+    /// Builds the rail beside the page. It is built from the same parts as
+    /// the inspector: a scrolling column, sections and property rows. It is
+    /// empty when no subscription's page is shown.
     pub(super) fn rail(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(subscription) = self.opened().cloned() else {
             return div().into_any_element();
@@ -478,8 +490,8 @@ impl SubscriptionsScreen {
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.rail_scroll)
-                    // The same space on both sides as the inspector has
-                    // (`Inspector::scroller`).
+                    // The rail has the same padding at its left and right as
+                    // the inspector has (`Inspector::scroller`).
                     .px(px(16.))
                     .pt(px(16.))
                     .pb(px(48.))
@@ -495,8 +507,8 @@ impl SubscriptionsScreen {
             .into_any_element()
     }
 
-    /// A section of the rail. It can be collapsed, like a section of the
-    /// inspector.
+    /// Builds a section of the rail with the title `title`. A click on the
+    /// title folds the section or unfolds it, as in the inspector.
     fn rail_section(
         &self,
         title: &'static str,
@@ -514,8 +526,9 @@ impl SubscriptionsScreen {
             }))
     }
 
-    /// The run's counts and the time of the last check as property rows, then
-    /// the schedule and the limit of posts per run.
+    /// Builds the content of the Properties section: the run's counts and
+    /// the time of the last check as property rows, then the Schedule
+    /// control and the "Posts per run" field.
     fn properties(&self, subscription: &data::Subscription, cx: &mut Context<Self>) -> AnyElement {
         let id = subscription.id;
         let view = cx.entity().downgrade();
@@ -555,7 +568,7 @@ impl SubscriptionsScreen {
                 t("Last check"),
                 format::relative_time(format::last_check(subscription), chrono::Local::now()),
             ))
-            // The Electron app's `setSchedule`.
+            // A schedule chosen here is sent as `subscriptions.schedule`.
             .child(
                 control_row(
                     t("Schedule"),
@@ -579,7 +592,7 @@ impl SubscriptionsScreen {
                 )
                 .mt(px(8.)),
             )
-            // The Electron app's `setPostsPerRun`.
+            // A number entered here is sent as `subscriptions.posts_per_run`.
             .child(control_row(
                 t("Posts per run"),
                 ui::number_input(
@@ -599,9 +612,11 @@ impl SubscriptionsScreen {
             .into_any_element()
     }
 
-    /// The inspector's "+" button after a list of chips or, when the list is
-    /// empty, the inspector's wide add row. `place` records where the control
-    /// is, so that the picker can open beside the rail at the same height.
+    /// Builds the control that opens the folder picker or the tag picker.
+    /// After a list of chips it is the inspector's "+" button. When the list
+    /// is empty (`empty`), it is the inspector's wide add row with `label`.
+    /// The control's position is stored in `place`, so that the picker can
+    /// open beside the rail at the same height.
     fn add_control(
         &self,
         id: &'static str,
@@ -642,10 +657,10 @@ impl SubscriptionsScreen {
         }
     }
 
-    /// Where new files go (`.subscriptionDestination`): the folders and tags
-    /// that every downloaded file receives. Each one is removed with the
-    /// button on its chip and added through the folder picker or the tag
-    /// picker.
+    /// Builds the content of the "New files" section: the folders and tags
+    /// that every downloaded file receives, each as a chip. A folder or tag
+    /// is removed with the button on its chip and added through the folder
+    /// picker or the tag picker.
     fn destination(&self, subscription: &data::Subscription, cx: &mut Context<Self>) -> AnyElement {
         let theme = theme::theme(cx);
         let id = subscription.id;
@@ -661,7 +676,7 @@ impl SubscriptionsScreen {
                 .map(|entry| entry.label.clone())
         };
         let mut folders = div().flex().flex_wrap().items_center().gap(px(4.));
-        // `selectedFolders`: only the folders that the library still has.
+        // A chip is shown only for a folder that the library still has.
         let mut shown = 0;
         for folder in &subscription.folder_ids {
             let Some(label) = folder_label(*folder) else {
@@ -732,7 +747,7 @@ impl SubscriptionsScreen {
             .into_any_element()
     }
 
-    // ── The tables ──────────────────────────────────────────────
+    // The functions below build the tables of the three tabs.
 
     fn plane(
         &mut self,
@@ -761,9 +776,9 @@ impl SubscriptionsScreen {
             .max(0.)
     }
 
-    /// A table as wide as the page: the column headings, then the rows, which
-    /// scroll while the headings stay in place, then whatever follows the
-    /// rows.
+    /// Builds a table as wide as the page. The column headings (`header`)
+    /// stay in place while the rows scroll. `after` is drawn under the last
+    /// row and scrolls with the rows.
     fn table(
         &self,
         id: &'static str,
@@ -815,8 +830,9 @@ impl SubscriptionsScreen {
             .into_any_element()
     }
 
-    /// A row of a table's body: at least 32px tall, with a 1px line under it
-    /// and a hover background.
+    /// Turns `row` into a row of a table's body. The row is at least 32px
+    /// tall, has a 1px line under it, and has the hover background while the
+    /// pointer is on it.
     fn body_row(&self, id: ElementId, row: Div, cx: &App) -> Stateful<Div> {
         let theme = theme::theme(cx);
         row.id(id)
@@ -826,11 +842,12 @@ impl SubscriptionsScreen {
             .hover(move |style| style.bg(theme.surface_hover()))
     }
 
-    /// Sources: the site, the query (with what is wrong with it), and the
-    /// counts at the right. The row's buttons are shown while the pointer is
-    /// on the row. They are drawn over the end of the query's cell. When the
-    /// page is narrow, the media count is removed first, then the posts count,
-    /// then the site.
+    /// Builds the Sources table. Its columns are the site, the query with
+    /// the text that says what is wrong with it, the number of posts and the
+    /// number of media. The row's buttons are shown while the pointer is on
+    /// the row. They are drawn over the end of the query's cell. When the
+    /// page is narrow, the media count is removed first, then the posts
+    /// count, then the site.
     fn sources(
         &self,
         subscription: &data::Subscription,
@@ -870,8 +887,8 @@ impl SubscriptionsScreen {
         );
         let active = subscription.active_run_id.is_some();
         let running = format::running(subscription);
-        // `busy || subscriptionRunning`: the row's buttons are disabled while
-        // a command or a run is in progress.
+        // The row's buttons are disabled while a command is waiting for its
+        // answer or the subscription has an active run.
         let waiting = self.busy() || active;
         let mut rows = Vec::new();
         if subscription.queries.is_empty() {
@@ -934,7 +951,7 @@ impl SubscriptionsScreen {
                     cx,
                 ));
             }
-            // `qAuthChip`: shown when the site needs a login before this
+            // This warning is shown when the site needs a login before this
             // source can run.
             if let Some(warning) =
                 format::auth_warning(&query.site_id, &self.logins, &self.login_health)
@@ -951,7 +968,7 @@ impl SubscriptionsScreen {
                         .text(theme::TEXT_SM)
                         .text_color(rgb(theme::FAILURE_TEXT))
                         .child(warning)
-                        // `onOpenAuth`: opens the Accounts dialog at the
+                        // A click opens the "Site accounts" dialog at the
                         // service that this source's login belongs to.
                         .on_click({
                             let site = query.site_id.clone();
@@ -1133,8 +1150,9 @@ impl SubscriptionsScreen {
         self.table("subscription-sources", header, rows, Some(add), window, cx)
     }
 
-    /// History: the start time and the state are as wide as their contents,
-    /// then come the counts, and the notes take the remaining width. When the
+    /// Builds the History table. The columns for the start time and the
+    /// state are as wide as their contents. Then come the counts of fetched
+    /// and reused files, and the notes take the remaining width. When the
     /// page is narrow, the reused count is removed first, then the fetched
     /// count, then the notes.
     fn history(
@@ -1217,9 +1235,11 @@ impl SubscriptionsScreen {
         self.table("subscription-history", header, rows, None, window, cx)
     }
 
-    /// Problems: the state and the time it was last seen are as wide as their
-    /// contents, then comes the post, and the reason it failed takes the
-    /// remaining width. The column for the fix is there only while some
+    /// Builds the Problems table. Its columns are the state, the post, the
+    /// reason the post failed, the time the problem was last seen and the
+    /// fix. The state and the time are as wide as their contents. The post
+    /// and the reason share the remaining width, and the reason gets twice
+    /// the post's share. The column for the fix is there only while some
     /// problem has a fix. When the page is narrow, the time is removed first,
     /// then the post. The state, the reason and the fix are never removed.
     fn problems(
@@ -1315,11 +1335,11 @@ impl SubscriptionsScreen {
                         .child(target_label)
                         .into_any_element(),
                 };
-                // `recovery_action` is `fix_credentials` for a login problem.
-                // The Electron app shows no other action on a row (`mapIssue`:
-                // Retry now and Review source never appear). Fix login opens
-                // the Accounts dialog at the service of the problem's source,
-                // or at the first service when the problem has no source.
+                // A problem with a login has the "Fix login" button. No
+                // other kind of problem has a button. "Fix login" opens the
+                // "Site accounts" dialog at the service of the problem's
+                // source, or at the first service when the problem has no
+                // source.
                 let fix = fixable(&issue.kind).then(|| {
                         let site = issue.query.and_then(|query| {
                             self.subscription(detail.subscription)?
@@ -1336,8 +1356,8 @@ impl SubscriptionsScreen {
                                 this.open_accounts(site.as_deref(), cx)
                             }))
                     });
-                // The message's tooltip holds the message and its detail
-                // (`title={[message, detail].join('\n')}`).
+                // The message's tooltip holds the message and, on a second
+                // line, its detail.
                 let full = [Some(issue.message.as_str()), issue.detail.as_deref()]
                     .into_iter()
                     .flatten()
@@ -1403,8 +1423,9 @@ impl SubscriptionsScreen {
         self.table("subscription-problems", header, rows, more, window, cx)
     }
 
-    /// The row for adding a source, under the sources (`AddQueryBar.tsx`): the
-    /// site, the query, and Add. Enter also adds the source.
+    /// Builds the row that adds a source, which is under the rows of the
+    /// Sources table. It holds the site's dropdown, the query's text field
+    /// and the Add button. Enter in the text field also adds the source.
     fn add_query_bar(&self, cx: &mut Context<Self>) -> Div {
         let sites = format::query_sites()
             .into_iter()

@@ -1,6 +1,6 @@
-//! What the imports show: the foreground task dialog (`TaskDialog.tsx`),
-//! the task bar of tasks sent to the background, and the dialogs an import
-//! asks in (`FolderImportModal`, "Import as Collection?").
+//! Draws what the imports show: the task dialog, the task bar that lists
+//! the minimized tasks, and the dialogs that ask a question before an
+//! import starts (the folder dialog and "Import as Collection?").
 use super::task::{Phase, StopChoice, Task, Tone};
 use super::{Analysis, Dialog, FolderOption, Imports, TaskView, folder_name};
 use crate::theme::Text as _;
@@ -11,20 +11,22 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use std::time::Instant;
 
-/// `.dialog`: `width: min(440px, calc(100vw - 48px))`, inside a 1px glass
-/// border.
+/// The width of the task dialog. The dialog is narrower in a window that
+/// is less than 488px wide, so that 24px stay free on each side of it.
 const DIALOG_WIDTH: f32 = 440.;
+/// The width of the border of the task dialog.
 const BORDER: f32 = 1.;
-/// `.dialog`'s and `.barRow`'s corners.
+/// The corner radius of the task dialog.
 const DIALOG_RADIUS: f32 = 12.;
+/// The corner radius of a row of the task bar.
 const BAR_RADIUS: f32 = 10.;
-/// The body's line height, which text with none of its own inherits from
-/// the page (`--mantine-line-height`).
+/// Returns the line height of body text at the font size `size`.
 fn line(size: f32) -> Pixels {
     px(size * theme::LINE_HEIGHT_BODY)
 }
 
-/// Runs `action` on the imports from a control's handler.
+/// Returns a handler for a control that runs `action` on the `Imports`
+/// view.
 fn on(
     this: &WeakEntity<Imports>,
     action: impl Fn(&mut Imports, &mut Context<Imports>) + 'static,
@@ -45,7 +47,10 @@ fn on_click(
 
 impl Render for Imports {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // The dialog follows the task in front; a new one comes in afresh.
+        // The task dialog now shows another task than before, or none. Its
+        // state starts again from the defaults, so the dialog of a new task
+        // fades in. The keyboard focus goes back to where it was before the
+        // dialog took it.
         let focused = self.focused().map(|task| task.task_id);
         if self.view.task != focused {
             if self.view.focused && self.focus.contains_focused(window, cx) {
@@ -66,7 +71,7 @@ impl Render for Imports {
 }
 
 impl Imports {
-    // ── The task dialog ─────────────────────────────────────────
+    // The functions below draw the task dialog.
 
     fn task_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let task = self.focused()?.clone();
@@ -92,7 +97,8 @@ impl Imports {
         } else {
             self.task_view(&task, &this, cx)
         };
-        // `role="dialog"` named by the task's title.
+        // Assistive technology is told that the panel is a dialog named by
+        // the task's title.
         let panel = ui::modal::dialog_panel("task-dialog", DIALOG_RADIUS, task.heading(), cx)
             .w(px(width))
             .overflow_hidden()
@@ -110,7 +116,7 @@ impl Imports {
         let id = task.task_id;
         let escape = this.clone();
         let layer = ui::modal::backdrop("task-backdrop", eased, Some(&self.focus), window)
-            // Escape sends a working import to the task bar.
+            // Escape moves a task that is still open to the task bar.
             .on_action(move |_: &ui::keys::Dismiss, _, cx| {
                 if open {
                     let _ = escape.update(cx, |imports, cx| imports.minimize(id, cx));
@@ -120,7 +126,9 @@ impl Imports {
         Some(ui::modal::over_window(layer, crate::ui::layer::DIALOG).into_any_element())
     }
 
-    /// `TaskView`: the progress, the counts and the controls.
+    /// Builds the body and the footer of the task dialog for a task. The
+    /// body holds the title, the progress bar and the counts, and the footer
+    /// holds the buttons.
     fn task_view(
         &mut self,
         task: &Task,
@@ -261,7 +269,8 @@ impl Imports {
         (body.into_any_element(), foot.into_any_element())
     }
 
-    /// `Failures`: the files that could not be imported, name and reason.
+    /// Builds the list of the files that could not be imported, each with
+    /// its name and the error. Returns `None` until the failures are read.
     fn failures(&self, theme: &theme::Theme) -> Option<Stateful<Div>> {
         let failures = self.view.failures.as_ref()?;
         Some(
@@ -305,7 +314,8 @@ impl Imports {
         )
     }
 
-    /// `StopView`: what becomes of what the import added.
+    /// Builds the body and the footer of the question about stopping, which
+    /// asks what happens to the items that the import has added.
     fn stop_view(
         &mut self,
         task: &Task,
@@ -462,10 +472,10 @@ impl Imports {
         (body.into_any_element(), foot.into_any_element())
     }
 
-    // ── The task bar ────────────────────────────────────────────
+    // The functions below draw the task bar.
 
-    /// `TaskBar`: one row per task sent to the background, above the
-    /// bottom edge between the rails.
+    /// Builds the task bar. It has one row for each minimized task and is
+    /// 12px above the bottom edge of the window, between the rails.
     fn bar(&mut self, cx: &mut Context<Self>) -> Option<Div> {
         let shown: Vec<Task> = self.presentation.in_bar(&self.tasks).cloned().collect();
         if shown.is_empty() {
@@ -510,7 +520,8 @@ impl Imports {
                         .aria_live(gpui::accesskit::Live::Polite)
                         .relative()
                         .h(px(40.))
-                        // 8px and 6px inside the 1px glass edge.
+                        // The padding is 8px on the left and 6px on the
+                        // right, plus the panel's 1px border.
                         .pl(px(9.))
                         .pr(px(7.))
                         .flex()
@@ -555,7 +566,8 @@ impl Imports {
         )
     }
 
-    // ── The import dialogs ──────────────────────────────────────
+    // The functions below draw the dialogs that ask a question before an
+    // import starts.
 
     fn dialog_layer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let blocked = super::task::gate(&self.tasks, super::IMPORT).map(|(_, reason)| reason);
@@ -705,8 +717,9 @@ impl Imports {
     }
 }
 
-/// The dialog's title and subtitle (`.titles`): the title on one line, the
-/// subtitle under it, wrapping only when it is a warning.
+/// Builds the title and the subtitle of the task dialog. The title is cut
+/// to one line. The subtitle is under it and is also cut to one line,
+/// unless it is a warning, which wraps.
 fn titles(title: String, subtitle: String, warning: bool, theme: &theme::Theme) -> Div {
     let subtitle = div()
         .mt(px(2.))
@@ -731,7 +744,7 @@ fn titles(title: String, subtitle: String, warning: bool, theme: &theme::Theme) 
         })
 }
 
-/// `.foot`: the footer strip of buttons.
+/// Builds the footer of the task dialog, which holds the buttons.
 fn foot(theme: &theme::Theme) -> Div {
     div()
         .flex()
@@ -746,7 +759,8 @@ fn foot(theme: &theme::Theme) -> Div {
         .border_color(theme.border_secondary())
 }
 
-/// `.foot button`: 28px, 14px either side, 12.5px text.
+/// Builds a button of the footer. It is 28px high, with 14px of padding on
+/// each side and 12.5px text.
 fn foot_button(id: &'static str, look: ButtonLook) -> ui::action_button::ActionButton {
     ui::action_button(id, look)
         .height(28.)
@@ -754,7 +768,8 @@ fn foot_button(id: &'static str, look: ButtonLook) -> ui::action_button::ActionB
         .text_size(12.5)
 }
 
-/// `TaskIcon` (`.kind`): the task's glyph on its tone's tile.
+/// Builds the task's icon on a square tile. The task's tone decides the
+/// colour of the icon and of the tile.
 fn kind(task: &Task, size: f32, radius: f32, theme: &theme::Theme) -> Div {
     let (glyph, tile) = match task.tone() {
         Tone::Working => (rgb(theme::TASK_WORKING_GLYPH), theme.primary_at(20.)),
@@ -776,17 +791,19 @@ fn kind(task: &Task, size: f32, radius: f32, theme: &theme::Theme) -> Div {
         .child(ui::icon(task.glyph(), 17., glyph))
 }
 
-/// `@keyframes indeterminate`: a 30% segment moving from
-/// `translateX(-110%)` to `translateX(340%)` of its own width.
+/// The moving segment of a task's progress bar while the share of the
+/// work done is unknown. The segment is 30% of the bar wide and moves by
+/// 4.5 times its own width in each period.
 const TASK_SWEEP: ui::progress_bar::Sweep = ui::progress_bar::Sweep {
     segment: 0.3,
     period: motion::TASK_PROGRESS_SWEEP,
     travel: 4.5,
 };
 
-/// The progress track (`.track`, `.fill`): a share that moves over 250 ms,
-/// or a 30% segment sweeping across while the share is unknown, in the
-/// task's tone.
+/// Builds the task's progress bar, `height` pixels high with `top` pixels
+/// of space above it. The filled share changes over 250 ms. While the
+/// share is unknown, a segment moves across the bar instead. The task's
+/// tone decides the colour.
 fn progress(task: &Task, height: f32, top: f32, cx: &App) -> Stateful<Div> {
     let theme = theme::theme(cx);
     let fill_color = match task.tone() {
@@ -806,8 +823,8 @@ fn progress(task: &Task, height: f32, top: f32, cx: &App) -> Stateful<Div> {
             task.share(),
         );
     }
-    // Each task's bar under an id of its own, so that several in the task
-    // bar do not share one.
+    // Each task's bar has an id of its own, so that several bars in the
+    // task bar do not share one element's state.
     div()
         .id(ElementId::NamedInteger(
             "task-progress".into(),

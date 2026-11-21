@@ -1,13 +1,15 @@
 //! The artwork drawn in place of a thumbnail: the torn page of a thumbnail
-//! that failed to load (`drawBrokenThumbnail.ts`) and the lettered card of a
-//! font (`drawFontThumbnail.ts`). Each is an SVG built once for the theme's
-//! placeholder colour and rasterised by GPUI's SVG renderer.
+//! that failed to load and the lettered card of a font. Each is an SVG built
+//! once for the theme's placeholder colour and rasterised by GPUI's SVG
+//! renderer.
 use gpui::*;
 use std::sync::Arc;
 
-/// The drawing's own size in `brokenThumbnailGeometry.ts` units.
+/// The width and height of the drawing of a thumbnail that failed to load,
+/// in the units its paths are written in.
 pub const BROKEN_SIZE: (f32, f32) = (160., 176.);
-/// `FONT_THUMBNAIL_SIZE`
+/// The width and the height of the drawing of a font's card, in the same
+/// units.
 pub const FONT_SIZE: f32 = 160.;
 /// Room kept around each drawing for its shadow, in drawing units.
 pub const MARGIN: f32 = 16.;
@@ -19,7 +21,8 @@ pub struct Art {
 }
 
 impl Art {
-    /// The artwork for a placeholder colour, reused while it stays the same.
+    /// Returns the artwork for the placeholder colour `color`. Builds it only
+    /// when `cached` is empty or holds the artwork of another colour.
     pub fn for_color(cached: &mut Option<Art>, color: Rgba) -> &Art {
         if cached.as_ref().is_none_or(|art| art.color != color) {
             let hex = hex(color);
@@ -39,7 +42,7 @@ impl Art {
     }
 }
 
-/// `#rrggbb` for an opaque colour.
+/// Returns an opaque colour written as `#rrggbb`.
 fn hex(color: Rgba) -> String {
     let channel = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
     format!(
@@ -50,8 +53,9 @@ fn hex(color: Rgba) -> String {
     )
 }
 
-/// A drawing of `width` by `height` units with `MARGIN` around it, rendered
-/// at twice its size so it stays sharp on a Retina display.
+/// Returns the SVG document of a drawing of `width` by `height` units with
+/// `MARGIN` units around it. The document is twice the drawing's size so
+/// that it stays sharp on a display with two pixels for each point.
 fn document(width: f32, height: f32, body: &str) -> String {
     let (outer_width, outer_height) = (width + 2. * MARGIN, height + 2. * MARGIN);
     format!(
@@ -63,10 +67,12 @@ fn document(width: f32, height: f32, body: &str) -> String {
     )
 }
 
-/// `drawBrokenThumbnail`: a page with a folded corner, lit from the top left,
-/// cut through by the placeholder colour along its fold and a crack.
-/// The canvas shadow (blur 9, 6px down, 36% black) is a Gaussian of half the
-/// blur.
+/// Returns the SVG of a thumbnail that failed to load: a page with a folded
+/// corner, lighter at its top left than at its bottom right. Two lines in
+/// the placeholder colour `background` are drawn over the page, one along
+/// the fold and one zigzag across the page that looks like a crack. The
+/// page's shadow is 36% black, 6 units below the page, and blurred with a
+/// standard deviation of 4.5 units.
 fn broken_svg(background: &str) -> String {
     let (width, height) = BROKEN_SIZE;
     document(
@@ -96,11 +102,11 @@ fn broken_svg(background: &str) -> String {
     )
 }
 
-/// `drawFontThumbnail`: a rounded card with "Aa" punched through it. The
-/// canvas punches the letters out and repaints them in the placeholder
-/// colour, so here they are drawn in that colour over the card. Baskerville
-/// bold, 124 and 84 units, 4 units closer than their advance, on the
-/// baseline `FONT_THUMBNAIL_BASELINE`.
+/// Returns the SVG of a font's thumbnail: a rounded card with the letters
+/// "Aa" drawn over it in the placeholder colour `background`, so that the
+/// letters look cut out of the card. The letters are Baskerville bold, 124
+/// and 84 units high, the "a" 4 units closer to the "A" than their widths
+/// give, on a baseline 122 units below the drawing's top.
 fn font_svg(background: &str) -> String {
     document(
         FONT_SIZE,
@@ -136,7 +142,8 @@ mod tests {
         assert!(font_svg("#232427").contains("fill=\"#232427\""));
     }
 
-    /// The pixel at drawing coordinates (`x`, `y`), BGRA.
+    /// Returns the pixel at the drawing's coordinates (`x`, `y`) as its blue,
+    /// green, red and alpha values.
     fn pixel(svg: &str, x: f32, y: f32) -> [u8; 4] {
         let renderer = gpui::SvgRenderer::new(std::sync::Arc::new(()));
         let image = renderer
@@ -144,7 +151,8 @@ mod tests {
             .expect("the SVG renders");
         let size = image.size(0);
         let width = i32::from(size.width) as usize;
-        // Rendered at twice the document's size, itself twice the drawing's.
+        // The number of pixels for one unit of the drawing. Both drawings are
+        // 192 units wide with their margins.
         let scale = width as f32 / (super::FONT_SIZE + 2. * super::MARGIN);
         let column = ((x + super::MARGIN) * scale) as usize;
         let row = ((y + super::MARGIN) * scale) as usize;
@@ -154,7 +162,8 @@ mod tests {
 
     #[test]
     fn the_artwork_renders_with_its_cuts_and_letters() {
-        // The page's paper is light; the crack through it is the placeholder.
+        // The page is light, and the crack through it has the placeholder
+        // colour.
         let broken = broken_svg("#ff0000");
         let paper = pixel(&broken, 40., 140.);
         assert!(paper[3] > 150 && paper[0] > 150, "paper: {paper:?}");
@@ -164,8 +173,8 @@ mod tests {
             (255, 0, 0),
             "crack: {crack:?}"
         );
-        // The card is light around the letters; inside the A's left stroke
-        // the placeholder shows.
+        // The card is light at its corner. The row 110 units down crosses the
+        // letters, which have the placeholder colour.
         let font = font_svg("#ff0000");
         let card = pixel(&font, 20., 20.);
         assert!(card[3] > 150 && card[0] > 150, "card: {card:?}");

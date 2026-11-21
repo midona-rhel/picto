@@ -1,8 +1,9 @@
-//! Tags apart from any one view: their names and groups, the groups'
-//! colours and order, what the tag browsers share (the Add Tags dialog, the
-//! tag picker and the Tags screen: their views, rail and paging), the rows
-//! every tag context menu starts with and what they do, and the starred
-//! tags and group colours kept in the library's application settings.
+//! Holds what is known about tags apart from any one view: the names of tags
+//! and of their groups, the colours and the order of the groups, the parts
+//! that the tag browsers share (the views, the rail and the paging of the Add
+//! Tags dialog, the tag picker and the Tags screen), the rows that every tag
+//! context menu starts with and what those rows do, and the starred tags and
+//! the group colours that are kept in the library's application settings.
 use crate::i18n::t;
 use crate::session::Session;
 use crate::theme;
@@ -12,26 +13,29 @@ use picto_library::{Library, TagId, TagNamespaceId, TagNamespaceRecord, TagRecor
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-// ── Names ───────────────────────────────────────────────────────
+// The functions in this section build the names of tags and take them apart.
 
-/// `tagNamespace`: the group a namespace names, or none for General.
+/// Returns the group that a namespace names, trimmed and in lower case, or
+/// `None` for the General group.
 pub fn group_of(namespace: &str) -> Option<String> {
     let normalized = namespace.trim().to_lowercase();
     (!normalized.is_empty() && normalized != "general").then_some(normalized)
 }
 
-/// `tagName`: `namespace:subname`, or the subname alone in General. This
-/// is the name the library adds, removes and stars a tag by.
+/// Returns the full name of a tag: `namespace:subname`, or the subname alone
+/// for a tag in General. The library adds, removes and stars a tag by this
+/// name.
 pub fn name(namespace: &str, subname: &str) -> String {
     name_in_group(subname, group_of(namespace).as_deref())
 }
 
-/// [`name`] of a record.
+/// Returns the full name ([`name`]) of a tag record.
 pub fn record_name(tag: &TagRecord) -> String {
     name(&tag.namespace, &tag.subname)
 }
 
-/// `tagNameInGroup`: the tag's name once moved into `group`.
+/// Returns the name that a tag has once it is moved into `group`, or out of
+/// every group when `group` is `None`.
 pub fn name_in_group(subname: &str, group: Option<&str>) -> String {
     match group {
         Some(group) => format!("{group}:{subname}"),
@@ -39,8 +43,8 @@ pub fn name_in_group(subname: &str, group: Option<&str>) -> String {
     }
 }
 
-/// `splitTag`: a typed name's namespace and subname, split at the first
-/// colon; a name without one has no namespace.
+/// Splits a typed name into its namespace and its subname at the first colon.
+/// A name without a colon has no namespace.
 pub fn split(name: &str) -> (Option<&str>, &str) {
     match name.split_once(':') {
         Some((namespace, subname)) => (Some(namespace), subname),
@@ -48,9 +52,9 @@ pub fn split(name: &str) -> (Option<&str>, &str) {
     }
 }
 
-/// `tagRecord`: a tag known only by name, split at the first colon. A name
-/// without a group is in General, the default group every tag without one
-/// belongs to.
+/// Returns a record for a tag that is known only by its name, which is split
+/// at the first colon. A name without a group is put in General, the default
+/// group that every tag without a group belongs to. The record's ids are 0.
 pub fn record(name: &str) -> TagRecord {
     let (namespace, subname) = split(name);
     TagRecord {
@@ -63,16 +67,18 @@ pub fn record(name: &str) -> TagRecord {
     }
 }
 
-/// `TagChip`'s `showNamespace`: whether a chip may put the namespace before
-/// the subname.
+/// Returns whether a chip may show the namespace before the subname. It may
+/// not for an empty namespace, for `general` and for `default`.
 pub fn chip_shows_namespace(namespace: &str) -> bool {
     !matches!(namespace, "" | "general" | "default")
 }
 
-// ── Colours and order ───────────────────────────────────────────
+// The functions in this section give the groups their colours and their
+// order.
 
-/// `NS_COLORS` in `TagChip.tsx`: a chip's colour for a namespace. It knows
-/// more namespaces than the groups' presets below.
+/// Returns the colour of a chip for a namespace. It knows more namespaces
+/// than the presets of the groups below: `studio`, `person` and `system` as
+/// well.
 pub fn chip_color(namespace: &str) -> u32 {
     match namespace.to_lowercase().as_str() {
         "creator" | "studio" => theme::TAG_CREATOR,
@@ -85,7 +91,8 @@ pub fn chip_color(namespace: &str) -> u32 {
     }
 }
 
-/// `tagGroupPresentation`: a group's preset colour and where it sorts.
+/// Returns the preset colour of a group and the position at which the group
+/// sorts among the groups.
 fn preset(namespace: &str) -> (u32, u8) {
     match namespace.to_lowercase().as_str() {
         "creator" => (theme::TAG_CREATOR, 0),
@@ -97,17 +104,19 @@ fn preset(namespace: &str) -> (u32, u8) {
     }
 }
 
-/// `tagGroupOrder`
+/// Returns the position at which a group sorts among the groups.
 pub fn group_order(namespace: &str) -> u8 {
     preset(namespace).1
 }
 
-/// `tagGroupColor` without the chosen colours: the group's preset.
+/// Returns the preset colour of a group, whatever colour the user chose for
+/// it.
 pub fn group_preset_color(namespace: &str) -> u32 {
     preset(namespace).0
 }
 
-/// `tagGroupColor`: the colour chosen for the group, else its preset.
+/// Returns the colour the user chose for the group, or the group's preset
+/// colour when the user chose none.
 pub fn group_color(namespace: &str, preferences: &Preferences) -> u32 {
     preferences
         .colors
@@ -116,8 +125,8 @@ pub fn group_color(namespace: &str, preferences: &Preferences) -> u32 {
         .unwrap_or(group_preset_color(namespace))
 }
 
-/// The inspector's order for a tag's group (`tagKey` in `Inspector.tsx`):
-/// the group order, with General after every named group.
+/// Returns the position at which the inspector lists the group of a tag: the
+/// group order, with General after every named group.
 pub fn inspector_order(namespace: &str) -> u8 {
     match namespace.to_lowercase().as_str() {
         "" | "general" => 99,
@@ -125,9 +134,10 @@ pub fn inspector_order(namespace: &str) -> u8 {
     }
 }
 
-/// The order the library hands tags back in when asked for them by id
-/// (`tags.get_many`, which production's inspector and tag picker list an
-/// item's tags in): by group name, then name, ignoring ASCII case, then id.
+/// Sorts tags into the order in which the library returns tags that are asked
+/// for by id (`tags.get_many`): by group name, then by name, both ignoring
+/// ASCII case, then by id. The inspector lists the tags of an item in this
+/// order.
 pub fn sort_as_library(tags: &mut [TagRecord]) {
     tags.sort_by(|left, right| {
         left.namespace
@@ -142,11 +152,11 @@ pub fn sort_as_library(tags: &mut [TagRecord]) {
     });
 }
 
-// ── Browsing ────────────────────────────────────────────────────
+// This section holds what the tag browsers share: their views and their rail.
 
-/// What a tag browser lists (`SidebarMode` with the group browsed): every
-/// tag, one group, the items' tags, and the Add Tags dialog's recent or the
-/// picker's starred tags.
+/// Says what a tag browser lists: every tag (`All`), the tags of one group
+/// (`Group`), the tags of the items (`Selected`), the recent tags of the Add
+/// Tags dialog (`Recent`), or the starred tags of the tag picker (`Starred`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum View {
     All,
@@ -157,7 +167,7 @@ pub enum View {
 }
 
 impl View {
-    /// The group the library is asked for, when one is browsed.
+    /// Returns the group to ask the library for, when the view is a group.
     pub fn group(&self) -> Option<String> {
         match self {
             View::Group(group) => Some(group.clone()),
@@ -166,8 +176,9 @@ impl View {
     }
 }
 
-/// Tab: All, each of `groups`, Selected, then `last` (the dialog's Recent or
-/// the picker's Starred), then All again.
+/// Returns the view that Tab moves to from `view`: from All to each of
+/// `groups` in turn, then Selected, then `last` (Recent in the dialog,
+/// Starred in the picker), then All again.
 pub fn next_view(view: &View, groups: &[String], last: &View) -> View {
     match view {
         View::All => groups
@@ -185,8 +196,10 @@ pub fn next_view(view: &View, groups: &[String], last: &View) -> View {
     }
 }
 
-/// `nsGroups`: the groups a rail lists, in their preset order. The Add Tags
-/// dialog lists General among them; the picker's All stands for it.
+/// Returns the groups that a rail lists, in their preset order. With
+/// `general` the General group is one of them, as in the rail of the Add Tags
+/// dialog. Without it General is left out, as in the tag picker, whose All
+/// stands for it.
 pub fn rail_groups(namespaces: &[TagNamespaceRecord], general: bool) -> Vec<TagNamespaceRecord> {
     let mut groups = namespaces
         .iter()
@@ -197,12 +210,11 @@ pub fn rail_groups(namespaces: &[TagNamespaceRecord], general: bool) -> Vec<TagN
     groups
 }
 
-/// The Selected view: the items' tags by name, by group and then by name.
-/// Production's two tag browsers disagree on where tags without a group
-/// go: its dialog files them under no group at all (`TagSelectModal.tsx`
-/// `tagRecord`: `''`), which sorts first; its picker files them under
-/// General (`TagSelectPanel.tsx`), which sorts among the groups. Each is
-/// kept: `general_first` is the dialog's order.
+/// Returns the records of the Selected view: the tags of the items, given by
+/// name, sorted by group and then by name. The two tag browsers put the tags
+/// without a group in different places. The Add Tags dialog puts them before
+/// every group, and `general_first` selects that order. The tag picker files
+/// them under General, which sorts among the other groups by its name.
 pub fn records_by_group<'a>(
     names: impl IntoIterator<Item = &'a String>,
     general_first: bool,
@@ -227,8 +239,8 @@ pub fn records_by_group<'a>(
     records
 }
 
-/// The library's tag groups with their counts, handed to `then` on the view
-/// once read.
+/// Reads the tag groups of the library with their counts, and gives them to
+/// `then` on the view once they are read.
 pub fn read_groups<V: 'static>(
     session: &Entity<Session>,
     cx: &mut Context<V>,
@@ -243,9 +255,11 @@ pub fn read_groups<V: 'static>(
     .detach();
 }
 
-// ── Paging ──────────────────────────────────────────────────────
+// The types and functions in this section load a listing of tags page by
+// page.
 
-/// A page of a listing: a search within a group, or every tag.
+/// One page of a listing. The listing is a search within a group, or every
+/// tag.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Page {
     generation: u64,
@@ -255,11 +269,12 @@ pub struct Page {
     size: usize,
 }
 
-/// A page's tags and where the next one starts, if there is one.
+/// The answer for a page: its tags, and the offset at which the next page
+/// starts, if there is a next page.
 pub type Answer = Result<(Vec<TagRecord>, Option<usize>), String>;
 
 impl Page {
-    /// The page from the library's sorted tag list.
+    /// Reads the page from the library's sorted list of tags.
     pub fn fetch(&self, library: &Library) -> Answer {
         let search = self.query.trim();
         library
@@ -274,16 +289,17 @@ impl Page {
     }
 }
 
-/// The tags a browser has loaded of its listing, page by page. A new
-/// listing makes every answer still on its way for an older one count for
-/// nothing; each tag is listed once.
+/// Holds the tags that a browser has loaded of its listing, page by page.
+/// When a new listing is started, every answer that is still on its way for
+/// an older listing is ignored. Each tag is listed once.
 #[derive(Debug)]
 pub struct TagPager {
     pub tags: Vec<TagRecord>,
-    /// Where the next page starts, while there is one.
+    /// The offset at which the next page starts, while there is a next page.
     pub cursor: Option<usize>,
     pub loading_more: bool,
-    /// The search and group of the listing shown, once its first page is in.
+    /// The search and the group of the listing that is shown, once its first
+    /// page has arrived.
     pub settled: Option<(String, Option<String>)>,
     asked: Option<(String, Option<String>)>,
     generation: u64,
@@ -291,7 +307,7 @@ pub struct TagPager {
 }
 
 impl TagPager {
-    /// Pages of `size` tags (`PAGE_SIZE`).
+    /// Creates a pager whose pages hold `size` tags.
     pub fn new(size: usize) -> Self {
         Self {
             tags: Vec::new(),
@@ -304,7 +320,8 @@ impl TagPager {
         }
     }
 
-    /// Starts a listing: the first page to ask for.
+    /// Starts a new listing and returns its first page, for the caller to ask
+    /// the library for.
     pub fn begin(&mut self, query: &str, group: Option<String>) -> Page {
         self.generation += 1;
         self.loading_more = false;
@@ -318,13 +335,14 @@ impl TagPager {
         }
     }
 
-    /// Whether `page` is of the listing last asked for.
+    /// Returns whether `page` belongs to the listing that was asked for last.
     pub fn current(&self, page: &Page) -> bool {
         page.generation == self.generation
     }
 
-    /// Takes a listing's first page in place of what was loaded, unless a
-    /// newer listing was asked for since; true when it was taken.
+    /// Replaces what was loaded with the first page of a listing, unless a
+    /// newer listing was asked for since. Returns true when the page was
+    /// taken.
     pub fn first(&mut self, page: &Page, tags: Vec<TagRecord>, next: Option<usize>) -> bool {
         if !self.current(page) {
             return false;
@@ -335,8 +353,9 @@ impl TagPager {
         true
     }
 
-    /// The page after those loaded, when there is one, none is on its way
-    /// and what is shown is the listing last asked for.
+    /// Returns the page after those loaded. Returns `None` when there is no
+    /// further page, when a page is on its way, or when what is shown is not
+    /// the listing that was asked for last.
     pub fn next(&mut self) -> Option<Page> {
         let offset = self.cursor.filter(|_| !self.loading_more)?;
         let (query, group) = self
@@ -354,7 +373,8 @@ impl TagPager {
     }
 
     /// Adds a further page to what is loaded, unless the listing changed
-    /// since it was asked for; true when the answer still counted.
+    /// since the page was asked for. Returns true when the answer was for the
+    /// current listing.
     pub fn more(&mut self, page: &Page, answer: Answer) -> bool {
         if !self.current(page) {
             return false;
@@ -362,16 +382,17 @@ impl TagPager {
         self.loading_more = false;
         if let Ok((tags, next)) = answer {
             self.tags = merge_unique(std::mem::take(&mut self.tags), tags);
-            // A page that does not move on would be asked for for ever.
+            // A next page that starts where this page started would be asked
+            // for again and again, so the listing ends here.
             self.cursor = next.filter(|next| *next != page.offset);
         }
         true
     }
 }
 
-/// Asks the library for `page`, once `delay` has passed when there is one,
-/// and hands the answer to `then` on the view if it is still there.
-/// Dropping the task forgets the request.
+/// Asks the library for `page`, after `delay` when one is given, and gives
+/// the answer to `then` on the view if the view still exists. Dropping the
+/// returned task cancels the request.
 pub fn fetch_page<V: 'static>(
     session: &Entity<Session>,
     page: Page,
@@ -393,8 +414,9 @@ pub fn fetch_page<V: 'static>(
     })
 }
 
-/// `mergeUniqueTags`: `incoming` after `current`, each tag once, a tag
-/// already listed updated where it stands.
+/// Returns `current` with the tags of `incoming` added after it. Each tag is
+/// listed once: a tag that `current` already lists is replaced where it
+/// stands.
 pub fn merge_unique(mut current: Vec<TagRecord>, incoming: Vec<TagRecord>) -> Vec<TagRecord> {
     let mut position = current
         .iter()
@@ -413,13 +435,15 @@ pub fn merge_unique(mut current: Vec<TagRecord>, incoming: Vec<TagRecord>) -> Ve
     current
 }
 
-// ── The common tag menu ─────────────────────────────────────────
+// This section builds the rows that every tag context menu starts with, and
+// runs them.
 
-/// `buildCommonTagContextEntries`: Filter, Star, the group moves when
-/// `groups` (into each other group of `namespaces`, or out of its own), then
-/// Copy. Their actions are `filter`, `star`/`unstar`, `move-to-group` (with
-/// the group as the value), `remove-from-group` and `copy`; callers append
-/// their own rows.
+/// Returns the rows that every tag context menu starts with: Filter, Star,
+/// the group moves when `groups` is true (into each other group of
+/// `namespaces`, and out of the tag's own group), then Copy. The actions of
+/// these rows are `filter`, `star` or `unstar`, `move-to-group` (with the
+/// group as the value), `remove-from-group` and `copy`. A caller appends its
+/// own rows.
 pub fn common_menu(
     tag: &TagRecord,
     namespaces: &[TagNamespaceRecord],
@@ -430,8 +454,9 @@ pub fn common_menu(
         Preferences::from_settings(crate::settings::current(cx)).is_starred(&record_name(tag));
     let current = group_of(&tag.namespace);
     let mut entries: Vec<menu::Entry> = vec![
-        // `IconSearch` at the menu rows' 1.25 stroke (`menu-search` is the
-        // search field's heavier glyph).
+        // `menu-filter` is the magnifier icon with the stroke width of the
+        // menu rows, 1.25. `menu-search` is the same magnifier with the
+        // stroke width of the search field, 1.5.
         menu::item("filter", "Filter Items with This Tag")
             .icon("menu-filter")
             .disabled(tag.tag_id.0 == 0)
@@ -486,21 +511,22 @@ pub fn common_menu(
     entries
 }
 
-/// What a row of [`common_menu`] leaves to the view once [`run_common`]
-/// has done what every view does alike.
+/// Says what a row of [`common_menu`] leaves for the view to do, after
+/// [`run_common`] has done the part that is the same in every view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Common {
-    /// Starred, unstarred or copied.
+    /// Nothing is left to do: the tag was starred, unstarred or copied.
     Done,
-    /// Show the items with the tag.
+    /// Show the items that have the tag.
     Filter,
-    /// Move the tag into another group, or out of its own: its new name, for
-    /// [`rename_or_merge`].
+    /// Move the tag into another group, or out of its own group. The value is
+    /// the tag's new name, for [`rename_or_merge`].
     Move(String),
 }
 
-/// The rows of [`common_menu`]: stars and copies the tag, and says what
-/// else the row asks for; `None` for a row the view added itself.
+/// Runs a row of [`common_menu`]. It stars, unstars or copies the tag itself,
+/// and returns what else the row asks of the view. Returns `None` for a row
+/// that the view added itself.
 pub fn run_common(
     action: &str,
     value: Option<SharedString>,
@@ -524,8 +550,7 @@ pub fn run_common(
     })
 }
 
-/// `tags.rename_or_merge`: renames a tag, or merges it into the tag that
-/// already has the name.
+/// Renames a tag, or merges it into the tag that already has the name.
 pub fn rename_or_merge(library: &Library, id: TagId, name: &str) -> Result<(), String> {
     let name = name.trim();
     let target = library
@@ -542,8 +567,9 @@ pub fn rename_or_merge(library: &Library, id: TagId, name: &str) -> Result<(), S
     .map_err(|error| error.to_string())
 }
 
-/// The tag search a [`TagTokenInput`](crate::ui::tag_token_input) offers:
-/// the library's first twelve tags matching what was typed.
+/// Returns the tag search that a
+/// [`TagTokenInput`](crate::ui::tag_token_input) offers: the first twelve
+/// tags of the library that match what was typed.
 pub fn token_search(
     session: gpui::Entity<crate::session::Session>,
 ) -> crate::ui::tag_token_input::Search {
@@ -564,11 +590,11 @@ pub fn token_search(
     })
 }
 
-// ── Preferences ─────────────────────────────────────────────────
+// This section holds the tag preferences that are kept in the library's
+// application settings.
 
-/// The tag preferences of the library's application settings
-/// (`tagPreferences.ts`): starred tags by name, and colours chosen for
-/// groups.
+/// The tag preferences in the library's application settings: the starred
+/// tags, by name, and the colours chosen for groups.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Preferences {
     pub starred: Vec<String>,
@@ -576,7 +602,7 @@ pub struct Preferences {
 }
 
 impl Preferences {
-    /// The preferences as the settings model holds them.
+    /// Reads the preferences from the settings model.
     pub fn from_settings(settings: &crate::settings::model::AppSettings) -> Self {
         Self {
             starred: settings.starred_tags.clone(),
@@ -588,7 +614,8 @@ impl Preferences {
         }
     }
 
-    /// The group colours as the settings model stores them.
+    /// Returns the group colours in the form in which the settings model
+    /// stores them.
     pub fn colors_json(&self) -> serde_json::Map<String, serde_json::Value> {
         self.colors
             .iter()
@@ -600,7 +627,8 @@ impl Preferences {
         self.starred.iter().any(|starred| starred == name)
     }
 
-    /// `setTagStarred`: the starred list, sorted, with `name` in or out.
+    /// Returns the starred list with `name` added, and then sorted, or with
+    /// `name` removed.
     pub fn with_star(&self, name: &str, starred: bool) -> Vec<String> {
         let mut tags = self.starred.clone();
         tags.retain(|tag| tag != name);
@@ -611,8 +639,8 @@ impl Preferences {
         tags
     }
 
-    /// `replaceStarredTag`: the list with a renamed tag's new name, or none
-    /// when the old name was not starred.
+    /// Returns the starred list with the new name of a renamed tag in place
+    /// of the old name, or `None` when the old name was not starred.
     pub fn renamed_star(&self, previous: &str, next: &str) -> Option<Vec<String>> {
         if previous == next || !self.is_starred(previous) {
             return None;
@@ -629,7 +657,8 @@ impl Preferences {
         Some(tags)
     }
 
-    /// `setTagGroupColor`
+    /// Returns the group colours with the colour of `group` set to `color`,
+    /// or removed when `color` is `None`.
     pub fn with_color(&self, group: &str, color: Option<&str>) -> BTreeMap<String, String> {
         let mut colors = self.colors.clone();
         match color {
@@ -639,8 +668,8 @@ impl Preferences {
         colors
     }
 
-    /// `replaceTagGroupColor`: the colours with a renamed group's moved to
-    /// its new name, or none when it had none.
+    /// Returns the group colours with the colour of a renamed group moved to
+    /// the group's new name, or `None` when the group had no colour.
     pub fn renamed_color(&self, previous: &str, next: &str) -> Option<BTreeMap<String, String>> {
         if previous == next {
             return None;
@@ -653,21 +682,22 @@ impl Preferences {
     }
 }
 
-/// Stores a starred list through the settings model, which writes the
-/// library's application settings and tells every follower.
+/// Stores a starred list through the settings model, which writes it to the
+/// library's application settings and emits `Applied`, so that the app
+/// follows the change (`SettingsModel::apply_now`).
 fn store_starred(starred: Vec<String>, cx: &mut App) {
     crate::settings::model(cx).update(cx, |model, cx| {
         model.apply_now(|app| app.starred_tags = starred.clone(), cx)
     });
 }
 
-/// `setTagStarred`
+/// Stars the tag named `name`, or removes its star.
 pub fn set_starred(name: &str, starred: bool, cx: &mut App) {
     let next = Preferences::from_settings(crate::settings::current(cx)).with_star(name, starred);
     store_starred(next, cx);
 }
 
-/// `replaceStarredTag`: a renamed tag keeps its star.
+/// Moves the star of a renamed tag to the tag's new name.
 pub fn rename_star(previous: &str, next: &str, cx: &mut App) {
     let preferences = Preferences::from_settings(crate::settings::current(cx));
     if let Some(starred) = preferences.renamed_star(previous, next) {
@@ -746,13 +776,13 @@ mod tests {
     #[test]
     fn the_selected_view_lists_by_group_then_name() {
         let names = ["zeta", "series:x", "alpha", "creator:b", "item10", "item9"].map(String::from);
-        // The picker: General among the groups, by its name.
+        // The picker's order: General sorts among the groups, by its name.
         let records = records_by_group(&names, false);
         assert_eq!(
             records.iter().map(record_name).collect::<Vec<_>>(),
             ["creator:b", "alpha", "item9", "item10", "zeta", "series:x"]
         );
-        // The dialog: tags without a group before every group.
+        // The dialog's order: tags without a group come before every group.
         let records = records_by_group(&names, true);
         assert_eq!(
             records.iter().map(record_name).collect::<Vec<_>>(),
@@ -779,7 +809,7 @@ mod tests {
             assert_eq!(run_common("copy", None, &cat, cx), Some(Common::Done));
             let copied = cx.read_from_clipboard().and_then(|item| item.text());
             assert_eq!(copied.as_deref(), Some("species:cat"));
-            // A view's own rows are its own.
+            // A row that a view added itself is not run here.
             assert_eq!(run_common("edit", None, &cat, cx), None);
         });
     }
@@ -793,7 +823,7 @@ mod tests {
             (page.query.as_str(), page.group.as_deref()),
             ("cat", Some("species"))
         );
-        // An answer for the older listing counts for nothing.
+        // An answer for the older listing is ignored.
         assert!(!pager.first(&old, vec![tag(9, "", "x")], Some(2)));
         assert!(pager.tags.is_empty() && pager.settled.is_none());
         assert!(pager.first(
@@ -802,7 +832,7 @@ mod tests {
             Some(2)
         ));
         assert_eq!(pager.settled, Some(("cat".into(), Some("species".into()))));
-        // One further page at a time.
+        // Only one further page is asked for at a time.
         let more = pager.next().unwrap();
         assert!(pager.loading_more && pager.next().is_none());
         assert!(pager.more(
@@ -821,7 +851,8 @@ mod tests {
             ["cat", "cats!", "catx"]
         );
         assert_eq!(pager.cursor, Some(4));
-        // A page that does not move on ends the listing.
+        // A next page that starts where the page before it started ends the
+        // listing.
         let stuck = pager.next().unwrap();
         assert!(pager.more(&stuck, Ok((Vec::new(), Some(4)))));
         assert_eq!(pager.cursor, None);
@@ -847,7 +878,8 @@ mod tests {
         assert_eq!(name("", "cat"), "cat");
         assert_eq!(name("General", "cat"), "cat");
         assert_eq!(name(" Creator ", "someone"), "creator:someone");
-        // "default" is a group of its own here, as `tagName` has it.
+        // `default` is a group of its own in a name, although a chip does not
+        // show it.
         assert_eq!(name("default", "cat"), "default:cat");
         assert_eq!(name_in_group("cat", Some("species")), "species:cat");
         assert_eq!(name_in_group("cat", None), "cat");
@@ -861,7 +893,8 @@ mod tests {
         let cat = record("cat");
         assert_eq!(cat.namespace, "general");
         assert_eq!(cat.tag_id, TagId(0));
-        // It is filed, starred and shown by the same name as before.
+        // Its full name is still the name without a group, so it is found,
+        // starred and shown by that name.
         assert_eq!(record_name(&cat), "cat");
         assert!(!chip_shows_namespace(&cat.namespace));
         let cat = record("species:cat:x");

@@ -1,8 +1,10 @@
-//! Paged documents rendered to pictures off the drawing thread: PDF through
-//! hayro, DjVu through djvu-rs, and comic archives (a zip of page images).
-//! Each open document lives on a thread of its own, which measures every
-//! page when it opens and then draws the pages the viewer asks for, in the
-//! order asked, skipping any request the viewer has since given up.
+//! Opens paged documents and draws their pages as pictures, on other threads
+//! than the one that draws the interface. A PDF is read with hayro and a
+//! DjVu file with djvu-rs. A comic archive is a zip file of page images.
+//! Each open document has a thread of its own (`PageWorker`). That thread
+//! measures every page when it opens the document. It then draws the pages
+//! that the viewer asks for, in the order in which they were asked for, and
+//! does not draw a page whose request the viewer has dropped since.
 use super::geometry::PageSize;
 use super::kind::RendererKind;
 use anyhow::{Context as _, Result, anyhow, bail};
@@ -15,14 +17,18 @@ use std::sync::{Arc, mpsc};
 /// A document whose pages can be measured and drawn.
 pub trait PageSource {
     fn page_count(&self) -> usize;
-    /// A page's natural size: PDF pages in points (CSS pixels at 100%),
-    /// DjVu pages and comic pages in pixels.
+    /// Returns the natural size of page `index`, counted from 0: for a PDF
+    /// in points, each of which is drawn as one logical pixel at a scale
+    /// of 100%, and for a DjVu file or a comic archive in pixels.
     fn page_size(&mut self, index: usize) -> Result<PageSize>;
-    /// Draws a page at exactly `width` × `height` pixels.
+    /// Draws page `index`, counted from 0, as a picture of exactly `width`
+    /// × `height` pixels.
     fn render(&mut self, index: usize, width: u32, height: u32) -> Result<RgbaImage>;
 }
 
-/// Opens the paged document of this kind.
+/// Opens the file at `path` as a paged document of `kind`. It fails when
+/// `kind` is not PDF, DjVu or comic archive, and when the file cannot be
+/// opened as a document of that kind.
 pub fn open(kind: RendererKind, path: &Path) -> Result<Box<dyn PageSource>> {
     Ok(match kind {
         RendererKind::Pdf => Box::new(Pdf::open(path)?),
@@ -32,7 +38,7 @@ pub fn open(kind: RendererKind, path: &Path) -> Result<Box<dyn PageSource>> {
     })
 }
 
-// ── PDF ─────────────────────────────────────────────────────────
+// The following opens and draws PDF files, with hayro.
 
 pub struct Pdf {
     pdf: hayro::hayro_syntax::Pdf,
@@ -45,7 +51,7 @@ impl Pdf {
             hayro::hayro_syntax::LoadPdfError::Decryption(_) => {
                 anyhow!("This PDF is encrypted.")
             }
-            // i18n: an error the document view shows through t()
+            // i18n: the paged viewer translates this error where it draws it
             hayro::hayro_syntax::LoadPdfError::Invalid => anyhow!("Could not open this PDF."),
         })?;
         if pdf.pages().is_empty() {
@@ -83,23 +89,28 @@ impl PageSource for Pdf {
             &hayro::hayro_interpret::InterpreterSettings::default(),
             &hayro::RenderSettings::default(),
             &hayro::PixmapSettings {
-                // hayro truncates the scaled size; a quarter pixel more
-                // makes it land on the size asked for.
+                // hayro rounds the scaled size down to whole pixels. A
+                // quarter of a pixel is added so that the picture is
+                // exactly `width` × `height` pixels.
                 x_scale: (width as f32 + 0.25) / natural_width,
                 y_scale: (height as f32 + 0.25) / natural_height,
-                // `.page { background: #fff }`
+                // The page is drawn on white, the colour of the rectangle
+                // that the viewer shows for a page without a drawing.
                 bg_color: hayro::vello_cpu::color::palette::css::WHITE,
             },
         );
         let (out_width, out_height) = (pixmap.width() as u32, pixmap.height() as u32);
-        // On an opaque white page premultiplied and straight alpha agree.
+        // hayro's pixels have their colours multiplied by their alpha.
+        // Every pixel of a page drawn on white is opaque, and an opaque
+        // pixel is the same in both forms, so the pixels are used as they
+        // are.
         RgbaImage::from_raw(out_width, out_height, pixmap.data_as_u8_slice().to_vec())
-            // i18n: an error the document view shows through t()
+            // i18n: the paged viewer translates this error where it draws it
             .ok_or_else(|| anyhow!("Could not render this PDF page."))
     }
 }
 
-// ── DjVu ────────────────────────────────────────────────────────
+// The following opens and draws DjVu files, with djvu-rs.
 
 pub struct Djvu {
     document: djvu_rs::Document,
@@ -121,7 +132,8 @@ impl PageSource for Djvu {
         self.document.page_count()
     }
 
-    /// The page at `max(96, dpi)`, as production renders it.
+    /// Returns the page's size in pixels at the resolution that the file
+    /// gives for the page, or at 96 dpi when that resolution is lower.
     fn page_size(&mut self, index: usize) -> Result<PageSize> {
         let page = self
             .document
@@ -141,22 +153,26 @@ impl PageSource for Djvu {
             .render_to_size(width, height)
             .map_err(|error| anyhow!("Could not render this DjVu page: {error}"))?;
         RgbaImage::from_raw(pixmap.width, pixmap.height, pixmap.data)
-            // i18n: an error the document view shows through t()
+            // i18n: the paged viewer translates this error where it draws it
             .ok_or_else(|| anyhow!("Could not render this DjVu page."))
     }
 }
 
-// ── Comic archives ──────────────────────────────────────────────
+// The following opens and draws comic archives, which are zip files of
+// page images.
 
-/// `IMAGE_EXTENSIONS` in `ArchiveDocumentViewer.tsx`.
+/// The file extensions, in lower case, of the archive entries that are the
+/// pages of a comic.
 const COMIC_EXTENSIONS: [&str; 8] = ["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"];
 
 pub struct Comic {
     archive: zip::ZipArchive<std::fs::File>,
-    /// The archive's image entries in reading order.
+    /// The names of the archive's image entries in reading order
+    /// (`comic_pages`).
     pages: Vec<String>,
-    /// The last decoded page, kept so a size query and the render that
-    /// follows it decode once.
+    /// The index and the picture of the page that was decoded last. They
+    /// are kept so that the page is not decoded again when it is drawn at
+    /// another size or measured.
     decoded: Option<(usize, Arc<RgbaImage>)>,
 }
 
@@ -195,8 +211,11 @@ impl Comic {
     }
 }
 
-/// The image entries of an archive, in natural order, ignoring case
-/// (`localeCompare` with `numeric: true, sensitivity: 'base'`).
+/// Returns the names in `names` that are the pages of a comic: the entries
+/// that are not folders and whose extension is one of `COMIC_EXTENSIONS`.
+/// They are sorted by `crate::text::natural_order`, which treats upper and
+/// lower case as the same and compares a run of digits as a number, so
+/// "Page 2" comes before "Page 10".
 pub fn comic_pages<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
     let mut pages: Vec<String> = names
         .filter(|name| !name.ends_with('/'))
@@ -211,15 +230,18 @@ pub fn comic_pages<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
     pages
 }
 
-/// The most of an archive entry read: comic pages and EPUB chapters and
-/// pictures come from the internet, and an entry can inflate to far more
-/// than its archive holds.
+/// The largest number of bytes, 64 MB, that is read of one archive entry.
+/// Comic archives and EPUB books come from the internet, and a small
+/// archive can hold an entry that decompresses to far more than the
+/// archive's own size.
 pub const ENTRY_LIMIT: u64 = 64 << 20;
-/// What is read of a page to find its size in its header.
+/// The number of bytes, 64 KB, that are read from the start of a comic page
+/// to find the picture's size in its header.
 const HEADER_LIMIT: u64 = 64 << 10;
 
-/// An archive entry's bytes, up to `limit`; a longer entry is an error, not
-/// its first part.
+/// Returns the content of the archive entry `name`. It fails when the
+/// archive has no such entry, and when the entry is longer than `limit`
+/// bytes. It never returns only the first part of an entry.
 pub fn read_entry<R: Read + std::io::Seek>(
     archive: &mut zip::ZipArchive<R>,
     name: &str,
@@ -236,14 +258,18 @@ pub fn read_entry<R: Read + std::io::Seek>(
     Ok(bytes)
 }
 
-/// The largest picture decoded from an archive, in pixels a side and bytes
-/// decoded, so a small file that claims a vast picture is refused rather
-/// than allocated.
+/// The largest width and the largest height in pixels of a picture that is
+/// decoded from an archive. `PICTURE_BYTES` is the most memory, 512 MB,
+/// that decoding one picture may allocate. A small file whose header gives
+/// a larger picture than this is refused before the memory for it is
+/// allocated.
 const PICTURE_SIDE: u32 = 16_384;
 const PICTURE_BYTES: u64 = 512 << 20;
 
-/// Decodes a page picture: raster formats through `image`, SVG through
-/// resvg at its own size, shrunk to [`MAX_RENDER_SIDE`] at most.
+/// Decodes the picture in `bytes`, the content of the archive entry `name`.
+/// An entry whose name ends in `.svg` is drawn by resvg at its own size, or
+/// smaller so that neither side is longer than [`MAX_RENDER_SIDE`]. Every
+/// other entry is decoded by the `image` crate.
 pub fn decode_picture(name: &str, bytes: &[u8]) -> Result<RgbaImage> {
     if name.to_ascii_lowercase().ends_with(".svg") {
         let tree = resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default())
@@ -262,7 +288,9 @@ pub fn decode_picture(name: &str, bytes: &[u8]) -> Result<RgbaImage> {
         );
         resvg::render(&tree, transform, &mut pixmap.as_mut());
         let mut data = pixmap.take();
-        // tiny-skia's pixels are premultiplied.
+        // tiny-skia's pixels have their colours multiplied by their alpha,
+        // and `RgbaImage` holds colours that are not. So each colour of a
+        // partly transparent pixel is divided by the pixel's alpha.
         for pixel in data.chunks_exact_mut(4) {
             let alpha = pixel[3] as u32;
             if alpha > 0 && alpha < 255 {
@@ -291,8 +319,11 @@ impl PageSource for Comic {
         self.pages.len()
     }
 
-    /// Read from the picture's header, so measuring a whole archive does
-    /// not decode every page.
+    /// Returns the size in pixels of the page's picture. The size is read
+    /// from the picture's header in the first 64 KB of the entry
+    /// (`HEADER_LIMIT`), so that measuring a whole archive does not decode
+    /// every page. When the size cannot be read from the header, the whole
+    /// picture is decoded.
     fn page_size(&mut self, index: usize) -> Result<PageSize> {
         if let Some((decoded, image)) = &self.decoded
             && *decoded == index
@@ -337,10 +368,12 @@ impl PageSource for Comic {
     }
 }
 
-// ── JPEG XL ─────────────────────────────────────────────────────
+// The following decodes JPEG XL images, which the media surface and the
+// duplicates screen show as pictures.
 
-/// A JPEG XL image decoded by jxl-oxide, the decoder `core/` makes its
-/// thumbnails with.
+/// Decodes the JPEG XL image at `path` with jxl-oxide, which is also the
+/// decoder that the crate in `core/` depends on. A panic in the decoder is
+/// returned as an error.
 pub fn decode_jpeg_xl(path: &Path) -> Result<RgbaImage> {
     super::guarded(|| decode_jpeg_xl_unguarded(path))
 }
@@ -354,9 +387,12 @@ fn decode_jpeg_xl_unguarded(path: &Path) -> Result<RgbaImage> {
         .to_rgba8())
 }
 
-// ── The document's thread ───────────────────────────────────────
+// The following is the thread that holds one open document and draws its
+// pages.
 
-/// A drawn page: its pixels, and the size it was asked for.
+/// The drawing of one page. `pixels` is the width and height that were
+/// asked for. `image` is the picture, which is smaller than `pixels` when a
+/// side of `pixels` is longer than `MAX_RENDER_SIDE`.
 pub struct RenderedPage {
     pub pixels: (u32, u32),
     pub image: RgbaImage,
@@ -368,16 +404,23 @@ struct Request {
     reply: oneshot::Sender<Result<RenderedPage>>,
 }
 
-/// An open paged document on its own thread. Dropping it ends the thread.
+/// The handle of the thread that holds one open paged document. The viewer
+/// asks the thread for drawings of pages through it (`render`). Dropping
+/// the handle ends the thread.
 pub struct PageWorker {
     requests: mpsc::Sender<Request>,
 }
 
-/// The largest side a page is drawn at, to bound memory at high zoom.
+/// The largest width and the largest height in pixels of the picture that a
+/// page is drawn as. It limits the memory that one page takes at a high
+/// zoom.
 pub const MAX_RENDER_SIDE: u32 = 8192;
 
-/// Every page's natural size. A page that cannot be measured takes the
-/// size of the one before it, so one bad page does not hide the rest.
+/// Returns the natural size of every page of `source`. A page that cannot
+/// be measured, or whose width or height is not above 0, gets the size of
+/// the page before it, so that one damaged page does not keep the other
+/// pages from being shown. It fails when the first page cannot be measured
+/// and when the document has no pages.
 pub fn measure_pages(source: &mut dyn PageSource) -> Result<Vec<PageSize>> {
     let mut sizes: Vec<PageSize> = Vec::with_capacity(source.page_count());
     for index in 0..source.page_count() {
@@ -398,15 +441,19 @@ pub fn measure_pages(source: &mut dyn PageSource) -> Result<Vec<PageSize>> {
     Ok(sizes)
 }
 
-/// Opens a paged document and measures its pages, for a view that lays
-/// the pages out before it shows them.
+/// Opens the paged document at `path` and returns the natural size of every
+/// page. The collection reader calls it to lay out the pages of a member
+/// that is a paged document before that member's viewer exists.
 pub fn measure(kind: RendererKind, path: &Path) -> Result<Vec<PageSize>> {
     super::guarded(|| measure_pages(open(kind, path)?.as_mut()))
 }
 
 impl PageWorker {
-    /// Opens the document on a new thread; the answer is the worker and every
-    /// page's natural size, or why the document cannot be shown.
+    /// Starts a thread that opens the document at `path` and measures its
+    /// pages. The receiver that is returned gets the thread's handle and
+    /// the natural size of every page, or the error with which opening or
+    /// measuring failed. When the thread cannot be started, or ends
+    /// without an answer, the receiver is cancelled.
     pub fn open(
         kind: RendererKind,
         path: PathBuf,
@@ -442,8 +489,9 @@ impl PageWorker {
                     let Some(request) = queue.pop_front() else {
                         continue;
                     };
-                    // The viewer gave this page up (scrolled away, zoomed,
-                    // closed): it is not drawn.
+                    // The viewer has dropped the receiver of this request,
+                    // because the page was scrolled away, the zoom changed
+                    // or the viewer was closed. The page is not drawn.
                     if request.reply.is_canceled() {
                         continue;
                     }
@@ -457,8 +505,11 @@ impl PageWorker {
         answer
     }
 
-    /// Asks for a page at `pixels`; the answer comes when it is drawn, or is
-    /// dropped unanswered when the receiver is dropped first.
+    /// Asks the thread to draw page `index` at `pixels`, a width and a
+    /// height in pixels. The receiver that is returned gets the drawing, or
+    /// the error with which drawing failed. When the caller drops the
+    /// receiver before the thread reaches the request, the thread does not
+    /// draw the page.
     pub fn render(
         &self,
         index: usize,
@@ -478,8 +529,10 @@ fn log_spawn_failure(error: &std::io::Error) {
     eprintln!("picto: could not start a document thread: {error}");
 }
 
-/// Draws a page, turning a decoder's panic into an error for that page, so
-/// the document's thread lives on and the other pages still draw.
+/// Draws page `index` of `source` at `pixels`, scaled down by
+/// `bound_render_size` when that is too large. A panic in the decoder is
+/// returned as an error for that page, so that the document's thread keeps
+/// running and can draw the other pages.
 fn render_guarded(
     source: &mut dyn PageSource,
     index: usize,
@@ -498,8 +551,9 @@ fn render_guarded(
     }
 }
 
-/// Shrinks a render size, keeping its proportions, so neither side passes
-/// [`MAX_RENDER_SIDE`].
+/// Returns `width` × `height` scaled down, with the same proportions, so
+/// that neither side is longer than [`MAX_RENDER_SIDE`]. A size within that
+/// limit is returned unchanged. Each side returned is at least 1.
 pub fn bound_render_size(width: u32, height: u32) -> (u32, u32) {
     let longest = width.max(height).max(1);
     if longest <= MAX_RENDER_SIDE {
@@ -521,7 +575,8 @@ mod tests {
     use anyhow::{Result, bail};
     use image::RgbaImage;
 
-    /// Three pages; the second cannot be measured and panics when drawn.
+    /// A document of three pages for the tests. Its second page cannot be
+    /// measured, and drawing it panics.
     struct Flaky;
 
     impl PageSource for Flaky {
@@ -545,12 +600,14 @@ mod tests {
     #[test]
     fn one_bad_page_neither_hides_nor_stops_the_others() {
         let mut source = Flaky;
-        // The page that cannot be measured takes the size before it.
+        // The page that cannot be measured gets the size of the page before
+        // it.
         assert_eq!(
             measure_pages(&mut source).unwrap(),
             vec![(100., 200.), (100., 200.), (102., 200.)]
         );
-        // A page whose decoder panics fails alone; the next still draws.
+        // Drawing the page whose decoder panics returns an error, and the
+        // page after it can still be drawn.
         assert!(render_guarded(&mut source, 1, (10, 20)).is_err());
         let next = render_guarded(&mut source, 2, (10, 20)).unwrap();
         assert_eq!((next.image.width(), next.image.height()), (10, 20));
@@ -587,12 +644,14 @@ mod tests {
 
     #[test]
     fn a_picture_that_claims_a_vast_size_is_refused_or_shrunk() {
-        // A GIF of a few bytes that claims 65535 pixels a side.
+        // A GIF of a few bytes whose header gives a width and a height of
+        // 65535 pixels.
         let mut gif = b"GIF89a".to_vec();
         gif.extend_from_slice(&[0xff, 0xff, 0xff, 0xff, 0, 0, 0]);
         gif.extend_from_slice(&[0x2c, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0, 2, 0, 0x3b]);
         assert!(decode_picture("page.gif", &gif).is_err());
-        // An SVG page as large is drawn at the largest render size.
+        // An SVG page that is larger still is drawn with its longer side at
+        // `MAX_RENDER_SIDE` pixels.
         let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1000000" height="500000"><rect width="10" height="10"/></svg>"#;
         let page = decode_picture("page.svg", svg).unwrap();
         assert_eq!(

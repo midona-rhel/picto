@@ -1,7 +1,8 @@
-//! The filter bar under the titlebar (`GridFilterToolbar` in
-//! `GridFilterMenu.tsx`): a control for each pinned or set filter, each
-//! opening its menu or picker, the button that pins fields, and on the
-//! right the saved filters, the navigation lock and Clear.
+//! The filter bar under the titlebar. It holds a control for each filter
+//! field that is pinned or set, and each control opens the field's menu or
+//! picker. After the controls comes the button that pins fields. On the
+//! right are the saved filters, the lock that keeps the filters when the
+//! user opens another destination, and the button that clears all filters.
 use super::filter_editors::{
     self, DateRangeEditor, DatesCommitted, RangeCommitted, RangeEditor, ResolutionEditor,
     SaveFilterEditor, SaveRequested,
@@ -24,17 +25,18 @@ use gpui::*;
 use picto_library::predicate::ViewQuerySpec;
 use picto_library::query::{ItemScope, RootQuery};
 
-/// `.toolbar`'s `min-height`.
+/// The smallest height of the filter bar, in pixels.
 pub const HEIGHT: f32 = 38.;
 
-/// The bar asks the window to show a menu above everything.
+/// Emitted when the bar opens a menu, so that the window draws the menu
+/// above everything else.
 pub enum BarEvent {
     Menu(Entity<Menu>),
 }
 
 impl EventEmitter<BarEvent> for FilterBar {}
 
-/// Which menu is open (`FilterMenuKind`).
+/// The kinds of menu that the bar opens.
 #[derive(Clone, Copy, PartialEq)]
 enum MenuKind {
     Rating,
@@ -54,7 +56,8 @@ impl MenuKind {
         !matches!(self, MenuKind::Rating | MenuKind::Type | MenuKind::Pin)
     }
 
-    /// `activeMenuWidth`; the others keep the menu's 270px.
+    /// Returns the menu's width in pixels, or `None` for a menu that keeps
+    /// the default width of 270 px.
     fn width(self) -> Option<f32> {
         match self {
             MenuKind::Saved => Some(250.),
@@ -66,10 +69,10 @@ impl MenuKind {
     }
 }
 
-/// The editors of the open menu, kept so the rows can be rebuilt around
-/// them. The colour, date and save editors follow filters changed
-/// elsewhere; the range and resolution editors keep what they were opened
-/// with.
+/// The editors of the open menu. They are kept so that the menu's rows can
+/// be built again around them. The colour, date and save editors are updated
+/// when the filters change outside the menu. The range and resolution
+/// editors keep the values they were opened with.
 #[derive(Default)]
 struct Editors {
     color: Option<Entity<ColorEditor>>,
@@ -81,23 +84,28 @@ struct Editors {
 
 pub struct FilterBar {
     session: Entity<Session>,
-    /// The fields shown while empty (`pinnedFilters`), in no order: the bar
-    /// keeps its own.
+    /// The fields whose controls show while the fields are not set. The
+    /// order of this list is not used: the bar shows the controls in the
+    /// order of `Field::ALL`.
     pinned: Vec<Field>,
-    /// Saved filters, by name (`savedFilters`).
+    /// The saved filters, each with its name.
     saved: Vec<(String, Filters)>,
-    /// The types the rest of the filters leave, for the type menu.
+    /// The MIME types found among the items that the filters other than the
+    /// type filter leave. The type menu offers them.
     facets: Vec<String>,
-    /// What the facets were asked for: destination, search and filters.
+    /// The destination, the search text and the filters that `facets` was
+    /// last requested for.
     facet_query: Option<(usize, String, Filters)>,
     facet_task: Option<Task<()>>,
     menu: Option<(MenuKind, Entity<Menu>)>,
     editors: Editors,
-    /// The tag and folder pickers in their filter mode, which the window
-    /// draws over everything.
+    /// The tag picker and the folder picker, used in their filter mode. The
+    /// window draws them over everything else.
     tag_picker: Entity<TagPicker>,
     folder_picker: Entity<FolderPicker>,
-    /// What the bar last showed, so it repaints only when that changes.
+    /// Whether the bar is open, whether the filters are locked, and the
+    /// filters, as the bar last drew them. The bar is drawn again only when
+    /// one of them changes.
     shown: Option<(bool, bool, Filters)>,
     scroll: ScrollHandle,
     _menu: Vec<Subscription>,
@@ -156,8 +164,8 @@ impl FilterBar {
                 }
             }),
         ];
-        // The pinned fields and saved filters the user left
-        // (`loadPinnedFilters`, `loadSavedFilters`).
+        // The pinned fields and the saved filters are read from the app's
+        // stored state.
         let kept = crate::state::get(cx);
         let pinned = kept
             .pinned_filters
@@ -187,8 +195,8 @@ impl FilterBar {
         }
     }
 
-    /// Keeps the pinned fields and saved filters in the app's state, as
-    /// production keeps them in localStorage.
+    /// Writes the pinned fields and the saved filters to the app's stored
+    /// state.
     fn keep(&self, cx: &mut App) {
         let pinned = self
             .pinned
@@ -217,9 +225,11 @@ impl FilterBar {
             .update(cx, |session, cx| session.set_filters(filters, cx));
     }
 
-    /// The filters, the bar or the destination changed: repaint if what the
-    /// bar shows changed, keep the open menu's rows and editors in step,
-    /// and fetch the type facets again when they may differ.
+    /// Called when the session's results or navigation change. Closes the
+    /// open menu when the bar is closed. Draws the bar again if what it
+    /// shows changed, and then updates the rows and the editors of the open
+    /// menu. While the bar is open, requests the types for the type menu
+    /// again if they may differ.
     fn session_changed(&mut self, cx: &mut Context<Self>) {
         let (open, locked, filters) = {
             let session = self.session.read(cx);
@@ -243,8 +253,9 @@ impl FilterBar {
         }
     }
 
-    /// `queryMimeFacets` for the destination with every filter but the
-    /// types, while the bar is open.
+    /// Requests the MIME types found among the items of the displayed
+    /// destination that match the search text and every filter except the
+    /// type filter. Does nothing when the last request was the same.
     fn fetch_facets(&mut self, cx: &mut Context<Self>) {
         let (key, scope, filter) = {
             let session = self.session.read(cx);
@@ -299,7 +310,8 @@ impl FilterBar {
         }));
     }
 
-    // ── Menus ───────────────────────────────────────────────────
+    // The functions below open the bar's menus and pickers and apply what
+    // the user chooses in them.
 
     fn open_menu(&mut self, kind: MenuKind, anchor: Bounds<Pixels>, cx: &mut Context<Self>) {
         if let Some((_, menu)) = self.menu.take() {
@@ -310,13 +322,15 @@ impl FilterBar {
         let filters = self.filters(cx);
         self.create_editors(kind, &filters, cx);
         let entries = self.entries(kind, &filters);
-        // `{ x: rect.left, y: rect.bottom + 4 }`.
+        // The menu opens 4 px below the control, with its left edge at the
+        // control's left edge.
         let position = point(anchor.left(), anchor.bottom() + px(4.));
         let menu = cx.new(|cx| {
             let menu = Menu::new(entries, position, cx)
                 .search(matches!(kind, MenuKind::Type | MenuKind::Pin));
-            // Editors take the keyboard, and their selects and calendars
-            // open over the window.
+            // A menu with an editor is drawn inside the window, because a
+            // text field needs the keyboard and a date field's calendar opens
+            // over the window.
             let menu = if kind.has_editor() {
                 menu.in_window()
             } else {
@@ -342,7 +356,8 @@ impl FilterBar {
         cx.emit(BarEvent::Menu(menu));
     }
 
-    /// The editors a menu holds, made from the filters as they are.
+    /// Creates the editors that the menu `kind` holds, with the values of
+    /// `filters`, and subscribes to what they emit.
     fn create_editors(&mut self, kind: MenuKind, filters: &Filters, cx: &mut Context<Self>) {
         match kind {
             MenuKind::Color => {
@@ -457,8 +472,8 @@ impl FilterBar {
         }
     }
 
-    /// The open menu's rows for the filters as they are now, and its
-    /// editors following them.
+    /// Updates the editors of the open menu to the filters as they are now,
+    /// and builds the menu's rows again.
     fn refresh_menu(&mut self, cx: &mut Context<Self>) {
         let Some((kind, menu)) = self.menu.clone() else {
             return;
@@ -484,7 +499,7 @@ impl FilterBar {
     }
 
     fn entries(&self, kind: MenuKind, filters: &Filters) -> Vec<menu::Entry> {
-        // The menu's width, which an editor fills.
+        // The width of the menu, which an editor fills.
         let width = kind.width().unwrap_or(270.);
         match kind {
             MenuKind::Rating => [5u8, 4, 3, 2, 1, 0]
@@ -677,13 +692,14 @@ impl FilterBar {
         }
     }
 
-    /// The tag and folder pickers, which the window draws over everything.
+    /// Returns the tag picker and the folder picker, which the window draws
+    /// over everything else.
     pub fn pickers(&self) -> (Entity<TagPicker>, Entity<FolderPicker>) {
         (self.tag_picker.clone(), self.folder_picker.clone())
     }
 
-    /// Opens the tag or folder picker in its filter mode, 4px below the
-    /// control.
+    /// Opens the tag picker or the folder picker in its filter mode, 4 px
+    /// below the control whose bounds are `anchor`.
     fn open_picker(
         &mut self,
         field: Field,
@@ -733,7 +749,7 @@ impl FilterBar {
         }
     }
 
-    // ── Drawing ─────────────────────────────────────────────────
+    // The functions below draw the bar.
 
     fn control(&self, field: Field, filters: &Filters, cx: &mut Context<Self>) -> AnyElement {
         let names = {
@@ -778,7 +794,8 @@ impl FilterBar {
     }
 }
 
-/// The menu a field's control opens.
+/// Returns the menu that a field's control opens, or `None` for a field
+/// whose control opens a picker.
 fn menu_kind(field: Field) -> Option<MenuKind> {
     Some(match field {
         Field::Color => MenuKind::Color,
@@ -789,12 +806,13 @@ fn menu_kind(field: Field) -> Option<MenuKind> {
         Field::Resolution => MenuKind::Resolution,
         Field::Duration => MenuKind::Duration,
         Field::Size => MenuKind::Size,
-        // Tags and folders open their pickers instead.
+        // The controls of tags and folders open their pickers instead.
         Field::Tags | Field::Folders => return None,
     })
 }
 
-/// A field's 16px glyph on the bar (`stroke={1.6}`).
+/// Returns the name of the 16 px icon that a field's control shows on the
+/// bar.
 fn bar_icon(field: Field) -> &'static str {
     match field {
         Field::Color => "filter-color",
@@ -809,7 +827,7 @@ fn bar_icon(field: Field) -> &'static str {
     }
 }
 
-/// A field's glyph in the pin menu.
+/// Returns the name of the icon that a field's row shows in the pin menu.
 fn pin_icon(field: Field) -> &'static str {
     match field {
         Field::Color => "pin-color",
@@ -884,8 +902,8 @@ impl Render for FilterBar {
                 .h(px(32.))
                 .ml(px(-10.))
                 .child(items)
-                // The fades at either end, over the controls that scroll under
-                // them.
+                // A gradient at each end, from the bar's background to
+                // transparent, is drawn over the controls that scroll under it.
                 .child(
                     div()
                         .absolute()

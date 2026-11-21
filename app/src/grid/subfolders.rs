@@ -1,9 +1,9 @@
 //! The subfolder header: the block at the top of a folder's grid that lists
-//! the folder's subfolders (`SubfolderGrid.tsx` in production). From top to
-//! bottom it shows the label "Folders (n)" with a chevron that collapses and
-//! expands the list, one tile for each subfolder, and the label "Content (n)"
-//! above the folder's own items. A tile is a card that shows the subfolder's
-//! cover picture, with the subfolder's name and item count below the card.
+//! the folder's subfolders. From top to bottom it shows the label
+//! "Folders (n)" with a chevron that collapses and expands the list, one tile
+//! for each subfolder, and the label "Content (n)" above the folder's own
+//! items. A tile is a card that shows the subfolder's cover picture, with the
+//! subfolder's name and item count below the card.
 //!
 //! A click selects a tile, a double-click opens that folder in the grid, and a
 //! right-click opens the folder's context menu. A tile's name can be edited in
@@ -52,13 +52,13 @@ pub struct Child {
 }
 
 /// Returns the subfolders to show as tiles for the destination at index
-/// `displayed` of the destination list `nav` (`gridChildFoldersAtom` in
-/// production). When `descendants` is false, these are the folder's direct
-/// children. When it is true, which is when the folder shows its subfolders'
-/// items too, these are all of its descendants, depth first: each child is
-/// followed by its own children before its next sibling. Siblings keep the
-/// order they have in `nav`, which is the sidebar's order. The result is empty
-/// when the destination is not a folder or is a screen of its own.
+/// `displayed` of the destination list `nav`. When `descendants` is false,
+/// these are the folder's direct children. When it is true, which is when the
+/// folder shows its subfolders' items too, these are all of its descendants,
+/// depth first: each child is followed by its own children before its next
+/// sibling. Siblings keep the order they have in `nav`, which is the sidebar's
+/// order. The result is empty when the destination is not a folder or is a
+/// screen of its own.
 pub fn children(nav: &[Navigation], displayed: usize, descendants: bool) -> Vec<Child> {
     let Some(entry) = nav.get(displayed) else {
         return Vec::new();
@@ -109,61 +109,54 @@ pub fn folder_of(node: &str) -> Option<FolderId> {
     node.strip_prefix("folder:")?.parse().ok().map(FolderId)
 }
 
-/// Returns the padding in pixels on the left and right of the header, which is
-/// the padding of `.container` in `SubfolderGrid.module.css`: 16px, or 8px
-/// when the grid's spacing `gap` is 8px or less (the `.tight` class in
-/// production). Production's `.list` uses the same two values for the gap
-/// between tiles.
+/// Returns the padding in pixels on the left and right of the header: 16px,
+/// or 8px when the grid's spacing `gap` is 8px or less. The gap between two
+/// subfolder tiles is the grid's spacing `gap` itself.
 fn padding(gap: f32) -> f32 {
     if gap <= 8. { 8. } else { 16. }
 }
 
-/// The "Folders (n)" label (`.sectionLabel`): a 4px margin above it, a line
-/// 18.6px tall (12px text at a line height of 1.55), and a 6px margin below
-/// it.
+/// The "Folders (n)" label: a 4px margin above it, a line 18.6px tall (12px
+/// text at a line height of 1.55), and a 6px margin below it.
 const LABEL_TOP: f32 = 4.;
 const LABEL_HEIGHT: f32 = 18.6;
 const LABEL_BELOW: f32 = 6.;
-/// The list of subfolder tiles (`.list`): a 6px margin above it and a 30px
-/// margin below it.
+/// The list of subfolder tiles: a 6px margin above it and a 30px margin below
+/// it.
 const LIST_TOP: f32 = 6.;
 const LIST_BELOW: f32 = 30.;
-/// The "Content (n)" label (`.contentLabel`): a 4px margin above it and a 6px
-/// margin below it. When the list of tiles is shown, the list's 30px bottom
-/// margin is the space above the label and the 4px is not added to it, because
-/// the two margins overlap in production's CSS. In the same way the 6px below
-/// the label is not added to the header's own 4px bottom margin
+/// The "Content (n)" label: a 4px margin above it and a 6px margin below it.
+/// When the list of tiles is shown, the list's 30px bottom margin is the
+/// space above the label and the 4px is not added to it. In the same way the
+/// 6px below the label is not added to the header's own 4px bottom margin
 /// (`CONTAINER_BELOW`).
 const CONTENT_TOP: f32 = 4.;
 const CONTENT_BELOW: f32 = 6.;
-/// The margin in pixels below the whole header (the `margin-bottom` of
-/// `.container`). It is used only when the list of tiles is collapsed and
-/// there is no "Content (n)" label.
+/// The margin in pixels below the whole header. It is used only when the list
+/// of tiles is collapsed and there is no "Content (n)" label.
 const CONTAINER_BELOW: f32 = 4.;
-/// A tile's card (`.thumbnail`). Its height is 75% of the tile's width plus
-/// 10px (`padding-bottom: calc(75% + 10px)`), and there are 12px between the
-/// card and the name below it.
+/// A tile's card. Its height is 75% of the tile's width plus 10px, and there
+/// are 12px between the card and the name below it.
 const CARD_EXTRA: f32 = 10.;
 const CARD_BELOW: f32 = 12.;
-/// The height in pixels of the row that holds the folder's icon and name
-/// (`.nameRow`). The row is one line of the tile's text, which is 13px at a
-/// line height of 1.55, and the 19px icon in the row makes that line 24.1px
-/// tall. A name that wraps onto a second 15px line makes the row 11px taller
-/// (`NAME_SECOND_LINE`).
+/// The height in pixels of the row that holds the folder's icon and name. The
+/// row is one line of the tile's text, which is 13px at a line height of 1.55,
+/// and the 19px icon in the row makes that line 24.1px tall. A name that wraps
+/// onto a second 15px line makes the row 11px taller (`NAME_SECOND_LINE`).
 const NAME_LINE: f32 = 24.1;
 const NAME_SECOND_LINE: f32 = 11.;
-/// The height in pixels of the line that shows the folder's item count
-/// (`.metas`): 10px text at a line height of 1.3.
+/// The height in pixels of the line that shows the folder's item count: 10px
+/// text at a line height of 1.3.
 const METAS: f32 = 13.;
-/// The width in pixels of the folder icon in the name row (`.nameRow`), and
-/// the gap between the icon and the name.
+/// The width in pixels of the folder icon in the name row, and the gap between
+/// the icon and the name.
 const NAME_ICON: f32 = 19.;
 const NAME_GAP: f32 = 6.;
-/// The width in pixels of the rename field (`FolderRenameInput`), as measured
-/// in production.
+/// The width in pixels of the text field in which a subfolder's name is
+/// edited.
 const RENAME_WIDTH: f32 = 161.6;
-/// The line height in pixels of a folder's name (`.name`). A name shows at
-/// most two lines.
+/// The line height in pixels of a folder's name. A name shows at most two
+/// lines.
 const NAME_LINE_HEIGHT: f32 = 15.;
 
 /// The positions and sizes of the parts of the subfolder header, in pixels.
@@ -192,8 +185,7 @@ pub struct Geometry {
 /// the zoom's tile size. It is clamped to between 150px and 400px, and the
 /// result is the narrowest a tile may be. The list has as many columns as fit
 /// at that width, and at least one. The columns then share the whole width
-/// equally. This is `repeat(auto-fill, minmax(size, 1fr))` on `.list` in
-/// production.
+/// equally.
 pub fn columns(width: f32, target: f32, gap: f32) -> (usize, f32) {
     let size = target.clamp(150., 400.);
     let columns = (((width + gap) / (size + gap)).floor() as usize).max(1);
@@ -294,11 +286,11 @@ pub struct Cover {
     pub font: bool,
 }
 
-/// Reads the cover of `folder` from the library (`getFolderCover` in
-/// production). It is called on the library's thread, not on the thread that
-/// draws. `blobs` is the library's blob store folder, which the path of the
-/// thumbnail is built from. Returns `None` when the folder has no cover set
-/// and either holds no items of its own or the query for its first item fails.
+/// Reads the cover of `folder` from the library. It is called on the library's
+/// thread, not on the thread that draws. `blobs` is the library's blob store
+/// folder, which the path of the thumbnail is built from. Returns `None` when
+/// the folder has no cover set and either holds no items of its own or the
+/// query for its first item fails.
 fn read_cover(
     library: &picto_library::Library,
     folder: FolderId,
@@ -339,7 +331,7 @@ fn read_cover(
 }
 
 /// A rename in progress: the name of the subfolder tile `node` is being edited
-/// in a text field on the tile (`FolderRenameInput` in production).
+/// in a text field on the tile.
 pub struct Renaming {
     pub node: String,
     original: String,
@@ -624,7 +616,7 @@ impl GridView {
     /// Opens the name of the subfolder tile with node id `node` for editing as
     /// soon as that tile exists. It is called for a folder that was just
     /// created or duplicated, whose tile appears only after the destination
-    /// list has been read again (`setRenamingSubfolderId` in production).
+    /// list has been read again.
     pub fn rename_subfolder_when_shown(&mut self, node: String, cx: &mut Context<Self>) {
         self.subfolders.rename_next = Some(node);
         cx.notify();
@@ -657,11 +649,10 @@ impl GridView {
             .collect()
     }
 
-    /// Starts renaming the subfolder tile with node id `node`
-    /// (`FolderRenameInput` in production). The tile shows a text field in
-    /// place of its name. The field holds `name` with all of it selected, and
-    /// takes the keyboard focus. Enter, or moving the focus out of the field,
-    /// commits the new name. Escape cancels.
+    /// Starts renaming the subfolder tile with node id `node`. The tile shows
+    /// a text field in place of its name. The field holds `name` with all of
+    /// it selected, and takes the keyboard focus. Enter, or moving the focus
+    /// out of the field, commits the new name. Escape cancels.
     pub fn rename_subfolder(
         &mut self,
         node: String,
@@ -733,9 +724,9 @@ impl GridView {
         let geometry = header.geometry.clone();
         let total = self.session.read(cx).total;
         // The subfolder tiles that are selected. A rubber band adds the tiles
-        // it covers to this selection only when the mouse button is released,
-        // as in production. While the band is being dragged, those tiles are
-        // drawn without the selection ring.
+        // it covers to this selection only when the mouse button is released.
+        // While the band is being dragged, those tiles are drawn without the
+        // selection ring.
         let selected = self.session.read(cx).folder_selection.clone();
         let expanded = header.expanded;
         let padding = geometry.padding;
@@ -746,10 +737,9 @@ impl GridView {
             .w_full()
             .h(px(geometry.height))
             .font_family(theme::FONT_UI);
-        // The "Folders (n)" label with its chevron (`.sectionLabel`). A click
-        // on it collapses or expands the list of tiles. Its text changes from
-        // the secondary text colour to the primary text colour while the
-        // pointer is over it.
+        // The "Folders (n)" label with its chevron. A click on it collapses or
+        // expands the list of tiles. Its text changes from the secondary text
+        // colour to the primary text colour while the pointer is over it.
         root = root.child(
             div()
                 .id("subfolders-label")
@@ -874,9 +864,8 @@ impl GridView {
     ) -> AnyElement {
         let theme = theme::theme(cx);
         let tint = child.tint.map(rgb);
-        // The front card of the tile (`.pic1`). Its top is 10px below the top
-        // of the tile. Production gives it 4px of padding, which keeps the
-        // cover picture 4px away from its edges.
+        // The front card of the tile. Its top is 10px below the top of the
+        // tile.
         let card_top = 10.;
         let face_h = card_h - card_top;
         let mut face = div()
@@ -918,10 +907,9 @@ impl GridView {
             .and_then(|resource| self.thumbnails.read(cx).size(resource));
         match (cover.as_ref(), resource, size) {
             (Some(cover), Some(_), Some((natural_w, natural_h))) => {
-                // The cover picture (`.coverImage`). It is scaled down to fit
-                // inside the card with 4px free on every side, it is never
-                // drawn larger than the thumbnail's own size, and it is
-                // centred in the card.
+                // The cover picture. It is scaled down to fit inside the card
+                // with 4px free on every side, it is never drawn larger than
+                // the thumbnail's own size, and it is centred in the card.
                 let (room_w, room_h) = (width - 2. - 8., face_h - 1. - 8.);
                 let scale = (room_w / natural_w).min(room_h / natural_h).min(1.);
                 let (w, h) = (natural_w * scale, natural_h * scale);
@@ -938,12 +926,12 @@ impl GridView {
             }
             (Some(_), _, _) => {}
             (None, _, _) => {
-                // A folder with no cover (`.folderPlaceholder`): draw the
-                // folder icon in the centre of the card. The icon is a quarter
-                // as wide as the tile, with the tile's width taken as no less
-                // than 150px and no more than 400px. It is drawn at 20%
-                // opacity in the folder's tint colour, or in the primary text
-                // colour when the folder has no tint.
+                // A folder with no cover: draw the folder icon in the centre
+                // of the card. The icon is a quarter as wide as the tile, with
+                // the tile's width taken as no less than 150px and no more
+                // than 400px. It is drawn at 20% opacity in the folder's tint
+                // colour, or in the primary text colour when the folder has no
+                // tint.
                 let size = (width.clamp(150., 400.) * 0.25).round().max(24.);
                 let color = tint.unwrap_or(theme.text());
                 face = face.child(
@@ -965,10 +953,9 @@ impl GridView {
             }
         }
         // Builds one of the two bars, each 2px high, that are drawn above the
-        // front card (`.pic2` and `.pic3`). They look like the top edges of
-        // two more cards stacked behind it. `top` is the bar's distance from
-        // the top of the tile, and `inset` is its distance from the tile's
-        // left and right edges.
+        // front card. They look like the top edges of two more cards stacked
+        // behind it. `top` is the bar's distance from the top of the tile, and
+        // `inset` is its distance from the tile's left and right edges.
         let stack = |top: f32, inset: f32, color: u32| {
             div()
                 .absolute()
@@ -992,12 +979,8 @@ impl GridView {
         let name_room = (width - NAME_ICON - NAME_GAP).max(0.);
         let name: AnyElement = match renaming {
             Some(input) => div()
-                // Production's CSS gives the rename field
-                // `width: min(180px, 100%)`. The row the field is in is sized
-                // by its content, so the field ends up at an input's default
-                // width, which was measured in production as 161.6px
-                // (`RENAME_WIDTH`). Here the field is that wide, or as wide as
-                // the room the name has when that is less.
+                // The rename field is `RENAME_WIDTH` wide, or as wide as the
+                // room the name has when that is less.
                 .w(px(RENAME_WIDTH.min(name_room)))
                 .min_w_0()
                 // A mouse press inside the rename field is for editing the
@@ -1049,8 +1032,8 @@ impl GridView {
             .items_center();
         if ringed {
             // The ring drawn around a tile that is selected or is the drop
-            // target (`.tileSelected::after`): a border 2px thick in the
-            // theme's primary colour, with 3px between it and the card.
+            // target: a border 2px thick in the theme's primary colour, with
+            // 3px between it and the card.
             tile = tile.child(
                 div()
                     .absolute()
@@ -1125,17 +1108,16 @@ impl GridView {
                 return;
             }
             if event.click_count() == 2 {
-                // A double-click opens the folder: the grid navigates to it
-                // (`onOpenFolder` in production).
+                // A double-click opens the folder: the grid navigates to it.
                 this.session
                     .update(cx, |session, cx| session.navigate(open_index, cx));
                 return;
             }
-            // A single click selects the tile (`onSelectFolder` in
-            // production). With the platform's selection key held (Command on
-            // macOS, Control on Windows and Linux), the click adds the tile to
-            // the selected tiles, or removes it if it was already selected.
-            // Without that key the tile becomes the only selected tile.
+            // A single click selects the tile. With the platform's selection
+            // key held (Command on macOS, Control on Windows and Linux), the
+            // click adds the tile to the selected tiles, or removes it if it
+            // was already selected. Without that key the tile becomes the only
+            // selected tile.
             let toggle = matches!(press, Press::Toggle | Press::Range { keep: true });
             this.session.update(cx, |session, cx| {
                 session.select_folders(vec![node.clone()], toggle, cx)
@@ -1252,10 +1234,9 @@ mod tests {
 
     #[test]
     fn the_header_matches_the_reference_layout() {
-        // These numbers were measured in production with the grid 585px wide
-        // and 8px spacing: four subfolder tiles in two rows, then the
-        // "Content (15)" label, and the item tiles start 636.2px below the top
-        // of the header.
+        // The expected numbers are for a grid 585px wide with 8px spacing:
+        // four subfolder tiles in two rows, then the "Content (15)" label,
+        // and the item tiles start 636.2px below the top of the header.
         let laid = geometry(585., 260., 8., 4, true, true, |_| false);
         assert_eq!(laid.padding, 8.);
         assert_eq!(laid.tiles.len(), 4);

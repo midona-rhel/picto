@@ -1,10 +1,10 @@
 //! Computes the difference picture of two images and counts the pixels that
 //! differ.
 //!
-//! The Electron screen draws the right image over the left image on a black
-//! background with the CSS property `mix-blend-mode: difference`. GPUI has
-//! no blend modes, so this module computes the same picture from the two
-//! decoded images. The screen runs it on a background thread.
+//! The difference picture is black where the two images are equal, and
+//! brighter the more they differ. GPUI has no blend mode that draws one
+//! image over another in this way, so this module computes the picture from
+//! the two decoded images. The screen runs it on a background thread.
 //!
 //! While the picture is computed, two numbers are counted: the share of
 //! pixels that differ at all, and the share of pixels that differ enough to
@@ -97,9 +97,9 @@ impl Measure {
 
 /// Computes the difference picture of two decoded images and counts the
 /// pixels that differ. The picture has the proportions of the left image.
-/// The right image is scaled to the size of the left image, as the Electron
-/// screen does with `object-fit: fill`. The result is `None` when either
-/// image has no pixels.
+/// The right image is scaled to the size of the left image, and its own
+/// proportions are not kept. The result is `None` when either image has no
+/// pixels.
 pub fn compute(left: &RenderImage, right: &RenderImage) -> Option<(Arc<RenderImage>, Measure)> {
     let buffer = |image: &RenderImage| -> Option<Buffer> {
         let size = image.size(0);

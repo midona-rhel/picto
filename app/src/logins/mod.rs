@@ -1,21 +1,22 @@
-//! Site logins: what production's main process does for the Accounts
-//! window (`electron/windows/authSessions.mjs`). A login opens the
-//! service's own page in a sign-in window (`platform::login_window`), its
-//! adapter decides from the page and its cookies when the user has signed
-//! in, and the credential goes to the application through
-//! `auth.credentials.set`, the command production's main process uses. One
-//! login is under way at a time.
+//! Site logins. A login opens the service's own page in a sign-in window
+//! (`platform::login_window`). The login's adapter decides from the page
+//! and its cookies when the user has signed in. The application then saves
+//! the credential with the command `auth.credentials.set`. One login can be
+//! under way at a time.
 //!
-//! - `sites.rs`: the services and their addresses (`authSites.mjs`);
-//! - `adapters.rs`: when each kind of login has finished and what it keeps;
-//! - `machine.rs`: the session's states and what each event leads to;
-//! - `onlyfans.rs`: OnlyFans' pasted session; `browser.rs`: its login in a
-//!   browser of the user's outside the app;
-//! - `oauth.rs`: OAuth 1 signatures; `cookies.rs`: which cookies a page is
-//!   sent.
+//! - `sites.rs` holds the services and their addresses.
+//! - `adapters/` holds, for each kind of login, the rules that decide when
+//!   the login has finished and what is kept. `adapters/oauth.rs` also
+//!   holds the signing of OAuth 1 requests.
+//! - `machine.rs` holds the states of a login and what each event leads to.
+//! - `onlyfans.rs` makes an OnlyFans login from a session that the user
+//!   pasted, and `browser.rs` runs the OnlyFans login in a browser outside
+//!   the app.
+//! - `cookies.rs` selects the cookies that are sent to an address.
 //!
 //! [`Logins`] performs what the machine asks for: it opens and closes the
-//! window, looks at its page every 750 ms, and sends the credential.
+//! sign-in window, looks at its page every 750 ms, and saves the
+//! credential.
 pub mod adapters;
 pub mod browser;
 #[cfg(debug_assertions)]
@@ -37,18 +38,17 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-/// Whether this build keeps site logins in the system keychain.
+/// Returns whether this build keeps site logins in the system keychain.
 ///
-/// A release build does. That is the build a user runs, and the owner
-/// decided that its logins are kept the way the Electron app keeps them.
-/// The application core files a login under the site's name alone (the
-/// keychain service `picto`, the account `<site>`), not under a library, so
-/// this app and the Electron app share one login per site: signing in or
-/// out in one of them changes it for the other.
+/// A release build does. The application core stores a login under the
+/// site's name alone (the keychain service `picto`, the account `<site>`)
+/// and not under a library. Picto 0.6.19 and earlier stored logins in the
+/// same place, so the logins they saved are still read, and signing in or
+/// out in one version changes the login for the other.
 ///
-/// A debug or test build does not. Agents, scripts, tests and CI only ever
-/// run those builds, and they must never read, write or prompt for the
-/// user's keychain.
+/// A debug build and a test build do not. Those are the builds that
+/// scripts, tests and CI run, and they must never read or write the user's
+/// keychain or make the system ask the user for access to it.
 pub fn uses_keychain() -> bool {
     !cfg!(debug_assertions)
 }
@@ -64,16 +64,17 @@ pub fn keep_credentials_in_process() {
     unsafe { std::env::set_var("PICTO_EPHEMERAL_CREDENTIALS", "1") };
 }
 
-/// Whether [`keep_credentials_in_process`] is in effect.
+/// Returns whether `PICTO_EPHEMERAL_CREDENTIALS` is set to `1`, which
+/// [`keep_credentials_in_process`] does.
 pub fn credentials_in_process() -> bool {
     std::env::var("PICTO_EPHEMERAL_CREDENTIALS").as_deref() == Ok("1")
 }
 
-/// Whether a login may be saved or removed. It may when logins are kept in
-/// memory, or when this build is allowed to use the keychain. This is
-/// checked before every save and every removal, so a debug or test build
-/// that somehow did not call [`keep_credentials_in_process`] still never
-/// reaches the keychain.
+/// Returns whether a login may be saved or removed: logins are kept in
+/// memory, or this build is allowed to use the keychain. It is checked
+/// before every save and every removal. A debug or test build in which
+/// [`keep_credentials_in_process`] was not called therefore still never
+/// reads or writes the keychain.
 pub fn may_change_logins() -> bool {
     credentials_in_process() || uses_keychain()
 }
@@ -83,13 +84,14 @@ pub fn may_change_logins() -> bool {
 pub const KEYCHAIN_REFUSED: &str =
     "Logins are kept only for this session here; the system keychain is not used.";
 
-/// Why a login that would reach a real site whatever the sign-in window
-/// loads is not started while `PICTO_GPUI_LOGIN_ORIGIN` keeps logins on
-/// local pages.
+/// The message shown when a login is not started because
+/// `PICTO_GPUI_LOGIN_ORIGIN` keeps logins on local pages and this login
+/// would reach the real site all the same. That is the case for the login
+/// in a browser outside the app and for Pixiv's code exchange.
 pub const LOCAL_ONLY: &str =
     "This login reaches the real site and is not run while logins are kept on local pages.";
 
-/// `AuthSessionState.status`.
+/// The status of the login under way.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Status {
     #[default]
@@ -102,8 +104,8 @@ pub enum Status {
     Error,
 }
 
-/// `AuthSessionState`: what the Accounts window is told of the login under
-/// way. It never holds a secret.
+/// The state of the login under way, which the Accounts dialog shows. It
+/// never holds a secret.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AuthState {
     pub site_category: Option<String>,
@@ -119,7 +121,8 @@ impl AuthState {
     }
 }
 
-/// A captured login, as `auth.credentials.set` takes it.
+/// A login that was obtained. Its fields are those that the command
+/// `auth.credentials.set` takes.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Credential {
     pub site_category: String,
@@ -133,7 +136,8 @@ pub struct Credential {
 }
 
 impl Credential {
-    /// `persistCredential`'s argument.
+    /// Returns the arguments of the command `auth.credentials.set` for
+    /// this credential. The display name is the site's id when none is set.
     pub fn arguments(&self) -> Value {
         json!({
             "site_id": self.site_category,
@@ -148,18 +152,21 @@ impl Credential {
     }
 }
 
-/// How often an open sign-in window's page is looked at (`POLL_INTERVAL_MS`).
+/// The time between two looks at the page of an open sign-in window.
 const POLL: Duration = Duration::from_millis(750);
-/// How long a look may take before it is given up (a page mid-navigation
-/// can leave a script unanswered).
+/// The longest time that one look at the page may take. A longer look is
+/// given up. That happens when the page moves to another address while a
+/// script runs, and the script then never returns.
 const INSPECT_LIMIT: Duration = Duration::from_secs(4);
 
-/// The app's one login session.
+/// Performs the logins. The app has one `Logins`, and one login can be
+/// under way at a time.
 pub struct Logins {
     machine: Machine,
     session: Entity<Session>,
     window: Option<LoginWindow>,
-    /// Counts windows, so a late answer about a closed one is dropped.
+    /// The number of sign-in windows opened so far. A result that arrives
+    /// for a window with an earlier number is ignored.
     generation: u64,
     shown_once: bool,
     window_events: Option<Task<()>>,
@@ -171,9 +178,11 @@ struct GlobalLogins(Entity<Logins>);
 impl Global for GlobalLogins {}
 
 impl Logins {
-    /// The app's login session, made on first use. Another library's
-    /// session (the library was switched) cancels a login under way for the
-    /// one before, whose credential would go to the wrong library.
+    /// Returns the app's `Logins` and makes it on the first call. If
+    /// `session` is not the session of the previous call, the user has
+    /// switched to another library. The login under way is then cancelled,
+    /// because its credential would otherwise be saved through the session
+    /// of the other library.
     pub fn global(session: &Entity<Session>, cx: &mut App) -> Entity<Logins> {
         if let Some(global) = cx.try_global::<GlobalLogins>() {
             let logins = global.0.clone();
@@ -187,9 +196,10 @@ impl Logins {
         }
         let session = session.clone();
         let logins = cx.new(|cx| {
-            // `closeAuthWindow` on quit, as production cancels the session
-            // when its main window goes: the sign-in window, or OnlyFans'
-            // browser and its profile, never outlive the app.
+            // The login under way is cancelled when the app quits. The
+            // sign-in window, or the browser of an OnlyFans login and its
+            // profile folder, therefore do not stay behind after the app
+            // has quit.
             cx.on_app_quit(|logins: &mut Logins, cx| {
                 logins.cancel(cx);
                 async {}
@@ -210,9 +220,10 @@ impl Logins {
         logins
     }
 
-    /// The open library is closing (a switch, Close Library, quitting):
-    /// a login under way for it ends, whether or not the Accounts dialog
-    /// is open, so its credential never reaches another library.
+    /// Cancels the login under way. It is called when the open library
+    /// closes: the user switches to another library, chooses Close Library,
+    /// or quits. The login is cancelled whether or not the Accounts dialog
+    /// is open, so that its credential is never saved to another library.
     pub fn library_closing(cx: &mut App) {
         if let Some(global) = cx.try_global::<GlobalLogins>() {
             let logins = global.0.clone();
@@ -220,19 +231,21 @@ impl Logins {
         }
     }
 
-    /// `auth_session_state`.
+    /// Returns the state of the login under way.
     pub fn state(&self) -> &AuthState {
         self.machine.state()
     }
 
-    /// The sign-in window open now, for the checks (`check.rs`).
+    /// Returns the open sign-in window. Only the check in `check.rs` uses
+    /// it.
     #[cfg(debug_assertions)]
     pub fn window(&self) -> Option<&LoginWindow> {
         self.window.as_ref()
     }
 
-    /// `auth_session_start`: signs in to `site_id` (and, for SubscribeStar,
-    /// the service chosen), cancelling any login under way.
+    /// Starts the sign-in for `site_id`, and for SubscribeStar for the
+    /// service at `service_host`. A login that is under way is cancelled
+    /// first.
     pub fn start(
         &mut self,
         site_id: &str,
@@ -244,13 +257,14 @@ impl Logins {
         Ok(())
     }
 
-    /// `auth_session_cancel`.
+    /// Cancels the login under way.
     pub fn cancel(&mut self, cx: &mut Context<Self>) {
         let effects = self.machine.cancel();
         self.perform(effects, cx);
     }
 
-    /// `auth_onlyfans_manual`.
+    /// Saves an OnlyFans session that the user pasted into the Accounts
+    /// dialog.
     pub fn save_manual_onlyfans(
         &mut self,
         input: &onlyfans::ManualInput,
@@ -268,7 +282,8 @@ impl Logins {
                     if let Err(error) = self.open_window(title, size, cx) {
                         let effects = self.machine.could_not_open(error);
                         self.perform(effects, cx);
-                        // Nothing else of this start applies.
+                        // The window could not be opened, so the remaining
+                        // effects of this start are not performed.
                         break;
                     }
                 }
@@ -366,8 +381,8 @@ impl Logins {
             Event::Started(url) => self.machine.navigated(&url),
             Event::Loaded(url) => {
                 let mut effects = Vec::new();
-                // `ready-to-show`: the window appears once its first page
-                // is there.
+                // The window is shown when its first page has finished
+                // loading.
                 if !self.shown_once {
                     self.shown_once = true;
                     effects.push(Effect::Show);
@@ -383,8 +398,8 @@ impl Logins {
             Event::OpenHere(url) => vec![Effect::Load(url)],
             Event::Failed { url, description } => self.machine.load_failed(&url, &description),
             Event::Unavailable(error) => {
-                // The window holds no web view; it goes, and the login ends
-                // with why.
+                // The web view could not be made, so the window is closed
+                // and the login ends with the error.
                 self.poll = None;
                 if let Some(window) = self.window.take() {
                     window.close(cx);
@@ -392,8 +407,10 @@ impl Logins {
                 self.machine.could_not_open(error)
             }
             Event::Closed => {
-                // The platform closed the window; what is left of it (its
-                // user data folder, GTK's last events) goes now.
+                // The user closed the window. `close` finishes the closing:
+                // on Windows it removes the data folder of the web view, and
+                // on Linux it processes the GTK events that are still
+                // pending.
                 self.poll = None;
                 if let Some(window) = self.window.take() {
                     window.close(cx);
@@ -511,8 +528,8 @@ impl Logins {
     }
 
     fn launch_external(&mut self, session: u64, cx: &mut Context<Self>) {
-        // OnlyFans' own browser can go anywhere; a debug build keeping
-        // logins on local pages does not start it.
+        // The browser outside the app can load any address, so it is not
+        // started while a debug build keeps logins on local pages.
         if crate::seams::login_origin().is_some() {
             let effects = self.machine.external_launched(Err(LOCAL_ONLY.to_owned()));
             self.perform(effects, cx);
@@ -543,11 +560,12 @@ impl Logins {
     }
 }
 
-/// With `PICTO_GPUI_LOGIN_ORIGIN` (a debug build signing in to local pages
-/// only), writes to standard error what the application now reports for
-/// `site`: its row of `auth.credentials.list`, read through the command,
-/// and the names of the cookies its credential store holds. No value is
-/// written out: a session pasted by hand is a real one.
+/// Writes to standard error what the application now holds for `site`:
+/// the site's row in the result of the command `auth.credentials.list`,
+/// and the names of the cookies in its stored credential. It does this
+/// only when `PICTO_GPUI_LOGIN_ORIGIN` is set, which is when a debug build
+/// signs in to local pages only. The values of the cookies are not
+/// written, because a session that the user pasted by hand is a real one.
 pub fn report_local_login(session: &Entity<Session>, site: &str, cx: &mut App) {
     if crate::seams::login_origin().is_none() {
         return;
@@ -578,7 +596,7 @@ pub fn report_local_login(session: &Entity<Session>, site: &str, cx: &mut App) {
     .detach();
 }
 
-/// The open sign-in window as adapters read it.
+/// Gives the adapters the open sign-in window as a [`Page`].
 struct WindowPage {
     logins: WeakEntity<Logins>,
     cx: RefCell<AsyncApp>,
@@ -622,7 +640,7 @@ impl Page for WindowPage {
     }
 }
 
-/// The network and the application, as adapters reach them.
+/// Gives the adapters the network and the application as [`Services`].
 struct AppServices {
     session: Entity<Session>,
     cx: RefCell<AsyncApp>,
@@ -640,8 +658,9 @@ impl AppServices {
 impl Services for AppServices {
     async fn post(&self, request: HttpRequest) -> Result<HttpResponse, String> {
         let (answer, received) = futures::channel::oneshot::channel();
-        // The token requests run on a thread of their own, with a runtime
-        // of their own, off the thread that draws.
+        // The request runs on a thread of its own with a runtime of its
+        // own, so that the thread that draws the interface does not wait
+        // for it.
         std::thread::spawn(move || {
             let _ = answer.send(post(request));
         });
@@ -651,9 +670,11 @@ impl Services for AppServices {
     }
 
     async fn dispatch(&self, command: &str, args: Value) -> Result<Value, String> {
-        // Pixiv's code exchange saves the login inside the application,
-        // past `Effect::Persist`: the same guard as a saved login, and no
-        // exchange with the real site while logins are kept local.
+        // Pixiv's code exchange saves the login inside the application and
+        // does not go through `Effect::Persist`. It is therefore checked
+        // here in the same way as `persist` checks a save. It is also
+        // refused while logins are kept on local pages, because the
+        // exchange would reach the real site.
         if command == "pixiv_oauth_exchange" {
             if !may_change_logins() {
                 return Err(KEYCHAIN_REFUSED.to_owned());
@@ -671,7 +692,8 @@ impl Services for AppServices {
     }
 }
 
-/// A form `POST`, as production's `fetch` sends it.
+/// Sends `request` as a `POST` and waits for the response. Returns the
+/// status and the body of the response.
 fn post(request: HttpRequest) -> Result<HttpResponse, String> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

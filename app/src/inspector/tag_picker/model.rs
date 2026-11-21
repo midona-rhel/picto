@@ -1,12 +1,15 @@
-//! The tag picker's pure list model: which tags show and in what order,
-//! the offer to create one and the arrow keys' steps. What it shares with
-//! the other tag browsers is in `crate::tags`.
+//! Holds the functions of the tag picker's list that draw nothing: which
+//! tags the list shows and in what order, which tag a search offers to
+//! create, and which row an arrow key moves the focus to. The functions that
+//! the tag picker shares with the other views that list tags are in
+//! `crate::tags`.
 use crate::tags::{View, record, record_name as name};
 use crate::ui::overlay_shell::Nav;
 use picto_library::TagRecord;
 use std::collections::BTreeSet;
 
-/// `displayTagName`: the name, without its group unless prefixes show.
+/// Returns the name a tag is shown with: the full name when `prefixes` is
+/// true, and otherwise the name without its group.
 pub(super) fn display_name(tag: &TagRecord, prefixes: bool) -> String {
     let full = name(tag);
     if prefixes {
@@ -15,24 +18,27 @@ pub(super) fn display_name(tag: &TagRecord, prefixes: bool) -> String {
     crate::tags::split(&full).1.to_owned()
 }
 
-/// Everything [`display_tags`] chooses from.
+/// Holds everything that [`display_tags`] chooses the rows from.
 pub struct Sources<'a> {
     pub view: &'a View,
-    /// What the search field holds now, and the search the loaded `tags`
-    /// answer.
+    /// The text the search field holds now. `settled` is the search text
+    /// that the loaded `tags` are the result of.
     pub query: &'a str,
     pub settled: &'a str,
-    /// The items' tags by name, and their records where known.
+    /// The names of the tags the items have. `entity_records` holds the
+    /// records of those of them that are known.
     pub entity: &'a [String],
     pub entity_records: &'a [TagRecord],
-    /// The names that were selected when the picker opened, which list first.
+    /// The names of the tags that were selected when the picker opened. They
+    /// are listed first.
     pub opening: &'a [String],
     pub tags: &'a [TagRecord],
     pub starred: &'a [String],
 }
 
-/// `displayTags`: the rows the list shows, best match first, each visible
-/// name once.
+/// Returns the rows the list shows. The rows that match the search best come
+/// first. Of several tags that are shown with the same name, only the first
+/// is kept.
 pub fn display_tags(sources: &Sources) -> Vec<TagRecord> {
     let local = matches!(sources.view, View::Selected | View::Starred);
     let candidates = match sources.view {
@@ -85,7 +91,8 @@ pub fn display_tags(sources: &Sources) -> Vec<TagRecord> {
     }
     .trim()
     .to_lowercase();
-    // `namespace:subname` searches match the full name; others the subname.
+    // A search that contains a colon is matched against the full name,
+    // `namespace:subname`. Any other search is matched against the subname.
     let full = query.contains(':');
     let keyed = candidates
         .into_iter()
@@ -114,8 +121,11 @@ pub fn display_tags(sources: &Sources) -> Vec<TagRecord> {
         .collect()
 }
 
-/// `createTag`: the tag a search would create, when it names none loaded:
-/// what was typed, in the browsed group unless it names one itself.
+/// Returns the tag that the picker offers to create for the search
+/// `settled`. The tag has the typed name. If the typed name has no colon and
+/// `settled_group` is given, the tag is put in that group. Returns `None` if
+/// a loaded tag already has that name, if the search is empty, and in the
+/// Selected and Starred views.
 pub fn create_candidate(
     view: &View,
     settled: &str,
@@ -139,7 +149,9 @@ pub fn create_candidate(
     (!exists).then(|| record(&wanted))
 }
 
-/// The row the arrow keys move to among `count` rows in `columns`.
+/// Returns the index of the row that an arrow key moves the focus to, among
+/// `count` rows laid out in `columns` columns. When no row has the focus,
+/// every key gives the first row.
 pub fn step(focus: Option<usize>, key: Nav, columns: usize, count: usize) -> Option<usize> {
     if count == 0 {
         return focus;
@@ -197,7 +209,8 @@ mod tests {
             starred: &[],
         });
         assert_eq!(names(&rows), ["series:cherry", "apple", "banana"]);
-        // In a group, only that group's opening tags come first.
+        // In the view of a group, only the opening tags of that group are
+        // listed first.
         let rows = display_tags(&Sources {
             view: &View::Group("creator".into()),
             query: "",
@@ -229,7 +242,7 @@ mod tests {
             tags: &tags,
             starred: &[],
         });
-        // `species:cat` has the same visible name as `cat` and is dropped.
+        // `species:cat` is shown with the same name as `cat`, so it is left out.
         assert_eq!(names(&rows), ["cat", "catgirl", "bobcat"]);
         // A search with a colon matches the full name.
         let rows = display_tags(&Sources {
@@ -258,8 +271,8 @@ mod tests {
             tags: &[],
             starred: &[],
         });
-        // By group, then name; `a` shows the same name as `creator:a` and
-        // is listed once, as production's de-duplication does.
+        // The rows are ordered by group and then by name. `a` is shown with the
+        // same name as `creator:a`, so only the first of the two is listed.
         assert_eq!(names(&rows), ["creator:a", "b"]);
         let starred = ["zeta".to_owned(), "alpha".to_owned()];
         let rows = display_tags(&Sources {

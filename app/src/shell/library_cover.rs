@@ -1,12 +1,12 @@
-//! The cover of the open library (`LibraryCoverDialogHost`). The user chooses
-//! it from the library's own pictures in the cover dialog that a
-//! subscription's cover also uses (`MediaCoverDialog`), and frames it there.
-//! "Set as Library Cover" on an item opens the dialog with that item already
-//! in the frame. Saving does what `setLibraryMeta` does to the library's
-//! folder: the item's thumbnail is copied next to the database as
-//! `.picto-library-cover.<ext>`, and the frame is written to
-//! `.picto-library-cover.json`. The sidebar and the list of libraries then
-//! show the new cover.
+//! Sets the cover of the open library. The user chooses it from the
+//! library's own pictures in the cover dialog that a subscription's cover
+//! also uses (`ui::cover_dialog`), and frames it there. "Set as Library
+//! Cover" on an item opens the dialog with that item already in the frame.
+//! Saving writes two files into the library's folder: the item's thumbnail
+//! is copied next to the database as `.picto-library-cover.<ext>`, and the
+//! frame is written to `.picto-library-cover.json`. Picto 0.6.19 and earlier
+//! wrote the same two files, so a cover that was set there is still shown.
+//! The sidebar and the list of libraries then show the new cover.
 use crate::grid::thumbnails::{self, Thumbnails};
 use crate::i18n::{en, t};
 use crate::session::{Change, Session};
@@ -20,14 +20,14 @@ use std::path::{Path, PathBuf};
 const INSTRUCTIONS: &str =
     en("Select a media item from this library, then adjust its position and zoom.");
 const EMPTY: &str = en("This library has no media available for a cover.");
-/// `PAGE_SIZE` in `libraryAppearance.ts`.
+/// The number of the library's items that are loaded as one page.
 const PAGE: usize = 200;
 /// The extensions the cover file can have. The file is next to the library's
 /// database.
 const COVER_EXTENSIONS: [&str; 2] = ["jpg", "png"];
 
-/// An item of the library as a candidate for the dialog. `None` for an item
-/// that is not a single media file or has no file.
+/// Returns `item` as a candidate for the cover dialog. Returns `None` for an
+/// item that is not a single media file or has no file.
 pub fn candidate(item: &RootSummary, session: &Session) -> Option<Candidate> {
     (item.kind == RootKind::Media && !item.content_hash.is_empty()).then(|| Candidate {
         media_item: i64::from(item.root_id.0),
@@ -60,9 +60,10 @@ impl LibraryCover {
         }
     }
 
-    /// `openCurrentLibraryCoverPicker`: opens the dialog. When `initial` is
-    /// given, that picture is in the frame at once, and the library's pictures
-    /// load in the meantime.
+    /// Opens the cover dialog and starts loading the library's pictures.
+    /// When `initial` is given, that picture is in the frame at once, before
+    /// the pictures have loaded. When no library is open, it shows an error
+    /// notification and opens nothing.
     pub fn open(&mut self, initial: Option<Candidate>, cx: &mut Context<Self>) {
         if self.session.read(cx).library_root().is_none() {
             ui::notify::error(
@@ -81,8 +82,10 @@ impl LibraryCover {
         self.load(None, cx);
     }
 
-    /// `loadLibraryCoverCandidates`: loads one page of the library's media
-    /// (the All destination), most recently imported first.
+    /// Loads one page of the library's items (the All destination), most
+    /// recently imported first, and adds the media items among them to the
+    /// dialog's candidates. `cursor` is `None` for the first page. When
+    /// `add_page` returns a cursor, the next page is loaded at once.
     fn load(&mut self, cursor: Option<String>, cx: &mut Context<Self>) {
         let more = cursor.is_some();
         let answer = self.session.read(cx).run(move |library| {
@@ -123,8 +126,9 @@ impl LibraryCover {
                     Err(error) => {
                         cover.loading = false;
                         cover.loading_more = false;
-                        // The same sentence as the subscription's dialog,
-                        // which the Electron app also uses here.
+                        // The title is the sentence of the subscription's
+                        // cover dialog. The locale files have no sentence
+                        // of their own for the library's cover.
                         let title = if more {
                             t("Unable to load more subscription media")
                         } else {
@@ -145,11 +149,12 @@ impl LibraryCover {
     }
 }
 
-/// `setLibraryMeta` for a picture. Copies the thumbnail of `hash` next to the
-/// database as the cover, removing a cover with the other extension, and
-/// writes the frame next to it. Only the library that is open in the window is
-/// written to (`libraries::writable`), and each file is written only inside
-/// that library's folder (`libraries::confine`).
+/// Writes the cover of the library at `library`. Copies the thumbnail of
+/// `hash` next to the database as the cover, removes a cover file that has
+/// the other extension, and writes the frame next to it. The caller passes
+/// the root of the library that is open in the window
+/// (`Session::writable_root`), and each file is written only inside that
+/// library's folder (`libraries::confine`).
 fn write_cover(
     library: &Path,
     blobs_thumbnail: &Path,
@@ -199,8 +204,11 @@ fn write_cover(
     })
 }
 
-/// `writeMaterializedCoverMetadata`: the frame in the form the Electron app
-/// writes it.
+/// Returns the text of `.picto-library-cover.json` for the picture `hash`
+/// framed by `crop`: a JSON object with the keys `imageHash`, `imageFocusX`,
+/// `imageFocusY` and `imageZoomPercent`, indented by two spaces. A whole
+/// number is written without a decimal point. Picto 0.6.19 and earlier wrote
+/// the file in this form.
 fn cover_frame(hash: &str, crop: crate::cover::Crop) -> String {
     let number = |value: f32| {
         if value.fract() == 0. {
@@ -369,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn the_frame_is_written_as_production_writes_it() {
+    fn the_frame_is_written_as_the_earlier_version_wrote_it() {
         let frame = cover_frame(
             "ab",
             Crop {

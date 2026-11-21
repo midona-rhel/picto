@@ -3,10 +3,11 @@ use gpui::*;
 
 const SIZE: f32 = 25.;
 
-/// The "Return to Top" button (`ScrollToTopButton`): a small glass button at
-/// the bottom right of a scrolling surface that rises into view once the
-/// surface has scrolled past `threshold`, and scrolls it back to the top.
-/// Place it after the surface, inside the element that wraps it.
+/// Returns the "Return to Top" button: a small glass button at the bottom
+/// right of a scrolling surface. It moves up into view once the surface has
+/// scrolled past `threshold`, and a click on it scrolls the surface back to
+/// the top. Returns `None` while the button is hidden. Place it after the
+/// surface, inside the element that wraps the surface.
 pub fn scroll_to_top(
     id: impl Into<ElementId>,
     scroll: &ScrollHandle,
@@ -20,7 +21,9 @@ pub fn scroll_to_top(
     let visible = -scroll.offset().y >= px(threshold);
     let fade = window.use_keyed_state(id.clone(), cx, |_, _| motion::Fade::at(visible));
     if fade.read(cx).on() != visible {
-        // `transform 150ms ease-in-out 30ms, opacity 150ms ease-in-out 30ms`.
+        // The button moves and fades over `motion::RETURN_TO_TOP` along
+        // `motion::EASE_IN_OUT`, after a delay of
+        // `motion::RETURN_TO_TOP_DELAY`.
         fade.update(cx, |fade, _| {
             fade.set_after(visible, motion::RETURN_TO_TOP, motion::RETURN_TO_TOP_DELAY)
         });
@@ -48,7 +51,8 @@ pub fn scroll_to_top(
         .occlude()
         .absolute()
         .right(px(10.))
-        // `translateY(150%)` when hidden.
+        // While hidden, the button is one and a half times its own height
+        // below its place.
         .bottom(px(bottom - SIZE * 1.5 * (1. - shown)))
         .size(px(SIZE))
         .flex()

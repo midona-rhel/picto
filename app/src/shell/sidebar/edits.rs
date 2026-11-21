@@ -1,7 +1,8 @@
-//! The sidebar's edits through the library: creating, duplicating,
-//! deleting, moving and renaming folders and smart folders, their
-//! appearance, sorting and Quick Access. A folder's or smart folder's name
-//! and notes are written here for the inspector too.
+//! This file holds the changes that the sidebar makes to the library. They
+//! create, duplicate, delete, move and rename folders and smart folders, set
+//! their icon and colour, sort a folder's items, and save the Quick Access
+//! list. The inspector also calls `rename_node` and `set_node_notes` here to
+//! save the name and the notes of a folder or smart folder.
 use super::{Renaming, Sidebar, folder_id, smart_folder, smart_folder_id, tree};
 use crate::i18n::t;
 use crate::session::{Change, Report, Reread, Session, edit_then, edit_then_in};
@@ -10,7 +11,8 @@ use gpui::*;
 use picto_library::model::ContentSortField;
 use picto_library::{FolderId, Library, LibraryError, SmartFolderId, SmartFolderInput};
 
-/// A smart folder's definition, to write back with one thing changed.
+/// Returns the definition of the smart folder `id` as the library holds it.
+/// A caller changes one field of it and writes the whole definition back.
 pub(super) fn smart_input(
     library: &Library,
     id: SmartFolderId,
@@ -30,8 +32,9 @@ pub(super) fn smart_input(
     })
 }
 
-/// The destination list shows `name` for the node at once; the name it
-/// showed before, if the node is listed.
+/// Shows `name` for the node in the list of destinations at once, before
+/// the library has saved the name. Returns the name the list showed before,
+/// or `None` if the node is not in the list.
 fn relabel(session: &Entity<Session>, node: &str, name: &str, cx: &mut App) -> Option<String> {
     session.update(cx, |session, cx| {
         let entry = session.nav.iter_mut().find(|entry| entry.id() == node)?;
@@ -43,11 +46,11 @@ fn relabel(session: &Entity<Session>, node: &str, name: &str, cx: &mut App) -> O
     })
 }
 
-/// `foldersController.rename`, and `smartFoldersController.update` with a
-/// new name: the sidebar and the title show the name at once, the
-/// definition is written, and a name the library refuses puts the old one
-/// back. Production leaves the failure to the console. `then` is told on
-/// the view whether it was saved.
+/// Renames a folder or a smart folder. The sidebar and the title show the
+/// new name at once, and then the name is written to the library. If the
+/// library refuses the name, the list shows the old name again, and no
+/// notification is shown. `then` is called on the view with whether the
+/// name was saved.
 pub(crate) fn rename_node<V: 'static>(
     session: &Entity<Session>,
     node: String,
@@ -91,9 +94,9 @@ pub(crate) fn rename_node<V: 'static>(
     );
 }
 
-/// `foldersController.applyNotes`, and `smartFoldersController.update` with
-/// new notes, keeping the rest of the definition as the library has it now.
-/// `then` is told on the view whether they were saved.
+/// Writes the notes of a folder or a smart folder, and keeps the rest of
+/// the definition as the library has it now. Empty notes are saved as no
+/// notes. `then` is called on the view with whether the notes were saved.
 pub(crate) fn set_node_notes<V: 'static>(
     session: &Entity<Session>,
     node: &str,
@@ -132,7 +135,8 @@ pub(crate) fn set_node_notes<V: 'static>(
     );
 }
 
-/// `emptySmartFolderPayload`: a smart folder with no rules is a group.
+/// Returns the definition of a new smart folder group named "Untitled"
+/// under `parent`. A smart folder that has no rules is a group.
 fn new_group(parent_id: Option<SmartFolderId>) -> SmartFolderInput {
     SmartFolderInput {
         name: "Untitled".into(),
@@ -154,16 +158,18 @@ pub(super) fn sorted_by_name(mut input: SmartFolderInput) -> SmartFolderInput {
 }
 
 impl Sidebar {
-    // ── Edits ───────────────────────────────────────────────────────
+    // The functions below change folders and smart folders in the library.
 
-    /// `file.newFolder`: a top-level folder, renamed in place.
+    /// Creates a top-level folder and starts renaming it in place. The
+    /// shortcut `file.newFolder` runs this.
     pub fn new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.create_folder(None, window, cx);
     }
 
-    /// `file.newSubfolder`: a subfolder of the folder chosen in the sidebar,
-    /// or of the open folder when none is chosen. Returns false, creating
-    /// nothing, unless that is exactly one folder.
+    /// Creates a subfolder of the folder that is selected in the sidebar, or
+    /// of the open folder when none is selected, and starts renaming it in
+    /// place. The shortcut `file.newSubfolder` runs this. Returns false and
+    /// creates nothing unless that is exactly one folder.
     pub fn new_subfolder(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         match self.chosen_or_open_folders(cx).as_slice() {
             [folder] => {
@@ -174,14 +180,16 @@ impl Sidebar {
         }
     }
 
-    /// `file.newSmartFolder`: the smart-folder editor for a new top-level
-    /// smart folder.
+    /// Opens the smart-folder editor for a new top-level smart folder. The
+    /// shortcut `file.newSmartFolder` runs this.
     pub fn new_top_smart_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.new_smart_folder(None, window, cx);
     }
 
-    /// `folder.autoTags`: the auto-tags editor for the folders chosen in the
-    /// sidebar, or the open folder. Returns false when there is none.
+    /// Opens the auto-tags dialog for the folders that are selected in the
+    /// sidebar, or for the open folder when none is selected. The shortcut
+    /// `folder.autoTags` runs this. Returns false when there is no such
+    /// folder.
     pub fn auto_tags_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let targets = self.chosen_or_open_folders(cx);
         if targets.is_empty() {
@@ -191,7 +199,9 @@ impl Sidebar {
         true
     }
 
-    /// The folders chosen in the sidebar, or else the open folder.
+    /// Returns the folders that are selected in the sidebar. When none is
+    /// selected it returns the open folder, or nothing when the open
+    /// destination is not a folder.
     fn chosen_or_open_folders(&self, cx: &App) -> Vec<FolderId> {
         let chosen = self.selection.iter().filter_map(|node| folder_id(node));
         let mut folders = chosen.collect::<Vec<_>>();
@@ -203,8 +213,8 @@ impl Sidebar {
         folders
     }
 
-    /// `createFolderAndRename`: a folder named "New Folder", revealed and
-    /// renamed in place.
+    /// Creates a folder named "New Folder" under `parent`, expands the
+    /// branch it is in and starts renaming it in place.
     pub(super) fn create_folder(
         &mut self,
         parent: Option<FolderId>,
@@ -215,22 +225,23 @@ impl Sidebar {
             &self.session,
             Report::folder_depth(),
             Reread::NAVIGATION,
-            // i18n: production names a new folder in English
+            // i18n: a new folder's name, English in every language
             move |library| library.create_folder("New Folder", parent),
             window,
             cx,
             |this, result, window, cx| {
                 if let Ok((id, _)) = result {
-                    // i18n: production names a new folder in English
+                    // i18n: a new folder's name, English in every language
                     this.rename_new(format!("folder:{}", id.0), "New Folder".into(), window, cx)
                 }
             },
         );
     }
 
-    /// A folder named "New Folder" under `parent`, revealed and renamed in
-    /// place, holding `members` when given (the grid's "New Folder" and "New
-    /// Folder with Selection").
+    /// Creates a folder named "New Folder" under `parent`, expands the
+    /// branch it is in and starts renaming it in place. When `members` is
+    /// given, those items are added to the folder. The grid's "New Folder"
+    /// and "New Folder with Selection" commands call this.
     pub fn new_folder_in(
         &mut self,
         parent: Option<FolderId>,
@@ -238,8 +249,8 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // The grid's "New Folder" reports any failure; "New Folder with
-        // Selection" only a folder nested too deep.
+        // "New Folder" shows a notification for any failure. "New Folder
+        // with Selection" shows one only for a folder nested too deep.
         let adds = members.is_some();
         let report = if adds {
             Report::folder_depth()
@@ -251,7 +262,7 @@ impl Sidebar {
             report,
             Reread::NAVIGATION,
             move |library| -> picto_library::Result<_> {
-                // i18n: production names a new folder in English
+                // i18n: a new folder's name, English in every language
                 let (id, _) = library.create_folder("New Folder", parent)?;
                 if let Some(members) = &members {
                     library.add_to_folder(members, id)?;
@@ -262,24 +273,24 @@ impl Sidebar {
             cx,
             move |this, result, window, cx| {
                 if let Ok(id) = result {
-                    // Adding the selection to the new folder makes it the
-                    // last folder used and lets the selection go
-                    // (`updateTargetFolderMembership`,
-                    // `settleSelectionAfterMutation`).
+                    // After the selected items were added to the new folder,
+                    // the folder is recorded as the last folder used and the
+                    // grid's selection is cleared.
                     if adds {
                         this.session.update(cx, |session, cx| {
                             session.record_folder_use(id);
                             session.clear_selection(cx);
                         });
                     }
-                    // i18n: production names a new folder in English
+                    // i18n: a new folder's name, English in every language
                     this.rename_new(format!("folder:{}", id.0), "New Folder".into(), window, cx)
                 }
             },
         );
     }
 
-    /// `createSmartFolderGroupAndRename`.
+    /// Creates a smart folder group named "Untitled" under `parent`, expands
+    /// the branch it is in and starts renaming it in place.
     pub(super) fn create_group(
         &mut self,
         parent: Option<SmartFolderId>,
@@ -301,8 +312,9 @@ impl Sidebar {
         );
     }
 
-    /// Duplicates folders and smart folders. One duplicate is renamed in
-    /// place under the name the Electron sidebar offers, "<name> copy".
+    /// Duplicates folders and smart folders. When exactly one node is
+    /// duplicated, the sidebar starts renaming the duplicate in place, and
+    /// the rename field holds "<name> copy".
     pub(super) fn duplicate(
         &mut self,
         nodes: Vec<String>,
@@ -345,8 +357,9 @@ impl Sidebar {
         );
     }
 
-    /// Deletes folder and smart-folder definitions. The library removes the
-    /// definitions and their memberships; no media file is touched.
+    /// Deletes folders and smart folders. The library removes their
+    /// definitions and the record of which items were in them. It deletes
+    /// no media file.
     pub(super) fn delete(
         &mut self,
         nodes: Vec<String>,
@@ -362,8 +375,9 @@ impl Sidebar {
             .filter_map(|node| smart_folder_id(node))
             .collect::<Vec<_>>();
         let bulk = nodes.len() > 1;
-        // `deleteMany` and `smartFoldersController.delete` each announce
-        // what they deleted; the smart folders are deleted last.
+        // The notification with the Undo button names one history command.
+        // Smart folders are deleted after folders, so the command is
+        // `smart_folders.delete` when a smart folder is among the nodes.
         let announce = if smart.is_empty() {
             "folders.delete"
         } else {
@@ -395,19 +409,23 @@ impl Sidebar {
         );
     }
 
-    /// Writes a renamed folder or smart folder (`rename_node`).
+    /// Saves the name typed in the rename field with `rename_node`. Nothing
+    /// is saved when the name is empty or is the name the node already had.
     fn apply_rename(&mut self, node: &str, original: &str, name: String, cx: &mut Context<Self>) {
         if !name.is_empty() && name != original {
             rename_node(&self.session, node.to_owned(), name, cx, |_, _, _| {});
         }
     }
 
-    /// The Quick Access node ids, in their order (`sidebarQuickAccess`).
+    /// Returns the ids of the nodes in Quick Access, in the order in which
+    /// the `sidebar_quick_access` setting stores them.
     pub(super) fn quick_access(&self, cx: &App) -> Vec<String> {
         crate::settings::current(cx).sidebar_quick_access.clone()
     }
 
-    /// Saves Quick Access as `reorderQuickAccess` does: each id once.
+    /// Saves `ids` as the Quick Access list. An id that occurs more than
+    /// once is kept only at its first place. A failure to save is reported
+    /// with the title "Unable to update Quick Access".
     pub(super) fn set_quick_access(&mut self, ids: Vec<String>, cx: &mut Context<Self>) {
         let mut unique = Vec::new();
         for id in ids {
@@ -425,7 +443,8 @@ impl Sidebar {
         cx.notify();
     }
 
-    /// Gives folders and smart folders an icon (`None` for the default).
+    /// Sets the icon of folders and smart folders. `None` sets the default
+    /// icon.
     pub(super) fn apply_icon(
         &mut self,
         nodes: Vec<String>,
@@ -435,7 +454,8 @@ impl Sidebar {
         self.edit_appearance(nodes, Some(icon), None, cx);
     }
 
-    /// Gives folders and smart folders a colour (`None` for the default).
+    /// Sets the colour of folders and smart folders. `None` sets the default
+    /// colour.
     pub(super) fn apply_color(
         &mut self,
         nodes: Vec<String>,
@@ -445,9 +465,10 @@ impl Sidebar {
         self.edit_appearance(nodes, None, Some(color), cx);
     }
 
-    /// Writes an icon, a colour or both, keeping what else the definition
-    /// holds. The icon picker may be in a menu's pop-up window, so this
-    /// waits for the library without holding any window.
+    /// Writes an icon, a colour or both to folders and smart folders, and
+    /// keeps the rest of each definition. The icon picker can be in a menu's
+    /// pop-up window, so this function waits for the library without using a
+    /// window.
     fn edit_appearance(
         &mut self,
         nodes: Vec<String>,
@@ -492,8 +513,8 @@ impl Sidebar {
         });
     }
 
-    /// `foldersController.sortContents`: orders each folder's items by a
-    /// field.
+    /// Orders the items of each of `folders` by `field` in the library, then
+    /// reads the grid again.
     pub(super) fn sort_contents(
         &mut self,
         folders: Vec<FolderId>,
@@ -521,9 +542,10 @@ impl Sidebar {
         );
     }
 
-    /// `smartFoldersController.moveMany`: moves smart folders under another
-    /// (`Some("")` or `None` for the top level), the topmost of a
-    /// selection only.
+    /// Moves smart folders under the smart folder `under`. `None` and
+    /// `Some("")` move them to the top level. A node in `nodes` that is
+    /// inside another node in `nodes` is not moved by itself, because it
+    /// moves with that node.
     pub(super) fn move_smart(
         &mut self,
         nodes: Vec<String>,
@@ -557,8 +579,9 @@ impl Sidebar {
         );
     }
 
-    /// "New Smart Folder" and "New Child Smart Folder": the editor with
-    /// every part, for a folder under `parent`.
+    /// Opens the smart-folder editor with all of its parts (`Part::All`) for
+    /// a new smart folder under `parent`. The menu rows "New Smart Folder"
+    /// and "New Child Smart Folder" call this.
     pub(super) fn new_smart_folder(
         &mut self,
         parent: Option<SmartFolderId>,
@@ -573,7 +596,9 @@ impl Sidebar {
         );
     }
 
-    /// "Edit Smart Folder..." (its details) and "Edit Rules...".
+    /// Opens the smart-folder editor for an existing smart folder. The
+    /// editor shows the rules when `rules` is true (the menu row "Edit
+    /// Rules...") and the details otherwise ("Edit Smart Folder...").
     pub(super) fn edit_smart_folder(
         &mut self,
         node: &str,
@@ -623,16 +648,18 @@ impl Sidebar {
             this.reveal(&format!("smart:{}", id.0), cx);
             cx.notify();
         });
-        // The editor repaints itself while it fades out; the sidebar has to
-        // repaint too, to drop it when it is done.
+        // The editor repaints itself while it fades out. The sidebar is
+        // repainted with it, because the sidebar's `render` is where the
+        // editor is dropped once it has finished.
         cx.observe(&editor, |_, _, cx| cx.notify()).detach();
         self.smart_editor = Some((editor, subscription));
         cx.notify();
     }
 
-    // ── Rename in place ─────────────────────────────────────────────
+    // The functions below rename a row in place.
 
-    /// A new or duplicated node: open its section and branch, then rename it.
+    /// Expands the section and the branches that hold a new or duplicated
+    /// node, then starts renaming the node in place.
     fn rename_new(
         &mut self,
         node: String,
@@ -644,7 +671,8 @@ impl Sidebar {
         self.start_rename(node, name, window, cx);
     }
 
-    /// `useInlineRename.startRename`: the name selected in a focused field.
+    /// Starts renaming a row in place. The row shows a text field that has
+    /// keyboard focus and holds `name`.
     pub(super) fn start_rename(
         &mut self,
         node: String,
@@ -652,7 +680,7 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // A rename already open is committed first.
+        // If another row is still being renamed, its name is saved first.
         if let Some(open) = self.renaming.take() {
             let value = open.input.read(cx).value().trim().to_owned();
             self.apply_rename(&open.node, &open.original, value, cx);
@@ -663,7 +691,7 @@ impl Sidebar {
             &input,
             window,
             |this, input, event: &Renamed, window, cx| {
-                // Only the field of the rename still open counts.
+                // An event from the field of an earlier rename is ignored.
                 if this
                     .renaming
                     .as_ref()
@@ -677,8 +705,8 @@ impl Sidebar {
                 if let Renamed::Commit(value) = event {
                     this.apply_rename(&open.node, &open.original, value.clone(), cx);
                 }
-                // Enter and Escape leave nothing focused; the keyboard goes back
-                // to the window.
+                // After Enter or Escape nothing has keyboard focus, so the
+                // focus is given to `home`.
                 if window.focused(cx).is_none() {
                     window.focus(&this.home, cx);
                 }

@@ -1,4 +1,5 @@
-//! What an empty grid says, as `GridScreen.tsx` words it for each scope.
+//! The title and the description that an empty grid shows, which depend on
+//! the scope and on whether a search or a filter is active.
 use crate::i18n::{en, t};
 use picto_library::query::ItemScope;
 
@@ -10,7 +11,12 @@ pub struct EmptyCopy {
     pub import: bool,
 }
 
-/// The copy for an empty scope. A search or a filter explains itself first.
+/// Returns the title and the description for a scope with no items, and
+/// whether the import buttons show. With a search the text is about the
+/// search, and otherwise with a filter it is about the filters, whatever
+/// the scope. The import buttons show only without a search and without a
+/// filter, and not in the Inbox, in Untagged, in a smart folder or in the
+/// list of the items that use one media file.
 pub fn copy(scope: &ItemScope, searching: bool, filtered: bool) -> EmptyCopy {
     let (title, description) = if searching {
         (

@@ -1,7 +1,8 @@
-//! The inspector with nothing selected: the destination the grid shows
-//! (the scope state of `Inspector.tsx`). A folder card of its first covers,
-//! its name and notes, how many items it holds and their size, and for a
-//! folder whether it tags and watches.
+//! Draws the inspector when nothing is selected. It then describes the
+//! destination the grid shows: a folder card with the first four covers, the
+//! destination's name and notes, how many items it holds and their size, and
+//! for a folder whether it adds tags automatically and whether it watches a
+//! folder on disk.
 use super::{Inspector, PREVIEW};
 use crate::grid::format;
 use crate::i18n::format::grouped;
@@ -19,10 +20,11 @@ use picto_library::{FolderId, FolderRecord, LibraryError, SmartFolderId, SmartFo
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// The kind of destination, which decides what the rail lets change.
+/// The kind of destination. It decides what the rail lets the user change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Kind {
-    /// All, Inbox, Trash and the other built-in destinations: read-only.
+    /// All, Inbox, Trash and the other built-in destinations. Their name
+    /// cannot be changed and they have no notes.
     System,
     Folder(FolderId),
     Smart(SmartFolderId),
@@ -39,8 +41,8 @@ impl Kind {
         }
     }
 
-    /// The key the name and notes fields are set with, distinct for every
-    /// folder and smart folder.
+    /// Returns the key that the name field and the notes field are set with.
+    /// Every folder and every smart folder has a different key.
     fn key(self) -> u64 {
         match self {
             Kind::System => u64::MAX,
@@ -50,8 +52,9 @@ impl Kind {
     }
 }
 
-/// A folder's or smart folder's own record, which the sidebar list does not
-/// carry.
+/// Holds the library's record of a folder or a smart folder. The record has
+/// the notes and, for a folder, the watch setting, which the sidebar's list
+/// of destinations does not have.
 #[derive(Clone)]
 pub(super) enum Record {
     Folder {
@@ -61,17 +64,20 @@ pub(super) enum Record {
     Smart(SmartFolderRecord),
 }
 
-/// One cell of the folder card: a cover and the colour behind it.
+/// Holds one cell of the folder card: the thumbnail of a cover and the colour
+/// drawn behind it.
 #[derive(Clone, PartialEq)]
 struct Cover {
     thumbnail: PathBuf,
     background: Option<u32>,
 }
 
-/// Everything the scope state draws, taken together so it changes at once.
+/// Holds everything that is drawn when the rail describes a destination. It
+/// is built whole and replaced whole, so that all of it changes in the same
+/// frame.
 #[derive(Clone, PartialEq)]
 pub(super) struct ScopeView {
-    /// The destination's place in the sidebar list.
+    /// The destination's position in the sidebar's list of destinations.
     index: usize,
     kind: Kind,
     name: String,
@@ -80,11 +86,13 @@ pub(super) struct ScopeView {
     size: u128,
     covers: Vec<Cover>,
     search: String,
-    /// A folder's auto-tags and watch, once its record has been read.
+    /// For a folder whose record has been read: whether it adds tags
+    /// automatically, and whether it watches a folder on disk.
     folder: Option<(bool, bool)>,
 }
 
-/// `.preview`'s collage holds the first four covers.
+/// The number of covers on the folder card. They are the destination's first
+/// four items.
 const COVERS: usize = 4;
 const COVER_PINS: [&str; COVERS] = [
     "inspector-cover-0",
@@ -97,30 +105,34 @@ pub(super) struct ScopeState {
     pub(super) name: Entity<TextInput>,
     pub(super) notes: Entity<TextInput>,
     pub(super) view: Option<ScopeView>,
-    /// Records by destination; `None` when reading one failed.
+    /// The records that have been read, by destination. A value of `None`
+    /// means that reading the record failed.
     records: HashMap<Kind, Option<Record>>,
-    /// The destination whose record was last asked for.
+    /// The position of the destination whose record was last asked for.
     asked: Option<usize>,
-    /// Whether the card's covers are pinned in the thumbnail cache.
+    /// Whether the thumbnail cache is keeping the card's covers decoded.
     pinned: bool,
-    /// What a subfolder selected in the grid holds of its own: its size and
-    /// first items, by folder; `None` while being read.
+    /// For each subfolder that was selected in the grid, the items that are
+    /// directly in it: their total size and the first four of them. A value
+    /// of `None` means that they are being read.
     subfolders: HashMap<FolderId, Option<Holding>>,
     /// The selected subfolder whose record is being read.
     reading: Option<Kind>,
 }
 
-/// A folder's own items, as the scope view of a selected subfolder shows
-/// them.
+/// Holds the total size and the first four of the items that are directly in
+/// a folder. The rail shows them when it describes a subfolder that is
+/// selected in the grid.
 #[derive(Clone)]
 struct Holding {
     size: u128,
     head: Vec<picto_library::query::RootSummary>,
 }
 
-/// What the scope view describes: a subfolder tile selected in the grid
-/// alone (`selectedSubfolderNodeIdAtom`), else the destination showing.
-/// Its place in the destination list, and the subfolder when it is one.
+/// Returns what the rail describes when nothing else is selected: the
+/// subfolder whose tile is selected in the grid, or otherwise the destination
+/// the grid shows. The first value is its position in the list of
+/// destinations. The second is the folder's id when it is a subfolder.
 fn described(session: &Session) -> (usize, Option<FolderId>) {
     session
         .selected_folder()
@@ -156,7 +168,7 @@ impl ScopeState {
         }
     }
 
-    /// Whether the view is the destination the grid shows.
+    /// Returns true if the view is for what [`described`] returns now.
     pub(super) fn ready(&self, session: &Session) -> bool {
         self.view
             .as_ref()
@@ -165,12 +177,13 @@ impl ScopeState {
 }
 
 impl Inspector {
-    /// Brings the scope view up to date with the destination showing. A
-    /// folder's view waits for its record, so the old view stays up until
-    /// the new one is whole.
+    /// Builds the view again for what the rail is to describe, and replaces
+    /// the old view if the new one differs. The view of a folder or smart
+    /// folder is not built until its record has been read, so the old view
+    /// stays until the new one is complete.
     pub(super) fn refresh_scope(&mut self, cx: &mut Context<Self>) {
-        // The record of the destination being opened is asked for now, so it
-        // is usually there by the time its grid is.
+        // The record of the destination that is being opened is asked for
+        // now, so that it has usually arrived when its grid has.
         let opening = {
             let session = self.session.read(cx);
             (self.scope.asked != Some(session.scope))
@@ -184,7 +197,9 @@ impl Inspector {
             }
         }
 
-        // A subfolder selected in the grid: its record, and what it holds.
+        // For a subfolder selected in the grid, its record and the items
+        // directly in it are read, unless they are already known or being
+        // read.
         let (index, subfolder) = described(self.session.read(cx));
         if let Some(folder) = subfolder {
             let kind = Kind::Folder(folder);
@@ -198,7 +213,8 @@ impl Inspector {
         }
         let view = {
             let session = self.session.read(cx);
-            // Before the first page there is nothing to describe.
+            // Before the first page of the first destination has loaded there
+            // is nothing to describe.
             if session.results_epoch == 0 {
                 return;
             }
@@ -224,8 +240,8 @@ impl Inspector {
                 Some(Record::Smart(record)) => (record.notes.clone(), None),
                 None => (None, None),
             };
-            // A subfolder shows what it holds of its own: its count in the
-            // sidebar, and the size and first items of those.
+            // A subfolder shows only the items that are directly in it: their
+            // count from the sidebar, their total size and the first of them.
             let (total, size, head) = match subfolder {
                 Some(folder) => match self.scope.subfolders.get(&folder) {
                     Some(Some(holding)) => (
@@ -248,8 +264,8 @@ impl Inspector {
                 notes: notes.unwrap_or_default(),
                 total,
                 size,
-                // The destination's first items, wherever the grid's window
-                // is (`queryHeadItems`).
+                // The covers are the first items of the destination, also when
+                // the grid has scrolled away from them.
                 covers: head
                     .iter()
                     .take(COVERS)
@@ -288,8 +304,8 @@ impl Inspector {
         cx.notify();
     }
 
-    /// Reads the size and first items of what a subfolder holds of its own,
-    /// in the order production opens a folder in (newest first).
+    /// Reads the total size and the first four of the items that are directly
+    /// in `folder`, in the default sort order.
     fn read_holding(&mut self, folder: FolderId, cx: &mut Context<Self>) {
         self.scope.subfolders.insert(folder, None);
         let job = self.session.read(cx).run(move |library| {
@@ -328,12 +344,14 @@ impl Inspector {
         .detach();
     }
 
-    /// Forgets what subfolders hold, after an edit, so the next one
-    /// selected is read afresh.
+    /// Drops what was read about the items of subfolders. This is called
+    /// after an edit, so that the next subfolder that is selected is read
+    /// again.
     pub(super) fn forget_holdings(&mut self, cx: &App) {
         self.scope.subfolders.clear();
-        // The selected subfolder's record is read again too; the
-        // destination's own is read again when it is opened.
+        // The record of a selected subfolder is dropped too, so that it is
+        // read again. The record of the destination the grid shows is kept.
+        // It is read again when the destination is opened.
         let displayed = {
             let session = self.session.read(cx);
             session
@@ -346,7 +364,8 @@ impl Inspector {
             .retain(|kind, _| Some(*kind) == displayed || *kind == Kind::System);
     }
 
-    /// Reads a folder's or smart folder's record on the library's thread.
+    /// Reads the record of a folder or smart folder on the library's thread
+    /// and then builds the view again.
     fn read_record(&mut self, kind: Kind, cx: &mut Context<Self>) {
         let job = self.session.read(cx).run(move |library| match kind {
             Kind::Folder(id) => {
@@ -386,9 +405,10 @@ impl Inspector {
         .detach();
     }
 
-    /// Saves a new name or notes for the folder or smart folder showing,
-    /// as the sidebar does (`rename_node`, `set_node_notes`). A name the
-    /// library refuses puts the fields back as they were.
+    /// Saves a new name or new notes for the folder or smart folder that the
+    /// rail describes, with the functions the sidebar uses (`rename_node`,
+    /// `set_node_notes`). If the save fails, for example because the library
+    /// refuses the name, the fields are set back to the saved values.
     pub(super) fn commit_scope(
         &mut self,
         key: u64,
@@ -408,8 +428,8 @@ impl Inspector {
         if self.scope.records.get(&kind).cloned().flatten().is_none() {
             return;
         }
-        // The row is found by id: the sidebar may rebuild the destination
-        // list while the save runs.
+        // The row is passed by its id, because the sidebar may rebuild the
+        // list of destinations while the save runs.
         let Some(node) = self.session.read(cx).nav.get(index).map(|entry| entry.id()) else {
             return;
         };
@@ -428,8 +448,10 @@ impl Inspector {
         }
     }
 
-    /// A save of the destination's name or notes is done: the record shown
-    /// takes them, or the fields go back to what it has.
+    /// Handles the end of a save of the name or notes. `saved` holds the new
+    /// values if the save succeeded. They are then written into the record
+    /// that the rail holds. If the save failed, the fields are set back to
+    /// the values of the view.
     fn scope_saved(
         &mut self,
         kind: Kind,
@@ -474,8 +496,9 @@ impl Inspector {
         });
     }
 
-    /// The folder card (`.thumbnail`): two cards peeking out behind a front
-    /// card that holds the first four covers in a 2×2 grid.
+    /// Draws the folder card: a front card that holds the first four covers
+    /// in a grid of two by two, and above it the top edges of two cards that
+    /// lie behind it.
     fn collage(&mut self, covers: &[Cover], cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
         self.scope.pinned = true;
@@ -487,7 +510,8 @@ impl Inspector {
                 thumbnails.pin(holder, cover);
             }
         });
-        // `.pic2`, `.pic3`: 2px strips with rounded tops.
+        // The top edge of a card behind the front card is a strip 2px high
+        // with rounded top corners.
         let peek = |inset: f32, top: f32, color: Rgba| {
             div()
                 .absolute()
@@ -499,7 +523,7 @@ impl Inspector {
                 .bg(color)
         };
         let content = if covers.is_empty() {
-            // `.folderPlaceholder`
+            // A destination without items shows a folder icon at 20% opacity.
             div()
                 .size_full()
                 .flex()
@@ -507,11 +531,11 @@ impl Inspector {
                 .justify_center()
                 .child(ui::icon("inspector-folder", 32., theme.text()).opacity(0.2))
         } else {
-            // `.collage`: 8px gaps between cells with 8px corners, each
-            // showing its cover over the cover's colour.
+            // The cells have 8px gaps between them and corners of 8px. Each
+            // cell shows its cover over the cover's colour.
             let cell = |cover: Option<&Cover>| {
-                // The cover is laid over the cell, so its own size cannot
-                // stretch the grid.
+                // The cover is positioned over the cell and is not part of its
+                // layout, so that the cover's own size cannot stretch the grid.
                 let mut cell = div()
                     .relative()
                     .flex_1()
@@ -554,9 +578,8 @@ impl Inspector {
                 .child(row(0))
                 .child(row(2))
         };
-        // `.pic1`: the front card, lit from the top. CSS lights it with a
-        // radial gradient from the top centre; this is the vertical line
-        // through that centre.
+        // The background of the front card is brighter at the top than at
+        // the bottom.
         let front = div()
             .absolute()
             .top(px(10.))
@@ -569,8 +592,10 @@ impl Inspector {
                 linear_color_stop(theme.contrast(15.), 0.),
                 linear_color_stop(theme.contrast(5.), 1.),
             ))
-            // The sides' borders; the brighter top one is drawn over them,
-            // and the padding below it stands for its pixel.
+            // The front card has a border on its left and right sides. The
+            // brighter border along the top is the child below, drawn over
+            // them. The top padding is 9px and not 8px to make room for that
+            // border's pixel.
             .border_l_1()
             .border_r_1()
             .border_color(theme.contrast(5.))
@@ -589,7 +614,8 @@ impl Inspector {
                     .border_color(theme.contrast(15.)),
             )
             .child(content);
-        // `.preview` around a 4:3 card at most 200px wide.
+        // The card is 200px wide and 150px high, centred in an area that is
+        // at least 200px high.
         div()
             .w_full()
             .min_h(px(PREVIEW))
@@ -608,9 +634,10 @@ impl Inspector {
             )
     }
 
-    /// The scope state's column: the folder card, the name (read-only for a
-    /// built-in destination), the notes of a folder or smart folder, the
-    /// item count and size, Export, and the Details section.
+    /// Draws the column for a destination: the folder card, the name, which
+    /// cannot be edited for a built-in destination, the notes of a folder or
+    /// smart folder, the item count and size, the Export action, and the
+    /// Details section.
     pub(super) fn scope_body(
         &mut self,
         window: &mut Window,
@@ -655,8 +682,9 @@ impl Inspector {
             Kind::System => None,
         };
         if let Some(scope) = scope.filter(|_| view.total > 0) {
-            // Everything the folder or smart folder holds, in its query's
-            // order, as the sidebar's export takes it.
+            // The export takes every item the folder or smart folder holds,
+            // in the default sort order, as the sidebar's Export command
+            // does.
             let target = picto_library::selection::SelectionTarget::Query {
                 query: picto_library::query::RootQuery {
                     scope,

@@ -14,13 +14,12 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 impl Sidebar {
-    /// Draws the library switcher, which corresponds to production's
-    /// `LibrarySwitcherButton`. It shows the library's cover, the library's
-    /// name and a selector glyph. Behind them is a highlight in the shape of
-    /// a circle around the cover joined to a bar. The highlight is shown
-    /// while the pointer is over the switcher or the library popover is
-    /// open. A click opens the library popover, or closes it when it is
-    /// open. While the popover is open, the highlight has the theme's
+    /// Draws the library switcher. It shows the library's cover, the
+    /// library's name and a selector glyph. Behind them is a highlight in
+    /// the shape of a circle around the cover joined to a bar. The highlight
+    /// is shown while the pointer is over the switcher or the library
+    /// popover is open. A click opens the library popover, or closes it when
+    /// it is open. While the popover is open, the highlight has the theme's
     /// `surface_active` colour instead of `surface_hover`, and the selector
     /// glyph keeps the colour it has while the pointer is over the switcher.
     fn library(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -110,9 +109,9 @@ impl Sidebar {
         .absolute()
         .inset_0();
         let entered = (state, hint.clone());
-        // As production's `LibrarySwitcherButton` is, the switcher is a
-        // button to assistive technology. Its label is the library's name,
-        // and it is reported as expanded while the library popover is open.
+        // The switcher is a button to assistive technology. Its label is the
+        // library's name, and it is reported as expanded while the library
+        // popover is open.
         let open = self.library_popover.read(cx).is_open();
         div()
             .id("library-switcher")
@@ -241,8 +240,7 @@ impl Render for Sidebar {
         // While the filter field has text, `kept` marks each folder and smart
         // folder whose name contains the text, ignoring case, and each of
         // its ancestors. Only those rows are drawn, and every branch is
-        // drawn expanded. This corresponds to production's `treeFilter.ts`.
-        // System rows are not filtered.
+        // drawn expanded. System rows are not filtered.
         let mut kept = vec![!filtering; entries.len()];
         if filtering {
             for index in 0..entries.len() {
@@ -528,12 +526,12 @@ impl Render for Sidebar {
         }
         let smart_editor = self.smart_editor.as_ref().map(|(editor, _)| editor.clone());
         // The sidebar's 1px right border is drawn over the app background,
-        // and the rail colour fills the area inside the border, as in the
-        // Electron app's layout. While the main window shows the system's
-        // frosted material (`ui::window_chrome::rails_translucent`), the
-        // sidebar has no background of its own: the shell (`Shell::render`)
-        // draws the app background under the border, and the area inside the
-        // border is filled with the partly transparent rail colour
+        // and the rail colour fills the area inside the border. While the
+        // main window shows the system's frosted material
+        // (`ui::window_chrome::rails_translucent`), the sidebar has no
+        // background of its own: the shell (`Shell::render`) draws the app
+        // background under the border, and the area inside the border is
+        // filled with the partly transparent rail colour
         // (`ui::window_chrome::rail_fill`).
         let translucent = ui::window_chrome::rails_translucent(cx);
         let rail_fill = ui::window_chrome::rail_fill(cx);
@@ -717,12 +715,12 @@ impl Sidebar {
         let expanded = filtering || !self.collapsed.contains(id);
         let group = entry.group;
         let in_section = section_of(&entry.scope, false).is_some();
-        // The glyph is chosen as production's `NodeIcon` chooses it. It is
-        // the icon the user chose for the node. A node without one shows the
-        // grid icon when it is a smart folder group, and otherwise a folder
-        // icon, which is the open folder while the node has children and its
-        // branch is expanded. When the icon picker no longer has the name
-        // the user chose, the row shows the closed folder icon.
+        // The glyph is the icon the user chose for the node. A node without
+        // one shows the grid icon when it is a smart folder group, and
+        // otherwise a folder icon, which is the open folder while the node
+        // has children and its branch is expanded. When the icon picker no
+        // longer has the name the user chose, the row shows the closed
+        // folder icon.
         let icon = match &entry.icon {
             Some(name) if !in_section || crate::assets::has_icon(name) => name.as_str(),
             Some(_) => "IconFolder",

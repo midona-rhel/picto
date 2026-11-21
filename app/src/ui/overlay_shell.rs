@@ -1,12 +1,14 @@
-//! The floating selection panel (`OverlayShell.tsx`) the tag and folder
-//! pickers open in: a glass panel beside the inspector, or centred, over a
-//! clear backdrop that closes it on a click or right-click. Its 40px header
-//! and footer drag it (after 5px), Escape closes it, and while pinned the
-//! backdrop is gone so the rest of the window stays usable.
+//! Draws the floating selection panel that the tag picker and the folder
+//! picker open in. It is a glass panel beside the inspector, or in the
+//! centre of the window, over a transparent backdrop that closes it on a
+//! click or a right click. The user drags the panel by its 40px header or
+//! footer, once the pointer has moved 5px. Escape closes the panel. While
+//! the panel is pinned it has no backdrop, so the rest of the window can be
+//! used.
 //!
-//! Also the panel's own small controls (`OverlayShell.module.css`): the
-//! header buttons, the compact view tabs and the key hints. Its check box is
-//! [`super::check::check_box`]'s compact size.
+//! This file also holds the panel's small controls: the header buttons, the
+//! compact view tabs and the key hints. The panel's check box is the compact
+//! size of [`super::check::check_box`].
 use super::popover::{self, Dismissal, Placement, Side, floating};
 use super::text_input;
 use super::tooltip::Tip;
@@ -33,7 +35,8 @@ pub fn bind(cx: &mut App) {
     );
 }
 
-/// A key the panel's owner can act on, from the search field or the panel.
+/// A key that the panel passes to its owner. The key can be pressed while
+/// the keyboard focus is in the search field or anywhere else in the panel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Nav {
     Up,
@@ -41,26 +44,29 @@ pub enum Nav {
     Left,
     Right,
     Confirm,
-    /// Tab: the next view of the panel's rail.
+    /// The Tab key, which shows the next view of the panel's rail.
     Next,
 }
 
-/// `MARGIN`: the panel keeps this far inside the window.
+/// The panel stays at least this far inside the window.
 const MARGIN: f32 = 12.;
-/// `DRAG_THRESHOLD`
+/// How far the pointer must move after a press on the header or footer
+/// before the panel is dragged.
 const DRAG_THRESHOLD: f32 = 5.;
 const HEADER: f32 = 40.;
 const FOOTER: f32 = 40.;
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 type MoveHandler = Rc<dyn Fn(Geometry, &mut Window, &mut App) + 'static>;
-/// Answers whether the owner used the key; one it did not use goes on to
-/// the search field (the side arrows move its caret).
+/// Returns whether the owner used the key. A key that the owner did not use
+/// goes on to the search field, where the left and right arrows move the
+/// caret.
 type NavHandler = Rc<dyn Fn(Nav, &mut Window, &mut App) -> bool + 'static>;
 
-/// Where the panel is. One opened from the inspector keeps its right edge
-/// where it was placed, so a change of width grows it to the left, as the
-/// CSS `right` offset does; a centred one keeps its left edge.
+/// Says where the panel is. A panel that was opened beside the inspector has
+/// `right` set and keeps its right edge there, so that a change of its width
+/// moves its left edge. Every other panel has no `right` and keeps its left
+/// edge at `left`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Geometry {
     pub right: Option<f32>,
@@ -69,36 +75,36 @@ pub struct Geometry {
 }
 
 impl Geometry {
-    /// The panel's left edge at `width`.
+    /// Returns the panel's left edge when the panel is `width` wide.
     pub fn left(&self, width: f32) -> f32 {
         self.right.map_or(self.left, |right| right - width)
     }
 }
 
-/// Where the panel opens (`OverlayShell`'s `anchor` and
-/// `anchorPlacement`).
+/// Says where the panel opens.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Opens {
-    /// Its right edge 12px left of this point's x (the inspector's left
-    /// edge), its top at its y.
+    /// The panel's right edge is 12px to the left of this point's x, which
+    /// is the inspector's left edge, and its top is at the point's y.
     Beside(Point<f32>),
-    /// Its left edge and top at this point (`'below'`).
+    /// The panel's top-left corner is at this point.
     Below(Point<f32>),
-    /// Its bottom 4px above this point, from its x (`'above'`).
+    /// The panel's bottom is 4px above this point, and its left edge is at
+    /// the point's x.
     Above(Point<f32>),
-    /// Centred in the window.
+    /// The panel is in the centre of the window.
     Centred,
 }
 
 impl Opens {
-    /// Beside `anchor`, or centred without one.
+    /// Returns `Beside(anchor)`, or `Centred` when there is no anchor.
     pub fn beside(anchor: Option<Point<f32>>) -> Self {
         anchor.map_or(Opens::Centred, Opens::Beside)
     }
 }
 
-/// Where a panel of `width` × `height` opens, kept 12px inside the window
-/// unless centred.
+/// Returns where a panel of `width` × `height` opens. The panel is kept 12px
+/// inside the window, except a centred panel, which is not moved.
 pub fn place(opens: Opens, viewport: Size<Pixels>, width: f32, height: f32) -> Geometry {
     let spot = |at: Point<f32>| Bounds::new(point(px(at.x), px(at.y)), Size::default());
     let (anchor, placement) = match opens {
@@ -113,8 +119,8 @@ pub fn place(opens: Opens, viewport: Size<Pixels>, width: f32, height: f32) -> G
     let corner = popover::place(anchor, size(width, height), viewport, placement);
     let (left, top) = (corner.x.round(), corner.y.round());
     match opens {
-        // `right` as the CSS has it, so a change of width grows the panel
-        // to the left.
+        // A panel beside the inspector is given its right edge, so that a
+        // change of its width moves its left edge.
         Opens::Beside(_) => {
             let edge = (corner.x + width).round();
             Geometry {
@@ -131,8 +137,9 @@ pub fn place(opens: Opens, viewport: Size<Pixels>, width: f32, height: f32) -> G
     }
 }
 
-/// The panel dragged by `delta` from `start`, kept 12px inside the window
-/// and below the titlebar, whose buttons it must never cover.
+/// Returns where the panel is after a drag by `delta` from `start`. The
+/// panel is kept 12px inside the window and below the titlebar, so that it
+/// never covers the titlebar's buttons.
 fn dragged(
     start: Geometry,
     delta: Point<f32>,
@@ -154,8 +161,9 @@ fn dragged(
     }
 }
 
-/// A drag of the header or footer: where the pointer went down, where the
-/// panel was, and whether it has passed the threshold.
+/// Holds a drag of the header or footer: where the pointer was pressed,
+/// where the panel was then, and whether the pointer has moved past the
+/// threshold.
 #[derive(Clone, Copy)]
 struct Drag {
     from: Point<Pixels>,
@@ -181,8 +189,9 @@ pub struct OverlayShell {
     layer: usize,
 }
 
-/// A panel at `geometry`, `width` × `height`. `focus` takes the keyboard
-/// while nothing inside it does, so Escape reaches the panel.
+/// Returns a panel at `geometry` that is `width` × `height`. `focus` is the
+/// handle that has the keyboard focus while nothing inside the panel has it,
+/// so that Escape reaches the panel.
 pub fn overlay_shell(
     id: impl Into<ElementId>,
     geometry: Geometry,
@@ -210,20 +219,21 @@ pub fn overlay_shell(
 }
 
 impl OverlayShell {
-    /// The layer the panel is drawn on (`ui::layer::PANEL` unless set):
-    /// above the dialogs (`OVER_DIALOG`) when a dialog opened it, as the
-    /// portal that follows the dialog's is.
+    /// Sets the layer that the panel is drawn on. It is `ui::layer::PANEL`
+    /// unless this is called. A panel that a dialog opened is drawn on
+    /// `ui::layer::OVER_DIALOG`, above the dialogs.
     pub fn layer(mut self, layer: usize) -> Self {
         self.layer = layer;
         self
     }
-    /// Pinned, the backdrop goes and only Escape closes the panel.
+    /// Sets whether the panel is pinned. A pinned panel has no backdrop, so
+    /// a click outside it does not close it.
     pub fn pinned(mut self, pinned: bool) -> Self {
         self.pinned = pinned;
         self
     }
-    /// Opened as a dialog is: its backdrop dims the window until the panel
-    /// is pinned.
+    /// Sets whether the panel's backdrop darkens the window, as the backdrop
+    /// of a dialog does. A pinned panel has no backdrop.
     pub fn dimmed(mut self, dimmed: bool) -> Self {
         self.dimmed = dimmed;
         self
@@ -241,7 +251,8 @@ impl OverlayShell {
         self.footer.push(child.into_any_element());
         self
     }
-    /// The arrow keys, Enter and Tab, from anywhere in the panel.
+    /// Sets the handler of the arrow keys, Enter and Tab, pressed anywhere
+    /// in the panel. The handler returns whether it used the key.
     pub fn on_nav(
         mut self,
         handler: impl Fn(Nav, &mut Window, &mut App) -> bool + 'static,
@@ -249,14 +260,16 @@ impl OverlayShell {
         self.on_nav = Some(Rc::new(handler));
         self
     }
-    /// What a drag of the header or footer does with the panel's new place.
+    /// Sets the handler that is called with the panel's new place while the
+    /// user drags the header or footer.
     pub fn on_move(mut self, handler: impl Fn(Geometry, &mut Window, &mut App) + 'static) -> Self {
         self.on_move = Some(Rc::new(handler));
         self
     }
 }
 
-/// Starts a drag of the panel from a press on the header or footer.
+/// Makes `strip`, which is the header or the footer, start a drag of the
+/// panel when it is pressed.
 fn grab(strip: Div, drag: Rc<Cell<Option<Drag>>>, geometry: Geometry) -> Div {
     strip
         .cursor(CursorStyle::OpenHand)
@@ -304,20 +317,21 @@ impl RenderOnce for OverlayShell {
                 .gap(px(4.))
                 .text_color(theme.text())
                 .text(theme::TEXT_MD)
-                // `box-shadow: 0 -1px 0 var(--color-border-secondary) inset`
+                // A 1px line in the secondary border colour along the bottom
+                // of the header.
                 .child(separator(false))
                 .children(self.header),
             drag.clone(),
             self.geometry,
         );
-        // `.panel`: the glass, with its edges.
+        // The panel's surface is glass.
         let mut panel = super::glass_panel(self.id.clone(), theme::RADIUS_LG, cx)
             .occlude()
             .relative()
             .w(px(width))
             .h(px(height))
-            // The glass edges are drawn over the panel; the 1px each takes
-            // in production's border box is kept clear here.
+            // The edges of the glass are drawn over the outermost 1px of the
+            // panel, so the content is kept 1px inside.
             .p(px(1.))
             .flex()
             .flex_col()
@@ -363,7 +377,8 @@ impl RenderOnce for OverlayShell {
         let (close, cancel) = (self.on_close.clone(), self.on_close.clone());
         panel = panel
             .on_action(move |_: &Dismiss, window, cx| close(window, cx))
-            // Escape closes the panel even from its search field.
+            // Escape closes the panel also while its search field has the
+            // keyboard focus.
             .capture_action(move |_: &text_input::Cancel, window, cx| {
                 cancel(window, cx);
                 cx.stop_propagation();
@@ -418,7 +433,8 @@ impl RenderOnce for OverlayShell {
                 });
         }
 
-        // The drag follows the pointer anywhere in the window.
+        // The drag follows the pointer anywhere in the window, so the handlers
+        // are on the window.
         let on_move = self.on_move.clone();
         let tracker = canvas(
             |_, _, _| {},
@@ -460,7 +476,8 @@ impl RenderOnce for OverlayShell {
             self.layer,
         )
         .at(point(left, self.geometry.top));
-        // Pinned, the backdrop goes and only Escape closes the panel.
+        // A pinned panel has no backdrop, so a click outside it does not close
+        // it.
         if !self.pinned {
             let close = self.on_close;
             layer = layer
@@ -473,8 +490,9 @@ impl RenderOnce for OverlayShell {
     }
 }
 
-/// `.pinBtn`: a 24px header button whose overlay shows under the pointer
-/// over 120 ms, with its tooltip.
+/// Returns a 24px button for the panel's header, with its tooltip. Its
+/// background appears over 120 ms when the pointer moves onto it
+/// (`icon_button::Look::Pin`).
 pub fn header_button(
     id: impl Into<ElementId>,
     icon: &'static str,
@@ -485,8 +503,8 @@ pub fn header_button(
         .tip(tip)
 }
 
-/// `.viewTabs`: the shared segmented control's view-tab look, with a
-/// tooltip on each tab.
+/// Returns the panel's view tabs: the shared segmented control in its look
+/// `segmented::Look::View`, with one tab for each icon and label in `tabs`.
 pub fn view_tabs(
     id: impl Into<ElementId>,
     tabs: &[(&'static str, &'static str)],
@@ -501,8 +519,8 @@ pub fn view_tabs(
         .on_select(on_select)
 }
 
-/// `highlightMatch`: a row's label with the search's first match in bold,
-/// in the text colour and underlined.
+/// Returns a row's label with the first place where it matches the search
+/// text drawn bold, in the primary text colour and underlined.
 pub fn search_match(label: impl Into<SharedString>, query: &str, cx: &App) -> StyledText {
     let theme = theme::theme(cx);
     let label = label.into();
@@ -524,7 +542,9 @@ pub fn search_match(label: impl Into<SharedString>, query: &str, cx: &App) -> St
     }))
 }
 
-/// `.kbd`: one key, in the monospace caption on the subtle overlay.
+/// Returns the box that shows one key in a key hint: the key's name in the
+/// monospace font at caption size, on a background of the contrast colour at
+/// 10% opacity.
 pub fn kbd(key: impl Into<SharedString>, cx: &App) -> Div {
     let theme = theme::theme(cx);
     div()
@@ -542,7 +562,8 @@ pub fn kbd(key: impl Into<SharedString>, cx: &App) -> Div {
         .child(key.into())
 }
 
-/// `TabKeyHint`: the Tab key as its arrow-to-bar glyph.
+/// Returns the box that shows the Tab key in a key hint, as a glyph of an
+/// arrow that points at a bar.
 pub fn tab_key(cx: &App) -> Div {
     let theme = theme::theme(cx);
     div()
@@ -556,7 +577,8 @@ pub fn tab_key(cx: &App) -> Div {
         .child(super::icon("picker-tab", 13., theme.text()))
 }
 
-/// `.kbdHint`: words and keys side by side in the tertiary caption.
+/// Returns the row of a key hint. Its children are words and keys side by
+/// side, at caption size and in the tertiary text colour.
 pub fn hint(cx: &App) -> Div {
     let theme = theme::theme(cx);
     div()
@@ -577,33 +599,37 @@ mod tests {
         let view = size(px(1200.), px(800.));
         let geometry = place(Opens::Above(point(420., 600.)), view, 340., 480.);
         assert_eq!((geometry.left(340.), geometry.top), (420., 116.));
-        // Too near the top or the right edge, it stays 12px inside.
+        // A panel that would reach past the top or the right edge is kept
+        // 12px inside the window.
         let geometry = place(Opens::Above(point(1000., 300.)), view, 340., 480.);
         assert_eq!((geometry.left(340.), geometry.top), (848., 12.));
     }
 
     #[test]
     fn a_panel_opens_left_of_the_inspector_at_its_button() {
-        // Inspector edge at x = 900, button top at y = 300, 1200 × 800 window.
+        // The inspector's edge is at x = 900 and the button's top is at
+        // y = 300, in a window of 1200 × 800.
         let view = size(px(1200.), px(800.));
         let geometry = place(Opens::Beside(point(900., 300.)), view, 540., 480.);
         assert_eq!(geometry.right, Some(888.));
         assert_eq!(geometry.left(540.), 348.);
         assert_eq!(geometry.top, 300.);
-        // Narrowed, it keeps its right edge.
+        // When the panel is made narrower, it keeps its right edge.
         assert_eq!(geometry.left(340.), 548.);
     }
 
     #[test]
     fn a_panel_is_kept_inside_the_window() {
         let view = size(px(1200.), px(800.));
-        // Too low: it rises to 12px above the bottom.
+        // A panel that would reach below the window is moved up to 12px
+        // above the bottom.
         let geometry = place(Opens::Beside(point(900., 700.)), view, 340., 480.);
         assert_eq!(geometry.top, 308.);
-        // An inspector edge so far left the panel would leave the window.
+        // The inspector's edge is so far left that the panel would reach
+        // past the window's left edge. The panel starts 12px inside it.
         let geometry = place(Opens::Beside(point(200., 100.)), view, 540., 480.);
         assert_eq!(geometry.left(540.), 12.);
-        // No anchor: centred.
+        // Without an anchor the panel is centred.
         let geometry = place(Opens::beside(None), view, 360., 480.);
         assert_eq!(
             (geometry.right, geometry.left, geometry.top),
@@ -616,7 +642,7 @@ mod tests {
         let view = size(px(1000.), px(700.));
         let below = place(Opens::Below(point(100., 80.)), view, 360., 480.);
         assert_eq!((below.right, below.left, below.top), (None, 100., 80.));
-        // Pushed in from the right edge and up from the bottom.
+        // The panel is moved in from the right edge and up from the bottom.
         let pushed = place(Opens::Below(point(900., 400.)), view, 360., 480.);
         assert_eq!((pushed.left, pushed.top), (628., 208.));
     }
@@ -635,7 +661,8 @@ mod tests {
         assert_eq!(moved.top, 308.);
         let far = dragged(start, point(-1000., 1000.), view, 540., 480.);
         assert_eq!((far.left(540.), far.top), (12., 308.));
-        // Never up under the titlebar and its window buttons.
+        // The panel is never dragged up over the titlebar and its window
+        // buttons.
         let up = dragged(start, point(0., -1000.), view, 540., 480.);
         assert_eq!(up.top, crate::theme::TITLEBAR_HEIGHT + 12.);
     }

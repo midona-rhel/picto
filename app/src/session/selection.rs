@@ -11,7 +11,7 @@ use picto_library::RootId;
 use picto_library::predicate::FilterExpr;
 
 impl Session {
-    // ── Selection ───────────────────────────────────────────────
+    // The methods below change the selection and report what is selected.
 
     /// Clears the selection of items and of subfolder tiles, the range anchor,
     /// and the item the inspector shows with its details. It does not emit a
@@ -126,8 +126,7 @@ impl Session {
 
     /// Whether the selection is query-wide: Select All, or a range stored by
     /// its two ends. Such a selection can include items the window does not
-    /// hold, so only the library can list all of its items (production's
-    /// `query_results` selection).
+    /// hold, so only the library can list all of its items.
     pub fn selects_whole(&self) -> bool {
         self.selection.query_wide()
     }
@@ -184,10 +183,11 @@ impl Session {
     }
 
     /// Selects subfolder tiles by node id. Without `toggle`, `nodes` become
-    /// the only selected tiles (`replace_folders`). With `toggle`, as on a
-    /// Command-click, each of `nodes` is added if it was not selected and
-    /// removed if it was (`toggle_folder`); if items were selected, the toggle
-    /// starts from no selected tiles. In both cases every item is deselected.
+    /// the only selected tiles. With `toggle`, as on a Command-click (a
+    /// Control-click on Windows and Linux), each of `nodes` is added if it
+    /// was not selected and removed if it was; if items were selected, the
+    /// toggle starts from no selected tiles. In both cases every item is
+    /// deselected.
     pub fn select_folders(&mut self, nodes: Vec<String>, toggle: bool, cx: &mut Context<Self>) {
         let mut chosen = if toggle && self.selection.is_empty() {
             std::mem::take(&mut self.folder_selection)
@@ -216,8 +216,7 @@ impl Session {
     }
 
     /// The node id of the selected subfolder tile, when exactly one tile and
-    /// no item is selected. The inspector then describes that subfolder
-    /// (`selectedSubfolderNodeIdAtom`).
+    /// no item is selected. The inspector then describes that subfolder.
     pub fn selected_folder(&self) -> Option<&str> {
         match self.folder_selection.as_slice() {
             [node] if self.selection.is_empty() => Some(node),

@@ -1,5 +1,7 @@
-//! What a chosen sidebar menu row does, for a system row, a section,
-//! a selection or one node.
+//! This file carries out the row that the user chose in a sidebar context
+//! menu. What a row does depends on what the menu was opened on: a system
+//! row, a section header, several selected rows, one folder or smart folder,
+//! or a subfolder tile in the grid.
 use super::edits::{smart_input, sorted_by_name};
 use super::menus::content_sort_field;
 use super::{
@@ -12,8 +14,10 @@ use gpui::*;
 use picto_library::query::{ItemScope, RootQuery};
 
 impl Sidebar {
-    /// Does what a menu row says, for what the menu was opened on. `value`
-    /// is the chosen row's or swatch's value, for rows that share an action.
+    /// Carries out the menu row `action` on `target`, which is the thing the
+    /// menu was opened on. Some rows share one action and differ only in
+    /// their value, such as the rows of a sort submenu and the colour
+    /// swatches. `value` is the value of the chosen row or swatch.
     pub(super) fn choose(
         &mut self,
         target: &Target,
@@ -22,9 +26,9 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // The visibility rows and sections, saved as the Settings window
-        // saves them (`persistSystemVisibility`, `persistSectionVisibility`).
-        // The menu stays open with the row's check following.
+        // A row of the visibility menu shows or hides a system row or a
+        // section. The change is saved in the app settings at once. The
+        // menu stays open, and the check mark of the chosen row is updated.
         if crate::settings::current(cx)
             .clone()
             .sidebar_visibility(action)
@@ -83,8 +87,8 @@ impl Sidebar {
                     cx,
                     |_, _, _, _| {},
                 ),
-                // The shell asks and deletes, as it does for the grid's
-                // Delete Permanently.
+                // The shell asks the user to confirm and deletes the items,
+                // as it does for "Delete Permanently" in the grid.
                 "empty-trash" => cx.emit(EmptyTrash),
                 _ => {}
             },
@@ -92,8 +96,8 @@ impl Sidebar {
                 "new-folder" => self.create_folder(None, window, cx),
                 "new-group" => self.create_group(None, window, cx),
                 "new-smart-folder" => self.new_smart_folder(None, window, cx),
-                // `chooseAndImportFolder({ kind: 'all' })`: the library's
-                // top level.
+                // "Import Folder..." in the menu of the Folders section
+                // imports into the library's top level.
                 "import-folder" => import_folder(None, window, cx),
                 _ => {}
             },
@@ -196,8 +200,11 @@ impl Sidebar {
         }
     }
 
-    /// A subfolder tile's row: opening it, and the renames, happen in the
-    /// grid; the rest is what the folder's own row does.
+    /// Carries out a row of the menu of a subfolder tile. "Open Folder"
+    /// opens the folder, and "Rename" renames the tile in place in the grid.
+    /// "New Subfolder" and "Duplicate" create a folder, and the grid renames
+    /// its tile in place once the tile is shown. Every other row does what
+    /// it does in the menu of the folder's row in the sidebar.
     fn choose_for_tile(
         &mut self,
         node: &str,
@@ -232,15 +239,15 @@ impl Sidebar {
                     });
                 }
             }
-            // `foldersController.create('New Folder', folderId)`, then the
-            // new tile renamed.
+            // Creates a folder named "New Folder" inside this folder. The
+            // grid renames its tile in place once the tile is shown.
             "new-subfolder" => {
                 let parent = folder_id(node);
                 edit_then_in(
                     &self.session,
                     Report::folder_depth(),
                     Reread::NAVIGATION,
-                    // i18n: production names a new folder in English
+                    // i18n: a new folder's name, English in every language
                     move |library| library.create_folder("New Folder", parent),
                     window,
                     cx,
@@ -423,8 +430,8 @@ impl Sidebar {
                 }
             }
             "export-originals" | "export-as" | "export-pack" => {
-                // `scopeExportEntry`: everything the folder or smart folder
-                // holds, in its query's order.
+                // The export takes every item that the folder or smart
+                // folder holds, in the default order of its query.
                 let source = match (folder_id(node), smart_folder_id(node)) {
                     (Some(id), _) => crate::export::PackSource::Folder(id),
                     (_, Some(id)) => crate::export::PackSource::SmartFolder(id),
@@ -461,8 +468,10 @@ impl Sidebar {
     }
 }
 
-/// "Import Folder..." and "Import Folder Here...": the folder chooser, then
-/// the folder dialog, into `folder` or the library's top level.
+/// Starts an import of a folder from disk into `folder`, or into the
+/// library's top level when `folder` is `None`. The user first chooses the
+/// folder on disk (`Imports::choose_folder`). The menu rows "Import
+/// Folder..." and "Import Folder Here..." call this.
 fn import_folder(folder: Option<picto_library::FolderId>, window: &mut Window, cx: &mut App) {
     if let Some(imports) = crate::imports::get(cx) {
         imports.update(cx, |imports, cx| {

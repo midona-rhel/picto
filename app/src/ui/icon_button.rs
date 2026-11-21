@@ -9,95 +9,96 @@ type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type HoverHandler = Box<dyn Fn(bool, &mut Window, &mut App) + 'static>;
 type PressHandler = Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>;
 
-/// Which of Picto's glyph buttons this is. Each look copies one CSS class of
-/// the Electron app: the button's size, its colours normally, under the
-/// pointer and while pressed, and how long the change between them takes.
-/// These values differ from class to class. A look keeps the values of its
-/// class unless its comment says otherwise.
+/// Says which of Picto's glyph buttons a button is. A look sets the button's
+/// size, its colours normally, under the pointer and while pressed, and how
+/// long the change between them takes. These values differ from look to
+/// look.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Look {
-    /// `iconButton.module.css` `.iconBtn`: 24px. The glyph is drawn at 94%
-    /// strength. Under the pointer the glyph is at full strength and the
-    /// button's background is an 8% overlay. While the button is pressed, and
-    /// all the time while it is toggled (`.iconBtnActive`), the background is
-    /// the 14% overlay. A disabled button is drawn at 20% strength. Changes
-    /// take 150 ms on `--ease-default`.
+    /// The look a glyph button has unless another is set. The button is 24px.
+    /// The glyph is drawn at 94% opacity. Under the pointer the glyph is at
+    /// full opacity and the button's background is an 8% overlay. While the
+    /// button is pressed, and all the time while it is toggled, the
+    /// background is the 14% overlay. A disabled button is drawn at 20%
+    /// opacity. Changes take 150 ms on `motion::EASE_DEFAULT`.
     Icon,
     /// The small glyph button of table rows and job strips. Its glyph is
-    /// drawn at full strength in the secondary text colour. Under the
+    /// drawn at full opacity in the secondary text colour. Under the
     /// pointer the glyph takes the primary text colour and the button gets
     /// the hover overlay as its background, over 100 ms. When toggled, the
     /// glyph is in the primary text colour all the time. When disabled, the
-    /// whole button is drawn at 20% strength, so that only a button that
-    /// cannot be pressed looks dimmed. (The Electron app's `.querySmallBtn`
-    /// draws an enabled button at 60%, which reads as disabled.)
+    /// whole button is drawn at 20% opacity, so that only a button that
+    /// cannot be pressed looks dimmed.
     Small,
-    /// `OverlayShell.module.css` `.pinBtn`: the 24px button in a picker's
-    /// header. Under the pointer its background is the subtle overlay. The
-    /// change takes 120 ms on `ease`.
+    /// The 24px button in a picker's header. Under the pointer its
+    /// background is the subtle overlay. The change takes 120 ms on
+    /// `motion::EASE`.
     Pin,
-    /// `WindowCloseButton`: a 28px square with a thin 16px cross. Its
-    /// background is the subtle overlay under the pointer and the pressed
-    /// overlay while the button is held down. Changes take 150 ms on
-    /// `--ease-default`.
+    /// A window's close button, and the minimise and maximise buttons of a
+    /// titlebar: a 28px square with a thin glyph, which is 16px unless the
+    /// caller sets another size. Its background is the subtle overlay under
+    /// the pointer and the pressed overlay while the button is held down.
+    /// Changes take 150 ms on `motion::EASE_DEFAULT`.
     WindowClose,
-    /// `WindowControls`' close button (`.btn.destructiveClose`): the same as
-    /// `WindowClose`, except that under the pointer the background is the
-    /// system's red and the cross is white, and while the button is held down
-    /// the red is darker.
+    /// The close button that stands beside a titlebar's minimise and
+    /// maximise buttons. It is the same as `WindowClose`, except that under
+    /// the pointer the background is red (`theme::CAPTION_CLOSE_HOVER`) and
+    /// the cross is white, and while the button is held down the red is
+    /// darker (`theme::CAPTION_CLOSE_PRESS`).
     CaptionClose,
-    /// `GridFilterMenu.module.css` `.filterAction` and `.addButton`: 24px.
-    /// Normally it has no background. Under the pointer, or while toggled, its
+    /// The 24px glyph buttons of the grid's filter bar. Normally the button
+    /// has no background. Under the pointer, or while toggled, its
     /// background is the subtle overlay. The change is immediate. A disabled
-    /// button is drawn at 25% strength.
+    /// button is drawn at 25% opacity.
     Filter,
-    /// `VideoPlayer.module.css` `.icBtn`: the video player's 32px button,
-    /// white on the dark controls. Normally it has no background and its glyph
-    /// is at 80% strength. Under the pointer the background is white at 15%
-    /// and the glyph is at 95%. While pressed the background is white at 25%.
-    /// While toggled (`.icBtnActive`) the glyph stays at 95%. The background
-    /// changes over 150 ms on `ease`; the glyph's colour changes immediately.
-    /// Its tooltip opens above it. A click on it is not passed on to anything
-    /// else.
+    /// The video player's 32px button, white on the dark controls. Normally
+    /// it has no background and its glyph is at 80% opacity. Under the
+    /// pointer the background is white at 15% and the glyph is at 95%. While
+    /// pressed the background is white at 25%. While toggled the glyph stays
+    /// at 95%. The background changes over 150 ms on `motion::EASE`; the
+    /// glyph's colour changes immediately. Its tooltip opens above it. A
+    /// click on it is not passed on to anything else.
     Media,
-    /// `SmartFolderModal.module.css` `.conditionButton`: 24px with a border.
-    /// Normally the border is the text colour at 15% and the background is the
-    /// text colour at 5%. Under the pointer they are 20% and 10%. While
-    /// pressed the background is 15%. Changes take 120 ms on `ease`. A
-    /// disabled button is drawn at 30% strength.
+    /// The 24px minus and plus buttons of a smart folder rule, which have a
+    /// border. Normally the border is the text colour at 15% and the
+    /// background is the text colour at 5%. Under the pointer they are 20%
+    /// and 10%. While pressed the background is 15%. Changes take 120 ms on
+    /// `motion::EASE`. A disabled button is drawn at 30% opacity.
     Condition,
-    /// `Inspector.module.css` `.tagAddBtn`: the 26px "+" button after a row of
-    /// chips. It is drawn at 50% strength, and at full strength under the
-    /// pointer. The change takes 200 ms on `--ease-default`.
+    /// The 26px "+" button after a row of chips. It is drawn at 50%
+    /// opacity, and at full opacity under the pointer. The change takes
+    /// 200 ms on `motion::EASE_DEFAULT`.
     TagAdd,
-    /// `InspectorField.module.css` `.urlActionBtn`: a 31 × 32 button at the
-    /// end of a source's row, with a 1px line along its left edge. Its glyph
-    /// is drawn at 50% strength. Under the pointer the glyph is at full
-    /// strength and the background is the control surface colour.
+    /// A 31 × 32 button at the end of a source's row in the inspector, with
+    /// a 1px line along its left edge. Its glyph is drawn at 50% opacity.
+    /// Under the pointer the glyph is at full opacity and the background is
+    /// the control surface colour.
     UrlAction,
-    /// `TaskDialog.module.css` `.iconButton`: 26px. The glyph is in the
+    /// The 26px glyph buttons of an import's task dialog. The glyph is in the
     /// secondary text colour. Under the pointer the glyph is in the primary
     /// text colour and the background is the hover colour. The change is
     /// immediate.
     Task,
-    /// `LibrarySwitcher.module.css` `.closeButton`: 24px. The glyph is in the
+    /// The 24px close button of the library switcher. The glyph is in the
     /// tertiary text colour. Under the pointer the glyph is in the primary
     /// text colour and the background is the hover colour. The change is
-    /// immediate. The diagnostics panel's `.iconButton` is the same at 26px.
+    /// immediate. The diagnostics panel's glyph buttons have this look at
+    /// 26px.
     Close,
-    /// `AiTaggerPanel.module.css` `.navButton`: a 24px chevron in the text
+    /// The 24px chevron buttons of the AI tagger's panel, in the text
     /// colour. Under the pointer the background is the hover colour. The
-    /// change is immediate. A disabled button is drawn at 28% strength.
+    /// change is immediate. A disabled button is drawn at 28% opacity.
     Nav,
-    /// `ShortcutsPanel.module.css` `.clearButton`: the 22px button inside a
-    /// shortcut's field. The glyph is in the tertiary text colour. Under the
-    /// pointer the glyph is in the primary text colour and the background is
-    /// the text colour at 10%. The change is immediate.
+    /// The 22px button inside a shortcut's field in the settings, which
+    /// clears the shortcut. The glyph is in the tertiary text colour. Under
+    /// the pointer the glyph is in the primary text colour and the
+    /// background is the text colour at 10%. The change is immediate.
     ShortcutClear,
 }
 
 impl Look {
-    /// How long the look's changes take, and the timing curve they follow.
+    /// Returns how long the look's changes take, and the timing curve they
+    /// follow.
     pub fn transition(self) -> (Duration, motion::CubicBezier) {
         match self {
             Look::Icon | Look::WindowClose | Look::CaptionClose => {
@@ -117,8 +118,8 @@ impl Look {
         }
     }
 
-    /// Whether the look is drawn differently while the button is held down
-    /// (`:active`).
+    /// Returns whether the look is drawn differently while the button is
+    /// held down.
     fn pressable(self) -> bool {
         matches!(
             self,
@@ -126,7 +127,8 @@ impl Look {
         )
     }
 
-    /// The sizes, colours and strengths the look is drawn with in `theme`.
+    /// Returns the sizes, colours and opacities the look is drawn with in
+    /// `theme`.
     fn paint(self, theme: &theme::Theme, toggled: bool) -> Paint {
         let clear = theme::clear;
         let base = Paint {
@@ -161,7 +163,7 @@ impl Look {
                 } else {
                     theme.text_secondary()
                 };
-                // A button that can be pressed is drawn at full strength,
+                // A button that can be pressed is drawn at full opacity,
                 // so that only a disabled one looks dimmed. Under the
                 // pointer its glyph takes the primary text colour.
                 Paint {
@@ -310,7 +312,8 @@ impl Look {
     }
 }
 
-/// A look's 1px border: on all four sides, or on the left side only.
+/// Describes a look's 1px border, which is on all four sides or on the left
+/// side only.
 #[derive(Clone, Copy)]
 struct Border {
     left_only: bool,
@@ -318,39 +321,40 @@ struct Border {
     hover: Rgba,
 }
 
-/// The values one look is drawn with in one theme.
+/// Holds the values one look is drawn with in one theme.
 #[derive(Clone, Copy)]
 struct Paint {
     width: f32,
     height: f32,
     radius: f32,
-    /// The glyph's size, unless the caller sets another.
+    /// Holds the glyph's size, which is used unless the caller sets another.
     glyph: f32,
     fill: Rgba,
     fill_hover: Rgba,
     fill_press: Rgba,
-    /// The glyph's colour normally and under the pointer. The colour changes
-    /// immediately; it is not faded.
+    /// `glyph_color` and `glyph_hover` hold the glyph's colour normally and
+    /// under the pointer. The colour changes immediately; it is not faded.
     glyph_color: Rgba,
     glyph_hover: Rgba,
-    /// The strength of the whole button (CSS `opacity`), normally and under
-    /// the pointer.
+    /// `opacity` and `opacity_hover` hold the opacity of the whole button,
+    /// normally and under the pointer.
     opacity: f32,
     opacity_hover: f32,
-    /// The strength of the glyph alone, normally and under the pointer.
+    /// `glyph_opacity` and `glyph_opacity_hover` hold the opacity of the
+    /// glyph alone, normally and under the pointer.
     glyph_opacity: f32,
     glyph_opacity_hover: f32,
-    /// The strength of the whole button while it is disabled.
+    /// Holds the opacity of the whole button while it is disabled.
     disabled_opacity: f32,
     border: Option<Border>,
 }
 
 impl Paint {
-    /// The background colour for a pointer that is `hover` of the way onto the
-    /// button and a press that is `press` of the way down. Each is 0 to 1 and
-    /// already follows the timing curve. The colour goes from the normal
-    /// background to the hover background, and from that to the pressed
-    /// background.
+    /// Returns the background colour for a pointer that is `hover` of the way
+    /// onto the button and a press that is `press` of the way down. Each is
+    /// 0 to 1 and already follows the timing curve. The colour goes from the
+    /// normal background to the hover background, and from that to the
+    /// pressed background.
     fn fill_at(&self, hover: f32, press: f32) -> Rgba {
         theme::blend(
             theme::blend(self.fill, self.fill_hover, hover),
@@ -359,34 +363,35 @@ impl Paint {
         )
     }
 
-    /// The strength of the whole button for a pointer that is `hover` of the
-    /// way onto it, when the button is `dimmed` of the way to disabled.
+    /// Returns the opacity of the whole button for a pointer that is `hover`
+    /// of the way onto it, when the button is `dimmed` of the way to
+    /// disabled.
     fn opacity_at(&self, hover: f32, dimmed: f32) -> f32 {
         let lit = self.opacity + (self.opacity_hover - self.opacity) * hover;
         lit + (self.disabled_opacity - lit) * dimmed
     }
 }
 
-/// What a glyph button remembers from one frame to the next.
+/// Holds what a glyph button keeps from one frame to the next.
 struct State {
     hover: motion::Fade,
     press: motion::Fade,
-    /// On while the button is disabled.
+    /// This fade is on while the button is disabled.
     dimmed: motion::Fade,
 }
 
-/// What is drawn inside the button.
+/// Says what is drawn inside the button.
 enum Content {
     Glyph(&'static str),
-    /// `.icBtn.rateButton`: a short label in the monospace caption font. The
-    /// button is as wide as the label plus 4px on each side, and at least
-    /// 28px.
+    /// A short label in the monospace caption font, as the video player's
+    /// playback rate button has. The button is as wide as the label plus 4px
+    /// on each side, and at least 28px.
     Label(SharedString),
     /// A glyph that the caller draws, in the look's glyph colour.
     Element(AnyElement),
 }
 
-/// The glyph button that every screen uses, drawn in one of its [`Look`]s. A
+/// Draws the glyph button that every screen uses, in one of its [`Look`]s. A
 /// press on it is not passed on to what is behind it, so a button in the
 /// titlebar never drags the window and a button in a picker's header never
 /// drags the picker. A disabled button does not react to the pointer and shows
@@ -397,24 +402,26 @@ pub struct IconButton {
     look: Look,
     content: Content,
     glyph: Option<f32>,
-    /// A size for the square button other than the look's size.
+    /// Holds a size for the square button when it is not the look's size.
     size: Option<f32>,
     radius: Option<f32>,
     disabled: bool,
     toggled: bool,
     badge: Option<usize>,
     tip: Option<Tip>,
-    /// The name given to assistive technology, when that is not the tooltip's
-    /// text.
+    /// Holds the name given to assistive technology, when that is not the
+    /// tooltip's text.
     name: Option<SharedString>,
-    /// `aria-pressed`, for the buttons that the Electron app marks as toggles.
+    /// Holds whether the button is reported to assistive technology as a
+    /// toggle that is on (`true`) or off (`false`). A button that is not a
+    /// toggle has `None`.
     pressed: Option<bool>,
     on_click: Option<ClickHandler>,
     on_hover: Option<HoverHandler>,
     on_secondary: Option<PressHandler>,
-    /// The part of the window's frame that this button is (minimise, maximise
-    /// or close), which the system then handles itself. Used for Windows'
-    /// caption buttons.
+    /// Holds the part of the window's frame that this button is (minimise,
+    /// maximise or close). On Windows the system then carries out a click on
+    /// the button itself.
     window_control: Option<WindowControlArea>,
     children: Vec<AnyElement>,
 }
@@ -473,7 +480,8 @@ impl IconButton {
         self
     }
 
-    /// Draws the button as switched on, as the look's active CSS class does.
+    /// Draws the button as switched on, in the way its look describes for a
+    /// toggled button.
     pub fn toggled(mut self, toggled: bool) -> Self {
         self.toggled = toggled;
         self
@@ -504,16 +512,15 @@ impl IconButton {
     }
 
     /// Sets what assistive technology calls the button, for a button whose
-    /// `aria-label` in the Electron app is not its tooltip's text, or that has
-    /// no tooltip. Without this, the name is the button's label, or else its
-    /// tooltip's text.
+    /// name is not its tooltip's text, or that has no tooltip. Without this,
+    /// the name is the button's label, or else its tooltip's text.
     pub fn name(mut self, name: impl Into<SharedString>) -> Self {
         self.name = Some(name.into());
         self
     }
 
     /// Reports the button to assistive technology as a toggle that is on or
-    /// off (`aria-pressed`).
+    /// off.
     pub fn pressed(mut self, pressed: bool) -> Self {
         self.pressed = Some(pressed);
         self
@@ -604,9 +611,9 @@ impl RenderOnce for IconButton {
             window.request_animation_frame();
         }
 
-        // The strength of the whole button is applied to its background,
+        // The opacity of the whole button is applied to its background,
         // border and glyph. It is not applied to the tooltip, which is a child
-        // of the button and must stay at full strength.
+        // of the button and must stay at full opacity.
         let opacity = paint.opacity_at(hover, dimmed);
         let faded = |color: Rgba| Rgba {
             a: color.a * opacity,
@@ -730,8 +737,9 @@ impl RenderOnce for IconButton {
             return button;
         }
         let focus = super::focus::control(&self.id, window, cx);
-        // `SmartFolderModal`'s `.conditionButton:focus-visible`. The Electron
-        // app's other glyph buttons draw no focus ring.
+        // The minus and plus buttons of a smart folder rule show a 1px ring
+        // in the text colour when the Tab key has moved the keyboard focus
+        // to them. The other glyph buttons draw no focus ring.
         if look == Look::Condition {
             let ring = super::focus::Ring {
                 width: 1.,
@@ -841,7 +849,7 @@ mod tests {
         // pointer on the button.
         let toggled = Look::Icon.paint(&DARK, true);
         assert!(same(toggled.fill_at(0., 0.), DARK.contrast(14.)));
-        // A disabled button is drawn at 20% strength.
+        // A disabled button is drawn at 20% opacity.
         assert!((paint.opacity_at(0., 1.) - 0.2).abs() < 1e-6);
         assert_eq!(paint.opacity_at(1., 0.), 1.);
     }
@@ -849,10 +857,11 @@ mod tests {
     #[test]
     fn the_small_look_is_dimmed_only_when_disabled() {
         let paint = Look::Small.paint(&DARK, false);
-        // Enabled: full strength at rest and under the pointer.
+        // An enabled button is drawn at full opacity, with and without the
+        // pointer on it.
         assert_eq!(paint.opacity_at(0., 0.), 1.);
         assert_eq!(paint.opacity_at(1., 0.), 1.);
-        // Disabled: 20%.
+        // A disabled button is drawn at 20% opacity.
         assert!((paint.opacity_at(0., 1.) - 0.2).abs() < 1e-6);
     }
 

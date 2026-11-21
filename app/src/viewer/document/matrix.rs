@@ -1,8 +1,10 @@
-//! The format matrix: every media type Picto accepts, the renderer it gets,
-//! and a check that its first page or frame draws. The regular checks decode
-//! the small fixtures in `assets/fixtures/documents` off-screen; the ignored
-//! ones draw the real viewers through GPUI's headless renderer (they need a
-//! GPU), and one takes a file from `PICTO_GPUI_MEDIA`.
+//! Tests of the formats. They list every media type that Picto accepts with
+//! the viewer it gets, and check that the first page or frame of each kind
+//! of document can be drawn. The tests that always run decode the small
+//! fixtures in `assets/fixtures/documents` without a window. The tests
+//! marked `#[ignore]` draw the viewers through GPUI's headless renderer,
+//! which needs a GPU. One of them takes its file from the environment
+//! variable `PICTO_GPUI_MEDIA`.
 use super::kind::{RendererKind, renderer_kind};
 use super::pages::PageSource as _;
 use super::{epub, font, pages, reader, rich};
@@ -15,7 +17,8 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// The media types `core/src/media_processing/formats.rs` accepts.
+/// The media types that the library accepts, copied from
+/// `core/src/media_processing/formats.rs`.
 const ACCEPTED: &[&str] = &[
     "image/jpeg",
     "image/png",
@@ -176,7 +179,7 @@ fn every_accepted_type_has_a_renderer() {
             .or_default()
             .push(mime);
     }
-    // Each document kind has the types the matrix in the README lists.
+    // Each kind of document gets exactly these media types.
     assert_eq!(by_kind["Pdf"], ["application/pdf"]);
     assert_eq!(by_kind["Epub"], ["application/epub+zip"]);
     assert_eq!(by_kind["Cbz"], ["application/vnd.comicbook+zip"]);
@@ -197,8 +200,8 @@ fn every_accepted_type_has_a_renderer() {
     );
     assert_eq!(by_kind["Video"].len(), 15);
     assert_eq!(by_kind["Audio"].len(), 11);
-    // Formats with no renderer take the unsupported view: office, design,
-    // 3D and the rest.
+    // A format that has no viewer, such as an office document, a design
+    // file or a 3D model, gets the view for files that cannot be shown.
     for mime in [
         "application/msword",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -212,10 +215,10 @@ fn every_accepted_type_has_a_renderer() {
     }
 }
 
-// ── Checking a picture ─────────────────────────────────────────
+// The following checks that something has been drawn in a picture.
 
-/// The share of pixels further than 24 levels from the picture's most
-/// common colour.
+/// Returns the share of the picture's pixels in which a colour channel
+/// differs by more than 24 levels from the picture's most common colour.
 fn ink(image: &RgbaImage) -> f32 {
     let mut counts = std::collections::HashMap::<[u8; 3], usize>::new();
     for pixel in image.pixels() {
@@ -237,16 +240,20 @@ fn ink(image: &RgbaImage) -> f32 {
     differing as f32 / (image.width() * image.height()).max(1) as f32
 }
 
-/// The picture has the size asked for and is not one flat colour.
+/// Asserts that `image` has the size `size` and is not of one colour only:
+/// more than 0.5% of its pixels differ from its most common colour (`ink`).
+/// `what` names the picture in the message of a failure.
 fn assert_drawn(image: &RgbaImage, size: (u32, u32), what: &str) {
     assert_eq!((image.width(), image.height()), size, "{what}: size");
     let share = ink(image);
     assert!(share > 0.005, "{what}: blank ({share})");
 }
 
-// ── First pages, decoded off-screen ────────────────────────────
+// The following tests decode the first page of each kind of document
+// without a window.
 
-/// The first page of a paged document, drawn to fit a 400px square.
+/// Draws the first page of the paged document at `path` as large as fits
+/// into a square of 400 pixels, and returns the picture and its size.
 fn first_page(kind: RendererKind, path: &Path) -> (RgbaImage, (u32, u32)) {
     let mut source = pages::open(kind, path).unwrap();
     assert!(source.page_count() > 0);
@@ -260,7 +267,7 @@ fn first_page(kind: RendererKind, path: &Path) -> (RgbaImage, (u32, u32)) {
 fn pdf_first_page_draws() {
     let mut pdf = pages::Pdf::open(&fixture("page.pdf")).unwrap();
     assert_eq!(pdf.page_count(), 1);
-    // US Letter in points.
+    // The page is US Letter, which is 612 × 792 points.
     assert_eq!(pdf.page_size(0).unwrap(), (612., 792.));
     let (image, size) = first_page(RendererKind::Pdf, &fixture("page.pdf"));
     assert_drawn(&image, size, "PDF");
@@ -269,13 +276,14 @@ fn pdf_first_page_draws() {
 #[test]
 fn a_multi_page_pdf_measures_and_draws_every_page() {
     let path = fixture("pages.pdf");
-    // Letter, A5 and Letter across, measured when the document opens.
+    // The three pages are US Letter, A5 and US Letter turned sideways.
     assert_eq!(
         pages::measure(RendererKind::Pdf, &path).unwrap(),
         vec![(612., 792.), (420., 595.), (792., 612.)]
     );
-    // The document's thread draws the pages asked for, in order, and skips
-    // one given up before its turn.
+    // The document's thread draws the pages that are asked for, in the
+    // order asked. It does not draw a page whose receiver was dropped
+    // before the thread reached the request.
     let (worker, sizes) =
         futures::executor::block_on(pages::PageWorker::open(RendererKind::Pdf, path))
             .unwrap()
@@ -289,7 +297,8 @@ fn a_multi_page_pdf_measures_and_draws_every_page() {
     let third = futures::executor::block_on(third).unwrap().unwrap();
     assert_drawn(&second.image, (210, 298), "PDF page 2");
     assert_drawn(&third.image, (396, 306), "PDF page 3");
-    // Page 2's band is red, page 3's green: each request drew its own page.
+    // Page 2 has a red band and page 3 has a green band, so the colours
+    // show that each request drew its own page.
     let red = second.image.get_pixel(105, 298 - 220);
     assert!(red[0] > 150 && red[1] < 100, "page 2: {red:?}");
     let green = third.image.get_pixel(198, 306 - 215);
@@ -305,11 +314,12 @@ fn djvu_first_page_draws() {
 #[test]
 fn comic_pages_draw_in_natural_order() {
     let mut comic = pages::Comic::open(&fixture("comic.cbz")).unwrap();
-    // 001, 002 and 010; the text file is not a page.
+    // The pages are the entries 001, 002 and 010. The text file in the
+    // archive is not a page.
     assert_eq!(comic.page_count(), 3);
     assert_eq!(comic.page_size(0).unwrap(), (120., 180.));
     let first = comic.render(0, 120, 180).unwrap();
-    // The first page's band is blue (60, 140, 220).
+    // The first page has a blue band, of the colour (60, 140, 220).
     let band = first.get_pixel(60, 20);
     assert!(band[2] > 200 && band[0] < 100, "page 001 first: {band:?}");
     let (image, size) = first_page(RendererKind::Cbz, &fixture("comic.cbz"));
@@ -324,7 +334,8 @@ fn jpeg_xl_decodes() {
 
 #[test]
 fn gif_and_svg_first_frames_decode() {
-    // The image renderer decodes rasters with `image`, as GPUI's loader does.
+    // Raster images are decoded with the `image` crate, which GPUI's image
+    // loader also uses.
     let gif = image::open(fixture("animation.gif")).unwrap().to_rgba8();
     assert_drawn(&gif, (48, 32), "GIF");
     let svg =
@@ -364,7 +375,8 @@ fn epub_chapters_read_with_their_pictures() {
     assert_eq!(picture, Some((160., 90.)));
 }
 
-/// A WOFF 1.0 file wrapping a TrueType font, every table compressed.
+/// Returns a WOFF 1.0 file that holds the TrueType font `sfnt`. Each table
+/// is stored compressed when that makes it smaller.
 fn pack_woff(sfnt: &[u8]) -> Vec<u8> {
     use std::io::Write;
     let read_u32 = |at: usize| u32::from_be_bytes(sfnt[at..at + 4].try_into().unwrap());
@@ -415,7 +427,9 @@ fn pack_woff(sfnt: &[u8]) -> Vec<u8> {
     woff
 }
 
-/// The bundled Fira Mono, as TrueType and wrapped as WOFF in `folder`.
+/// Returns two files of the bundled font Fira Mono, each with its media
+/// type: the TrueType file in the app's assets, and a WOFF file made from
+/// it, which is written into `folder`.
 fn font_files(folder: &Path) -> Vec<(PathBuf, &'static str)> {
     let ttf = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/FiraMono.ttf");
     let woff = folder.join("FiraMono.woff");
@@ -437,10 +451,11 @@ fn fonts_load_and_have_outlines() {
     }
 }
 
-// ── The viewers, drawn off-screen ──────────────────────────────
+// The following tests draw the viewers in a window that is not shown.
 
-// The macOS text system and Metal draw these; other platforms have no
-// headless renderer here yet.
+// These tests draw with the macOS text system and with Metal. The other
+// platforms have no headless renderer in this crate yet, so the tests
+// exist on macOS only.
 #[cfg(target_os = "macos")]
 mod gpu {
     use super::super::{Document, kind::RendererKind, kind::renderer_kind};
@@ -488,7 +503,8 @@ mod gpu {
         cx
     }
 
-    /// Whether the document has what it was loading.
+    /// Returns whether the document has finished loading what it shows
+    /// first.
     fn settled(document: &Document, cx: &App) -> bool {
         match document {
             Document::Paged(paged) => paged.read(cx).settled(),
@@ -498,8 +514,9 @@ mod gpu {
         }
     }
 
-    /// Opens a file in its viewer in an off-screen window, waits for it to
-    /// load and draw, and returns the window's picture.
+    /// Opens the file at `path` in its viewer in a window that is not
+    /// shown, waits up to 30 seconds for the viewer to load the file, and
+    /// returns a picture of the window.
     pub fn render(cx: &mut HeadlessAppContext, path: &Path, mime: &str) -> RgbaImage {
         let kind = renderer_kind(mime);
         assert!(kind.is_document(), "{mime} is not a document");
@@ -530,8 +547,9 @@ mod gpu {
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        // Lay out once more with what arrived, then once more for anything
-        // measured in that frame.
+        // The window is drawn once more, which lays out the content that
+        // arrived, and then again, which lays out anything that was
+        // measured in the frame before.
         draw(cx);
         cx.run_until_parked();
         draw(cx);
@@ -541,16 +559,18 @@ mod gpu {
         picture
     }
 
-    /// The picture is the window's size and its middle holds a drawing:
-    /// at least 400 pixels apart from its most common colour, so a page
-    /// with a few lines of text passes and a flat backdrop does not.
+    /// Asserts that `picture` is at least as large as the window and that
+    /// something is drawn in its middle: at least 400 pixels there differ
+    /// from the most common colour. A page with a few lines of text
+    /// passes, and a backdrop of one colour does not.
     fn assert_view(picture: &RgbaImage, what: &str) {
         let (width, height) = (picture.width(), picture.height());
         assert!(
             width as f32 >= WIDTH && height as f32 >= HEIGHT,
             "{what}: {width}×{height}"
         );
-        // The footer and the backdrop are flat; the page in the middle is not.
+        // The footer and the backdrop are each of one colour, so only the
+        // middle of the picture, where the page is, is checked.
         let middle =
             image::imageops::crop_imm(picture, width / 4, height / 8, width / 2, height / 2)
                 .to_image();
@@ -588,8 +608,8 @@ mod gpu {
             }
             assert_view(&picture, mime);
         }
-        // A type with no renderer takes the unsupported view: the message
-        // in the document shell.
+        // A type that has no viewer gets the view for files that cannot be
+        // shown, which is the document shell with a message.
         let picture = render(&mut cx, &fixture("missing.zip"), "application/zip");
         if let Some(out) = &out {
             picture.save(out.join("unsupported_zip.png")).unwrap();
@@ -597,7 +617,8 @@ mod gpu {
         assert_view(&picture, "unsupported");
     }
 
-    /// The type of a real file, from its extension.
+    /// Returns the media type that the extension of `path` stands for, or
+    /// `application/octet-stream` for an extension that is not listed.
     fn mime_of(path: &Path) -> &'static str {
         match path
             .extension()
@@ -627,10 +648,12 @@ mod gpu {
         }
     }
 
-    /// `PICTO_GPUI_MEDIA=<file>` (with `PICTO_GPUI_MEDIA_MIME` to override
-    /// the type its extension gives): decodes its first page or frame and,
-    /// for documents, draws its viewer off-screen. `PICTO_GPUI_MATRIX_OUT`
-    /// saves the pictures to a folder.
+    /// Checks the file that the environment variable `PICTO_GPUI_MEDIA`
+    /// names. The file's media type comes from its extension, or from
+    /// `PICTO_GPUI_MEDIA_MIME` when that variable is set. The test decodes
+    /// the file's first page or frame. For a document it also draws the
+    /// viewer in a window that is not shown. When `PICTO_GPUI_MATRIX_OUT`
+    /// names a folder, the pictures are saved there.
     #[test]
     #[ignore = "takes a real file"]
     fn renders_a_real_file() {

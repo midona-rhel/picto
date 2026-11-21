@@ -113,7 +113,6 @@ impl SettingsWindow {
         // the toolbar's zoom control does, because the Settings window has
         // no grid width to count columns in. The range starts at 150 px
         // because that is the smallest tile size the zoom allows.
-        // Production's slider goes from 100 to 600 in steps of 50.
         const LEAST: f64 = crate::grid::layout::SMALLEST_TILE as f64;
         const MOST: f64 = 600.;
         let size = grid.target_size.unwrap_or(220.).clamp(LEAST, MOST);
@@ -164,7 +163,7 @@ impl SettingsWindow {
         // view preferences, so it changes `draft.app`. The grid reads the
         // saved value each time the zoom changes
         // (`GridView::snapshot`), so a change applies to the next zoom step
-        // after Apply. Production has no such setting.
+        // after Apply.
         checks = checks.child(
             ui::check(
                 "grid-zoom-animation",
@@ -208,9 +207,9 @@ impl SettingsWindow {
                 div()
                     .flex()
                     .items_center()
-                    // The 6 px gap between the slider and the label that
-                    // shows its value is the gap of production's
-                    // `.settingControl`.
+                    // The gap between the slider and the label that shows
+                    // its value is 6 px, which is also the gap between the
+                    // controls of a row (`pieces::control`).
                     .gap(px(6.))
                     .child(
                         ui::slider("thumbnail-size", size, LEAST, MOST, 10.).on_change(number(
@@ -245,11 +244,10 @@ impl SettingsWindow {
                                     .clone()
                                     .unwrap_or_else(|| prefs::sort_value(SortField::ImportedAt).into()),
                             ),
-                            // The sort fields are listed in the order of
-                            // production's `SORT_FIELD_OPTIONS`, in which
-                            // Rating comes before File Size. The view
-                            // panel's list (`prefs::SORTS`) has File Size
-                            // before Rating.
+                            // In this list Rating comes before File Size,
+                            // as it did in Picto 0.6.19 and earlier. The
+                            // view panel's list (`prefs::SORTS`) has File
+                            // Size before Rating.
                             [
                                 SortField::ImportedAt,
                                 SortField::CapturedAt,

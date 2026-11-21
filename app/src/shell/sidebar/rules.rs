@@ -1,13 +1,16 @@
-//! The smart-folder rule model (`fieldConfig.ts`, `queryModel.ts`): groups
-//! of rules as the editor shows them, compiled to the library's
-//! `FilterExpr` and read back from it.
+//! The rules of a smart folder as the smart-folder editor shows them: the
+//! fields that a rule can test, the operators of each field, and groups of
+//! rules. `compile` turns the groups into the library's `FilterExpr`, and
+//! `from_filter` turns a `FilterExpr` back into groups.
 use crate::grid::filters::{day_key, day_start, hex_to_lab};
 use picto_library::predicate::{FilterClause, FilterExpr, SetMatchMode, TextField};
 use picto_library::{LabColor, Rating, TagId};
 
-/// `MAX_LOCAL_RULES`.
+/// The largest number of rules, counted over all groups, that the editor
+/// lets a smart folder have.
 pub const MAX_RULES: usize = 10;
-/// `DEFAULT_COLOR_DELTA_E`.
+/// The largest colour difference (delta E) at which an item's colour still
+/// matches the colour of a Color rule.
 const COLOR_DELTA_E: f32 = 16.;
 const DAY_MS: i64 = 86_400_000;
 
@@ -22,7 +25,9 @@ pub enum ValueType {
     Color,
 }
 
-/// One field a rule can test (`FieldDef`).
+/// One field that a rule can test: its key, its label, its operators as
+/// pairs of key and label, the kind of value it takes, and the unit of that
+/// value if it has one.
 pub struct FieldDef {
     pub key: &'static str,
     pub label: &'static str,
@@ -60,7 +65,8 @@ const DATE_OPERATORS: &[(&str, &str)] = &[
     ("between", "between"),
 ];
 
-/// `FIELD_DEFS`, in the editor's order.
+/// The fields that a rule can test, in the order in which the editor lists
+/// them.
 // i18n: translated where drawn
 pub const FIELDS: &[FieldDef] = &[
     FieldDef {
@@ -163,7 +169,9 @@ pub const FIELDS: &[FieldDef] = &[
     },
 ];
 
-/// The file-type choices (`selectOptions`).
+/// The choices of the File Type field, as pairs of value and label. A value
+/// with a `/` is one MIME type, and a value without one is a family of
+/// types.
 // i18n: translated where drawn (select choices)
 pub const FILE_TYPES: &[(&str, &str)] = &[
     ("image", "Image"),
@@ -174,7 +182,7 @@ pub const FILE_TYPES: &[(&str, &str)] = &[
     ("video/mp4", "MP4"),
 ];
 
-/// `FILESIZE_UNITS`.
+/// The units of the File Size field, as pairs of value and label.
 // i18n: translated where drawn (select choices)
 pub const FILE_SIZE_UNITS: &[(&str, &str)] = &[
     ("B", "Bytes"),
@@ -183,7 +191,7 @@ pub const FILE_SIZE_UNITS: &[(&str, &str)] = &[
     ("GB", "Gigabytes"),
 ];
 
-/// `RATING_OPTIONS`.
+/// The choices of the Rating field, as pairs of value and label.
 // i18n: translated where drawn (select choices)
 pub const RATING_OPTIONS: &[(&str, &str)] = &[
     ("0", "Unrated"),
@@ -194,7 +202,8 @@ pub const RATING_OPTIONS: &[(&str, &str)] = &[
     ("5", "★★★★★"),
 ];
 
-/// `getFieldDef`: the tags field for a key it does not know.
+/// Returns the field with the key `key`. For a key that no field has, it
+/// returns the Tags field.
 pub fn field(key: &str) -> &'static FieldDef {
     FIELDS
         .iter()
@@ -202,8 +211,9 @@ pub fn field(key: &str) -> &'static FieldDef {
         .unwrap_or(&FIELDS[0])
 }
 
-/// One rule (`SmartFolderPredicateRule`). Values are kept as the editor
-/// shows them and read when the rule is compiled.
+/// One rule: a field, an operator and the values to compare with. The
+/// values are kept as the text that the editor shows, and they are parsed
+/// when the rule is compiled.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Rule {
     pub field: &'static str,
@@ -214,7 +224,9 @@ pub struct Rule {
     pub unit: Option<&'static str>,
 }
 
-/// One group of rules (`SmartFolderPredicateGroup`).
+/// One group of rules. An item matches the group when it matches every
+/// rule, or at least one rule when `any` is true. When `negate` is true, the
+/// group matches the items that it would otherwise not match.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Group {
     pub any: bool,
@@ -222,7 +234,8 @@ pub struct Group {
     pub rules: Vec<Rule>,
 }
 
-/// `defaultValue`, as text.
+/// Returns the value that a new rule on the field `key` starts with, as
+/// text. `today` is today's date, which a date field starts with.
 fn default_value(key: &str, today: &str) -> String {
     match field(key).kind {
         ValueType::Tags | ValueType::Color | ValueType::Text => String::new(),
@@ -233,7 +246,9 @@ fn default_value(key: &str, today: &str) -> String {
 }
 
 impl Rule {
-    /// The rule a field starts as when chosen (`handleFieldChange`).
+    /// Returns the rule that the editor shows after the user chose the field
+    /// `key`. It has the field's first operator and the field's default
+    /// value.
     pub fn for_field(key: &str, today: &str) -> Self {
         let field = field(key);
         Self {
@@ -247,8 +262,10 @@ impl Rule {
         }
     }
 
-    /// `handleOpChange`: `between` takes a second value, starting at the
-    /// first.
+    /// Returns this rule with the operator `op`. The operator `between`
+    /// takes a second value, which starts as a copy of the first value
+    /// unless the rule already has one. Every other operator has no second
+    /// value.
     pub fn with_op(&self, op: &'static str) -> Self {
         Self {
             op,
@@ -257,13 +274,15 @@ impl Rule {
         }
     }
 
-    /// Whether the operator takes a value (`is empty` does not).
+    /// Returns whether the rule's operator takes a value. The operators "is
+    /// empty" and "is not empty" take none.
     pub fn shows_value(&self) -> bool {
         !matches!(self.op, "is_empty" | "is_not_empty")
     }
 }
 
-/// `defaultRule`.
+/// Returns the rule that a new group starts with: the field Tags, the
+/// operator "include any", and no tags.
 pub fn default_rule() -> Rule {
     Rule {
         field: "tags",
@@ -275,7 +294,8 @@ pub fn default_rule() -> Rule {
     }
 }
 
-/// `defaultGroup`.
+/// Returns the group that a new smart folder starts with. It matches all of
+/// its rules, is not negated, and holds one default rule.
 pub fn default_group() -> Group {
     Group {
         any: false,
@@ -284,7 +304,10 @@ pub fn default_group() -> Group {
     }
 }
 
-/// `normalizeRule`: an operator the field does not have becomes its first.
+/// Returns the rule in a form that the editor can show. An operator that
+/// the rule's field does not have is replaced by the field's first
+/// operator. A File Size rule without a unit gets megabytes, and a rule on
+/// any other field has no unit.
 fn normalize_rule(mut rule: Rule) -> Rule {
     let def = field(rule.field);
     rule.field = def.key;
@@ -304,7 +327,9 @@ fn normalize_rule(mut rule: Rule) -> Rule {
     rule
 }
 
-/// `normalizePredicate`: at least one group, each with at least one rule.
+/// Returns the groups in a form that the editor can show: there is at least
+/// one group, every group has at least one rule, and every rule is
+/// normalized.
 pub fn normalize(groups: Vec<Group>) -> Vec<Group> {
     if groups.is_empty() {
         return vec![default_group()];
@@ -322,7 +347,7 @@ pub fn normalize(groups: Vec<Group>) -> Vec<Group> {
         .collect()
 }
 
-// ── Compiling ──────────────────────────────────────────────────────
+// The functions below compile groups of rules to a `FilterExpr`.
 
 fn number(text: &str) -> f64 {
     let trimmed = text.trim();
@@ -339,7 +364,9 @@ struct Range {
     negate: bool,
 }
 
-/// `numberRange`.
+/// Returns the range of whole numbers that a numeric rule matches. The
+/// rule's values are multiplied by `scale` and rounded. `negate` is true
+/// for "not equals", which matches every number outside the range.
 fn number_range(rule: &Rule, scale: f64) -> Result<Range, String> {
     let value = (number(&rule.value) * scale).round().max(0.) as u64;
     let value2 = (number(rule.value2.as_deref().unwrap_or(&rule.value)) * scale)
@@ -385,12 +412,15 @@ fn number_range(rule: &Rule, scale: f64) -> Result<Range, String> {
     })
 }
 
-/// Today in UTC, as the date field's default.
+/// Returns today's date in UTC as `YYYY-MM-DD`. A new date rule starts with
+/// it.
 pub fn today() -> String {
     day_key(crate::now_ms())
 }
 
-/// `dateRange`.
+/// Returns the range of times that a date rule matches, in milliseconds
+/// since 1970. A day starts at midnight UTC and ends one millisecond before
+/// the next midnight.
 fn date_range(rule: &Rule) -> Result<(Option<u64>, Option<u64>), String> {
     let parse =
         |text: &str| day_start(text.trim()).ok_or("Smart-folder date is invalid.".to_owned());
@@ -421,7 +451,10 @@ fn wrap_not(expression: FilterExpr, negate: bool) -> FilterExpr {
 
 const RATINGS: [Rating; 6] = Rating::ALL;
 
-/// `compileRule`.
+/// Compiles one rule to a filter expression. `resolve_tag` returns the id
+/// of the tag with a given name. Returns an error when the rule names a tag
+/// that does not exist, has an invalid date, or is a Color rule without a
+/// colour.
 fn compile_rule(
     rule: &Rule,
     resolve_tag: &dyn Fn(&str) -> Option<TagId>,
@@ -577,8 +610,10 @@ fn compile_rule(
     Ok(wrap_not(FilterExpr::Clause(clause), negate))
 }
 
-/// `compileSmartFolderPredicate`: every group must match; a group matches
-/// all or any of its rules, or is excluded.
+/// Compiles the groups to one filter expression. An item matches the
+/// expression when it matches every group. A group matches all of its
+/// rules, or at least one of them when `any` is true, and a negated group
+/// matches the items that this leaves out.
 pub fn compile(
     groups: &[Group],
     resolve_tag: &dyn Fn(&str) -> Option<TagId>,
@@ -602,9 +637,10 @@ pub fn compile(
     Ok(FilterExpr::All(groups))
 }
 
-// ── Reading back ───────────────────────────────────────────────────
+// The functions below turn a `FilterExpr` back into groups of rules.
 
-/// `String(number)`: whole numbers without a fraction.
+/// Returns the number as text. A whole number is written without a decimal
+/// point.
 fn number_text(value: f64) -> String {
     if value.fract() == 0. {
         format!("{}", value as i64)
@@ -624,7 +660,9 @@ fn rule(field: &'static str, op: &'static str, value: String) -> Rule {
     }
 }
 
-/// `rangeRule`.
+/// Returns the numeric rule on `field` that matches the range from
+/// `minimum` to `maximum`. The stored numbers are divided by `scale` to get
+/// the values that the editor shows.
 fn range_rule(field: &'static str, minimum: Option<u64>, maximum: Option<u64>, scale: f64) -> Rule {
     let text = |value: u64| number_text(value as f64 / scale);
     match (minimum, maximum) {
@@ -639,7 +677,9 @@ fn range_rule(field: &'static str, minimum: Option<u64>, maximum: Option<u64>, s
     }
 }
 
-/// `dateRule`.
+/// Returns the date rule on `field` that matches the range of times from
+/// `minimum` to `maximum`. A range shorter than one day becomes the rule
+/// "is" on that day.
 fn date_rule(field: &'static str, minimum: Option<u64>, maximum: Option<u64>) -> Rule {
     let date = |ms: u64| day_key(ms as i64);
     match (minimum, maximum) {
@@ -656,7 +696,9 @@ fn date_rule(field: &'static str, minimum: Option<u64>, maximum: Option<u64>) ->
     }
 }
 
-/// `ruleFromClause`.
+/// Returns the rule that the editor shows for one filter clause. `tag_name`
+/// returns the name of the tag with a given id. Returns an error for a
+/// clause that the editor has no field for.
 fn rule_from_clause(
     clause: &FilterClause,
     tag_name: &dyn Fn(TagId) -> Option<String>,
@@ -759,7 +801,10 @@ fn rule_from_clause(
     })
 }
 
-/// `unwrapGroup`.
+/// Returns the group that the editor shows for one filter expression.
+/// Returns an error for an expression that the editor cannot show: one that
+/// holds nested expressions, or a negated rule whose field has no operator
+/// for the negation.
 fn group_from(
     expression: &FilterExpr,
     tag_name: &dyn Fn(TagId) -> Option<String>,
@@ -801,7 +846,8 @@ fn group_from(
     })
 }
 
-/// `editorPredicateFromFilter`, normalized as the editor opens it.
+/// Returns the groups that the editor shows for a smart folder's filter,
+/// normalized with `normalize`.
 pub fn from_filter(
     filter: &FilterExpr,
     tag_name: &dyn Fn(TagId) -> Option<String>,
@@ -817,9 +863,10 @@ pub fn from_filter(
     Ok(normalize(groups))
 }
 
-// ── Colour ─────────────────────────────────────────────────────────
+// The function below converts a colour for the Color rule.
 
-/// `labToHex`.
+/// Converts a CIELAB colour to an sRGB colour written as hex, such as
+/// `#339af0`.
 pub fn lab_to_hex(color: &LabColor) -> String {
     let fy = (color.l + 16.) / 116.;
     let fx = color.a / 500. + fy;
@@ -948,7 +995,8 @@ mod tests {
                 ))]))),
             ])
         );
-        // Read back, a `gt 100` reads as `at least 101`, as in Electron.
+        // The filter stores "greater than 100" as a minimum of 101, so the
+        // rule is read back as "at least 101".
         let back = from_filter(&compiled, &name).unwrap();
         assert_eq!(back[0].rules[1], rule("width", "gte", "101"));
         assert_eq!(back[1].rules[0].op, "do_not_include");

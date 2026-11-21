@@ -1,11 +1,12 @@
-//! The Accounts dialog (`AccountsModal`, `AuthWorkspace`, `AuthSitesSidebar`
-//! and `AuthSiteDetail`): every service a login is kept for, its state, and
-//! its sign in, sign out and the login under way (`crate::logins`).
+//! The "Site accounts" dialog. On the left it lists every service that a
+//! login can be saved for. On the right it shows, for the chosen service,
+//! the state of its login, the buttons that log in and remove the login, and
+//! the progress of a login that is under way (`crate::logins`).
 //!
-//! What it lists is `authController.loadWorkspaceSnapshot`: the services
-//! that own their logins, with the subscriptions' sources that use each,
-//! the saved login and its last check, and the subscriptions' open login
-//! problems.
+//! The list holds the services that own their logins. For each service the
+//! dialog reads the number of the subscriptions' sources that use it, the
+//! saved login, the last check of that login, and the open login problems
+//! of the subscriptions that use it.
 use super::format;
 use crate::i18n::{en, t};
 use crate::logins::{Logins, Status, onlyfans::ManualInput, sites::SUBSCRIBESTAR_HOSTS};
@@ -22,11 +23,12 @@ use gpui::{prelude::FluentBuilder as _, *};
 use picto_core::subscriptions::sites::SiteEntry;
 use serde_json::{Value, json};
 
-/// One service as the dialog shows it (`AuthSiteSnapshot`).
+/// One service as the dialog shows it.
 #[derive(Clone)]
 pub struct Account {
     pub site: &'static SiteEntry,
-    /// Production shows E-Hentai's logins as ExHentai's.
+    /// The name that the dialog shows for the service. It is the site's
+    /// name, except that E-Hentai's login is shown under the name ExHentai.
     pub name: String,
     pub domain: String,
     pub query_count: usize,
@@ -52,8 +54,11 @@ pub struct AuthIssue {
 }
 
 impl Account {
-    /// `getAuthAccountStatus`: signed in, needing attention, or not, with
-    /// its tone.
+    /// Returns the label of the state of the service's login and the tone
+    /// the label is drawn in. A service without a saved login is "Not
+    /// signed in". A service with a saved login is "Needs attention" when
+    /// the last check of the login failed or the service has an open login
+    /// problem, and "Signed in" otherwise.
     pub fn status(&self) -> (&'static str, Tone) {
         let health = self
             .health
@@ -72,7 +77,9 @@ impl Account {
     }
 }
 
-/// `isAuthIssue`: a problem about a login, by its kind or its words.
+/// Returns whether a subscription's problem is about a login. It is when
+/// its kind is one of the four kinds in `KINDS`, or when its message or its
+/// detail contains "credential", "login" or "auth".
 pub fn is_auth_issue(kind: &str, message: &str, detail: Option<&str>) -> bool {
     // i18n: issue kinds and words matched, not shown
     const KINDS: [&str; 4] = [
@@ -91,12 +98,17 @@ pub fn is_auth_issue(kind: &str, message: &str, detail: Option<&str>) -> bool {
         .any(|word| haystack.contains(word))
 }
 
-/// The services, with what uses them and what was saved, sorted by name
-/// (`loadWorkspaceSnapshot` and `AuthWorkspace.refresh`).
+/// Returns the services that own their logins, sorted by name. Each service
+/// has the number of sources that use it, the type of its saved login, the
+/// last check of that login, and the open login problems of the
+/// subscriptions that use it.
 ///
-/// `usage` holds each subscription's sources' sites, in the order the
-/// subscriptions are listed; `issues` each subscription's open issues as
-/// (subscription, id, kind, message, detail, last seen), newest first.
+/// `usage` holds, for each subscription, the sites of its sources, in the
+/// order the subscriptions are listed. `credentials` holds each service's
+/// id and the type of its saved login, and `health` holds each service's id
+/// and the last check of its login. `issues` holds the subscriptions' open
+/// problems as (subscription, id, kind, message, detail, last seen), newest
+/// first.
 pub fn accounts(
     usage: &[(i64, Vec<String>)],
     credentials: &[(String, String)],
@@ -158,17 +170,19 @@ pub fn accounts(
             }
         })
         .collect();
-    // `localeCompare(…, { sensitivity: 'base' })`.
+    // Upper and lower case make no difference to the order.
     list.sort_by_cached_key(|account| account.name.to_lowercase());
     list
 }
 
-/// `formatRelativeTime` of the Accounts dialog: minutes, hours, then days.
+/// Returns how long ago the time `value` was, in minutes, hours or days
+/// (`format::relative_time_in_days`).
 fn relative(value: Option<&str>) -> String {
     format::relative_time_in_days(value, chrono::Local::now())
 }
 
-/// The dialog's contents: the services' list and the chosen one's detail.
+/// The content of the "Site accounts" dialog: the list of services and the
+/// details of the chosen service.
 pub struct Accounts {
     session: Entity<Session>,
     logins: Entity<Logins>,
@@ -184,13 +198,17 @@ pub struct Accounts {
     x_bc: Entity<TextInput>,
     list_scroll: ScrollHandle,
     issue_scroll: ScrollHandle,
-    /// A completed login already taken in.
+    /// True from the time `login_changed` sees a completed login until the
+    /// services have been read again. While it is true, `login_changed`
+    /// does not handle the same completed login a second time.
     finishing: bool,
     _subscriptions: Vec<Subscription>,
 }
 
 impl Accounts {
-    /// The dialog's contents, on `focus_site`'s service when given.
+    /// Creates the dialog's content and reads the services. The service
+    /// `focus_site` is chosen at first. Without it, the first service in
+    /// the list is chosen.
     pub fn new(
         session: Entity<Session>,
         usage: Vec<(i64, Vec<String>)>,
@@ -199,7 +217,7 @@ impl Accounts {
     ) -> Self {
         let logins = Logins::global(&session, cx);
         let field = |cx: &mut Context<Self>| cx.new(|cx| TextInput::new(Kind::Form, cx));
-        // Production's Cookie and X-BC are password fields.
+        // The Cookie and X-BC fields hide the text that is typed in them.
         let secret = |cx: &mut Context<Self>| cx.new(|cx| TextInput::new(Kind::Form, cx).masked());
         let cookie = secret(cx);
         let user_agent = field(cx);
@@ -210,7 +228,8 @@ impl Accounts {
             cx.observe(&cookie, |_, _, cx| cx.notify()),
             cx.observe(&user_agent, |_, _, cx| cx.notify()),
             cx.observe(&x_bc, |_, _, cx| cx.notify()),
-            // A service's icon arrived (or may be asked for again).
+            // The dialog is drawn again when the site icons change, which
+            // happens when a service's icon has been loaded.
             cx.observe(&icons, |_, _, cx| cx.notify()),
         ];
         let mut accounts = Self {
@@ -231,9 +250,9 @@ impl Accounts {
             finishing: false,
             _subscriptions: subscriptions,
         };
-        // A login that completed while the dialog was closed is taken in
-        // now, as production's dialog does when it reads the session's
-        // state on opening.
+        // A login that completed while the dialog was closed is handled
+        // now, in the way a login that completes while the dialog is open
+        // is handled.
         if accounts.logins.read(cx).state().status == Status::Completed {
             accounts.login_changed(cx);
         } else {
@@ -242,7 +261,9 @@ impl Accounts {
         accounts
     }
 
-    /// `externalSelectedSiteId`: the dialog opened again on a service.
+    /// Called when the dialog is asked for while it is already open. It
+    /// chooses the service `site`, when one is given, and reads the
+    /// services again.
     pub fn focus(&mut self, site: Option<String>, cx: &mut Context<Self>) {
         if let Some(site) = site {
             self.select(&site, cx);
@@ -334,8 +355,9 @@ impl Accounts {
             .find(|account| account.site.id == selected)
     }
 
-    /// `handleSelectSite`: another service; a login under way for another
-    /// is cancelled.
+    /// Chooses the service `site`. A login that is under way for another
+    /// service is cancelled. When the chosen service changes, the notice is
+    /// cleared, the manual login form is closed and its fields are emptied.
     fn select(&mut self, site: &str, cx: &mut Context<Self>) {
         let state = self.logins.read(cx).state().clone();
         if state.status != Status::Idle
@@ -357,8 +379,10 @@ impl Accounts {
         cx.notify();
     }
 
-    /// A completed login: the services are read again, the session is
-    /// cancelled and the notice says the login was saved.
+    /// Called when the state of the login under way changes. When a login
+    /// has completed, the services are read again and then the login is
+    /// ended (`Logins::cancel`). In a build that keeps logins in memory,
+    /// the notice then says that the login is not kept after the app quits.
     fn login_changed(&mut self, cx: &mut Context<Self>) {
         let completed = self.logins.read(cx).state().status == Status::Completed;
         if completed && !self.finishing {
@@ -401,7 +425,9 @@ impl Accounts {
         self.logins.update(cx, |logins, cx| logins.cancel(cx));
     }
 
-    /// `removeCredential`: the service's login is deleted.
+    /// Deletes the chosen service's saved login (`auth.credentials.delete`)
+    /// and reads the services again. When the app may not change logins
+    /// (`logins::may_change_logins`), it only shows a notice that says so.
     fn remove(&mut self, cx: &mut Context<Self>) {
         let Some(account) = self.selected_account() else {
             return;
@@ -443,7 +469,10 @@ impl Accounts {
         .detach();
     }
 
-    /// `saveManualOnlyFans`.
+    /// Saves the OnlyFans login that was typed into the Cookie, User-Agent
+    /// and X-BC fields (`Logins::save_manual_onlyfans`). When it has been
+    /// saved, the fields are emptied and the form is closed. An error is
+    /// shown as the notice.
     fn save_manual(&mut self, cx: &mut Context<Self>) {
         let input = ManualInput {
             cookie: self.cookie.read(cx).value().to_string(),
@@ -467,7 +496,8 @@ impl Accounts {
     }
 }
 
-/// `auth.credentials.list`: each service's saved login type.
+/// Reads the answer to `auth.credentials.list`: each service's id and the
+/// type of its saved login.
 fn read_credentials(answer: Option<&Value>) -> Vec<(String, String)> {
     answer
         .and_then(Value::as_array)
@@ -482,7 +512,8 @@ fn read_credentials(answer: Option<&Value>) -> Vec<(String, String)> {
         .collect()
 }
 
-/// `auth.health.list`: each service's last check.
+/// Reads the answer to `auth.health.list`: each service's id and the last
+/// check of its login.
 fn read_health(answer: Option<&Value>) -> Vec<(String, Health)> {
     answer
         .and_then(Value::as_array)
@@ -501,11 +532,12 @@ fn read_health(answer: Option<&Value>) -> Vec<(String, Health)> {
         .collect()
 }
 
-// ── Drawing ─────────────────────────────────────────────────────
+// The functions below draw the dialog.
 
-/// `.siteMark` and `.detailMark` holding `SiteIcon`: the service's own
-/// icon (`crate::site_icons`), or the globe while there is none or it
-/// cannot be drawn.
+/// Builds the bordered square that holds a service's icon. The square is
+/// `size` wide and its corners have the radius `radius`. The icon is `glyph`
+/// wide. It is the service's own icon (`crate::site_icons`), or a globe
+/// while there is none or it cannot be drawn.
 fn mark(domain: &str, size: f32, glyph: f32, radius: f32, cx: &mut App) -> Div {
     let theme = theme::theme(cx);
     let globe = theme.text_tertiary();
@@ -531,7 +563,9 @@ fn mark(domain: &str, size: f32, glyph: f32, radius: f32, cx: &mut App) -> Div {
         .child(content)
 }
 
-/// A service's dot in the list (`.accountDot`).
+/// Returns the colour of a service's dot in the list: the success colour
+/// for `Tone::Success`, the danger colour for `Tone::Attention`, and the
+/// colour of disabled text for every other tone.
 fn dot_color(tone: Tone, cx: &App) -> Rgba {
     match tone {
         Tone::Success => rgb(theme::SUCCESS),
@@ -540,8 +574,8 @@ fn dot_color(tone: Tone, cx: &App) -> Rgba {
     }
 }
 
-/// `.buttonPrimary`, `.buttonSecondary` and `.buttonDanger`: the shared
-/// action button at the dialog's 30px with 13px sides.
+/// Builds one of the dialog's buttons. It is the shared action button, 30px
+/// tall with 13px of padding at its left and right. A click calls `press`.
 fn button(
     id: &'static str,
     label: impl Into<SharedString>,
@@ -580,7 +614,9 @@ impl Render for Accounts {
 }
 
 impl Accounts {
-    /// `AuthSitesSidebar`.
+    /// Builds the list of services at the left of the dialog. A row shows
+    /// the service's icon, its name and a dot in the colour of the state of
+    /// its login. A click on a row chooses the service.
     fn sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
         let accounts = self.accounts.clone().unwrap_or_default();
@@ -690,7 +726,11 @@ impl Accounts {
             )
     }
 
-    /// `AuthSiteDetail`.
+    /// Builds the details of the chosen service at the right of the dialog:
+    /// a header with the icon, the name, the domain and the state badge,
+    /// then the account panel, the sign-in panel and the panel of login
+    /// problems. When no service is chosen, it shows a panel that says
+    /// "Select a site".
     fn detail(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = theme::theme(cx);
         let Some(account) = self.selected_account().cloned() else {
@@ -783,10 +823,13 @@ impl Accounts {
                     .child(ui::status_badge::status_badge("accounts-state", tone, state_label).large()),
             );
 
-        // `.detailBody`'s columns, `minmax(300px, 1fr)` and
-        // `minmax(220px, 0.75fr)`, in the dialog's width: the panel's, less
-        // its border, the body's gutter, the list and the 12px padding and
-        // 10px gap.
+        // The body has two columns. The first gets 1 part of the body's
+        // width and is at least 300px wide. The second gets 0.75 parts and
+        // is at least 220px wide. The body's width is the dialog's width
+        // (900px, or the window's width less 48px when that is smaller),
+        // less the dialog's 2px of border, the scrollbar's gutter, the
+        // 224px list of services, the 24px of padding and the 10px gap
+        // between the columns.
         let viewport = f32::from(window.viewport_size().width);
         let inner = 900_f32.min(viewport - 48.) - 2. - ui::scrollbar::GUTTER - 224. - 24. - 10.;
         let first = (inner / 1.75).max(300.);
@@ -822,7 +865,9 @@ impl Accounts {
             .into_any_element()
     }
 
-    /// `.accountPanel`: the facts, the actions and the notice.
+    /// Builds the account panel: the rows of facts about the login, the
+    /// buttons that log in, cancel a login and remove the login, the
+    /// controls that only SubscribeStar and OnlyFans have, and the notice.
     fn account_panel(
         &mut self,
         account: &Account,
@@ -833,7 +878,8 @@ impl Accounts {
     ) -> impl IntoElement {
         let theme = theme::theme(cx);
         let (state_label, _) = account.status();
-        // Production writes these in English.
+        // "Not used by a subscription" and "queries" have no key in the
+        // locale files, so they are shown in English in every language.
         let usage = match account.query_count {
             0 => en("Not used by a subscription").to_owned(),
             1 => format!("1 {}", t("query")),
@@ -925,8 +971,8 @@ impl Accounts {
                                     .map(|host| ui::choice(host, *host))
                                     .collect(),
                             )
-                            // Not while a login runs (`disabled={busy ||
-                            // sessionActive}`).
+                            // The service cannot be changed while a login is
+                            // under way or the login is being removed.
                             .disabled(busy || session_active)
                             .on_change(move |host, _, cx| {
                                 let _ = view.update(cx, |this, cx| {
@@ -1019,7 +1065,8 @@ impl Accounts {
             .flex_none()
             .h_full()
             .p(px(14.))
-            // `scrollbar-gutter: stable`.
+            // The padding at the right includes the width of a scrollbar,
+            // so the content is as wide with a scrollbar as without one.
             .pr(px(14. + ui::scrollbar::GUTTER))
             .flex()
             .flex_col()
@@ -1061,7 +1108,10 @@ impl Accounts {
             )
     }
 
-    /// `.loginPanel`: what signing in does, and the login under way.
+    /// Builds the sign-in panel. It holds a text that says what signing in
+    /// to this service does. While a login for this service is under way or
+    /// has failed, it also holds a dot and the login's message, or the
+    /// address of the page the login shows when it has no message.
     fn login_panel(
         &self,
         account: &Account,
@@ -1128,7 +1178,9 @@ impl Accounts {
             )
     }
 
-    /// `.issuesPanel`: the service's login problems.
+    /// Builds the "Runtime Issues" panel: the open login problems of the
+    /// subscriptions that use the service. Each problem is shown with its
+    /// message, its detail and the time it was last seen.
     fn issues_panel(
         &self,
         account: &Account,
@@ -1306,8 +1358,8 @@ mod tests {
         assert_eq!(find("pixiv").query_count, 2);
         assert_eq!(find("e621").query_count, 2);
         assert_eq!(find("patreon").query_count, 1);
-        // Subscription 1's login problem shows on every service it uses, as
-        // production assigns it.
+        // Subscription 1's login problem is shown on every service that
+        // subscription 1 uses.
         assert_eq!(
             find("pixiv")
                 .issues

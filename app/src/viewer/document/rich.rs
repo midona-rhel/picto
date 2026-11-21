@@ -1,13 +1,13 @@
-//! The text documents' content as blocks of styled text, built off the
-//! drawing thread from plain text, JSON, RTF, Markdown and the XHTML chapters
-//! of an EPUB. `TextDocumentViewer.tsx` and `ArchiveDocumentViewer.tsx` hand
-//! these to the browser as HTML; here [`super::reader`] lays them out with
-//! GPUI's text.
+//! The content of a text document, or of a chapter of a book, as blocks of
+//! styled text. The blocks are built on a background thread from plain text,
+//! JSON, Markdown and the XHTML of an EPUB's chapters by the functions here,
+//! and from RTF by `super::rtf`. [`super::reader`] lays them out with GPUI's
+//! text.
 use gpui::RenderImage;
 use std::ops::Range;
 use std::sync::Arc;
 
-/// Inline styles a run of text carries.
+/// The styles of a range of text inside a paragraph.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct Marks {
     pub bold: bool,
@@ -17,11 +17,14 @@ pub struct Marks {
     pub strike: bool,
 }
 
-/// A paragraph's text and the styled runs within it.
+/// The text of a paragraph, a heading or a table cell, and the ranges of
+/// that text which are styled.
 #[derive(Clone, Default, PartialEq, Debug)]
 pub struct Inline {
     pub text: String,
-    /// Runs that are not plain, in order and not overlapping.
+    /// The byte ranges of `text` that are styled, each with its styles.
+    /// They are in order and do not overlap. The text outside them is
+    /// plain.
     pub marks: Vec<(Range<usize>, Marks)>,
 }
 
@@ -63,7 +66,8 @@ impl Inline {
     }
 }
 
-/// A picture inside a chapter, decoded and ready to draw.
+/// A picture in a chapter of a book, decoded into the form that GPUI draws.
+/// `size` is its width and height in pixels.
 #[derive(Clone)]
 pub struct Picture {
     pub image: Arc<RenderImage>,
@@ -86,7 +90,9 @@ impl PartialEq for Picture {
 pub enum Block {
     Heading(u8, Inline),
     Paragraph(Inline),
-    /// Text kept exactly, in the monospace face (`<pre>`).
+    /// Text whose spaces and line breaks are kept as they are, drawn in the
+    /// monospace font. A `<pre>` element of HTML and a code block of
+    /// Markdown become this.
     Preformatted(String),
     Quote(Vec<Block>),
     List {
@@ -98,10 +104,14 @@ pub enum Block {
     Picture(Picture),
 }
 
-/// Lines per preformatted block, so a long file is laid out in pieces.
+/// The number of lines in one preformatted block of a plain text file. A
+/// long file is cut into blocks of this many lines, so that its text is
+/// laid out as several blocks and not as one.
 const PREFORMATTED_LINES: usize = 64;
 
-/// A plain text file as `<pre>` shows it, in pieces of whole lines.
+/// Returns a plain text file as preformatted blocks of `PREFORMATTED_LINES`
+/// lines each. A carriage return followed by a line feed is first replaced
+/// by a line feed.
 pub fn plain_text(text: &str) -> Vec<Block> {
     let text = text.replace("\r\n", "\n");
     let lines: Vec<&str> = text.split('\n').collect();
@@ -111,8 +121,9 @@ pub fn plain_text(text: &str) -> Vec<Block> {
         .collect()
 }
 
-/// `formattedPlainText`: JSON pretty-printed with two spaces, or as it is
-/// when it does not parse.
+/// Returns a JSON file as preformatted blocks. The JSON is written out
+/// again with an indent of two spaces. Text that is not valid JSON is
+/// returned as it is.
 pub fn json(text: &str) -> Vec<Block> {
     match serde_json::from_str::<serde_json::Value>(text)
         .and_then(|value| serde_json::to_string_pretty(&value))
@@ -122,7 +133,7 @@ pub fn json(text: &str) -> Vec<Block> {
     }
 }
 
-// ── Building blocks ─────────────────────────────────────────────
+// The following builds blocks from the calls that a parser makes.
 
 enum Container {
     Root(Vec<Block>),
@@ -138,29 +149,36 @@ enum Container {
     Row(Vec<Inline>),
 }
 
-/// Assembles blocks from a stream of starts, ends and text, as both the
-/// Markdown parser and the XHTML walk produce them.
+/// Builds blocks from a sequence of calls, each of which starts an element,
+/// ends an element or adds text. The Markdown parser (`markdown`) and the
+/// walk over a chapter's XHTML (`walk`) both make such calls.
 struct Builder {
     stack: Vec<Container>,
-    /// The open paragraph or heading (level 0 is a paragraph), or a table
-    /// cell.
+    /// The paragraph or heading that text is being added to, with its
+    /// level. Level 0 is a paragraph. While `cell` holds a table cell, text
+    /// is added to that cell instead.
     open: Option<(u8, Inline)>,
     cell: Option<Inline>,
     marks: Marks,
-    /// Whether whitespace collapses as HTML's does.
+    /// True when each run of whitespace in added text is replaced by one
+    /// space, as HTML does. It is true for XHTML and false for Markdown.
     collapse: bool,
-    /// Quotes, lists and items opened past [`MAX_NESTING`], which add no
-    /// level: their content joins the deepest one.
+    /// The number of quotes, lists and list items that were started beyond
+    /// [`MAX_NESTING`] levels and have not ended yet. They add no level,
+    /// and their content is added to the deepest level that exists.
     flattened: usize,
-    /// How deep the XHTML walk is.
+    /// The depth of the element that the walk over a chapter's XHTML is at.
     depth: usize,
 }
 
-/// The deepest quotes and lists nest. A file can nest them without end;
-/// laid out and dropped recursively, they would run out of stack.
+/// The largest number of levels to which quotes and lists are nested. A
+/// file can nest them to any depth. The functions that lay blocks out and
+/// free them call themselves once for each level, so blocks that are nested
+/// too deeply would overflow the stack.
 const MAX_NESTING: usize = 32;
-/// The deepest the XHTML walk descends; below it a node's text is taken
-/// as it is.
+/// The largest depth of elements that the walk over a chapter's XHTML goes
+/// to. Of an element at that depth, only the text is taken, without the
+/// structure of the elements inside it.
 const MAX_DEPTH: usize = 128;
 
 impl Builder {
@@ -176,8 +194,10 @@ impl Builder {
         }
     }
 
-    /// Whether a quote, list or item starting now adds no level, and if so
-    /// counts it, so its end is matched.
+    /// Returns true when a quote, list or list item that starts now must
+    /// not add a level, because [`MAX_NESTING`] has been reached. It then
+    /// counts the start in `flattened`, so that `flattened_end` can tell
+    /// which end belongs to it.
     fn flatten(&mut self) -> bool {
         let flatten = self.flattened > 0 || self.stack.len() > MAX_NESTING;
         if flatten {
@@ -187,7 +207,9 @@ impl Builder {
         flatten
     }
 
-    /// Whether an end closes one of the starts [`Self::flatten`] counted.
+    /// Returns true when the end of a quote, list or list item belongs to
+    /// a start that [`Self::flatten`] counted, and takes that start off the
+    /// count.
     fn flattened_end(&mut self) -> bool {
         let flattened = self.flattened > 0;
         if flattened {
@@ -202,7 +224,9 @@ impl Builder {
             self.stack.last(),
             Some(Container::Root(_) | Container::Quote(_) | Container::Item(_))
         ) {
-            // Text directly in a list or table goes into a new item.
+            // A block that is added directly inside a list goes into a new
+            // list item. A block that is added directly inside a table or
+            // a row goes into a new quote.
             match self.stack.last() {
                 Some(Container::List { .. }) => self.stack.push(Container::Item(Vec::new())),
                 _ => self.stack.push(Container::Quote(Vec::new())),
@@ -221,7 +245,8 @@ impl Builder {
         self.blocks().push(block);
     }
 
-    /// Ends the open paragraph or heading.
+    /// Ends the paragraph or heading that text is being added to, and adds
+    /// it to the blocks unless it holds only whitespace.
     fn close_inline(&mut self) {
         if let Some((level, mut inline)) = self.open.take() {
             inline.trim_end();
@@ -357,7 +382,8 @@ impl Builder {
         }
     }
 
-    /// Closes items left open inside a quote that is ending.
+    /// Ends the lists and list items that are still open inside a quote
+    /// that is ending.
     fn close_items(&mut self) {
         while matches!(
             self.stack.last(),
@@ -440,10 +466,10 @@ impl Builder {
     }
 }
 
-// ── Markdown ────────────────────────────────────────────────────
+// The following parses Markdown.
 
-/// Markdown as `marked` renders it by default (GitHub flavoured: tables and
-/// strikethrough).
+/// Parses Markdown into blocks. It understands tables and strikethrough,
+/// which GitHub's flavour of Markdown adds.
 pub fn markdown(source: &str) -> Vec<Block> {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
     let mut builder = Builder::new(false);
@@ -492,8 +518,9 @@ pub fn markdown(source: &str) -> Vec<Block> {
                 TagEnd::Link => builder.marks.link = false,
                 _ => {}
             },
-            // An image's alternative text arrives as text: `marked` emits an
-            // <img> whose relative source the viewer cannot load.
+            // The parser gives the alternative text of an image as text, so
+            // that text is shown in place of the image. The viewer does not
+            // load the pictures that a Markdown file refers to.
             Event::Text(text) => match &mut code {
                 Some(code) => code.push_str(&text),
                 None => builder.text(&text),
@@ -506,8 +533,8 @@ pub fn markdown(source: &str) -> Vec<Block> {
             Event::SoftBreak => builder.text(" "),
             Event::HardBreak => builder.line_break(),
             Event::Rule => builder.push_block(Block::Rule),
-            // Raw HTML is shown as its text, as `sanitizeMarkup` would keep
-            // the text of what it removes.
+            // Of raw HTML in the Markdown, the tags are removed and the
+            // text between them is shown.
             Event::Html(html) | Event::InlineHtml(html) => {
                 let text = strip_tags(&html);
                 if !text.trim().is_empty() {
@@ -534,9 +561,11 @@ fn strip_tags(html: &str) -> String {
     out
 }
 
-// ── XHTML (EPUB chapters) ───────────────────────────────────────
+// The following parses the XHTML of an EPUB's chapters.
 
-/// The entities HTML defines that XML does not, which chapters use.
+/// Named entities that HTML defines and XML does not, each with the numeric
+/// reference that replaces it before a chapter is parsed as XML. They are
+/// the ones that chapters commonly use.
 const ENTITIES: [(&str, &str); 12] = [
     ("&nbsp;", "&#160;"),
     ("&mdash;", "&#8212;"),
@@ -552,9 +581,12 @@ const ENTITIES: [(&str, &str); 12] = [
     ("&eacute;", "&#233;"),
 ];
 
-/// A chapter's body as blocks. `picture` resolves an image's `src` to a
-/// decoded picture, or `None` to leave it out (`sanitizeEpubDocument` and
-/// the image loop of `ArchiveDocumentViewer.tsx`).
+/// Parses the XHTML of a chapter and returns the content of its body as
+/// blocks. `picture` is called with the source address of each image and
+/// returns the decoded picture, or `None` when the image is to be left out.
+/// Scripts, styles, forms and embedded content are left out. A chapter that
+/// is not well-formed XML is returned as paragraphs of its text without the
+/// tags.
 pub fn xhtml(markup: &str, picture: &mut dyn FnMut(&str) -> Option<Picture>) -> Vec<Block> {
     let mut source = markup.to_owned();
     for (entity, number) in ENTITIES {
@@ -567,7 +599,8 @@ pub fn xhtml(markup: &str, picture: &mut dyn FnMut(&str) -> Option<Picture>) -> 
         ..Default::default()
     };
     let Ok(document) = roxmltree::Document::parse_with_options(&source, options) else {
-        // Not well-formed: show its text rather than nothing.
+        // The chapter is not well-formed XML. Its text without the tags is
+        // shown as paragraphs, so that the page is not empty.
         return strip_tags(markup)
             .split("\n\n")
             .filter(|paragraph| !paragraph.trim().is_empty())
@@ -704,7 +737,9 @@ fn walk_children(
                 }
             }
             "svg" => {
-                // An SVG wrapper around a cover image.
+                // A cover is often an `<svg>` element that holds one
+                // `<image>` element, so the walk goes into it to find the
+                // image.
                 walk(child, builder, picture, preformatted);
             }
             "b" | "strong" => styled(child, builder, picture, preformatted, |marks| {
@@ -742,7 +777,8 @@ fn styled(
     builder.marks = saved;
 }
 
-/// The pictures in blocks, at any depth.
+/// Returns the pictures in `blocks`, including those inside quotes and
+/// lists at any depth.
 pub fn pictures(blocks: &[Block]) -> Vec<Arc<RenderImage>> {
     let mut found = Vec::new();
     for block in blocks {
@@ -756,7 +792,8 @@ pub fn pictures(blocks: &[Block]) -> Vec<Arc<RenderImage>> {
     found
 }
 
-/// The plain text of blocks, for checking what a document holds.
+/// Returns the text of `blocks` without its styles. Tests use it to check
+/// what a parsed document holds.
 #[cfg(test)]
 pub fn text_of(blocks: &[Block]) -> String {
     let mut out = String::new();
@@ -890,7 +927,8 @@ mod tests {
         assert!(!text_of(&blocks).contains("alert"));
     }
 
-    /// How deep quotes and lists nest in `blocks`.
+    /// Returns the number of levels to which quotes and lists are nested in
+    /// `blocks`.
     fn nesting(blocks: &[Block]) -> usize {
         blocks
             .iter()
@@ -917,7 +955,8 @@ mod tests {
         let blocks = markdown(&lists);
         assert!(nesting(&blocks) <= 33);
         assert!(text_of(&blocks).contains("4999"));
-        // A chapter nested past the walk's depth keeps its text, in order.
+        // A chapter whose elements are nested deeper than `MAX_DEPTH` keeps
+        // its text, in the order of the file.
         let chapter = format!(
             "<html><body>{}<p>end</p>{}</body></html>",
             "<div><blockquote>".repeat(10_000),

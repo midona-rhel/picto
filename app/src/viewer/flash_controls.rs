@@ -1,7 +1,8 @@
-//! Flash's controls (`FlashControls.tsx`): play or pause and stop on the
-//! left, the volume on the right, in the media player's shaded bar
-//! ([`super::video::controls`]), which hides as the player's does after the
-//! pointer stops moving over the movie. The buttons are the media player's.
+//! The controls of a Flash movie. Play or pause and Stop are on the left,
+//! and the volume is on the right. They are drawn in the media player's
+//! shaded bar ([`super::video::controls`]) with the media player's buttons.
+//! The bar hides as the media player's bar does, after the pointer stops
+//! moving over the movie.
 use super::flash::{Flash, Playback};
 use super::surface::MediaSurface;
 use super::video::button::media_button;
@@ -10,8 +11,9 @@ use crate::i18n::t;
 use crate::ui;
 use gpui::*;
 
-/// The bar for the movie `surface` plays, at opacity `shown`, taking the
-/// pointer while `visible`.
+/// Builds the bar for the movie that `surface` plays. `shown` is the bar's
+/// opacity, and the bar takes pointer events only while `visible` is true.
+/// The play and stop buttons do nothing while `ready` is false.
 pub fn controls(
     surface: WeakEntity<MediaSurface>,
     playback: &Playback,
@@ -69,7 +71,7 @@ pub fn controls(
         })
         .on_mute(move |_, cx| mute(Box::new(Flash::toggle_mute), cx));
     let bar = controls_bar(shown, visible).child(button_row(left, right));
-    // A press on the bar stays out of the movie beneath it.
+    // A press on the bar must not reach the movie under it.
     if visible {
         bar.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
     } else {

@@ -1,5 +1,8 @@
-//! The application's events and what follows them: the sidebar's
-//! destinations and subscription activity read again, and the recents kept.
+//! Handles the events that the application layer reports. After an event the
+//! session reads again what the event may have changed: the sidebar's
+//! destinations, the grid's results, and the state of subscriptions. This
+//! file also records the recently used folders and tags and writes them to
+//! the app's state.
 use super::edits::when_answered;
 use super::{Change, SUBSCRIPTION_POLL, Session, SubscriptionActivity, settle};
 use crate::application::{self, Event};
@@ -8,7 +11,7 @@ use crate::i18n::t;
 use crate::screens::subscriptions::requests;
 use gpui::*;
 
-/// Shows what the settle model announces.
+/// Shows each notification that the model in `settle.rs` returned.
 fn show(popups: impl IntoIterator<Item = settle::Popup>, cx: &mut App) {
     for popup in popups {
         match popup {
@@ -21,25 +24,28 @@ fn show(popups: impl IntoIterator<Item = settle::Popup>, cx: &mut App) {
 }
 
 impl Session {
-    // ── The application's events ────────────────────────────────
+    // The methods below handle the application layer's events, read the
+    // state of subscriptions, and record the recently used folders and tags.
 
-    /// Grayscale on or off for the grid's thumbnails (`gridGrayscaleAtom`,
-    /// kept for the session only).
+    /// Turns the grayscale drawing of the grid's thumbnails on or off. The
+    /// setting is not saved: it lasts until the session ends.
     pub fn toggle_grayscale(&mut self, cx: &mut Context<Self>) {
         self.grayscale = !self.grayscale;
         cx.emit(Change::Results);
     }
 
-    /// Tells the views that the thumbnail of `hash` was written again by
-    /// this app (regenerated, or a captured frame), as the application's
-    /// `picto:thumbnail-changed` does for what it writes.
+    /// Tells the views that this app wrote the thumbnail of the file with
+    /// content hash `hash` again, because it was regenerated or replaced by
+    /// a captured video frame. The views receive the same `Event::Thumbnail`
+    /// that the application layer sends for the thumbnails it writes itself.
     pub fn thumbnail_written(&mut self, hash: String, cx: &mut Context<Self>) {
         cx.emit(Event::Thumbnail(hash));
     }
 
-    /// Takes what the application reported since the last look, merged into
-    /// one invalidation, does what the Electron runtime stores do with it,
-    /// and passes it on to the views that subscribe to [`Event`].
+    /// Takes the events that the application layer reported since the last
+    /// call and merges the reported changes into one. Starts the reads that
+    /// the change makes necessary, and then emits the events to the views
+    /// that subscribe to [`Event`].
     pub(super) fn receive_events(&mut self, cx: &mut Context<Self>) {
         let (changed, thumbnails) = application::coalesce(self.events.try_iter());
         for hash in thumbnails {
@@ -48,7 +54,8 @@ impl Session {
         let Some(changed) = changed else {
             return;
         };
-        // `sidebarSettle.ts`: the counts and the destination list.
+        // A change to any of these resources can change the sidebar's
+        // destinations or their counts, so the sidebar's list is read again.
         if ["sidebar", "folders", "smart_folders", "tags", "duplicates"]
             .iter()
             .any(|resource| application::touches(&changed, resource))
@@ -56,9 +63,10 @@ impl Session {
             self.refresh_navigation(cx);
         }
         if application::touches(&changed, "library") {
-            // What other destinations held may no longer be true; going
-            // back to one reads it again. The grid on screen is read again
-            // in place (`gridSettle.ts`), keeping its scroll and selection.
+            // The grids saved for Back and Forward may now hold items that
+            // are out of date, so they are dropped. Going back to such a
+            // destination reads it again. The grid on screen is refreshed in
+            // place, which keeps its scroll position and its selection.
             self.saved.clear();
             self.request_refresh(cx);
             let shown = self
@@ -68,7 +76,8 @@ impl Session {
                 self.refresh_details(cx);
             }
         }
-        // `subscriptionsSettle.ts`: the running state follows runs.
+        // A change to subscriptions or to tasks can mean that a run started
+        // or ended, so the state of subscriptions is read again.
         if application::touches(&changed, "subscriptions")
             || application::touches(&changed, "tasks")
         {
@@ -77,8 +86,9 @@ impl Session {
         cx.emit(Event::Changed(changed));
     }
 
-    /// Reads the sidebar's destinations and counts again. Changes that
-    /// arrive while a read is under way are folded into one more read.
+    /// Reads the sidebar's destinations and counts again. When this is
+    /// called while a read is running, no second read starts at the same
+    /// time. One more read runs after the running one has finished.
     pub fn refresh_navigation(&mut self, cx: &mut Context<Self>) {
         if !self.navigation_reading.begin() {
             return;
@@ -97,9 +107,12 @@ impl Session {
         });
     }
 
-    /// Reads whether subscriptions are running or held, and keeps reading
-    /// while one runs. A change that arrives while a read is under way is
-    /// read once more after it, so a run that starts meanwhile is seen.
+    /// Reads `subscriptions.list` to learn whether any subscription is
+    /// running and whether all subscriptions are paused, and gives the
+    /// answer to the model in `settle.rs`. While a subscription is running,
+    /// the read is repeated every 1.5 seconds (`SUBSCRIPTION_POLL`). When
+    /// this is called while a read is running, one more read runs after the
+    /// running one has finished, so a run that started meanwhile is seen.
     pub fn refresh_activity(&mut self, cx: &mut Context<Self>) {
         if !self.activity_reading.begin() {
             return;
@@ -127,8 +140,12 @@ impl Session {
         });
     }
 
-    /// `subscriptionsSettle.ts`: what a read of the list announces, and
-    /// the run and gallery reads it asks for, whose answers announce more.
+    /// Gives the answer of `subscriptions.list` to the model in `settle.rs`
+    /// and shows the notifications the model returns. Then starts the reads
+    /// the model asks for: the activity of runs (`subscriptions.runs.get`)
+    /// and the latest run of each gallery download that has stopped running.
+    /// The answers of those reads go to the model too, and the notifications
+    /// it returns for them are shown.
     fn settle_runs(&mut self, list: &serde_json::Value, cx: &mut Context<Self>) {
         let (progress, galleries) = settle::read_list(list);
         let plan = self
@@ -157,7 +174,8 @@ impl Session {
         }
         for entry in plan.finished_reads {
             let Some(run) = entry.run else { continue };
-            // A failed read never affects the run itself; nothing is shown.
+            // When this read fails, nothing is shown. The failed read does
+            // not affect the run itself.
             when_answered(
                 activity(self, run),
                 cx,
@@ -183,8 +201,9 @@ impl Session {
                 let cleanup = requests::clean_up_gallery(gallery.id);
                 let cleanup = this.dispatch(cleanup.name, cleanup.args);
                 when_answered(cleanup, cx, move |this: &mut Self, result, cx| {
-                    // A cleanup that failed is logged and announces
-                    // nothing; the gallery is looked at again.
+                    // When the cleanup fails, the error is logged and no
+                    // notification is shown. `gallery_failed` makes a later
+                    // read of the list handle this gallery again.
                     let cleaned = match result {
                         Some(Ok(cleaned)) => cleaned,
                         Some(Err(error)) => {
@@ -208,7 +227,9 @@ impl Session {
         }
     }
 
-    /// Polls while a run is going, as the renderer does every 1.5 s.
+    /// Sets a timer that calls `refresh_activity` after 1.5 seconds
+    /// (`SUBSCRIPTION_POLL`), if a subscription is running and no such timer
+    /// is set yet. Removes the timer when no subscription is running.
     fn poll_activity(&mut self, cx: &mut Context<Self>) {
         if !self.subscriptions.running {
             self.activity_poll = None;
@@ -226,8 +247,10 @@ impl Session {
         }));
     }
 
-    /// The sidebar row's button: holds every subscription, or lets them run
-    /// again (`subscriptions.pause_all`).
+    /// Pauses all subscriptions, or resumes them when they are paused, with
+    /// the `subscriptions.pause_all` command. The button of the sidebar's
+    /// Subscriptions row calls this. Does nothing while an earlier call has
+    /// not been answered. Shows an error notification if the command fails.
     pub fn toggle_all_subscriptions(&mut self, cx: &mut Context<Self>) {
         if self.subscriptions.busy {
             return;
@@ -254,27 +277,33 @@ impl Session {
         });
     }
 
-    /// Fetches the current destination again, after an edit made elsewhere.
+    /// Reads the open destination's results again from the beginning and
+    /// discards the grids saved for Back and Forward. The sidebar calls this
+    /// after an edit that changes which items the destination holds, and
+    /// the grid's Retry button calls it after a read has failed.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.saved.clear();
         self.query(cx);
     }
 
-    /// `recordRecentFolderUse`: the folder moves to the front of the recent
-    /// folders, each kept once, at most 30.
+    /// Records that items were added to `folder`: moves the folder to the
+    /// front of the recent folders. The list holds each folder once and at
+    /// most 30 folders.
     pub fn record_folder_use(&mut self, folder: picto_library::FolderId) {
         record_recent(&mut self.recent_folders, folder);
         self.recents_changed = true;
     }
 
-    /// `recordRecentItems('picto-recent-tags', …)`: the tags go to the front
-    /// in their order, each kept once, at most 30.
+    /// Records that `tags` were added to items: puts them at the front of
+    /// the recent tags, in the order given. The list holds each tag once and
+    /// at most 30 tags.
     pub fn record_tags_use(&mut self, tags: &[String]) {
         record_recent_names(&mut self.recent_tags, tags);
         self.recents_changed = true;
     }
 
-    /// Keeps the recents in the app's state once they changed.
+    /// Writes the recent folders and the recent tags to the app's state, if
+    /// either list changed since it was last written.
     pub(super) fn keep_recents(&mut self, cx: &mut App) {
         if !std::mem::take(&mut self.recents_changed) {
             return;
@@ -289,15 +318,17 @@ impl Session {
     }
 }
 
-/// `recordRecentFolderUse`: `folder` first, each folder once, at most 30.
+/// Moves `folder` to the front of `recent`, so that the list holds it once,
+/// and cuts the list to 30 folders.
 fn record_recent(recent: &mut Vec<picto_library::FolderId>, folder: picto_library::FolderId) {
     recent.retain(|id| *id != folder);
     recent.insert(0, folder);
     recent.truncate(30);
 }
 
-/// `recordRecentItems`: `names` first, in their order, then the others,
-/// each once, at most 30.
+/// Puts `names` at the front of `recent` in the order given, followed by the
+/// names that were already in the list. Each name is kept once, and the list
+/// is cut to 30 names. Does nothing when `names` is empty.
 fn record_recent_names(recent: &mut Vec<String>, names: &[String]) {
     if names.is_empty() {
         return;

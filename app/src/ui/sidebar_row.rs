@@ -8,8 +8,8 @@ use gpui::*;
 pub type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type PressHandler = Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>;
 
-/// Where a dragged folder would land relative to this row
-/// (`.dropBefore`, `.dropInside`, `.dropAfter`).
+/// Says where a dragged folder would land relative to this row: before it,
+/// inside it or after it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DropPosition {
     Before,
@@ -17,33 +17,40 @@ pub enum DropPosition {
     After,
 }
 
-/// What a row keeps between frames.
+/// Holds what a row keeps between frames.
 struct State {
-    /// The row highlight, 50 ms.
+    /// The fade of the row's highlight when the pointer moves onto or off
+    /// the row. It takes 50 ms.
     hover: motion::Fade,
-    /// The disclosure triangle brightening under the pointer, 200 ms.
+    /// The fade of the disclosure triangle, which is brighter while the
+    /// pointer is over it. It takes 200 ms.
     arrow: motion::Fade,
-    /// On while the row's children are folded away: the triangle's quarter
-    /// turn, 200 ms.
+    /// The quarter turn of the disclosure triangle. It is on while the row's
+    /// children are hidden, and takes 200 ms.
     folded: motion::Fade,
 }
 
-/// The Subscriptions row's activity button (`.activityButton`), shown in
-/// place of a count while subscriptions run or are held: a pulsing dot that
-/// becomes a pause glyph under the pointer, or, while everything is held, a
-/// pause glyph that becomes a play glyph.
+/// The activity button of the Subscriptions row. The row shows it in place
+/// of a count while subscriptions run or are paused. While subscriptions
+/// run, it is a pulsing dot, and a pause glyph while the pointer is over it.
+/// While all subscriptions are paused, it is a pause glyph, and a play glyph
+/// while the pointer is over it.
 pub struct Activity {
     pub paused: bool,
-    /// The pause or resume is on its way.
+    /// Whether a pause or a resume has been asked for and has not finished.
+    /// The button is then dimmed and a click does nothing.
     pub busy: bool,
-    /// What a click does, also its tooltip.
+    /// The text that says what a click does. It is the button's tooltip and
+    /// its name for assistive technology.
     pub label: SharedString,
     pub on_click: ClickHandler,
 }
 
-/// `subscriptionActivityPulse`, 2.4 s: from 65% opacity with a 3px glow at
-/// 30% to full opacity with a 9px glow at 60% and back, each half on
-/// `ease-in-out`. Returns the opacity, the glow's blur and its strength.
+/// Returns how the pulsing dot of the activity button is drawn when the
+/// animation clock reads `elapsed`: its opacity, the blur of its glow in
+/// pixels, and the opacity of the glow in percent. One pulse takes 2.4 s. It
+/// goes from 65% opacity with a 3px glow at 30% to full opacity with a 9px
+/// glow at 60% and back, each half on `motion::EASE_IN_OUT`.
 fn activity_pulse(elapsed: std::time::Duration) -> (f32, f32, f32) {
     let along = motion::pulse(elapsed);
     let between = |from: f32, to: f32| from + (to - from) * along;
@@ -52,15 +59,18 @@ fn activity_pulse(elapsed: std::time::Duration) -> (f32, f32, f32) {
 
 #[derive(Clone, Default)]
 pub struct Branch {
-    /// For each ancestor depth, whether that ancestor has siblings below it,
-    /// so its vertical line continues through this row.
+    /// For each depth above this row, whether the ancestor at that depth has
+    /// siblings below it. If it has, its vertical guide line continues
+    /// through this row.
     pub continues: Vec<bool>,
     pub last_child: bool,
 }
 
-/// One sidebar list row (`SidebarRow.tsx`): tree guides, disclosure, glyph,
-/// label and count over a highlight that is solid when the row is active and
-/// otherwise fades with the pointer over 50 ms.
+/// One row of the sidebar's list. It draws the tree's guide lines, the
+/// disclosure triangle, the glyph, the label and the count over a highlight.
+/// The highlight is at full opacity when the row is active. Otherwise it
+/// fades in over 50 ms when the pointer moves onto the row and fades out
+/// when the pointer leaves.
 #[derive(IntoElement)]
 pub struct SidebarRow {
     id: ElementId,
@@ -72,17 +82,17 @@ pub struct SidebarRow {
     count: Option<u64>,
     activity: Option<Activity>,
     active: bool,
-    /// One of several rows chosen with Cmd or Shift (`.selected`).
+    /// Whether the row is one of several rows chosen with Cmd or Shift.
     selected: bool,
-    /// The row whose context menu is open (`.contextHighlight`).
+    /// Whether the row's context menu is open.
     context: bool,
-    /// The row holds keyboard focus (`.rowInteractive:focus-visible`).
+    /// Whether the row is the one the sidebar's keys are on.
     focused: bool,
-    /// Items dragged from the grid are over the row
-    /// (`[data-drop-highlighted]`): the hover look, held.
+    /// Whether items dragged from the grid are over the row. The row then
+    /// has the highlight it has under the pointer.
     drop_highlight: bool,
-    /// Something is being dragged, so the pointer lights no row
-    /// (`html[data-grid-drag-active]`, `[data-sidebar-drag-active]`).
+    /// Whether something is being dragged. The pointer then highlights no
+    /// row.
     dragging: bool,
     drop: Option<DropPosition>,
     /// The field that replaces the label while the row is renamed.
@@ -90,7 +100,7 @@ pub struct SidebarRow {
     /// `Some(expanded)` when the row has children.
     disclosure: Option<bool>,
     branch: Branch,
-    /// `showTreeGuides`: whether nested rows draw their guide lines.
+    /// Whether nested rows draw their guide lines.
     guides: bool,
     on_click: Option<ClickHandler>,
     on_toggle: Option<ClickHandler>,
@@ -98,9 +108,8 @@ pub struct SidebarRow {
     on_press: Option<PressHandler>,
 }
 
-/// The width of the rename field when the row shows no count: an
-/// `<input>`'s default 20-character width in the 13px sidebar font, as the
-/// Electron row measures it (137.5px with its border).
+/// The width of the rename field, with its border, when the row shows no
+/// count.
 const RENAME_WIDTH: f32 = 137.5;
 
 pub fn sidebar_row(
@@ -143,12 +152,13 @@ impl SidebarRow {
         self.tint = tint;
         self
     }
-    /// A count of zero is not shown.
+    /// Sets the count that the row shows at its right end. A count of zero
+    /// is not shown.
     pub fn count(mut self, count: Option<u64>) -> Self {
         self.count = count.filter(|count| *count > 0);
         self
     }
-    /// The activity button, which takes the count's place.
+    /// Sets the activity button, which is shown in place of the count.
     pub fn activity(mut self, activity: Option<Activity>) -> Self {
         self.activity = activity;
         self
@@ -157,12 +167,14 @@ impl SidebarRow {
         self.active = active;
         self
     }
-    /// Not drawn on the active row, which is already highlighted.
+    /// Marks the row as one of several chosen rows. This changes nothing on
+    /// the active row, which is already highlighted.
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
         self
     }
-    /// Not drawn on the active row.
+    /// Marks the row as the one whose context menu is open. This changes
+    /// nothing on the active row.
     pub fn context_highlight(mut self, context: bool) -> Self {
         self.context = context;
         self
@@ -183,7 +195,7 @@ impl SidebarRow {
         self.drop = drop;
         self
     }
-    /// Shows this field in place of the label.
+    /// Shows this field in place of the label, for renaming the row.
     pub fn rename(mut self, input: Option<Entity<TextInput>>) -> Self {
         self.rename = input;
         self
@@ -214,7 +226,8 @@ impl SidebarRow {
         self.on_toggle = Some(Box::new(handler));
         self
     }
-    /// A left-button press, which may start a drag.
+    /// Sets the handler of a press with the left button, which may start a
+    /// drag.
     pub fn on_press(
         mut self,
         handler: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
@@ -222,7 +235,8 @@ impl SidebarRow {
         self.on_press = Some(Box::new(handler));
         self
     }
-    /// A right-button press: the row's context menu.
+    /// Sets the handler of a press with the right button, which opens the
+    /// row's context menu.
     pub fn on_secondary(
         mut self,
         handler: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
@@ -232,12 +246,14 @@ impl SidebarRow {
     }
 }
 
-/// The highlight behind a row (`.row::before`) in the order the stylesheet
-/// resolves it: a drop inside, then the active row, each forced; otherwise
-/// the hover colour, held on while the row is selected, focused, showing
-/// its menu or under items dragged from the grid, and fading with the
-/// pointer otherwise, except while something is dragged.
-/// Returns the fill, the 1px border inside it, and its opacity.
+/// Returns the highlight behind a row: its fill, the 1px border inside the
+/// fill if there is one, and its opacity. A row that a folder would be
+/// dropped inside has the primary colour at 10% with a border at 30%.
+/// Otherwise the active row has the active surface colour. Both are at full
+/// opacity. Every other row has the hover colour. It is at full opacity
+/// while the row is selected, focused, showing its context menu or under
+/// items dragged from the grid. Otherwise its opacity is `hover`, which
+/// follows the pointer, and 0 while something is dragged.
 fn highlight(theme: theme::Theme, row: &SidebarRow, hover: f32) -> (Rgba, Option<Rgba>, f32) {
     if row.drop == Some(DropPosition::Inside) {
         (theme.primary_at(10.), Some(theme.primary_at(30.)), 1.)
@@ -254,8 +270,9 @@ fn highlight(theme: theme::Theme, row: &SidebarRow, hover: f32) -> (Rgba, Option
     }
 }
 
-/// The guide lines of one row, as the two SVGs in `SidebarRow.tsx` draw them:
-/// 10px columns whose 26-unit height is stretched over the row.
+/// Draws the guide lines of one row. The vertical line of a depth is 3px to
+/// the right of the middle of that depth's indent (`theme::SIDEBAR_INDENT`).
+/// The heights of the lines are given in units of 1/26 of the row's height.
 fn guides(depth: usize, branch: Branch, has_children: bool, color: Rgba) -> impl IntoElement {
     canvas(
         |_, _, _| {},
@@ -290,7 +307,8 @@ fn guides(depth: usize, branch: Branch, has_children: bool, color: Rgba) -> impl
             }
             let x = column(depth);
             match (has_children, branch.last_child) {
-                // The line breaks around the disclosure triangle.
+                // A row with children has a gap in its vertical line where the
+                // disclosure triangle is.
                 (true, last) => {
                     vertical(window, x, 0., 9.);
                     if !last {
@@ -302,7 +320,8 @@ fn guides(depth: usize, branch: Branch, has_children: bool, color: Rgba) -> impl
                     vertical(window, x, 0., 26.);
                     arm(window, x, 4., 12.);
                 }
-                // The last child's line turns the corner into its arm.
+                // The vertical line of a last child ends in a rounded corner
+                // that joins its horizontal line.
                 (false, true) => {
                     let top = bounds.top();
                     let mut path = PathBuilder::stroke(px(1.));
@@ -355,7 +374,8 @@ impl RenderOnce for SidebarRow {
         let indent = self.depth as f32 * theme::SIDEBAR_INDENT;
         let interactive = self.on_click.is_some();
         let (fill, edge, shown) = highlight(theme, &self, hover);
-        // The icon brightens with the pointer and on the active row.
+        // The icon is at full opacity on the active row, under the pointer and
+        // while items are dragged over the row. Otherwise it is at 80%.
         let lit = self.active || (hovered && !self.dragging) || self.drop_highlight;
         let count_color = if self.active || self.selected {
             theme.text()
@@ -364,11 +384,12 @@ impl RenderOnce for SidebarRow {
         };
 
         let row_state = state.clone();
-        // A tree item at its level, read as production's row text (its
-        // label, then its count), selected while it is the destination or
-        // in the selection, expanded or collapsed when it has children.
-        // Named only while the window builds its tree: the sidebar draws
-        // every row each frame.
+        // Assistive technology gets the row as a tree item at its level. Its
+        // name is its label followed by its count. It is selected while it
+        // is the active row or one of the chosen rows, and expanded or
+        // collapsed when it has children. The name is built only while the
+        // window builds its accessibility tree, because the sidebar draws
+        // every row in each frame.
         let name: SharedString = if super::a11y::active(window) {
             let shown_label = crate::i18n::t_shared(self.label.clone());
             match self.count {
@@ -385,8 +406,8 @@ impl RenderOnce for SidebarRow {
             .aria_level(self.depth + 1)
             .aria_selected(self.active || self.selected)
             .when_some(self.disclosure, |row, expanded| row.aria_expanded(expanded))
-            // The row the sidebar's keys are on reads as focused while the
-            // rows have the keyboard.
+            // The row that the sidebar's keys are on is reported as the
+            // active descendant, so assistive technology reads it as focused.
             .when(self.focused, |row| row.aria_active_descendant())
             .relative()
             .flex()
@@ -415,8 +436,9 @@ impl RenderOnce for SidebarRow {
                 }
                 layer
             });
-        // `.dropBefore::after` / `.dropAfter::after`: a 2px bar across the
-        // row's top or bottom edge, from the label column to the list edge.
+        // A folder that would be dropped before or after the row is shown by
+        // a 2px bar across the row's top or bottom edge, from the start of
+        // the row's content to the right edge of the list.
         if let Some(position @ (DropPosition::Before | DropPosition::After)) = self.drop {
             let bar = div()
                 .absolute()
@@ -509,14 +531,15 @@ impl RenderOnce for SidebarRow {
                 ),
         );
         row = match self.rename {
-            // `.renameInput`: a 20px field with a 1px primary border on the
-            // app background, pulled 1px left so the text starts where the
-            // label did.
+            // The rename field is 20px tall and has a 1px border in the primary
+            // colour on the app's background colour. It starts 1px to the left
+            // of the label's place, so that its text starts where the label's
+            // text did.
             Some(input) => {
                 let commit = input.clone();
-                // With a count the row's content spans the row and the field
-                // fills it up to the count; without one the content is only
-                // as wide as the field's own width.
+                // With a count or an activity button, the field fills the row
+                // up to it. Without one, the field has the width
+                // `RENAME_WIDTH`.
                 let fills = self.count.is_some() || self.activity.is_some();
                 row.child(
                     div()
@@ -537,11 +560,10 @@ impl RenderOnce for SidebarRow {
                         .rounded(px(theme::SIDEBAR_RENAME_RADIUS))
                         .bg(theme.background())
                         .overflow_hidden()
-                        // A press in the field edits the name; it is not a
-                        // click on the row.
+                        // A press in the field belongs to the editing of the
+                        // name. It is not passed on to the row.
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        // A right-click commits the name, as the Electron
-                        // field's context-menu handler does.
+                        // A click with the right button commits the name.
                         .on_mouse_down(MouseButton::Right, move |_, _, cx| {
                             cx.stop_propagation();
                             commit.update(cx, |input, cx| input.finish_rename(true, cx));
@@ -555,8 +577,8 @@ impl RenderOnce for SidebarRow {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    // `translateMessage(node.name)`, as production's sidebar
-                    // shows every row's name.
+                    // The row's name is translated into the interface's
+                    // language here.
                     .child(crate::i18n::t_shared(self.label)),
             ),
         };
@@ -590,8 +612,9 @@ impl RenderOnce for SidebarRow {
     }
 }
 
-/// `.activitySlot` holding `.activityButton`: 22 × 22, radius 5, primary
-/// glyphs, a 30% primary fill under the pointer.
+/// Draws the activity button at the right end of the row. It is 22 × 22 with
+/// a corner radius of 5px. Its glyphs are in the primary colour, and its
+/// fill is the primary colour at 30% while the pointer is over it.
 fn activity_button(activity: Activity, window: &mut Window, cx: &mut App) -> impl IntoElement {
     let theme = theme::theme(cx);
     let hovered_state = window.use_keyed_state("subscriptions-activity", cx, |_, _| false);
@@ -602,8 +625,9 @@ fn activity_button(activity: Activity, window: &mut Window, cx: &mut App) -> imp
         window.request_animation_frame();
     }
     let hovered = *hovered_state.read(cx) && !activity.busy;
-    // What shows: the dot while running and not hovered; the pause glyph
-    // under the pointer, or while held; the play glyph on a held one hovered.
+    // While subscriptions run, the button shows the dot, and the pause glyph
+    // while the pointer is over it. While they are paused, it shows the
+    // pause glyph, and the play glyph while the pointer is over it.
     let glyph = match (activity.paused, hovered) {
         (false, false) => None,
         (false, true) | (true, false) => Some("activity-pause"),
@@ -662,7 +686,8 @@ fn activity_button(activity: Activity, window: &mut Window, cx: &mut App) -> imp
                     });
                     hint.update(cx, |hint, cx| hint.set(*hovered, cx));
                 })
-                // The press and the click are the button's, not the row's.
+                // The press and the click on the button are not passed on to
+                // the row.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(move |event, window, cx| {
                     cx.stop_propagation();

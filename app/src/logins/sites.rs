@@ -1,28 +1,34 @@
-//! The services a sign-in window can open (`electron/windows/authSites.mjs`):
-//! where each one's login starts, how the app tells that it has finished
-//! and what it keeps.
+//! The services that the user can sign in to: the address where the login
+//! of each one starts, how the app finds out that the login has finished,
+//! and what the app keeps of it.
 //!
 //! A debug build started with `PICTO_GPUI_LOGIN_ORIGIN=http://127.0.0.1:<port>`
-//! moves every address here onto that origin (path and query kept), so the
-//! sign-in can be driven end to end against local pages without reaching a
-//! real site (`seams::login_origin`).
+//! replaces the scheme, host and port of every address here with those of
+//! that origin and keeps the path and the query (`seams::login_origin`). A
+//! whole sign-in can then be run against local pages, and no real site is
+//! reached.
 
-/// How a service's login is captured (`site.strategy`).
+/// The way in which the app obtains the login of a service.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Strategy {
-    /// The session cookies a normal page login sets.
+    /// The app keeps the session cookies that the service sets when the user
+    /// signs in on its page.
     Cookies,
-    /// The account's API key, read from its options page after the login.
+    /// The app reads the account's API key from the account's options page
+    /// after the user has signed in.
     AccountApi,
     OAuth1,
     OAuth2,
-    /// The core's own OAuth flow (`pixiv_oauth_start`, `pixiv_oauth_exchange`).
+    /// The application core runs Pixiv's OAuth flow (`pixiv_oauth_start`,
+    /// `pixiv_oauth_exchange`).
     Pixiv,
-    /// A browser of the user's own, outside the app, or a pasted session.
+    /// The user signs in with a browser that is installed on the computer,
+    /// outside the app, or pastes the values of a session.
     OnlyFans,
 }
 
-/// The sign-in window's size (`authWindowSize`).
+/// The size at which a sign-in window opens and the smallest size the user
+/// can give it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WindowSize {
     pub width: f32,
@@ -31,7 +37,8 @@ pub struct WindowSize {
     pub min_height: f32,
 }
 
-/// The size of every sign-in window but the wide ones.
+/// The size of the sign-in window of every service that does not use
+/// [`WIDE_AUTH_WINDOW`].
 pub const AUTH_WINDOW: WindowSize = WindowSize {
     width: 520.,
     height: 760.,
@@ -39,7 +46,8 @@ pub const AUTH_WINDOW: WindowSize = WindowSize {
     min_height: 640.,
 };
 
-/// `WIDE_AUTH_WINDOW`: services whose login pages need a desktop width.
+/// The size of the sign-in window of the services whose login pages need
+/// the width of a desktop browser window.
 pub const WIDE_AUTH_WINDOW: WindowSize = WindowSize {
     width: 1000.,
     height: 760.,
@@ -47,8 +55,9 @@ pub const WIDE_AUTH_WINDOW: WindowSize = WindowSize {
     min_height: 640.,
 };
 
-/// One service, with its addresses resolved (`resolveAuthSite`, and the
-/// SubscribeStar service chosen).
+/// One service and the addresses that its login uses. [`resolve`] returns
+/// it, and [`with_service_host`] sets the addresses of the SubscribeStar
+/// service that the user chose.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Site {
     pub id: &'static str,
@@ -56,16 +65,21 @@ pub struct Site {
     pub strategy: Strategy,
     pub login_url: Option<String>,
     pub cookie_url: Option<String>,
-    /// The cookies of all these addresses are read together (ExHentai).
+    /// When this is set, the cookies of all these addresses are read
+    /// together. Only ExHentai sets it.
     pub cookie_urls: Option<Vec<String>>,
-    /// The cookies kept; every cookie of the address when `None`.
+    /// The names of the cookies that are kept. When this is `None`, every
+    /// cookie of the address is kept.
     pub cookie_names: Option<&'static [&'static str]>,
-    /// The cookies only a signed-in session has; with none, the page must
-    /// show it is signed in (`hasAuthenticatedDomSignal`).
+    /// The names of cookies that only a signed-in session has. When this is
+    /// `None`, the login counts as finished only when the page itself shows
+    /// that the user is signed in (`adapters::scripts::SIGNED_IN_SCRIPT`).
     pub authenticated_cookie_names: Option<&'static [&'static str]>,
-    /// A page the login must reach before it is saved (ExHentai).
+    /// A page that the sign-in window must have loaded before the login is
+    /// saved. Only ExHentai sets it.
     pub verification_url: Option<String>,
-    /// The account page holding the API key (`account_api`).
+    /// The address of the account page that shows the API key
+    /// (`Strategy::AccountApi`).
     pub options_url: Option<String>,
     pub request_token_url: Option<String>,
     pub authorize_url: Option<String>,
@@ -74,30 +88,35 @@ pub struct Site {
     pub consumer_secret: Option<&'static str>,
     pub client_id: Option<&'static str>,
     pub client_secret: Option<&'static str>,
-    /// The token exchange sends the client in an `Authorization: Basic`
-    /// header rather than in the body (`tokenAuth: 'basic'`).
+    /// Whether the token exchange sends the client's id and secret in an
+    /// `Authorization: Basic` header. When this is false they are sent in
+    /// the body of the request.
     pub token_auth_basic: bool,
     pub redirect_url: Option<String>,
     pub scope: Option<&'static str>,
-    /// The field of the token answer kept (`access_token` by default).
+    /// The name of the field of the token response whose value is kept.
+    /// When this is `None`, the field is `access_token`.
     pub token_field: Option<&'static str>,
-    /// FANBOX's account API, asked whether the session is signed in.
+    /// An address of FANBOX's account API. The app requests it from the
+    /// sign-in page to find out whether the session is signed in.
     pub session_check_url: Option<String>,
     pub window: WindowSize,
 }
 
-/// `OAUTH_CALLBACK_URL`: where OAuth services without their own redirect
-/// send the browser back.
+/// The address to which an OAuth service sends the sign-in window back
+/// after the user has authorized the app, for the services that have no
+/// `redirect_url` of their own.
 pub const OAUTH_CALLBACK_URL: &str = "https://picto.app/oauth/callback";
 
-/// The SubscribeStar services a login can be for; one is stored at a time.
+/// The hosts of the three SubscribeStar services. A login is for one of
+/// them, and the app stores one SubscribeStar login at a time.
 pub const SUBSCRIBESTAR_HOSTS: [&str; 3] = [
     "www.subscribestar.com",
     "subscribestar.adult",
     "subscribestar.art",
 ];
 
-/// Every service, by id, in production's order (`AUTH_SITES`).
+/// The ids of all services.
 #[cfg(test)]
 pub const SITE_IDS: [&str; 18] = [
     "pixiv",
@@ -148,7 +167,8 @@ fn blank(id: &'static str, label: &'static str, strategy: Strategy) -> Site {
     }
 }
 
-/// `cookieSite`: a service whose page login leaves session cookies.
+/// Returns a service with the strategy `Strategy::Cookies`: the user signs
+/// in on the page at `login`, and the cookies of `cookies` are kept.
 fn cookie_site(id: &'static str, label: &'static str, login: &str, cookies: &str) -> Site {
     Site {
         login_url: Some(login.to_owned()),
@@ -161,9 +181,10 @@ fn some(url: &str) -> Option<String> {
     Some(url.to_owned())
 }
 
-/// The service as production declares it, before any origin is moved.
+/// Returns the service with the id `id` with its real addresses, before
+/// `PICTO_GPUI_LOGIN_ORIGIN` replaces their origin.
 fn declared(id: &str) -> Option<Site> {
-    // i18n: service names, URLs and protocol fields; not shown through t()
+    // i18n: service names, URLs and protocol fields, not translated
     Some(match id {
         "pixiv" => blank("pixiv", "Pixiv", Strategy::Pixiv),
         "gelbooru" => Site {
@@ -230,8 +251,10 @@ fn declared(id: &str) -> Option<Site> {
             "https://danbooru.donmai.us/session/new",
             "https://danbooru.donmai.us",
         ),
-        // gallery-dl's public application and callback, so the refresh token
-        // goes straight back to gallery-dl.
+        // The client id, the client secret and the redirect address are
+        // those of gallery-dl's public DeviantArt application. The refresh
+        // token that the login obtains therefore belongs to that
+        // application and is refreshed with its client id and secret.
         "deviantart" => Site {
             client_id: Some("5388"),
             client_secret: Some("76b08c69cfb27f26d6161f9ab6d061a1"),
@@ -311,7 +334,7 @@ fn declared(id: &str) -> Option<Site> {
             authenticated_cookie_names: Some(&["ipb_member_id", "ipb_pass_hash"]),
             ..cookie_site(
                 "ehentai",
-                // i18n: a service's name, as production shows it
+                // i18n: the name of a service, the same in every language
                 "ExHentai",
                 "https://forums.e-hentai.org/index.php?act=Login&CODE=00",
                 "https://forums.e-hentai.org",
@@ -321,8 +344,9 @@ fn declared(id: &str) -> Option<Site> {
     })
 }
 
-/// `resolveAuthSite`: the service for a site id, `pixivuser` signing in to
-/// Pixiv and `exhentai` to E-Hentai, ignoring case and spaces around it.
+/// Returns the service for a site id. Upper and lower case are not
+/// distinguished, and spaces around the id are ignored. The id `pixivuser`
+/// gives Pixiv, and `exhentai` gives the service with the id `ehentai`.
 pub fn resolve(site_id: &str) -> Option<Site> {
     let requested = site_id.trim().to_lowercase();
     let canonical = match requested.as_str() {
@@ -337,11 +361,12 @@ pub fn resolve(site_id: &str) -> Option<Site> {
     })
 }
 
-/// The service with one SubscribeStar service chosen, or the error
-/// production gives for any other host.
+/// Returns `site` with the login and cookie addresses of the SubscribeStar
+/// service at `host`. Returns an error if `site` is not SubscribeStar or
+/// `host` is not one of [`SUBSCRIBESTAR_HOSTS`].
 pub fn with_service_host(mut site: Site, host: &str) -> Result<Site, String> {
     if site.id != "subscribestar" || !SUBSCRIBESTAR_HOSTS.contains(&host) {
-        // i18n: production's error text, shown as it is (English)
+        // i18n: an error text, shown in English in every language
         return Err("Choose a supported SubscribeStar service.".to_owned());
     }
     let login = format!("https://{host}/login");
@@ -359,7 +384,8 @@ pub fn with_service_host(mut site: Site, host: &str) -> Result<Site, String> {
     Ok(site)
 }
 
-/// `getStaticAuthLoginRoutes`: every service with a login page, and where.
+/// Returns the id and the login address of every service that has a login
+/// address.
 #[cfg(test)]
 pub fn login_routes() -> Vec<(String, String)> {
     SITE_IDS
@@ -369,8 +395,8 @@ pub fn login_routes() -> Vec<(String, String)> {
         .collect()
 }
 
-/// Every address of `site` with its scheme, host and port replaced by
-/// `origin`'s.
+/// Returns `site` with the scheme, host and port of every one of its
+/// addresses replaced by those of `origin`.
 fn moved(mut site: Site, origin: &str) -> Site {
     let each = |url: &mut Option<String>| {
         if let Some(value) = url {
@@ -391,15 +417,18 @@ fn moved(mut site: Site, origin: &str) -> Site {
             *url = move_origin(url, origin);
         }
     }
-    // OAuth services without a redirect of their own come back to the
-    // fixed callback, which moves with the rest.
+    // An OAuth service without a `redirect_url` of its own uses
+    // `OAUTH_CALLBACK_URL`. Its origin is replaced like the others, so that
+    // the callback also stays on the local pages.
     if matches!(site.strategy, Strategy::OAuth1 | Strategy::OAuth2) && site.redirect_url.is_none() {
         site.redirect_url = Some(move_origin(OAUTH_CALLBACK_URL, origin));
     }
     site
 }
 
-/// `url` with `origin`'s scheme, host and port, its path and query kept.
+/// Returns `url` with its scheme, host and port replaced by those of
+/// `origin`. The path and the query stay. Returns `url` unchanged if either
+/// of the two is not a valid address.
 pub fn move_origin(url: &str, origin: &str) -> String {
     let (Ok(mut parsed), Ok(target)) = (url::Url::parse(url), url::Url::parse(origin)) else {
         return url.to_owned();
@@ -423,8 +452,8 @@ mod tests {
         assert!(resolve("").is_none());
     }
 
-    // 'captures only the selected SubscribeStar host' and 'rejects an
-    // unsupported SubscribeStar login host'
+    // Each of the three SubscribeStar hosts gives its own login and cookie
+    // addresses, and every other host is refused.
     #[test]
     fn a_subscribestar_service_is_one_of_three_hosts() {
         for host in SUBSCRIBESTAR_HOSTS {

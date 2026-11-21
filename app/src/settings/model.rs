@@ -1,25 +1,24 @@
-//! The application settings and the grid's default view, with the same JSON
-//! keys and values that production's `settingsApi.ts` reads and writes. The
-//! application settings are the JSON object in the `application` row of the
-//! library's `setting` table. The grid's default view is the JSON object in
-//! the `grid:defaults` row of the library's `view_pref` table.
+//! The application settings and the grid's default view, and how they are
+//! read from the library and written to it as JSON. The application
+//! settings are the JSON object in the `application` row of the library's
+//! `setting` table. The grid's default view is the JSON object in the
+//! `grid:defaults` row of the library's `view_pref` table. The keys and the
+//! values are the ones that Picto 0.6.19 and earlier wrote, so that
+//! settings written by those versions are still read.
 //!
 //! Each field is read on its own. A field of the application settings that
-//! is missing from the stored object takes its default, as in production. A
-//! field whose stored value has the wrong type, or is not one of the allowed
-//! values, also takes its default here, and the other fields are still read;
-//! production's `parseAppSettings` throws an error for such a value. A field
-//! of the grid's default view that is missing or has the wrong type is left
+//! is missing from the stored object takes its default. A field whose
+//! stored value has the wrong type, or is not one of the allowed values,
+//! also takes its default, and the other fields are still read. A field of
+//! the grid's default view that is missing or has the wrong type is left
 //! unset.
 use serde_json::{Map, Value, json};
 
-/// The application settings, with the same fields and defaults as
-/// production's `AppSettings` type and `APP_SETTINGS_DEFAULTS`, and three
-/// more fields, `frosted_glass_rails`, `acrylic_rails` and
-/// `grid_zoom_animation`, which production does not have. A setting
-/// with a fixed list of choices is kept as the string production stores for
-/// the chosen value, for example `"scroll"` or `"zoom"` for
-/// `grid_wheel_action`.
+/// The application settings. A setting with a fixed list of choices is kept
+/// as the string that the library stores for the chosen value, for example
+/// `"scroll"` or `"zoom"` for `grid_wheel_action`. Picto 0.6.19 and earlier
+/// had every field except `frosted_glass_rails`, `acrylic_rails` and
+/// `grid_zoom_animation`, with the same defaults.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppSettings {
     pub grid_spacing: &'static str,
@@ -31,9 +30,9 @@ pub struct AppSettings {
     /// `frosted_glass_rails` is followed on macOS, where the material is an
     /// `NSVisualEffectView`, and `acrylic_rails` on Windows, where it is
     /// Acrylic. A library that is used on both systems therefore keeps a
-    /// choice for each. Linux has no such setting. Production has neither
-    /// setting, so the keys `frostedGlassRails` and `acrylicRails` exist
-    /// only in libraries this app has saved settings to.
+    /// choice for each. Linux has no such setting. Picto 0.6.19 and earlier
+    /// had neither setting, so a library has the keys `frostedGlassRails`
+    /// and `acrylicRails` only after this app has saved settings to it.
     pub frosted_glass_rails: bool,
     pub acrylic_rails: bool,
     pub zoom_factor: Option<f64>,
@@ -54,9 +53,9 @@ pub struct AppSettings {
     pub grid_wheel_action: &'static str,
     /// Whether the grid animates its tiles to their new positions and sizes
     /// when the zoom changes. When it is off, the grid draws the new layout
-    /// in the next frame. Production has no such setting, so the key
-    /// `gridZoomAnimation` exists only in libraries this app has saved
-    /// settings to.
+    /// in the next frame. Picto 0.6.19 and earlier had no such setting, so
+    /// a library has the key `gridZoomAnimation` only after this app has
+    /// saved settings to it.
     pub grid_zoom_animation: bool,
     pub viewer_trackpad_gestures: bool,
     pub grid_double_click_action: &'static str,
@@ -216,8 +215,7 @@ impl Reader<'_> {
 
 impl AppSettings {
     /// Reads the application settings from the stored JSON object `stored`.
-    /// This does the work of production's `parseAppSettings`. A field that
-    /// is missing or not valid takes the value it has in
+    /// A field that is missing or not valid takes the value it has in
     /// `AppSettings::default()`. When `stored` is not a JSON object, every
     /// field takes its default.
     pub fn from_json(stored: &Value) -> Self {
@@ -387,9 +385,10 @@ impl AppSettings {
         }
     }
 
-    /// Returns every field as one JSON object, under production's key names
-    /// such as `gridSpacing`. The Settings window writes this object to the
-    /// library with the `settings.replace` command when it saves.
+    /// Returns every field as one JSON object, under the key names that the
+    /// library stores, such as `gridSpacing`. The Settings window writes
+    /// this object to the library with the `settings.replace` command when
+    /// it saves.
     /// `SettingsModel::apply_now_reporting` also compares two of these
     /// objects to find which fields a change altered.
     pub fn to_json(&self) -> Value {
@@ -515,9 +514,10 @@ impl AppSettings {
         Value::Object(map)
     }
 
-    /// Whether the user has turned on the frosted material of the system
-    /// this build runs on: `frosted_glass_rails` on macOS and `acrylic_rails`
-    /// on Windows. It is always `false` on Linux, which has no such setting.
+    /// Returns whether the user has turned on the frosted material of the
+    /// system this build runs on: `frosted_glass_rails` on macOS and
+    /// `acrylic_rails` on Windows. It is always `false` on Linux, which has
+    /// no such setting.
     pub fn rail_material(&self) -> bool {
         if cfg!(target_os = "macos") {
             self.frosted_glass_rails
@@ -542,12 +542,9 @@ impl AppSettings {
     /// row or one section, as a mutable reference so that the caller can
     /// switch it on or off. `key` is the row's node id, for example
     /// `system:inbox`, or the section's key, for example `section:folders`.
-    /// Each node id is paired with the setting that production's
-    /// `AppShell.tsx` uses for it when it builds `visibleSystemNodes`, and
-    /// each section with the setting behind `showQuickAccess`, `showFolders`
-    /// or `showSmartFolders` there. Returns `None` for any other key. The
-    /// rows All (`system:active`) and Trash (`system:trash`) have no
-    /// setting, because the sidebar always shows them.
+    /// Returns `None` for any other key. The rows All (`system:active`) and
+    /// Trash (`system:trash`) have no setting, because the sidebar always
+    /// shows them.
     pub fn sidebar_visibility(&mut self, key: &str) -> Option<&mut bool> {
         Some(match key {
             "system:inbox" => &mut self.show_sidebar_inbox,
@@ -565,9 +562,9 @@ impl AppSettings {
         })
     }
 
-    /// Whether the sidebar shows the system row or section with this key. A
-    /// key that has no setting, such as `system:active` or `system:trash`,
-    /// is always shown.
+    /// Returns whether the sidebar shows the system row or section with
+    /// this key. A key that has no setting, such as `system:active` or
+    /// `system:trash`, is always shown.
     pub fn sidebar_shows(&self, key: &str) -> bool {
         self.clone().sidebar_visibility(key).is_none_or(|on| *on)
     }
@@ -598,8 +595,8 @@ impl AppSettings {
         } = value;
     }
 
-    /// Whether the AI tagging model with this slug is switched on for
-    /// tagging new imports. Four models have such a setting, for example
+    /// Returns whether the AI tagging model with this slug is switched on
+    /// for tagging new imports. Four models have such a setting, for example
     /// `ai_tagger_wd14_enabled` for the slug `wd14-swinv2-v3`. Any other
     /// slug returns `false`. New imports are tagged only while
     /// `ai_tagger_auto_on_import` is also on.
@@ -614,9 +611,9 @@ impl AppSettings {
     }
 
     /// Switches the AI tagging model with this slug on or off for tagging
-    /// new imports. The four slugs and their settings are the ones in
-    /// production's `AUTO_MODEL_SETTING_KEYS`. Any other slug has no
-    /// setting, so the call changes nothing.
+    /// new imports. Four slugs have such a setting
+    /// ([`AppSettings::has_model_setting`]). Any other slug has none, so the
+    /// call changes nothing.
     pub fn set_runs_model(&mut self, slug: &str, on: bool) {
         let setting = match slug {
             "wd14-swinv2-v3" => &mut self.ai_tagger_wd14_enabled,
@@ -628,8 +625,8 @@ impl AppSettings {
         *setting = on;
     }
 
-    /// Whether the model with this slug is one of the four that have a
-    /// setting for tagging new imports. The AI Models section of the
+    /// Returns whether the model with this slug is one of the four that
+    /// have a setting for tagging new imports. The AI Models section of the
     /// Settings window shows a switch only for those models.
     pub fn has_model_setting(slug: &str) -> bool {
         matches!(
@@ -667,10 +664,9 @@ pub enum Threshold {
 }
 
 /// The grid's default view: the view preferences stored in the
-/// `grid:defaults` row of the library's `view_pref` table. The fields are
-/// those of production's `ViewPrefsDto`, without its `scope_key`. A field
-/// that is `None` is not stored in the row, and the grid then uses its
-/// built-in default for that field.
+/// `grid:defaults` row of the library's `view_pref` table. A field that is
+/// `None` is not stored in the row, and the grid then uses its built-in
+/// default for that field.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GridDefaults {
     pub sort_field: Option<String>,
@@ -707,10 +703,9 @@ impl GridDefaults {
         }
     }
 
-    /// Returns every field as one JSON object, as production's
-    /// `viewPrefsToPatch` does. A field that is `None` becomes `null`. When
-    /// [`patched`] applies this object to the stored `grid:defaults` row, a
-    /// `null` removes that field from the row.
+    /// Returns every field as one JSON object. A field that is `None`
+    /// becomes `null`. When [`patched`] applies this object to the stored
+    /// `grid:defaults` row, a `null` removes that field from the row.
     pub fn to_patch(&self) -> Map<String, Value> {
         let value = json!({
             "sort_field": self.sort_field,
@@ -733,9 +728,9 @@ impl GridDefaults {
     }
 }
 
-/// Returns the JSON object in `stored` with `patch` applied, in the way
-/// production's `settings.patch` and `settings.view.patch` commands change a
-/// stored row. A field that is `null` in `patch` is removed from the object.
+/// Returns the JSON object in `stored` with `patch` applied. The commands
+/// `settings.patch` and `settings.view.patch` change a stored row in this
+/// way. A field that is `null` in `patch` is removed from the object.
 /// Any other field in `patch` replaces the stored value, or is added when
 /// the object does not have it. Fields that `patch` does not name are kept.
 /// When `stored` is `None`, is not valid JSON, or is not a JSON object, the

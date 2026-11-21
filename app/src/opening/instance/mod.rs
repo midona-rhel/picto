@@ -1,19 +1,21 @@
-//! One instance per library copy, as production keeps one per machine
-//! (`requestSingleInstanceLock`, `second-instance`): a second launch on the
-//! copy an instance already has open hands its arguments to that instance,
-//! which brings its window forward, and ends. Launches on other copies run
-//! side by side. A launch with files and no copy (a file manager opening a
-//! pack with the app) hands them to the instance most recently active.
+//! Keeps one running instance of the app for each library copy. A second
+//! launch on a copy that an instance already has open sends its arguments to
+//! that instance and then ends, and that instance brings its window to the
+//! front. Launches on different copies run at the same time. A launch that
+//! has files and no copy (a file manager that opens a pack with the app)
+//! sends the files to the instance that was active most recently.
 //!
-//! Each instance holds an exclusive lock on `<key>.lock` in a folder only
-//! the user can reach, for as long as it runs, and listens on a local
-//! socket (a named pipe on Windows) named after the same key; the key is the
-//! copy's identity. The system lets the lock go with the process, so a
-//! crashed instance leaves nothing that blocks the next.
+//! Each instance holds an exclusive lock on the file `<key>.lock` for as
+//! long as it runs. The file is in a folder that only the user can reach.
+//! The instance also listens on a local socket (a named pipe on Windows)
+//! whose name contains the same key. The key identifies the copy. The system
+//! releases the lock when the process ends, so an instance that crashed
+//! does not block the next launch.
 //!
-//! The exchange: the instance greets with `picto-gpui-instance 1 <pid>`, the
-//! launch sends one JSON line `{"cwd": …, "args": […]}`, and the instance
-//! answers `ok` once it has taken them.
+//! A launch and an instance exchange three lines. The instance sends
+//! `picto-gpui-instance 1 <pid>`. The launch sends one line of JSON,
+//! `{"cwd": …, "args": […]}`. The instance answers `ok` after it has taken
+//! the arguments.
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -29,16 +31,17 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const GREETING: &str = "picto-gpui-instance 1";
-/// How long a launch keeps trying to reach an instance that holds the lock
-/// (one still starting, or one whose lock a probe held for a moment).
+/// How long a launch keeps trying to reach an instance that holds the lock.
+/// The instance may still be starting, or another launch may have held the
+/// lock for a moment while it looked for running instances.
 const REACH: Duration = Duration::from_secs(5);
-/// How long one exchange may take before the launch gives up on it.
+/// How long one exchange may take before the launch stops waiting for it.
 const EXCHANGE: Duration = Duration::from_secs(10);
-/// The most a request may hold.
+/// The largest number of bytes that an instance reads from one request.
 const REQUEST_LIMIT: u64 = 1 << 20;
 
-/// What a launch hands the instance: its working folder and arguments, as
-/// `second-instance` receives them.
+/// What a launch sends to the instance: the launch's working folder and its
+/// arguments.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Request {
     pub cwd: PathBuf,
@@ -67,7 +70,7 @@ impl Request {
     }
 }
 
-/// The running instance: holds the lock until it ends.
+/// The running instance of one copy. It holds the lock until it is dropped.
 pub struct Instance {
     _lock: File,
     active: PathBuf,
@@ -75,29 +78,32 @@ pub struct Instance {
 }
 
 impl Instance {
-    /// Notes this instance as the one most recently active, which a launch
-    /// with files and no copy hands them to.
+    /// Records that this instance was active most recently, by writing the
+    /// file `<key>.active`. A launch that has files and no copy sends them to
+    /// the instance whose file was written last.
     pub fn mark_active(&self) {
         let _ = std::fs::write(&self.active, self.copy.to_string_lossy().as_bytes());
     }
 }
 
-/// What starting on a copy came to.
+/// The result of starting on a copy.
 pub enum Started {
-    /// This process is the copy's instance; requests from later launches
-    /// arrive through `deliver`.
+    /// This process is the copy's instance. Requests from later launches
+    /// are passed to `deliver`.
     Primary(Instance),
-    /// An instance already had the copy open and took the request.
+    /// An instance already had the copy open, and it took the request.
     HandedOver,
 }
 
-/// Where the locks and sockets are: a folder of the user's own.
+/// Returns the folder that holds the lock files and the sockets. Only the
+/// user can reach it.
 pub fn folder() -> std::io::Result<PathBuf> {
     transport::folder()
 }
 
-/// The copy's key: FNV-1a of its identity on disk (device and inode on
-/// Unix; the canonical path, case folded, on Windows).
+/// Returns the copy's key: the FNV-1a hash of what identifies the copy on
+/// disk. On Unix that is the device and the inode of its folder. On Windows
+/// it is the canonical path in lower case.
 pub fn key(copy: &Path) -> std::io::Result<String> {
     let identity = transport::identity(copy)?;
     let mut hash: u64 = 0xcbf29ce484222325;
@@ -108,7 +114,8 @@ pub fn key(copy: &Path) -> std::io::Result<String> {
     Ok(format!("{hash:016x}"))
 }
 
-/// Becomes `copy`'s instance, or hands `request` to the one it has.
+/// Makes this process the instance of `copy`, or sends `request` to the
+/// instance that already has `copy` open.
 pub fn start(
     copy: &Path,
     request: &Request,
@@ -137,9 +144,9 @@ fn start_in(
             .map_err(|error| format!("{}: {error}", lock_path.display()))?;
         match lock.try_lock() {
             Ok(()) => {
-                // Without its listener the instance still holds the copy;
-                // later launches on it are then refused rather than opened
-                // twice.
+                // If the listener cannot start, this instance still holds
+                // the lock. A later launch on the copy then fails with an
+                // error, and the copy is not opened a second time.
                 if let Err(error) = transport::serve(folder, &key, std::sync::Arc::new(deliver)) {
                     eprintln!("picto: later launches on this copy cannot reach it: {error}");
                 }
@@ -172,8 +179,9 @@ fn start_in(
     }
 }
 
-/// Hands `request` to the instance most recently active, for a launch
-/// with files and no copy. Returns the copy that instance has open.
+/// Sends `request` to the instance that was active most recently. A launch
+/// that has files and no copy uses this. Returns the copy that the instance
+/// has open.
 pub fn hand_to_latest(request: &Request) -> Result<PathBuf, String> {
     let folder = folder().map_err(|error| format!("instance folder: {error}"))?;
     hand_to_latest_in(&folder, request)
@@ -193,7 +201,7 @@ fn hand_to_latest_in(folder: &Path, request: &Request) -> Result<PathBuf, String
         let Ok(lock) = OpenOptions::new().write(true).open(&path) else {
             continue;
         };
-        // A lock that can be taken belongs to no running instance.
+        // If the lock can be taken, no running instance holds it.
         if !matches!(lock.try_lock(), Err(std::fs::TryLockError::WouldBlock)) {
             continue;
         }
@@ -218,8 +226,8 @@ fn hand_to_latest_in(folder: &Path, request: &Request) -> Result<PathBuf, String
     }
 }
 
-/// One exchange with the instance listening under `key`, given up after
-/// [`EXCHANGE`].
+/// Does one exchange with the instance that listens under `key`. Returns an
+/// error when the exchange takes longer than [`EXCHANGE`].
 fn send(folder: &Path, key: &str, request: &Request) -> Result<(), String> {
     let stream = transport::connect(folder, key).map_err(|error| error.to_string())?;
     let request = request.clone();
@@ -232,8 +240,9 @@ fn send(folder: &Path, key: &str, request: &Request) -> Result<(), String> {
         .map_err(|_| "the open instance did not answer in time".to_string())?
 }
 
-/// The launch's side: reads the greeting, lets the instance take the
-/// foreground, sends the request and waits for `ok`.
+/// Does the launch's part of an exchange: reads the greeting, allows the
+/// instance to bring its window to the front (`allow`), sends the request
+/// and waits for `ok`.
 fn ask<S: Read + Write>(stream: S, request: &Request, allow: fn(u32)) -> Result<(), String> {
     let mut reader = BufReader::new(stream);
     let mut greeting = String::new();
@@ -264,7 +273,9 @@ fn ask<S: Read + Write>(stream: S, request: &Request, allow: fn(u32)) -> Result<
     }
 }
 
-/// The instance's side of one exchange.
+/// Does the instance's part of one exchange: sends the greeting, reads the
+/// request, passes it to `deliver` and answers `ok`. Answers `refused` when
+/// the request cannot be read.
 fn answer<S: Read + Write>(stream: S, deliver: &(impl Fn(Request) + ?Sized)) {
     let mut reader = BufReader::new(stream);
     let greeting = format!("{GREETING} {}\n", std::process::id());
@@ -293,8 +304,8 @@ fn answer<S: Read + Write>(stream: S, deliver: &(impl Fn(Request) + ?Sized)) {
     };
     let _ = reader.get_mut().write_all(reply.as_bytes());
     let _ = reader.get_mut().flush();
-    // Read until the launch hangs up, so the answer is never discarded with
-    // the connection before it has been read.
+    // Wait until the launch closes the connection. If the instance closed it
+    // first, the system could discard the answer before the launch read it.
     let mut rest = [0u8; 64];
     let _ = reader.get_mut().read(&mut rest);
 }
@@ -327,10 +338,11 @@ mod tests {
         assert_ne!(key(&copy).unwrap(), key(&other).unwrap());
     }
 
-    /// Two instances of the protocol in this process: the first takes the
-    /// lock and listens; a second start on the same copy hands its request
-    /// over and does not start; a start on another copy runs beside it; a
-    /// launch with no copy reaches the one most recently active.
+    /// Runs two instances in this process. The first takes the lock and
+    /// listens. A second start on the same copy sends its request to the first
+    /// and does not become an instance. A start on another copy becomes an
+    /// instance of its own. A launch with no copy reaches the instance that
+    /// was marked active last.
     #[test]
     fn a_second_start_on_the_same_copy_hands_over() {
         let scratch = tempfile::tempdir().expect("scratch");
@@ -369,7 +381,8 @@ mod tests {
         let Started::Primary(beside) = beside else {
             panic!("another copy's start found an instance");
         };
-        // The modification times must differ for the order to show.
+        // `hand_to_latest_in` picks the instance by the modification time
+        // of its `.active` file, so the two times must differ.
         std::thread::sleep(Duration::from_millis(20));
         first.mark_active();
         let handed = Request {

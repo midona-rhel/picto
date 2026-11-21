@@ -1,5 +1,7 @@
-//! Destinations: opening one, Back and Forward, the grids left behind,
-//! and the fade between two.
+//! The part of `Session` that changes which destination is open: opening a
+//! destination, going Back and Forward, saving the grid of the destination
+//! the user leaves and showing it again later, and running the fade between
+//! two destinations.
 use super::{Change, SavedGrid, Session, Transition, Visit};
 use crate::backend::Navigation;
 use crate::grid::filters::Filters;
@@ -10,19 +12,25 @@ use picto_library::{RootId, TagRecord};
 use std::{collections::HashMap, time::Instant};
 
 impl Session {
-    /// Puts a rebuilt destination list in place of the current one, after
-    /// the sidebar edited the folders. Places are kept by what they show, not
-    /// by their position. When the open destination is gone, its nearest
-    /// surviving ancestor opens instead, or All, as the Electron app falls
-    /// back after a delete.
+    /// Replaces the list of destinations with a list that was read again,
+    /// for example after the sidebar edited the folders. Destinations are
+    /// matched between the two lists by their id (`Navigation::id`).
+    /// Everything that refers to a destination by its index (the open
+    /// destination, the displayed one, the history and the saved grids) is
+    /// changed to the destination's new index, and history entries and saved
+    /// grids of destinations that no longer exist are removed. When the open
+    /// destination no longer exists, its nearest ancestor that still exists
+    /// opens instead, or the first destination when no ancestor exists.
     pub fn replace_navigation(
         &mut self,
         nav: Vec<Navigation>,
         tags: Vec<TagRecord>,
         cx: &mut Context<Self>,
     ) {
-        // A media-matches destination has no row of its own: it stays while
-        // it is open or in the history.
+        // A destination that lists the items using one item's media
+        // (`ItemScope::MediaMatches`) has no sidebar row, so the list that
+        // was read again does not contain it. Copy these destinations from
+        // the old list, so that they still exist in the new one.
         let mut nav = nav;
         nav.extend(
             self.nav
@@ -85,19 +93,22 @@ impl Session {
                 });
                 self.history_index = self.history.len() - 1;
                 self.open(fallback, None, None, cx);
-                // What `open` kept of the grid on screen was the deleted
-                // destination's, not the fallback's.
+                // `open` saved the grid on screen under the index of the
+                // fallback destination, but that grid holds the items of the
+                // deleted destination. Remove it, so that Back and Forward
+                // do not show those items for the fallback destination.
                 self.saved.retain(|(scope, _), _| *scope != fallback);
             }
         }
         cx.emit(Change::Navigation);
     }
 
-    // ── Navigation ──────────────────────────────────────────────
+    // The methods below open destinations and go Back and Forward.
 
-    /// `navigateToNode('media-matches:<id>')`: every item that uses the
-    /// media of `item` (Find Items with This Media), a destination with no
-    /// sidebar row, titled "Items with This Media".
+    /// Opens the destination that lists every item which uses the media of
+    /// `item`. The menu command Find Items with This Media calls this. The
+    /// destination has no sidebar row and is titled "Items with This Media".
+    /// It is added to `nav` the first time it is opened for this item.
     pub fn open_media_matches(&mut self, item: RootId, cx: &mut Context<Self>) {
         let scope = picto_library::query::ItemScope::MediaMatches { item_id: item.0 };
         let index = match self
@@ -126,20 +137,23 @@ impl Session {
         self.navigate(index, cx);
     }
 
-    /// Opens a sidebar destination and records it for Back and Forward.
-    /// Choosing the destination already showing does nothing, unless the
-    /// viewer is over it, which this closes.
+    /// Opens the destination at `index` in `nav`, which the user chose in
+    /// the sidebar, and adds a Back and Forward history entry for it. When
+    /// that destination is already open, this only closes the viewer and, if
+    /// a place inside a screen is open, returns to the screen's top level.
     pub fn navigate(&mut self, index: usize, cx: &mut Context<Self>) {
         if index == self.scope {
-            // Choosing a screen from inside one of its places goes to its top.
+            // The user chose the screen that is already open while a place
+            // inside it is open. Return to the screen's top level.
             if self.place().is_some() {
                 self.open_place(None, cx);
             }
             self.close_viewer(cx);
             return;
         }
-        // A destination chosen afresh opens at its top, without filters
-        // unless they are locked.
+        // A destination chosen in the sidebar opens with its grid at the top
+        // and without the filter bar's filters, unless the filters are
+        // locked.
         let filters = if self.filters_locked {
             self.filters.clone()
         } else {
@@ -155,19 +169,28 @@ impl Session {
         self.open(index, None, Some(filters), cx);
     }
 
-    /// Adds a place after the current one, dropping any Forward steps.
+    /// Adds `visit` to the history after the current entry and makes it the
+    /// current entry. The entries after the current one, which Forward would
+    /// have gone to, are removed first.
     pub(super) fn record(&mut self, visit: Visit) {
         self.history.truncate(self.history_index + 1);
         self.history.push(visit);
         self.history_index = self.history.len() - 1;
     }
 
+    /// Whether the history has an entry `delta` steps from the current one.
+    /// A `delta` of -1 is Back and a `delta` of 1 is Forward.
     pub fn can_step_history(&self, delta: isize) -> bool {
         self.history_index
             .checked_add_signed(delta)
             .is_some_and(|target| target < self.history.len())
     }
 
+    /// Goes `delta` entries along the history: -1 is Back and 1 is Forward.
+    /// Does nothing when the history has no such entry. When the entry is
+    /// for the open destination, only the filter bar's filters or the viewer
+    /// change. When it is for another destination, that destination opens,
+    /// with its saved grid if one can be used.
     pub fn step_history(&mut self, delta: isize, cx: &mut Context<Self>) {
         let Some(target) = self.history_index.checked_add_signed(delta) else {
             return;
@@ -179,9 +202,10 @@ impl Session {
         let step_filters = self.filter_steps[visit.filters].clone();
         if visit.scope == self.scope {
             if step_filters != self.filters && !self.filters_locked {
-                // A step of the filters: the grid comes back with the
-                // filters it had, where it was when nothing has changed what
-                // it would show.
+                // The entry has other filters than the grid has now. Show the
+                // grid with the entry's filters. If a grid was saved with
+                // those filters and with an empty search text, it is shown as
+                // it was saved; otherwise the results are read again.
                 self.save_grid();
                 let saved = self
                     .saved
@@ -194,8 +218,8 @@ impl Session {
                     cx.emit(Change::Viewer);
                 }
                 match saved {
-                    // Where it was scrolled, with nothing selected, as
-                    // production's filter intent leaves it.
+                    // The saved grid is shown at the scroll position it had,
+                    // but with nothing selected.
                     Some(saved) => {
                         self.restore_grid(saved, cx);
                         self.clear_selection(cx);
@@ -205,8 +229,9 @@ impl Session {
                 cx.emit(Change::Navigation);
                 return;
             }
-            // The same grid: only the viewer opens or closes, and the grid
-            // stays where it was.
+            // The entry has the same destination and the same filters, or the
+            // filters are locked. Only the viewer opens or closes, and the
+            // grid is not changed.
             let viewing = visit.viewing && self.focus.is_some();
             if self.viewer != viewing {
                 self.viewer = viewing;
@@ -215,9 +240,11 @@ impl Session {
             cx.emit(Change::Navigation);
             return;
         }
-        // Another destination comes back with the filters it had, unless
-        // they are locked, and as it was left when nothing has changed what
-        // it would show.
+        // The entry is for another destination. It opens with the filters the
+        // entry had, or with the current filters when the filters are locked.
+        // Its saved grid is shown only if it was saved with an empty search
+        // text and with exactly these filters; otherwise the destination's
+        // results are read again.
         let filters = if self.filters_locked {
             self.filters.clone()
         } else {
@@ -231,7 +258,11 @@ impl Session {
         self.open(visit.scope, saved, Some(filters), cx);
     }
 
-    /// What the current grid holds, to return to.
+    /// Saves the grid on screen in `saved`, under the displayed destination
+    /// and the current filters, so that Back and Forward can show it again:
+    /// the window of results, the scroll position, the view preferences, the
+    /// zoom and the selection. Saves nothing when a screen is displayed or
+    /// the grid has no items.
     pub(super) fn save_grid(&mut self) {
         if self
             .nav
@@ -265,7 +296,10 @@ impl Session {
         );
     }
 
-    /// Puts a saved grid on the hidden surface and fades it in.
+    /// Replaces the current results with a saved grid and starts the
+    /// fade-in. The grid scrolls to the saved offset and the saved selection
+    /// is selected again. The viewer opens if the current history entry was
+    /// made with the viewer open.
     fn restore_grid(&mut self, saved: SavedGrid, cx: &mut Context<Self>) {
         self.items = saved.items;
         self.start = saved.start;
@@ -282,8 +316,10 @@ impl Session {
         self.pending_focus = None;
         self.results_epoch += 1;
         self.window_epoch += 1;
-        // The window lies where it lay, in the same estimated height, so
-        // the scroll offset shows what it showed.
+        // Restore the measured height per item and the position of the
+        // window's tiles in the scrollable height. The layout is then the
+        // same as when the grid was saved, so the saved scroll offset shows
+        // the same items.
         self.density = saved.density;
         self.restore_window_top = Some(saved.window_top);
         self.restore_scroll = Some(saved.scroll);
@@ -305,7 +341,8 @@ impl Session {
             }
         }
         cx.emit(Change::Selection);
-        // An entry that was the viewer opens it again on the same item.
+        // When the current history entry was made with the viewer open, the
+        // viewer opens again on the same item.
         let viewing = self.history[self.history_index].viewing && self.focus.is_some();
         if self.viewer != viewing {
             self.viewer = viewing;
@@ -315,8 +352,12 @@ impl Session {
         cx.emit(Change::Results);
     }
 
-    /// Opens a destination: a saved grid, or its results fetched with
-    /// `filters` in place of the current ones when given.
+    /// Opens the destination at `index`. The grid on screen is saved first
+    /// and the search text is cleared. When `filters` is given, they replace
+    /// the filter bar's filters. What is on screen fades out. Then the
+    /// destination's screen is shown, or the grid `saved` when one is given,
+    /// or the results that are read from the library. This method does not
+    /// add a history entry; its callers do.
     pub(super) fn open(
         &mut self,
         index: usize,
@@ -325,8 +366,8 @@ impl Session {
         cx: &mut Context<Self>,
     ) {
         self.save_grid();
-        // Every destination opens without a search (`prepareNavigation`
-        // sets `searchText: ''`), Back and Forward included.
+        // Every destination opens with an empty search text, also when Back
+        // or Forward opens it.
         self.search_text.clear();
         if let Some(filters) = filters {
             self.filter = Self::filter_of(&filters);
@@ -344,10 +385,13 @@ impl Session {
             .get(index)
             .is_some_and(|entry| entry.screen.is_some());
         self.transition = match self.transition {
-            // Further clicks while the surface is fading out or already hidden
-            // only retarget where it lands.
+            // What was on screen is still fading out, or is already
+            // invisible. The fade continues unchanged and ends by showing the
+            // destination that was opened last.
             Transition::FadingOut(_) | Transition::Waiting => self.transition,
-            // Turning around mid fade-in continues from the current opacity.
+            // A fade-in is running. Start the fade-out near the opacity the
+            // fade-in has reached, by setting its start time as far in the
+            // past as a fade-out needs to get down to that opacity.
             Transition::FadingIn(started) => {
                 let shown = motion::progress(started.elapsed(), motion::SCOPE_FADE);
                 let now = Instant::now();
@@ -359,16 +403,20 @@ impl Session {
             Transition::Idle => Transition::FadingOut(Instant::now()),
         };
         if screen {
-            // Not a grid: nothing to fetch, and any reply still on its way for
-            // the previous scope no longer applies.
+            // The destination is a screen, so no results are read. Raising
+            // `generation` makes the session ignore a reply that is still on
+            // its way for the previous destination.
             self.generation += 1;
             self.loading = false;
             if matches!(self.transition, Transition::Waiting) {
                 self.commit_screen();
             }
         } else if let Some(saved) = saved {
-            // Nothing to fetch: the saved grid goes on once the surface is
-            // hidden, and a reply still on its way no longer applies.
+            // A saved grid is shown, so no results are read, and raising
+            // `generation` makes the session ignore a reply that is still on
+            // its way. The saved grid is shown now if what was on screen is
+            // already invisible. Otherwise it waits in `pending_restore`
+            // until the fade-out has finished.
             self.generation += 1;
             self.loading = false;
             if matches!(self.transition, Transition::Waiting) {
@@ -382,7 +430,9 @@ impl Session {
         cx.emit(Change::Navigation);
     }
 
-    /// Shows a destination that is a screen, not a grid, on the hidden surface.
+    /// Shows the open destination when it is a screen and not a grid:
+    /// empties the results, makes the destination the displayed one, and
+    /// starts the fade-in.
     fn commit_screen(&mut self) {
         self.clear_results();
         self.total_size_bytes = 0;
@@ -390,8 +440,9 @@ impl Session {
         self.transition = Transition::FadingIn(Instant::now());
     }
 
-    /// Fades the destination in on its error, which takes the grid's place.
-    /// The previous destination's items go, so a retry never shows them.
+    /// Shows the open destination with its error in place of the grid, and
+    /// starts the fade-in. The results are emptied, so that the items of the
+    /// previous destination are not shown when the read is tried again.
     pub(super) fn show_error(&mut self, cx: &mut Context<Self>) {
         self.clear_results();
         self.displayed = self.scope;
@@ -400,7 +451,8 @@ impl Session {
         cx.emit(Change::Selection);
     }
 
-    /// No results: an empty window over nothing.
+    /// Empties the results: no items, a total of 0, no requests for other
+    /// windows, and no selection.
     fn clear_results(&mut self) {
         self.items.clear();
         self.head.clear();
@@ -414,8 +466,13 @@ impl Session {
         self.forget_selection();
     }
 
-    /// Moves a scope change along once its current stage has run its time.
-    /// The views that fade call this as they paint.
+    /// Moves the fade to its next stage when the current stage has lasted
+    /// 170 ms (`motion::SCOPE_FADE`). When the fade-out has finished, this
+    /// shows what is ready for the open destination: its screen, a saved
+    /// grid, results that have already arrived, or its error. When none of
+    /// these is ready, the grid stays invisible until the results arrive.
+    /// When the fade-in has finished, the fade is over. The views that fade
+    /// call this each time they are drawn.
     pub fn advance_transition(&mut self, cx: &mut Context<Self>) {
         match self.transition {
             Transition::FadingOut(started) if started.elapsed() >= motion::SCOPE_FADE => {
@@ -446,8 +503,12 @@ impl Session {
     }
 }
 
-/// Back and Forward without the places that no longer exist, each moved to
-/// its destination's new position, and where the current place now is.
+/// Returns the history as it is after the list of destinations was
+/// replaced, together with the index of the current entry in it. `moved`
+/// gives the new index of a destination, or `None` when the destination no
+/// longer exists. Entries of destinations that no longer exist are removed,
+/// and the other entries get their destination's new index. When the current
+/// entry is removed, the kept entry before it becomes the current one.
 fn remap_history(
     history: &[Visit],
     index: usize,
@@ -457,7 +518,9 @@ fn remap_history(
     let mut current = 0;
     for (at, visit) in history.iter().enumerate() {
         if let Some(scope) = moved(visit.scope) {
-            // Two steps to the same place, once what was between them is gone.
+            // Skip an entry that is equal to the entry kept before it. Two
+            // equal entries become neighbours when the entries that were
+            // between them have been removed.
             if kept.last() != Some(&Visit { scope, ..*visit }) {
                 kept.push(Visit { scope, ..*visit });
             }
@@ -482,7 +545,8 @@ mod tests {
             place: None,
             filters: 0,
         };
-        // Destinations 0..4; 2 was deleted and 3 moved up to 2.
+        // There were destinations 0 to 3. Destination 2 was deleted, and
+        // destination 3 now has index 2.
         let moved = |index: usize| match index {
             2 => None,
             3 => Some(2),
@@ -492,11 +556,13 @@ mod tests {
         let (kept, current) = remap_history(&history, 2, moved);
         assert!(kept == [visit(0), visit(2), visit(1)]);
         assert_eq!(current, 1);
-        // The current place itself deleted: the one before it is current.
+        // The destination of the current entry was deleted, so the entry
+        // before it becomes the current one.
         let (kept, current) = remap_history(&history, 1, moved);
         assert_eq!(kept.len(), 3);
         assert_eq!(current, 0);
-        // Steps that meet once the place between them is gone become one.
+        // Two equal entries that become neighbours, because the entry between
+        // them is removed, are kept as one entry.
         let (kept, _) = remap_history(&[visit(1), visit(2), visit(1)], 2, moved);
         assert!(kept == [visit(1)]);
     }

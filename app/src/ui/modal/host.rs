@@ -1,40 +1,48 @@
-//! Holding a view's open dialog: what it shows, its time on screen, the
-//! focus that holds the keyboard while no field in it has it, and where the
-//! keyboard goes back to once it has gone.
+//! Keeps the one dialog that a view has open: its content, its [`Presence`],
+//! the focus handle that has the keyboard focus while no field in the dialog
+//! has it, and the control that gets the keyboard focus back when the dialog
+//! closes.
 use super::Presence;
 use crate::ui::menu::{Return, host::give_back};
 use gpui::*;
 
-/// The open dialog. Draw it with its `presence` and `focus`.
+/// The dialog that is open. The owner draws it with its `presence` and its
+/// `focus`.
 pub struct Dialog<T> {
     pub content: T,
     pub presence: Presence,
-    /// Holds the keyboard while no field in the dialog has it.
+    /// The focus handle that has the keyboard focus while no field in the
+    /// dialog has it.
     pub focus: FocusHandle,
-    /// What takes the keyboard when the dialog is first drawn.
+    /// The focus handle that gets the keyboard focus when the dialog is first
+    /// drawn. It is `None` after that.
     first: Option<FocusHandle>,
     back: Return,
     back_to: Option<FocusHandle>,
-    /// The keyboard has been given back, as the dialog began to leave.
+    /// Whether the keyboard focus has already been returned. That happens when
+    /// the dialog starts to fade out.
     returned: bool,
 }
 
 impl<T> Dialog<T> {
-    /// A field that takes the keyboard when the dialog opens, rather than
-    /// the dialog itself.
+    /// Makes `handle`, a field of the dialog, take the keyboard focus when the
+    /// dialog opens, in place of the dialog itself.
     pub fn focus_first(&mut self, handle: FocusHandle) {
         self.first = Some(handle);
     }
 }
 
-/// One dialog at a time for its owner. The owner draws what
-/// [`Host::layer`] returns from its `render`, which drops the dialog once it
-/// has faded out and keeps the owner repainting until then: a faded
-/// [`super::Modal`] draws nothing and asks for no more frames, so without
-/// that its owner could keep it forever.
+/// Keeps at most one open dialog for a view. The view draws what
+/// [`Host::layer`] returns from its `render`. `layer` removes the dialog once
+/// it has faded out, and asks for another frame until then. This is needed
+/// because a [`super::Modal`] that has faded out draws nothing and asks for no
+/// more frames, so nothing else would make the view draw again and remove the
+/// dialog.
 pub struct Host<T> {
     open: Option<Dialog<T>>,
-    /// A dialog closed at once, whose keyboard goes back at the next draw.
+    /// The focus handles of a dialog that was closed without a fade-out: its
+    /// own, and the one that the keyboard focus returns to. The focus is
+    /// returned at the next draw.
     left: Option<(FocusHandle, Option<FocusHandle>)>,
 }
 
@@ -48,8 +56,9 @@ impl<T> Default for Host<T> {
 }
 
 impl<T> Host<T> {
-    /// Opens `content` over whatever was open. It takes the keyboard when it
-    /// is first drawn, and gives it back to `back` once it leaves.
+    /// Opens a dialog with `content`, and closes the one that was open. The
+    /// dialog takes the keyboard focus when it is first drawn. When it closes,
+    /// the focus returns to `back`.
     pub fn open<V: 'static>(
         &mut self,
         content: T,
@@ -78,7 +87,7 @@ impl<T> Host<T> {
         self.open.as_mut()
     }
 
-    /// What the open dialog shows.
+    /// Returns the content of the open dialog.
     pub fn content(&self) -> Option<&T> {
         self.open.as_ref().map(|dialog| &dialog.content)
     }
@@ -87,8 +96,9 @@ impl<T> Host<T> {
         self.open.as_mut().map(|dialog| &mut dialog.content)
     }
 
-    /// The close button, Escape, the backdrop, or a confirmation: the
-    /// dialog fades out, and the keyboard goes back at once.
+    /// Starts the dialog's fade-out. The close button, Escape, a click on the
+    /// backdrop and a confirmation call this. The keyboard focus is returned at
+    /// the next draw, before the fade-out has ended.
     pub fn dismiss<V: 'static>(&mut self, cx: &mut Context<V>) {
         if let Some(dialog) = &mut self.open {
             dialog.presence.close();
@@ -96,7 +106,8 @@ impl<T> Host<T> {
         }
     }
 
-    /// Cancel, or a dialog whose work is done: it goes at once.
+    /// Removes the dialog at once, without a fade-out, and returns its content.
+    /// Cancel calls this, and so does a dialog whose work is done.
     pub fn close<V: 'static>(&mut self, cx: &mut Context<V>) -> Option<T> {
         let dialog = self.open.take()?;
         if !dialog.returned {
@@ -106,7 +117,10 @@ impl<T> Host<T> {
         Some(dialog.content)
     }
 
-    /// The open dialog, to draw from the owner's `render`.
+    /// Returns the open dialog, for the owner to draw in its `render`. Before
+    /// that, it returns the keyboard focus for a dialog that has closed,
+    /// removes a dialog that has faded out, and gives the keyboard focus to a
+    /// dialog that is drawn for the first time.
     pub fn layer(&mut self, window: &mut Window, cx: &mut App) -> Option<&Dialog<T>> {
         if let Some((focus, back)) = self.left.take() {
             let still_there = focus.contains_focused(window, cx);

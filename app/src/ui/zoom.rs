@@ -1,23 +1,20 @@
-//! The zoom control in the titlebar (production's `TitlebarControls.tsx`). It
-//! is a horizontal track 80 px long with a round knob. It is used in two
-//! places.
+//! Draws the zoom control in the titlebar. It is a horizontal track 80 px
+//! long with a round knob. It is used in two places.
 //!
 //! In the grid's toolbar it sets the grid's zoom, and it has a − button on its
-//! left and a + button on its right (`TitlebarZoomSlider`). In the grid and
-//! waterfall layouts the track has one knob position for each number of
-//! columns the grid can have at its current width. The smallest tiles (the
-//! most columns) are at the left end and one column is at the right end. Each
-//! position gives a different number of columns, and no number of columns is
-//! left out. The knob's place on the track follows the size of the tiles, so
-//! it moves only slightly, and only in one direction, while the grid is made
-//! wider or narrower without a change of zoom. In the justified layout, which has a target row height and no
-//! columns, the knob's position is that height and it can be anywhere on the
-//! track. Production's control sets a tile size from 150 to 900 in steps of 10
-//! in every layout.
+//! left and a + button on its right. In the grid and waterfall layouts the
+//! track has one knob position for each number of columns the grid can have
+//! at its current width. The smallest tiles (the most columns) are at the
+//! left end and one column is at the right end. Each position gives a
+//! different number of columns, and no number of columns is left out. The
+//! knob's place on the track follows the size of the tiles, so it moves only
+//! slightly, and only in one direction, while the grid is made wider or
+//! narrower without a change of zoom. In the justified layout, which has a
+//! target row height and no columns, the knob's position is that height and
+//! it can be anywhere on the track.
 //!
 //! In the viewer's toolbar it sets the zoom percentage of the picture on a
-//! logarithmic scale, and it has no buttons (`TitlebarRangeSlider` as
-//! `ViewerToolbar` uses it).
+//! logarithmic scale, and it has no buttons.
 use crate::i18n::t;
 use crate::{theme, ui};
 use gpui::*;
@@ -62,16 +59,16 @@ pub enum Value {
 const TRACK: f32 = 80.;
 const KNOB: f32 = 12.;
 
-/// The viewer's zoom range in percent, 5 to 800 (`MIN_SCALE` and `MAX_SCALE`
-/// in production's `useImageZoom.ts`). `POSITION_STEP` is the distance the
-/// viewer's knob moves in one step, on a track that is numbered 0 to 100.
+/// The viewer's zoom range in percent, 5 to 800. `POSITION_STEP` is the
+/// distance the viewer's knob moves in one step, on a track that is numbered
+/// 0 to 100.
 const PERCENT_MINIMUM: f32 = 5.;
 const PERCENT_MAXIMUM: f32 = 800.;
 const POSITION_STEP: f32 = 0.5;
 
-/// The knob position, from 0 to 100, for a zoom percentage in the viewer. 5%
-/// is at 0, 100% is at 50 and 800% is at 100. The scale is logarithmic on each
-/// side of 50 (`zoomToSlider` in production's `GridToolbar.tsx`).
+/// Returns the knob position, from 0 to 100, for a zoom percentage in the
+/// viewer. 5% is at 0, 100% is at 50 and 800% is at 100. The scale is
+/// logarithmic on each side of 50.
 fn percent_to_position(percent: f32) -> f32 {
     if percent <= 100. {
         50. * (percent / PERCENT_MINIMUM).ln() / (100. / PERCENT_MINIMUM).ln()
@@ -80,8 +77,8 @@ fn percent_to_position(percent: f32) -> f32 {
     }
 }
 
-/// The zoom percentage for a knob position from 0 to 100. This is the inverse
-/// of [`percent_to_position`] (production's `sliderToZoom`).
+/// Returns the zoom percentage for a knob position from 0 to 100. This is the
+/// inverse of [`percent_to_position`].
 fn position_to_percent(position: f32) -> f32 {
     if position <= 50. {
         PERCENT_MINIMUM * (100. / PERCENT_MINIMUM).powf(position / 50.)
@@ -90,11 +87,11 @@ fn position_to_percent(position: f32) -> f32 {
     }
 }
 
-/// The container the zoom control is placed in, in the titlebar (production's
-/// `.sliderSection`). It is filled with the app's background colour, and a 20
-/// px wide gradient to its left goes from transparent to that colour, so a
-/// long scope title is hidden where it reaches the control. A press on it does
-/// not drag the window.
+/// Returns the container that the zoom control is placed in, in the titlebar.
+/// It is filled with the app's background colour, and a 20 px wide gradient to
+/// its left goes from transparent to that colour, so a long scope title is
+/// hidden where it reaches the control. A press on it does not drag the
+/// window.
 pub fn section(cx: &App) -> Div {
     let background = theme::theme(cx).background();
     div()
@@ -130,24 +127,24 @@ pub struct Zoom {
     value: Value,
     /// True while the mouse button is held after a press on the control. While
     /// it is true the knob follows the pointer even when the pointer is
-    /// outside the control, as a native range input does.
+    /// outside the control.
     dragging: Rc<Cell<bool>>,
 }
 
 impl EventEmitter<Changed> for Zoom {}
 
 impl Value {
-    /// The knob's position along the track, from 0 at the left end to 1 at the
-    /// right end.
+    /// Returns the knob's position along the track, from 0 at the left end to
+    /// 1 at the right end.
     fn along(self) -> f32 {
         match self {
             // A grid too narrow for two columns has one knob position. It is
             // drawn at the right end, where one column always is.
             Value::Columns { most, span, .. } if most <= 1 || span <= 1. => 1.,
             // The whole numbers `count` and `most` each change in a jump at
-            // a different width, so a knob placed with them moved left and
-            // right by turns while the grid was resized. The numbers before
-            // rounding change evenly with the width.
+            // a different width, so a knob placed with them would move left
+            // and right by turns while the grid is resized. The numbers
+            // before rounding change evenly with the width.
             Value::Columns { exact, span, .. } => (span - exact) / (span - 1.),
             Value::Height {
                 height,
@@ -159,10 +156,10 @@ impl Value {
         .clamp(0., 1.)
     }
 
-    /// The value for a knob position `along` the track, from 0 to 1. For
-    /// columns it is the nearest whole number of columns. For a row height it
-    /// is rounded to a whole pixel. For the viewer the position is rounded to
-    /// half a unit of its 0 to 100 track.
+    /// Returns the value for a knob position `along` the track, from 0 to 1.
+    /// For columns it is the nearest whole number of columns. For a row
+    /// height it is rounded to a whole pixel. For the viewer the position is
+    /// rounded to half a unit of its 0 to 100 track.
     fn at(self, along: f32) -> Self {
         match self {
             Value::Columns { most, span, .. } => {
@@ -186,8 +183,8 @@ impl Value {
         }
     }
 
-    /// Whether the value is at the end of its range in the direction of a
-    /// step, so the step would change nothing. The − and + buttons are
+    /// Returns whether the value is at the end of its range in the direction
+    /// of a step, so the step would change nothing. The − and + buttons are
     /// disabled when this is true for their direction.
     fn at_end(self, larger: bool) -> bool {
         match (self, larger) {
@@ -200,10 +197,10 @@ impl Value {
         }
     }
 
-    /// The numbers reported to assistive technology for the slider: the
-    /// current value, the smallest value and the largest value. For columns,
-    /// the value is the number of the knob's position counted from the left
-    /// end, where the smallest tiles are, starting at 1.
+    /// Returns the numbers reported to assistive technology for the slider:
+    /// the current value, the smallest value and the largest value. For
+    /// columns, the value is the number of the knob's position counted from
+    /// the left end, where the smallest tiles are, starting at 1.
     fn numbers(self) -> (f64, f64, f64) {
         match self {
             Value::Columns { count, most, .. } => {
@@ -250,8 +247,7 @@ impl Zoom {
     /// Shows `value` in the control without emitting [`Changed`]. The toolbars
     /// call this when the zoom changed for another reason than this control,
     /// for example a zoom key. It does nothing while the user is dragging the
-    /// knob, so the knob stays under the pointer. Production's viewer slider
-    /// ignores the zoom in the same way during a drag.
+    /// knob, so the knob stays under the pointer.
     pub fn show(&mut self, value: Value, cx: &mut Context<Self>) {
         if self.dragging.get() {
             return;
@@ -341,10 +337,9 @@ impl Render for Zoom {
             },
         )
         .size_full();
-        // The slider's accessibility values, as production's `<input
-        // type="range" aria-label="Zoom">` reports them. An increment or
-        // decrement from assistive technology makes the same step as the + or
-        // − button.
+        // Assistive technology gets the control as a slider named "Zoom", with
+        // its current, smallest and largest value. An increment or decrement
+        // from assistive technology makes the same step as the + or − button.
         let (value, minimum, maximum) = self.value.numbers();
         let stepped = |larger: bool| {
             let zoom = cx.entity().downgrade();

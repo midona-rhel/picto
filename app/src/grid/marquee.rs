@@ -1,16 +1,21 @@
-//! Rubber-band selection and the pointer geometry it shares with hovering, as
-//! `CanvasGrid.tsx` and `hitTesting.ts` define them. Coordinates are layout
-//! pixels: x from the grid's left edge, y from the top of the scrolled content.
+//! The rubber band selection, and the pointer geometry it shares with
+//! hovering: which image is under a point, and where a tile's magnifier
+//! corner is. Coordinates are layout pixels: x is measured from the grid's
+//! left edge and y from the top of the scrolled content.
 use super::layout::{Layout, Tile};
 use std::collections::BTreeSet;
 
-/// The rectangle shows, and selects, once either side is this long.
+/// The rubber band's rectangle is drawn, and selects images, once its width
+/// or its height is at least this many pixels.
 pub const THRESHOLD: f32 = 5.;
-/// Within this distance of the grid's top or bottom edge the grid scrolls.
+/// The grid scrolls while the pointer of a rubber band is within this many
+/// pixels of the grid's top or bottom edge.
 pub const EDGE_ZONE: f32 = 50.;
-/// The scroll step, in pixels per frame, at the very edge.
+/// The number of pixels the grid scrolls in each frame when the pointer is
+/// exactly on the edge.
 pub const MAX_SPEED: f32 = 12.;
-/// The magnifier corner of a hovered image (`ZOOM_BTN_SIZE` + 4 by + 2).
+/// The width and the height of the magnifier corner, which is the area at
+/// the bottom right of a hovered image that holds the magnifier icon.
 pub const MAGNIFIER_WIDTH: f32 = 28.;
 pub const MAGNIFIER_HEIGHT: f32 = 26.;
 
@@ -23,7 +28,8 @@ pub struct Rect {
 }
 
 impl Rect {
-    /// The rectangle between where the press started and where the pointer is.
+    /// Returns the rectangle between the point of the press, `start`, and
+    /// the point where the pointer is, `end`.
     pub fn spanning(start: (f32, f32), end: (f32, f32)) -> Self {
         Self {
             left: start.0.min(end.0),
@@ -33,27 +39,30 @@ impl Rect {
         }
     }
 
-    /// Whether the pointer has moved far enough for the rectangle to count.
+    /// Whether the rectangle's width or height is at least `THRESHOLD`.
     pub fn reaches_threshold(&self) -> bool {
         self.width >= THRESHOLD || self.height >= THRESHOLD
     }
 }
 
-/// A rubber band in progress.
+/// A rubber band selection in progress.
 pub struct Marquee {
-    /// Where the press landed, in layout pixels.
+    /// The point of the press, in layout pixels.
     pub start: (f32, f32),
-    /// The pointer relative to the grid's top-left corner, not scrolled.
+    /// The pointer's position measured from the grid's top-left corner. The
+    /// distance the grid is scrolled is not added to it.
     pub pointer: (f32, f32),
-    /// The selection kept from before the press (Shift or the selection key
-    /// held).
+    /// The indexes of the tiles that were selected before the press, when
+    /// the rubber band adds to the selection. It is empty when the rubber
+    /// band replaces the selection.
     pub base: BTreeSet<usize>,
-    /// The images under the rectangle.
+    /// The indexes of the tiles whose images the rectangle overlaps.
     pub hits: BTreeSet<usize>,
-    /// The rectangle once it has reached the threshold. It stays at its last
-    /// size if the pointer comes back closer than that.
+    /// The rectangle, once it has reached `THRESHOLD`. It keeps its last
+    /// size when the pointer comes back closer to the press than that.
     pub rect: Option<Rect>,
-    /// The auto-scroll step for the pointer's distance from an edge.
+    /// The number of pixels the grid scrolls in each frame, which depends
+    /// on the pointer's distance from the grid's top or bottom edge.
     pub speed: f32,
 }
 
@@ -69,7 +78,9 @@ impl Marquee {
         }
     }
 
-    /// Follows the pointer at the grid's current scroll position.
+    /// Computes the rectangle and the tiles it overlaps again, for the
+    /// stored pointer position and the distance `scroll_top` that the grid
+    /// is scrolled.
     pub fn track(&mut self, scroll_top: f32, layout: &Layout, text_height: f32) {
         let rect = Rect::spanning(self.start, (self.pointer.0, self.pointer.1 + scroll_top));
         if rect.reaches_threshold() && self.rect != Some(rect) {
@@ -78,9 +89,10 @@ impl Marquee {
         }
     }
 
-    /// Whether the tile shows as selected while the band is out: the kept
-    /// selection and what the rectangle covers. Before the rectangle shows,
-    /// the selection as it was.
+    /// Whether the tile at `index` is drawn as selected during the rubber
+    /// band. Once the rectangle is drawn, these are the tiles of `base` and
+    /// the tiles the rectangle overlaps. Before that, these are the tiles
+    /// of `selection`, the selection from before the press.
     pub fn shows_selected(&self, index: usize, selection: &BTreeSet<usize>) -> bool {
         if self.rect.is_some() {
             self.base.contains(&index) || self.hits.contains(&index)
@@ -89,7 +101,9 @@ impl Marquee {
         }
     }
 
-    /// What the selection becomes on release, if the rectangle ever showed.
+    /// Returns the selection that the release of the button leaves: the
+    /// tiles of `base` and the tiles the rectangle overlaps. Returns `None`
+    /// when the rectangle never reached `THRESHOLD`.
     pub fn committed(self) -> Option<BTreeSet<usize>> {
         self.rect?;
         let mut selection = self.base;
@@ -98,8 +112,8 @@ impl Marquee {
     }
 }
 
-/// The images whose rect (not the text rows under them) the rectangle
-/// overlaps, as `collectMarqueeHits` tests them.
+/// Returns the indexes of the tiles whose image the rectangle overlaps. The
+/// text rows under an image are not part of the image.
 pub fn hits(layout: &Layout, rect: Rect, text_height: f32) -> BTreeSet<usize> {
     layout
         .visible(rect.top, rect.top + rect.height)
@@ -115,8 +129,8 @@ pub fn hits(layout: &Layout, rect: Rect, text_height: f32) -> BTreeSet<usize> {
         .collect()
 }
 
-/// The image under a point, as `hitTestTile` finds it: the text rows under an
-/// image are empty space.
+/// Returns the index of the tile whose image is under the point (`x`, `y`).
+/// A point on the text rows under an image is on no image.
 pub fn image_at(layout: &Layout, x: f32, y: f32, text_height: f32) -> Option<usize> {
     layout.visible(y, y).into_iter().find(|&index| {
         let tile = &layout.tiles[index];
@@ -124,15 +138,17 @@ pub fn image_at(layout: &Layout, x: f32, y: f32, text_height: f32) -> Option<usi
     })
 }
 
-/// Whether a point on a tile is on its magnifier corner (`isZoomButtonHit`).
+/// Whether the point (`x`, `y`) is on the magnifier corner of `tile`.
 pub fn on_magnifier(tile: &Tile, x: f32, y: f32, text_height: f32) -> bool {
     let left = tile.x + tile.w - MAGNIFIER_WIDTH;
     let top = tile.y + tile.h - text_height - MAGNIFIER_HEIGHT;
     x >= left && x < left + MAGNIFIER_WIDTH && y >= top && y < top + MAGNIFIER_HEIGHT
 }
 
-/// How far the grid scrolls each frame for a pointer `y` pixels below the
-/// grid's top edge: faster the nearer the edge, and faster still past it.
+/// Returns how many pixels the grid scrolls in each frame for a pointer `y`
+/// pixels below the grid's top edge. The speed is 0 further than `EDGE_ZONE`
+/// from both edges and grows the nearer the pointer is to an edge. It keeps
+/// growing when the pointer is outside the grid.
 pub fn auto_scroll_speed(y: f32, viewport_height: f32) -> f32 {
     if y < EDGE_ZONE {
         -MAX_SPEED * (1. - y / EDGE_ZONE)
@@ -149,8 +165,8 @@ mod tests {
     use super::{Marquee, Rect, Tile, auto_scroll_speed, hits, image_at, on_magnifier};
     use std::collections::BTreeSet;
 
-    /// Twelve square items in the grid mode, four to a row, each with a 20px
-    /// text row under the image.
+    /// Returns the layout of twelve square items in the grid mode, four in a
+    /// row, each with a text row of 20 px under the image.
     fn grid() -> Layout {
         Layout::compute(&[1.; 12], 840., 200., 14., ViewMode::Grid, 20.)
     }
@@ -177,7 +193,8 @@ mod tests {
         let layout = grid();
         let first = layout.tiles[0];
         let image_bottom = first.y + first.h - 20.;
-        // A thin band across the first row's text rows selects nothing.
+        // A thin rectangle across the text rows of the first row selects
+        // nothing.
         let text_rows = Rect {
             left: 0.,
             top: image_bottom + 1.,
@@ -185,7 +202,8 @@ mod tests {
             height: 15.,
         };
         assert!(hits(&layout, text_rows, 20.).is_empty());
-        // Reaching one pixel into the image selects the whole row.
+        // A rectangle that reaches one pixel into the images selects the
+        // whole row.
         let into_images = Rect {
             top: image_bottom - 1.,
             ..text_rows
@@ -195,7 +213,7 @@ mod tests {
             row.len(),
             layout.tiles.iter().filter(|t| t.y == first.y).count()
         );
-        // Touching an edge exactly is not overlapping.
+        // A rectangle that only touches an image's edge does not overlap it.
         let edge = Rect {
             left: first.x + first.w,
             top: first.y,
@@ -203,7 +221,7 @@ mod tests {
             height: 10.,
         };
         assert!(!hits(&layout, edge, 20.).contains(&0));
-        // The gap between two images selects neither.
+        // A rectangle in the gap between two images selects neither.
         let second = layout.tiles[1];
         let gap = Rect {
             left: first.x + first.w + 1.,
@@ -275,7 +293,7 @@ mod tests {
         assert_eq!(auto_scroll_speed(0., 600.), -12.);
         assert_eq!(auto_scroll_speed(575., 600.), 6.);
         assert_eq!(auto_scroll_speed(600., 600.), 12.);
-        // Past the edge, as the Electron grid does, it does not cap.
+        // The speed has no upper limit when the pointer is outside the grid.
         assert_eq!(auto_scroll_speed(-50., 600.), -24.);
         assert_eq!(auto_scroll_speed(650., 600.), 24.);
     }
@@ -287,18 +305,19 @@ mod tests {
         let base = BTreeSet::from([11]);
         let mut marquee = Marquee::new((first.x - 4., first.y - 4.), (0., 0.), base);
         let selection = BTreeSet::from([11, 3]);
-        // A press without moving shows the selection as it was.
+        // After a press without a move, the selection is shown as it was.
         marquee.pointer = (first.x - 2., first.y - 2.);
         marquee.track(0., &layout, 20.);
         assert!(marquee.rect.is_none());
         assert!(marquee.shows_selected(3, &selection));
-        // Moving into the first image selects it alongside the kept one.
+        // A move into the first image selects it together with the kept tile.
         marquee.pointer = (first.x + 10., first.y + 10.);
         marquee.track(0., &layout, 20.);
         assert!(marquee.shows_selected(0, &selection));
         assert!(marquee.shows_selected(11, &selection));
         assert!(!marquee.shows_selected(3, &selection));
-        // Scrolling down with the pointer still reaches the next row.
+        // When the grid scrolls down while the pointer stays where it is, the
+        // rectangle reaches the next row.
         marquee.track(first.h + 20., &layout, 20.);
         let next_row = layout
             .tiles
@@ -307,7 +326,7 @@ mod tests {
             .unwrap();
         assert!(marquee.shows_selected(next_row, &selection));
         assert_eq!(marquee.committed(), Some(BTreeSet::from([0, next_row, 11])));
-        // A press that never moved commits nothing.
+        // A rubber band whose pointer never moved leaves no selection.
         let still = Marquee::new((0., 0.), (0., 0.), BTreeSet::from([1]));
         assert_eq!(still.committed(), None);
     }

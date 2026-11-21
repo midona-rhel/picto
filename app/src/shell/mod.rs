@@ -1,12 +1,11 @@
-//! The root view of the main window. It lays the window out the way
-//! `AppShell.tsx` does in production. At the top is the titlebar row; the left
-//! block of that row is always as wide as the sidebar. Below the titlebar is
-//! the body, which holds the sidebar on the left and, in the centre, the grid,
-//! the viewer or a screen. The inspector is on the right and spans the
-//! window's full height. The sidebar and the inspector are called rails in
-//! this code. The user can hide either one, and it then slides out of the
-//! window. Each part is a separate cached view, so this root view only
-//! positions them.
+//! The root view of the main window. It lays the window out in this way. At
+//! the top is the titlebar row; the left block of that row is always as wide
+//! as the sidebar. Below the titlebar is the body, which holds the sidebar on
+//! the left and, in the centre, the grid, the viewer or a screen. The
+//! inspector is on the right and spans the window's full height. The sidebar
+//! and the inspector are called rails in this code. The user can hide either
+//! one, and it then slides out of the window. Each part is a separate cached
+//! view, so this root view only positions them.
 //!
 //! The user can turn on the system's frosted material for the two rails
 //! (`ui::window_chrome::show_rail_material`). The rails are then filled with
@@ -121,17 +120,14 @@ pub struct Shell {
     /// have it, and any other screen uses that width itself.
     /// `inspector_presence` is the inspector's opacity. When
     /// `inspector_available` changes because the user opened or left a screen,
-    /// the inspector fades in or out over 170 ms (`data-motion='fade'` in
-    /// production). It does not slide then; it slides only when the user hides
-    /// or shows it.
+    /// the inspector fades in or out over 170 ms. It does not slide then; it
+    /// slides only when the user hides or shows it.
     inspector_available: Option<bool>,
     inspector_presence: motion::Fade,
     /// True from the moment the viewer is closed by navigating to another
     /// destination until the centre of the window has finished fading out.
     /// During that time the viewer is still drawn in the centre and fades out
-    /// with it, and after that the destination replaces it. Production does
-    /// the same: `MediaView` stays inside the workspace surface while that
-    /// surface fades out.
+    /// with it, and after that the destination replaces it.
     viewer_exit: bool,
     /// The context menu that is open, if there is one. The grid, the sidebar,
     /// the filter bar and the other parts of the window all show their menus
@@ -160,7 +156,7 @@ pub struct Shell {
     batch_rename: Entity<batch_rename::BatchRename>,
     /// The library cover dialog.
     library_cover: Entity<library_cover::LibraryCover>,
-    /// The update dialog, which is `ApplicationUpdateHost` in production.
+    /// The update dialog.
     updates: Entity<crate::updates::dialog::UpdateDialog>,
     /// The Quick Search panel. It is drawn over the whole window while it is
     /// open.
@@ -533,8 +529,8 @@ impl Shell {
             // In a debug build, setting the environment variable
             // `PICTO_GPUI_INSPECTOR`, for example to `272`, opens the
             // inspector at that width instead of the saved width. It is for
-            // comparing this window with an Electron window whose inspector
-            // was resized.
+            // looking at the window with an inspector of a chosen width
+            // without changing the saved width.
             inspector_width: crate::seams::inspector_width()
                 .map_or(kept.inspector_width, crate::state::inspector_width),
             resizing: None,
@@ -568,9 +564,8 @@ impl Shell {
         }
     }
 
-    /// Opens the view menu (`GridViewMenu` in production) at `position`, and
-    /// tells the toolbar to keep its "View options" button highlighted while
-    /// the menu is open.
+    /// Opens the view menu at `position`, and tells the toolbar to keep its
+    /// "View options" button highlighted while the menu is open.
     fn open_view_menu(
         &mut self,
         position: Point<Pixels>,
@@ -620,11 +615,11 @@ impl Shell {
         self._view_panels = subscriptions;
     }
 
-    /// Toggle Panels: hides the sidebar and the inspector together, or
-    /// shows them together. When at least one of them is showing, every
-    /// one that is showing is hidden. When both are hidden, both are shown.
-    /// So the two never end up swapped, with one appearing as the other
-    /// disappears.
+    /// Carries out the Toggle Panels command: hides the sidebar and the
+    /// inspector together, or shows them together. When at least one of them
+    /// is showing, every one that is showing is hidden. When both are hidden,
+    /// both are shown. So it never happens that one rail appears while the
+    /// other disappears.
     pub(super) fn toggle_all_rails(&mut self, cx: &mut Context<Self>) {
         let (sidebar_shown, inspector_shown) =
             (!self.sidebar_collapsed, !self.inspector_collapsed);
@@ -638,12 +633,11 @@ impl Shell {
     /// Hides or shows the sidebar when `sidebar` is true, and the inspector
     /// when `inspector` is true, and saves the new state. Both rails slide
     /// over the same 100 ms, so when they are hidden together they move in
-    /// step (in production the sidebar takes 50 ms). The content between the
-    /// rails gets its new width immediately and is laid out for that width
-    /// once; the rails are drawn over it while they slide. While the window
-    /// shows the system's frosted material, the content is not drawn under a
-    /// sliding rail (see `Shell::render`), so it is drawn again in each frame
-    /// of the slide, at the same width.
+    /// step. The content between the rails gets its new width immediately and
+    /// is laid out for that width once; the rails are drawn over it while they
+    /// slide. While the window shows the system's frosted material, the
+    /// content is not drawn under a sliding rail (see `Shell::render`), so it
+    /// is drawn again in each frame of the slide, at the same width.
     fn toggle_rails(&mut self, sidebar: bool, inspector: bool, cx: &mut Context<Self>) {
         let shown = (
             !(self.sidebar_collapsed ^ sidebar),
@@ -755,7 +749,7 @@ impl Shell {
 
     /// Handles a double-click on the tile at `ordinal`, or a middle-click when
     /// `middle` is true. What the click does is chosen in the Controls
-    /// settings (`onTileDoubleClick` and `onTileMiddleClick` in production).
+    /// settings (`grid_double_click_action` and `grid_middle_click_action`).
     fn activate(
         &mut self,
         ordinal: usize,
@@ -807,11 +801,10 @@ impl Shell {
         }
     }
 
-    /// Opens the item at the ordinal `start` in a detail window, as
-    /// `openGridItemInWindow` does in production. The detail window can step
-    /// through the items at `ordinals`. An ordinal whose item is not among the
-    /// items the session has loaded is left out, and nothing opens if `start`
-    /// is such an ordinal.
+    /// Opens the item at the ordinal `start` in a detail window. The detail
+    /// window can step through the items at `ordinals`. An ordinal whose item
+    /// is not among the items the session has loaded is left out, and nothing
+    /// opens if `start` is such an ordinal.
     fn open_in_window(&mut self, ordinals: Vec<usize>, start: usize, cx: &mut Context<Self>) {
         let (entries, at) = {
             let session = self.session.read(cx);
@@ -833,8 +826,7 @@ impl Shell {
     }
 
     /// Opens the first media file of the item at `ordinal` in the application
-    /// that the system uses for that kind of file, as `openDefaultAppForHash`
-    /// does in production.
+    /// that the system uses for that kind of file.
     fn open_default(&mut self, ordinal: usize, cx: &mut Context<Self>) {
         let Some(root) = self
             .session
@@ -872,9 +864,8 @@ impl Shell {
     /// the sidebar is hidden, so the toolbar beside it does not move when the
     /// sidebar is hidden or shown. It holds the Settings, Toggle Panels and
     /// Quick Search buttons, and the application menu button where the window
-    /// has one. Its
-    /// left padding (`TITLEBAR_INSET`) keeps the buttons clear of the macOS
-    /// window buttons (the traffic lights).
+    /// has one. Its left padding (`TITLEBAR_INSET`) keeps the buttons clear of
+    /// the macOS window buttons (the traffic lights).
     fn titlebar_left(&self, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = theme::theme(cx);
         let translucent = ui::window_chrome::rails_translucent(cx);
@@ -893,8 +884,7 @@ impl Shell {
             // The block has the app background colour and a 1px right border.
             // While the sidebar is shown, the rail colour fills the area
             // inside the border. The border is therefore drawn over the app
-            // background and not over the rail colour. Production's CSS does
-            // this with `background-clip: padding-box`. While the window shows
+            // background and not over the rail colour. While the window shows
             // the frosted material, the block has no background of its own:
             // `Shell::render` draws the app background under the border and,
             // while the sidebar is hidden, under the whole block.
@@ -907,9 +897,8 @@ impl Shell {
             })
             .children((!self.sidebar_collapsed).then(|| div().absolute().inset_0().bg(rail_fill)))
             // Where the application menu is shown inside the window (Windows
-            // and Linux), it is a button at the left of this block
-            // (`ApplicationMenuButton` in production). A flexible spacer after
-            // it keeps the other buttons at the right.
+            // and Linux), it is a button at the left of this block. A
+            // flexible spacer after it keeps the other buttons at the right.
             .children(crate::app_menu::in_window().then(|| {
                 ui::icon_button("application-menu", "app-menu")
                     .size(theme::CONTROL_MD)
@@ -992,13 +981,12 @@ impl Render for Shell {
         };
         // The inspector is shown beside the grid and the viewer. A screen uses
         // the window's full width, including the right-hand part of the
-        // titlebar (`inspectorAvailable` in production). The exception is a
-        // screen that shows a rail of its own, which so far is only a
-        // subscription's page: that rail is drawn where the inspector is, with
-        // the inspector's width and show/hide toggle. A screen goes on showing
-        // the same page while it fades out, so when the user goes between a
-        // page with a rail and the grid or the viewer, the rail's area stays
-        // where it is and only its content changes.
+        // titlebar. The exception is a screen that shows a rail of its own,
+        // which so far is only a subscription's page: that rail is drawn where
+        // the inspector is, with the inspector's width and show/hide toggle. A
+        // screen goes on showing the same page while it fades out, so when the
+        // user goes between a page with a rail and the grid or the viewer, the
+        // rail's area stays where it is and only its content changes.
         let screen_rail = screen
             .filter(|_| !viewer_open)
             .and_then(|screen| self.screen_rails.iter().find(|(owner, _)| *owner == screen))
@@ -1316,10 +1304,9 @@ impl Render for Shell {
                 // The right-hand part of the titlebar is as wide as the
                 // inspector. It stays reserved, and still drags the window,
                 // while the inspector is hidden, and it then holds the
-                // window's buttons (`.titlebarInspectorHidden` in production).
-                // While a screen uses the inspector's width, this part has no
-                // fixed width and holds only the window's buttons, at the
-                // right end of the toolbar.
+                // window's buttons. While a screen uses the inspector's width,
+                // this part has no fixed width and holds only the window's
+                // buttons, at the right end of the toolbar.
                 ui::drag_region("titlebar-right", window, cx)
                     .when(inspector_width > 0., |region| region.w(px(inspector_width)))
                     .flex_none()
@@ -1347,8 +1334,8 @@ impl Render for Shell {
             .text_color(theme.text())
             .font_family(theme::FONT_UI)
             .text(theme::TEXT_MD)
-            // This is the line height that CSS `line-height: normal` gives for
-            // the system font.
+            // This is the line height of 13px interface text. Every element in
+            // the window that does not set a line height of its own gets it.
             .line_height(px(theme::LINE_HEIGHT))
             .track_focus(&self.focus)
             // The key context includes `Grid` only while the grid itself is
@@ -1386,7 +1373,7 @@ impl Render for Shell {
             .on_key_up(cx.listener(|this, _: &KeyUpEvent, _, _| this.review_keys.released()))
             // This watcher is drawn before every view so that it sees scroll
             // input first. After an Inbox review moves on to the next item, it
-            // swallows the scroll events that the system keeps sending from a
+            // discards the scroll events that the system keeps sending from a
             // trackpad flick that began on the previous item.
             .child(ui::momentum::watcher())
             .children(backgrounds.into_iter().flatten())
@@ -1497,14 +1484,12 @@ impl Render for Shell {
             .children(sidebar_edge)
             .children(inspector);
         // Quick Look covers the whole window, including the titlebar and the
-        // rails, and is drawn below the context menus (`--layer-overlay` in
-        // production).
+        // rails, and is drawn below the context menus.
         if quick_look_open {
             root = root.child(self.quick_look.clone());
         }
         // The log window is drawn along the bottom of the window. It is above
-        // Quick Look (in production it has `--z-overlay` and is mounted after
-        // Quick Look) and below the menus and dialogs.
+        // Quick Look and below the menus and dialogs.
         if let Some((panel, _)) = &self.diagnostics {
             root = root.child(panel.clone());
         }
@@ -1542,8 +1527,7 @@ impl Render for Shell {
         root = root.children(self.confirmation(window, cx));
         // The Inbox review pill is drawn over the media view and Quick Look.
         // It is also drawn over the confirmation dialog that rejecting an item
-        // may open, and the review waits for the answer to that dialog (in
-        // production the pill has `--layer-modal` and comes after the dialog).
+        // may open, and the review waits for the answer to that dialog.
         root = root.children(self.review_controls(cx));
         // The inspector's tag picker and folder picker are added to the root
         // here so that they are drawn over the rest of the window.
@@ -1558,8 +1542,8 @@ impl Render for Shell {
         // in filter mode. They are added to the root in the same way.
         let (tag_picker, folder_picker) = self.filter_bar.read(cx).pickers();
         root = root.child(tag_picker).child(folder_picker);
-        // The notifications are drawn over every other layer
-        // (`--layer-notification` in production).
+        // The notifications are drawn over every other layer of the window's
+        // content.
         root = root.child(self.notifications.clone());
         // A video player that is in fullscreen fills the whole window and is
         // drawn over everything else.
@@ -1567,8 +1551,8 @@ impl Render for Shell {
         // On Linux, a window without a system frame gets edges that resize it.
         // They are drawn over the content.
         root = root.children(ui::window_chrome::resize_edges(window));
-        // The window's rim is drawn over everything (`.shellMac::after` in
-        // production).
+        // The window's rim is drawn over everything except the frame meter,
+        // which follows.
         root = root.children(ui::window_chrome::rim(window, cx));
         // The frame meter, which is shown only when debugging, is the last
         // child, so that its paint marks the end of the frame's drawing.

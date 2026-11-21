@@ -1,13 +1,13 @@
-//! Where an import goes and what it asks the application for
-//! (`filesController.ts`, `GridScreen.tsx`'s drop handler), as pure rules.
+//! The rules that decide where an import goes and what it asks the
+//! application for. The functions here do not read or change any state.
 use picto_library::FolderId;
 use picto_library::query::ItemScope;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-/// The destination of a manual import (`manualImportParamsForScope`): the
-/// Inbox's own lifecycle when the Inbox is open, otherwise the library, and
-/// the open folder when one is.
+/// The destination of an import that the user starts. The items go to the
+/// Inbox when the Inbox is open, otherwise to the library, and into the
+/// open folder when a folder is open.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Destination {
     pub inbox: bool,
@@ -15,7 +15,7 @@ pub struct Destination {
 }
 
 impl Destination {
-    /// The destination of an import made while `scope` is open.
+    /// Returns the destination of an import made while `scope` is open.
     pub fn for_scope(scope: &ItemScope) -> Self {
         Self {
             inbox: matches!(scope, ItemScope::Inbox),
@@ -28,8 +28,9 @@ impl Destination {
         }
     }
 
-    /// A folder chosen from the sidebar ("Import Folder Here..."), or the
-    /// library's top level.
+    /// Returns the destination for a folder chosen from the sidebar ("Import
+    /// Folder Here..."), or for the library's top level when `folder` is
+    /// `None`.
     pub fn folder(folder: Option<FolderId>) -> Self {
         Self {
             inbox: false,
@@ -42,7 +43,7 @@ impl Destination {
     }
 }
 
-/// `MediaImportParams`: what `imports.enqueue` is asked besides the paths.
+/// What the command `imports.enqueue` is told besides the paths.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Params {
     pub destination: Destination,
@@ -53,7 +54,8 @@ pub struct Params {
     pub include_folders_without_media: bool,
     pub watch_source_folder: bool,
     pub delete_after_ingest: bool,
-    /// Unset until the multi-file rule has decided it.
+    /// Whether several files become one collection. It is `None` until the
+    /// multi-file import setting or the user has decided it.
     pub group_files: Option<bool>,
 }
 
@@ -65,8 +67,9 @@ impl Params {
         }
     }
 
-    /// The `imports.enqueue` arguments for `paths`. Fields production leaves
-    /// out are left out, so the application's defaults apply.
+    /// Returns the arguments of `imports.enqueue` for `paths`.
+    /// `include_subfolders` is left out when it is not set, so that the
+    /// application's default applies.
     pub fn enqueue(&self, paths: &[PathBuf]) -> Value {
         let mut args = json!({
             "paths": paths.iter().map(|path| path.to_string_lossy()).collect::<Vec<_>>(),
@@ -87,8 +90,9 @@ impl Params {
     }
 }
 
-/// The extensions production takes a dropped path to be media by. One path
-/// without one of them is taken for a folder when it cannot be looked at.
+/// The extensions by which a dropped path is taken to be media when the
+/// path cannot be inspected. One path without one of them is then taken
+/// for a folder.
 const MEDIA_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "svg", "mp4", "mkv", "webm", "avi",
     "mov", "wmv", "flv", "m4v", "avif", "jxl", "ico", "pdf",
@@ -104,32 +108,31 @@ fn has_media_extension(path: &Path) -> bool {
         })
 }
 
-/// What a drop or a paste of `paths` asks for.
+/// What a drop or a paste of some paths is to do.
 #[derive(Debug, PartialEq)]
 pub enum Dropped {
-    /// One Picto Pack, which has its own import.
+    /// One Picto Pack, which is imported through the pack dialog.
     Pack(PathBuf),
-    /// Picto Packs mixed with other files, or several packs.
+    /// Picto Packs together with other files, or several packs.
     PackMixed,
-    /// One path that does not look like media: the folder dialog.
+    /// One folder, which opens the folder dialog.
     Folder(PathBuf),
-    /// Files to import as they are.
+    /// Files that are imported as they are.
     Files(Vec<PathBuf>),
     Nothing,
 }
 
-/// A Picto Pack, by its extension (`/\.picto-pack$/i`).
+/// Returns whether the path is a Picto Pack, which its extension
+/// `.picto-pack` says, in any letter case.
 pub fn is_pack(path: &Path) -> bool {
     path.extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("picto-pack"))
 }
 
-/// The drop handler's rules, in its order: a Picto Pack alone, then one
-/// folder, then everything as files. Production takes one path without a
-/// known media extension for a folder, which sends a single Flash, EPUB or
-/// audio file to the folder dialog, where it cannot be imported; here one
-/// path is a folder when `is_dir` says it is, and the extension decides only
-/// when it cannot say.
+/// Decides what a drop of `paths` does. A Picto Pack on its own is a pack,
+/// and a pack with anything else is refused. One path is a folder when
+/// `is_dir` says so. When `is_dir` cannot say, the path is a folder if it
+/// has no known media extension. Everything else is imported as files.
 pub fn classify(paths: Vec<PathBuf>, is_dir: impl Fn(&Path) -> Option<bool>) -> Dropped {
     let packs = paths.iter().filter(|path| is_pack(path)).count();
     if packs > 0 {
@@ -148,9 +151,11 @@ pub fn classify(paths: Vec<PathBuf>, is_dir: impl Fn(&Path) -> Option<bool>) -> 
     }
 }
 
-/// `requestMediaImport`: one path, or a batch whose grouping is already
-/// decided, goes at once; otherwise the `multiFileImportBehavior` setting
-/// decides, and "ask" asks.
+/// Whether files are imported at once or the user is asked first. One
+/// file, or files whose grouping is already decided, are imported at once.
+/// Otherwise the multi-file import setting decides: "ask" asks the user,
+/// "group" imports the files as one collection, and any other value
+/// imports them as separate items.
 #[derive(Debug, PartialEq)]
 pub enum Batch {
     Now(Params),
@@ -170,8 +175,9 @@ pub fn batch(count: usize, params: Params, behavior: &str) -> Batch {
     }
 }
 
-/// `folderConsolidationMessage`: what the folder dialog says when the
-/// folder is deeper than Picto keeps.
+/// Returns what the folder dialog says when the folder is deeper than
+/// Picto keeps. Returns `None` when no level of the folder is merged into
+/// another.
 pub fn consolidation_message(analysis: &Value) -> Option<String> {
     let levels = analysis["consolidated_levels"].as_u64()?;
     let retained = analysis["retained_depth"].as_u64()?;
@@ -244,7 +250,7 @@ mod tests {
     #[test]
     fn a_drop_is_a_pack_a_folder_or_files() {
         let path = PathBuf::from;
-        // Nothing can be looked at: the extension decides.
+        // `is_dir` cannot say what the path is, so the extension decides.
         let unknown = |_: &std::path::Path| None;
         assert_eq!(
             classify(vec![path("/x/Set.picto-pack")], unknown),

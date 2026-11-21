@@ -1,11 +1,12 @@
-//! What a file the viewer cannot show gets (`UnsupportedDocumentViewer.tsx`):
-//! the document shell on its one page, with the message that there is no
-//! preview for its type in place of the page.
+//! The view for a file that the viewer cannot show. It is the document shell
+//! with one page, and in place of the page it shows the message that there
+//! is no preview for the file's type.
 use super::shell;
 use crate::i18n::t;
 use gpui::*;
 
-/// `Preview is not available for {mime}.`
+/// Returns the message "Preview is not available for {mime}." in the app's
+/// language. An empty `mime` is written as "this file type".
 pub fn message(mime: &str) -> String {
     let mime = if mime.is_empty() {
         t("this file type")

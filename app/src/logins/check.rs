@@ -1,32 +1,43 @@
-//! The sign-in window checked end to end in the running app, on whatever
-//! system it runs on (debug builds only): `PICTO_GPUI_LOGIN_CHECK=<folder>`
-//! with `PICTO_GPUI_LOGIN_ORIGIN=http://127.0.0.1:<port>` and a copy open.
+//! A check of the whole sign-in in the running app, with the real sign-in
+//! window and the web view of the operating system it runs on. Only a debug
+//! build holds it. It runs when the app is started with
+//! `PICTO_GPUI_LOGIN_CHECK=<folder>` and
+//! `PICTO_GPUI_LOGIN_ORIGIN=http://127.0.0.1:<port>`, and it starts once a
+//! library is open.
 //!
-//! The check serves a login of its own at that origin (the Danbooru
-//! service's addresses move there, `logins::sites`): a sign-in page with a
-//! password field, a form post that sets a session cookie and redirects,
-//! and a page with "Log out" once signed in. Then, through [`Logins`] as
-//! the Accounts dialog drives it, it signs in four times, each in a new
-//! sign-in window on the system's web view:
+//! The check runs a small web server at that origin, to which the addresses
+//! of the Danbooru service are moved (`logins::sites`). The server serves a
+//! sign-in page with a password field, accepts the form's `POST`, sets a
+//! session cookie and redirects, and serves a page with a "Log out" link to
+//! a signed-in session. The check then starts four logins through
+//! [`Logins`], the same way the Accounts dialog does. Each login opens a new
+//! sign-in window:
 //!
-//! - the page cannot load (the server closes the connection unanswered):
-//!   the login reports "Danbooru could not load (…)"; then Cancel;
-//! - the page loads and the login waits for the user ("Log in with
-//!   Danbooru to continue.", which needs the page's cookies and a script
-//!   run in it); then Cancel, which closes the window;
-//! - the same, then the window closed as its close button does: "Login
-//!   window closed.";
-//! - the page posts its form by itself: the session cookie is set, the
-//!   success rule fires, the credential goes to the application through
-//!   `auth.credentials.set` into the process-local store, the window
-//!   closes; the login is read back through `auth.credentials.list` and
-//!   the core's store, then removed with `auth.credentials.delete`.
+//! 1. The server closes the connection without a response, so the page
+//!    cannot load. The login must report "Danbooru could not load (…)". The
+//!    check then cancels the login.
+//! 2. The page loads and the login waits for the user, with the message
+//!    "Log in with Danbooru to continue.". The login reaches that message
+//!    only if the page's cookies can be read and a script can be run in the
+//!    page. The check then cancels the login, which must close the window.
+//! 3. The page loads as in the second login, and the check closes the
+//!    window the way its close button does. The login must report "Login
+//!    window closed.".
+//! 4. The page submits its form by itself. The session cookie is set, the
+//!    adapter counts the user as signed in, and the credential is saved
+//!    with `auth.credentials.set` in the store that the process keeps in
+//!    memory. The window must close. The check reads the login back with
+//!    `auth.credentials.list` and from the core's credential store, and
+//!    removes it with `auth.credentials.delete`.
 //!
-//! A foreground task runs every few milliseconds throughout, so one is
-//! ready while a web view is being made (WebView2 runs the thread's
-//! messages then). Pictures of the window are saved in the folder, with
-//! `login-check.log`, whose last line is `result: pass` or `result: fail`;
-//! then the app quits.
+//! For the whole run a foreground task wakes every 3 ms. WebView2 processes
+//! the thread's messages while it creates a web view, so a task of the app
+//! can run in the middle of the creation. The check makes sure that a task
+//! is ready to run at that moment, so that it covers this case.
+//!
+//! The check saves pictures of the sign-in window in the folder, and the
+//! file `login-check.log`, whose last line is `result: pass` or
+//! `result: fail`. Then the app quits.
 use super::{Logins, Status};
 use crate::platform::login_window::LoginWindow;
 use gpui::*;
@@ -40,31 +51,34 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// The cookie the local login sets (Danbooru's own name).
+/// The name of the cookie that the local server sets when the form is
+/// submitted. It is the name of Danbooru's own session cookie.
 const SESSION_COOKIE: &str = "_danbooru2_session";
 const SITE: &str = "danbooru";
 const WAITING: &str = "Log in with Danbooru to continue.";
 
-/// What the local server does with a request.
+/// What the local server does with the requests it receives.
 #[derive(Clone, Copy)]
 #[repr(u8)]
 enum Mode {
-    /// Serves the sign-in page, which waits for the user.
+    /// Serves a sign-in page that waits for the user to submit its form.
     Hold = 0,
-    /// Serves the sign-in page, which posts its form by itself.
+    /// Serves a sign-in page that submits its form by itself after 400 ms.
     Submit = 1,
-    /// Closes every connection without an answer.
+    /// Closes every connection without a response.
     Drop = 2,
 }
 
 #[derive(Clone)]
 struct Server {
     mode: Arc<AtomicU8>,
-    /// The session cookie's value, once the form was posted.
+    /// The value of the session cookie that the server set when the form
+    /// was submitted. It is `None` until then.
     issued: Arc<Mutex<Option<String>>>,
 }
 
-/// Starts the check if `PICTO_GPUI_LOGIN_CHECK` names a folder.
+/// Starts the check if `PICTO_GPUI_LOGIN_CHECK` names a folder. Does
+/// nothing otherwise.
 pub fn start(cx: &mut App) {
     let Some(out) = crate::seams::login_check() else {
         return;
@@ -90,8 +104,9 @@ pub fn start(cx: &mut App) {
         std::env::consts::OS,
         std::env::consts::ARCH
     ));
-    // Always ready: a foreground task that borrows the app every few
-    // milliseconds.
+    // This foreground task wakes every 3 ms and borrows the app, until the
+    // check has finished. It is there so that a task is ready to run while
+    // WebView2 creates a web view (see the module comment).
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor()
@@ -134,7 +149,8 @@ async fn run(server: &Server, report: &mut Report, out: &Path, cx: &mut AsyncApp
     };
     report.line(&format!("library open after {:?}", started.elapsed()));
     let logins = cx.update(|cx| Logins::global(&session, cx));
-    // Every state the login passes through, as the Accounts dialog is told.
+    // `seen` collects every state that the login passes through. These
+    // are the states that the Accounts dialog would show.
     let seen: Rc<RefCell<Vec<super::AuthState>>> = Rc::default();
     let _watch = cx.update(|cx| {
         let seen = seen.clone();
@@ -148,7 +164,7 @@ async fn run(server: &Server, report: &mut Report, out: &Path, cx: &mut AsyncApp
     });
     let mut passed = true;
 
-    // A page that cannot load.
+    // The first login: the page cannot load.
     server.set(Mode::Drop);
     seen.borrow_mut().clear();
     passed &= begin(&logins, report, cx);
@@ -167,7 +183,8 @@ async fn run(server: &Server, report: &mut Report, out: &Path, cx: &mut AsyncApp
     capture(&logins, out, "load-failed", report, cx);
     passed &= cancel(&logins, report, cx).await;
 
-    // The page loads and waits for the user; Cancel.
+    // The second login: the page loads and waits for the user, and the
+    // login is then cancelled.
     server.set(Mode::Hold);
     seen.borrow_mut().clear();
     passed &= begin(&logins, report, cx);
@@ -181,7 +198,8 @@ async fn run(server: &Server, report: &mut Report, out: &Path, cx: &mut AsyncApp
     capture(&logins, out, "sign-in", report, cx);
     passed &= cancel(&logins, report, cx).await;
 
-    // The page loads; the user closes the window.
+    // The third login: the page loads, and the window is closed the way
+    // its close button closes it.
     seen.borrow_mut().clear();
     passed &= begin(&logins, report, cx);
     let waiting = until(cx, 30, |cx| waits(&logins, cx)).await;
@@ -207,7 +225,7 @@ async fn run(server: &Server, report: &mut Report, out: &Path, cx: &mut AsyncApp
         &seen,
     );
 
-    // The page signs in by itself.
+    // The fourth login: the page submits its form by itself.
     server.set(Mode::Submit);
     seen.borrow_mut().clear();
     passed &= begin(&logins, report, cx);
@@ -249,7 +267,8 @@ async fn run(server: &Server, report: &mut Report, out: &Path, cx: &mut AsyncApp
     passed &= report.check_detail(
         "the process-local store holds the cookie the page set",
         issued.is_some() && stored == issued,
-        // The values are the check's own, made up for this run.
+        // The two cookie values may be written to the log: the local
+        // server made them up for this run, and no site knows them.
         &format!("set {issued:?}, stored {stored:?}"),
     );
     let removed = dispatch(
@@ -274,13 +293,16 @@ async fn run(server: &Server, report: &mut Report, out: &Path, cx: &mut AsyncApp
     passed
 }
 
-/// Starts a Danbooru login as the Accounts dialog's Log In does.
+/// Starts a Danbooru login the way the Log In button of the Accounts
+/// dialog does, and writes to the report whether it started.
 fn begin(logins: &Entity<Logins>, report: &mut Report, cx: &mut AsyncApp) -> bool {
     let started = cx.update(|cx| logins.update(cx, |logins, cx| logins.start(SITE, None, cx)));
     report.check_detail("the login starts", started.is_ok(), &format!("{started:?}"))
 }
 
-/// Cancel, as the Accounts dialog's: the login is idle and its window gone.
+/// Cancels the login the way the Cancel button of the Accounts dialog
+/// does. Returns whether, within 15 s, the login is idle and its window is
+/// closed.
 async fn cancel(logins: &Entity<Logins>, report: &mut Report, cx: &mut AsyncApp) -> bool {
     cx.update(|cx| logins.update(cx, |logins, cx| logins.cancel(cx)));
     let idle = until(cx, 15, |cx| {
@@ -292,8 +314,9 @@ async fn cancel(logins: &Entity<Logins>, report: &mut Report, cx: &mut AsyncApp)
     report.check_detail("Cancel closes the window and the login is idle", idle, "")
 }
 
-/// The sign-in page is up and the login waits for the user, which takes
-/// its cookies and a script run in the page.
+/// Returns whether the sign-in page has loaded and the login waits for the
+/// user. The login reaches that state only after it has read the page's
+/// cookies and run a script in the page.
 fn waits(logins: &Entity<Logins>, cx: &App) -> bool {
     let state = logins.read(cx).state();
     state.status == Status::Active
@@ -347,7 +370,8 @@ async fn pause(cx: &mut AsyncApp, milliseconds: u64) {
         .await;
 }
 
-/// `login-check.log`, also written to standard error as it goes.
+/// The lines of `login-check.log`. Each line is also written to standard
+/// error when it is added.
 struct Report {
     out: PathBuf,
     lines: Vec<String>,
@@ -367,7 +391,8 @@ impl Report {
     }
 
     fn check(&mut self, what: &str, ok: bool, seen: &RefCell<Vec<super::AuthState>>) -> bool {
-        // The states hold no secret (`AuthState`).
+        // The states may be written to the log: an `AuthState` never holds
+        // a secret.
         let states: Vec<String> = seen
             .borrow()
             .iter()
@@ -409,7 +434,8 @@ impl Server {
     }
 }
 
-/// Serves the local login at `origin` on threads of its own.
+/// Starts the local server at `origin`. It accepts connections on one
+/// thread and handles each connection on a thread of its own.
 fn serve(origin: &str) -> Result<Server, String> {
     let url = url::Url::parse(origin).map_err(|error| error.to_string())?;
     let address = format!(
@@ -439,7 +465,8 @@ fn answer(mut stream: TcpStream, server: &Server) {
     };
     let mode = server.mode.load(Ordering::SeqCst);
     if mode == Mode::Drop as u8 {
-        // No answer: the connection just closes.
+        // The connection is closed without a response, so the page cannot
+        // load.
         let _ = stream.shutdown(std::net::Shutdown::Both);
         return;
     }
@@ -509,7 +536,9 @@ fn page(status: &str, headers: &str, body: &str) -> String {
     )
 }
 
-/// The request's method, path, `Cookie` header and body.
+/// Reads one HTTP request and returns its method, its path, the value of
+/// its `Cookie` header and its body. Returns `None` if the connection ends
+/// before the headers are complete or the headers are longer than 64 KiB.
 fn read_request(stream: &mut TcpStream) -> Option<(String, String, String, Vec<u8>)> {
     let mut data = Vec::new();
     let mut buffer = [0u8; 4096];

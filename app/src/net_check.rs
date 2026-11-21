@@ -35,10 +35,11 @@
 //!    On macOS the update is offered as a link to the release page.
 //! 3. A search on every engine, through `search_by_image`, in its hidden web
 //!    view. Nothing may reach an engine before the search starts. The engine
-//!    must receive exactly the file's bytes, name and type. The results
-//!    address must be the one the Electron app opens.
+//!    must receive exactly the file's bytes, name and type. The address that
+//!    the search returns must be the results address expected for that
+//!    engine.
 //! 4. The install, which is the last step. Restart and Install starts the
-//!    stand-in installer the way the Electron app starts its installer, and
+//!    stand-in installer in the way the app starts a real installer, and
 //!    quits the app. When the folder holds a file named `install-on-quit`,
 //!    the app instead quits with the update waiting, which installs it
 //!    silently; the icons and the searches are skipped in that case. On
@@ -80,7 +81,8 @@ struct Received {
     sha256: String,
 }
 
-/// Where the stand-in installer writes what it was started with.
+/// The name of the file in which the stand-in installer writes what it was
+/// started with.
 const MARKER: &str = "installer-ran.txt";
 
 #[derive(Clone)]
@@ -129,8 +131,9 @@ pub fn start(cx: &mut App) {
             return;
         }
     };
-    // This must be ready at all times, because WebView2 runs the thread's
-    // messages while its web view is being made.
+    // This task sets a timer every 3 ms until the check has finished, so that
+    // the main thread always has a task that is about to become ready.
+    // WebView2 runs the thread's messages while its web view is being made.
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor()
@@ -301,8 +304,8 @@ async fn updates(
                 state.status, state.downloaded, state.error
             ),
         );
-        // The same release, with a feed whose checksum no longer matches the
-        // installer.
+        // The server now gives the same release with a feed whose checksum
+        // does not match the installer.
         server.bad_checksum.store(true, Ordering::SeqCst);
         let folder = state
             .downloaded
@@ -451,9 +454,10 @@ async fn searches(
     passed
 }
 
-/// The last step. On Windows and Linux the update is installed in the way
-/// that system installs it; the app then quits, which ends the check. On
-/// macOS the release page is offered.
+/// Runs the last step. On Windows and Linux the update is installed in the
+/// way that system installs it, and the app then quits, which ends the check.
+/// On macOS, Open Download Page is run, and the address it would open must be
+/// the release page.
 async fn install(
     out: &std::path::Path,
     on_quit: bool,
@@ -628,7 +632,8 @@ fn expected_result(engine: Engine, origin: &str) -> Expected {
     }
 }
 
-/// Each engine's page and the results address its upload leads to.
+/// The key of each engine, the path of its page, and the path of the results
+/// address that an upload on that page leads to.
 const ENGINE_PAGES: [(&str, &str, &str); 4] = [
     ("tineye", "/tineye.com/", "/tineye.com/search/abc123"),
     ("saucenao", "/saucenao.com/", "/saucenao.com/search.php"),
@@ -644,9 +649,10 @@ const ENGINE_PAGES: [(&str, &str, &str); 4] = [
     ),
 ];
 
-/// The page the server gives for an engine. Its upload control is where the
-/// Electron app's script looks for it, behind a button for the engines that
-/// hide it behind one. An upload leads to the results address.
+/// Returns the page that the server gives for an engine. Its upload control
+/// is where the script of `search_by_image` looks for it. For the engines
+/// that show the control only after a button is pressed, the page adds it
+/// when that button is pressed. An upload leads to the results address.
 fn engine_page(key: &str, result: &str) -> String {
     let control = match key {
         "tineye" => r#"<div id="upload-box"><input type="file" id="f"></div>"#.to_owned(),
@@ -836,7 +842,8 @@ fn record(server: &Server, engine: &str, name: &str, mime: &str, body: &[u8]) {
     }
 }
 
-/// The file part of a `multipart/form-data` body: its name, type and bytes.
+/// Returns the file part of a `multipart/form-data` body: its name, its type
+/// and its bytes.
 fn multipart_file(content_type: &str, body: &[u8]) -> Option<(String, String, Vec<u8>)> {
     let boundary = format!("--{}", content_type.split("boundary=").nth(1)?.trim());
     let parts = split(body, boundary.as_bytes());
@@ -877,7 +884,8 @@ fn split<'a>(body: &'a [u8], boundary: &[u8]) -> Vec<&'a [u8]> {
     parts
 }
 
-/// The request's method, path, `Content-Type` and body.
+/// Reads one request from the stream and returns its method, its path, its
+/// `Content-Type` and its body.
 fn read_request(stream: &mut TcpStream) -> Option<(String, String, String, Vec<u8>)> {
     let mut data = Vec::new();
     let mut buffer = [0u8; 16384];
@@ -926,7 +934,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// A 32×32 picture of one colour.
+/// Returns a 32×32 PNG picture of one colour.
 fn png(color: [u8; 3]) -> Vec<u8> {
     let mut bytes = Vec::new();
     let image = image::RgbImage::from_pixel(32, 32, image::Rgb(color));
@@ -937,7 +945,8 @@ fn png(color: [u8; 3]) -> Vec<u8> {
     bytes
 }
 
-/// An icon file holding one 32×32 PNG with transparency, as favicons do.
+/// Returns an icon file that holds one 32×32 PNG with transparency, which is
+/// what a favicon usually holds.
 fn ico(color: [u8; 3]) -> Vec<u8> {
     let mut png = Vec::new();
     let image =

@@ -1,13 +1,11 @@
 //! The components that more than one view uses. Each component has one
-//! implementation, in this module, in the same way that `src/shared/ui`
-//! holds the shared components of the Electron frontend. Views build their
-//! screens from these components. A control that only one view has in
-//! production (a control with its own CSS class) is drawn by that view and
-//! is not in this module. Everything that is drawn over the rest of the
-//! window, such as a menu, a tooltip or a dialog, takes its drawing order
-//! from [`layer`]. Something that opens beside a control also takes its
-//! position from [`popover`] (`popover::place`) and is drawn by the element
-//! that [`popover`] provides (`popover::Floating`).
+//! implementation, in this module. Views build their screens from these
+//! components. A control that only one view has is drawn by that view and is
+//! not in this module. Everything that is drawn over the rest of the window,
+//! such as a menu, a tooltip or a dialog, takes its drawing order from
+//! [`layer`]. Something that opens beside a control also takes its position
+//! from [`popover`] (`popover::place`) and is drawn by the element that
+//! [`popover`] provides (`popover::Floating`).
 pub mod a11y;
 pub mod action_button;
 mod action_row;
@@ -126,12 +124,12 @@ pub fn text_width(text: &str, font: Font, size: f32, window: &Window) -> f32 {
     f32::from(shape_line(text.to_owned(), font, size, black(), window).width)
 }
 
-/// A breadcrumb that the user can click to go somewhere else: a part of the
-/// path in the toolbar, or the parent in the viewer's breadcrumb
-/// (`.viewerBreadcrumb` in production). Its text has the secondary text
-/// colour. While the pointer is over it, the text has the primary text
-/// colour and, when `underline` is true, is underlined. It calls `occlude`,
-/// so a press on it does not reach the titlebar's drag region behind it.
+/// Returns a breadcrumb that the user can click to go somewhere else: a part of
+/// the path in the toolbar, or the parent in the viewer's breadcrumb. Its text
+/// has the secondary text colour. While the pointer is over it, the text has
+/// the primary text colour and, when `underline` is true, is underlined. It
+/// calls `occlude`, so a press on it does not reach the titlebar's drag region
+/// behind it.
 pub fn crumb(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -140,8 +138,8 @@ pub fn crumb(
 ) -> Stateful<Div> {
     let theme = theme::theme(cx);
     let label = label.into();
-    // Production draws this as a `<button>`. Assistive technology is given
-    // the role of a button, and the label as the button's name.
+    // Assistive technology is given the role of a button, and the label as the
+    // button's name.
     div()
         .id(id)
         .role(Role::Button)
@@ -196,16 +194,15 @@ pub fn track_drag(
     });
 }
 
-/// A strip of the titlebar that the user drags to move the window, as an
-/// element with `data-window-drag-region` does in the Electron shell. On
-/// macOS and Linux, pressing the left button on the strip and then moving
-/// the pointer starts moving the window. A double-click does what the system
+/// Returns a strip of the titlebar that the user drags to move the window. On
+/// macOS and Linux, pressing the left button on the strip and then moving the
+/// pointer starts moving the window. A double-click does what the system
 /// setting for a double-click on a titlebar says on macOS, and maximises or
 /// restores the window on Linux. On Windows the strip is registered as the
-/// system's caption area (`WindowControlArea::Drag`), and Windows itself
-/// then handles the drag, the double-click and window snapping. A control
-/// inside the strip calls `occlude`, so that a press on the control does not
-/// move the window.
+/// system's caption area (`WindowControlArea::Drag`), and Windows itself then
+/// handles the drag, the double-click and window snapping. A control inside the
+/// strip calls `occlude`, so that a press on the control does not move the
+/// window.
 pub fn drag_region(id: impl Into<ElementId>, window: &mut Window, cx: &mut App) -> Stateful<Div> {
     let id = id.into();
     // The strip has the role `TitleBar`, so assistive technology reports it
@@ -246,23 +243,20 @@ pub fn drag_region(id: impl Into<ElementId>, window: &mut Window, cx: &mut App) 
         })
 }
 
-/// Wraps a badge's text in an element that is moved up by 1px. GPUI centres
-/// a line of text 1px lower than production's canvas draws it with
-/// `textBaseline = 'middle'`, and the 1px shift makes the two match.
+/// Wraps a badge's text in an element that is moved up by 1px. Without the
+/// shift, GPUI draws the text 1px below the middle of the badge.
 pub fn badge_text(text: impl Into<SharedString>) -> Div {
     div().relative().top(px(-1.)).child(text.into())
 }
 
-/// A translucent badge that looks like the label badges that the grid draws
-/// on its tiles (`drawBadge` in `primitives.ts`). It is 18px high and as
-/// wide as its text plus `padding` on each side. Production fills the box
-/// and then strokes a 1px line along its edge. A canvas stroke is centred on
-/// the edge, so half of the line is over the fill and half is outside it.
-/// Here the line is drawn as two borders of 0.5px: one on the box itself,
-/// over the fill, and one on a child element whose border lies just outside
-/// the box. A box shadow is not used for the outer half, because GPUI draws
-/// a shadow under the whole box, and it would show through the translucent
-/// fill and darken it.
+/// Returns a translucent badge of the kind that the grid draws on its tiles. It
+/// is 18px high and as wide as its text plus `padding` on each side. It has a
+/// fill and a 1px line along its edge. Half of the line lies over the fill and
+/// half lies outside it. The line is drawn as two borders of 0.5px: one on the
+/// box itself, over the fill, and one on a child element whose border lies just
+/// outside the box. A box shadow is not used for the outer half, because GPUI
+/// draws a shadow under the whole box, and it would show through the
+/// translucent fill and darken it.
 pub fn badge(padding: f32) -> Div {
     let stroke = rgba(theme::BADGE_BORDER);
     div()

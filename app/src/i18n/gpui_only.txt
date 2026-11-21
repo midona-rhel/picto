@@ -1,13 +1,8 @@
 # This file lists the texts that the app shows and that have no key in
-# production's en.json. They are shown in English in every language. Nearly
-# all of them are texts that production also writes in English without t().
-# The texts that only this app has include: Could not copy file, Could not
-# copy file path, This font cannot be previewed, This is not the library open
-# here, the notes of the Cloud section, and the texts of the Quick Search
-# panel. Each line is one text, written as it is written in the code, with a
-# line break written as \n. The guard (guard.rs) fails when a text marked
-# with en(...) in the code is missing here, and when a line here is no
-# longer used.
+# locales/en.json. They are shown in English in every language. Each line is
+# one text, written as it is written in the code, with a line break written
+# as \n. The guard (guard.rs) fails when a text marked with en(...) in the
+# code is missing here, and when a line here is no longer used.
 
 Edit Rules
 Edit Smart Folder

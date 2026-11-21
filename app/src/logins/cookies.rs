@@ -1,22 +1,25 @@
-//! Which of a web view's cookies a page at an address is sent, as
-//! Electron's `session.cookies.get({ url })` answers (RFC 6265: the domain,
-//! the path, and `Secure` only over HTTPS or to the loopback).
+//! Selects, from the cookies that a web view stores, those that the web
+//! view sends with a request to a given address. The rules are those of
+//! RFC 6265: the cookie's domain and path must match the address, and a
+//! `Secure` cookie is sent only over HTTPS or to a loopback address.
 
-/// A cookie as a web view's store holds it.
+/// One cookie as the cookie store of a web view holds it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cookie {
     pub name: String,
     pub value: String,
-    /// The domain as stored: `.example.com` for a cookie its domain's
-    /// subdomains share, `example.com` for one only that host is sent.
+    /// The domain as the store holds it. `.example.com` is a cookie that is
+    /// sent to `example.com` and to all its subdomains. `example.com` is a
+    /// cookie that is sent to that host only.
     pub domain: String,
     pub path: String,
     pub secure: bool,
 }
 
-/// The cookies of `all` that a request to `url` carries, in their order.
-/// macOS needs it, as its store hands over every cookie; WebView2 and
-/// WebKitGTK answer for an address themselves.
+/// Returns the cookies of `all` that are sent with a request to `url`, in
+/// the order they have in `all`. Only macOS uses it, because the cookie
+/// store of WKWebView returns all its cookies. WebView2 and WebKitGTK can
+/// be asked for the cookies of one address.
 #[cfg(any(target_os = "macos", test))]
 pub fn sent_to(all: &[Cookie], url: &str) -> Vec<Cookie> {
     let Ok(url) = url::Url::parse(url) else {
@@ -45,7 +48,9 @@ pub fn sent_to(all: &[Cookie], url: &str) -> Vec<Cookie> {
         .collect()
 }
 
-/// RFC 6265 §5.1.4: the request's path is the cookie's or below it.
+/// Returns whether the path of a request matches the path of a cookie as
+/// RFC 6265 §5.1.4 defines it: the two are equal, or the request's path is
+/// below the cookie's path.
 #[cfg(any(target_os = "macos", test))]
 fn path_matches(cookie: &str, request: &str) -> bool {
     let cookie = if cookie.is_empty() { "/" } else { cookie };

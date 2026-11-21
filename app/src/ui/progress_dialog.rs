@@ -1,7 +1,8 @@
-//! `ProgressDialog.tsx`: a glass dialog over a dimmed window that holds the
-//! keyboard and every press while work the user must wait for runs, with a
-//! bold message, an optional mono detail, and a 4px progress bar. It has no
-//! buttons and Escape does nothing: it goes when the work is done.
+//! A glass dialog over a dimmed window, shown while work runs that the user
+//! must wait for. It has the keyboard focus and stops every press. It shows a
+//! bold message, optionally a detail in the monospaced font, and a 4px
+//! progress bar. It has no buttons, and Escape does nothing. The caller
+//! removes it when the work is done.
 use crate::theme;
 use crate::theme::Text as _;
 use gpui::*;
@@ -11,12 +12,13 @@ pub struct ProgressDialog {
     id: ElementId,
     message: SharedString,
     detail: Option<SharedString>,
-    /// `done / total`, or none while indeterminate.
+    /// The share of the work that is done, or `None` while it is not known.
     share: Option<f32>,
     focus: FocusHandle,
 }
 
-/// The dialog saying `message`, holding the keyboard on `focus`.
+/// Returns the dialog with the message `message`. It keeps the keyboard focus
+/// on `focus`.
 pub fn progress_dialog(
     id: impl Into<ElementId>,
     message: impl Into<SharedString>,
@@ -37,7 +39,8 @@ impl ProgressDialog {
         self
     }
 
-    /// Known progress; without it the bar sweeps.
+    /// Sets the progress to `done` of `total`. Without this call the bar shows
+    /// unknown progress.
     pub fn progress(mut self, done: i64, total: i64) -> Self {
         self.share = Some(super::progress_bar::share(done, total));
         self
@@ -47,8 +50,8 @@ impl ProgressDialog {
 impl RenderOnce for ProgressDialog {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
-        // `useShortcutSuspension` and the dialog's own focus: the keyboard
-        // stays here while it is up.
+        // The keyboard focus is kept on the dialog while the dialog is shown,
+        // so that no shortcut of the app acts.
         if !self.focus.is_focused(window) {
             window.focus(&self.focus, cx);
         }
@@ -108,7 +111,7 @@ impl RenderOnce for ProgressDialog {
                 .child(div().w_full().child(bar)),
         );
         let layer = super::modal::backdrop(self.id, 1., Some(&self.focus), window)
-            // Tab goes nowhere (`event.key === 'Tab'`).
+            // Tab is stopped here, so it does not move the keyboard focus.
             .on_key_down(|event, _, cx| {
                 if event.keystroke.key == "tab" {
                     cx.stop_propagation();

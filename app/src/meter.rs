@@ -1,12 +1,16 @@
-//! Opt-in frame meter for debugging: with `PICTO_GPUI_FPS=1` the window's
-//! bottom-left corner shows how many frames were drawn in the last second,
-//! the time between the last two, and how long the app spent drawing one
-//! (from the start of the shell's render to the end of its paint; what the
-//! GPU does afterwards is not in it). The end of each frame is also what
-//! `stats.rs` measures the gap between frames by, so either variable puts
-//! the (invisible) end marker in the window; with neither set nothing is
-//! added. The meter asks for no frames of its own except one a second while
-//! nothing else is drawing, to say so.
+//! A frame meter for debugging. When the environment variable
+//! `PICTO_GPUI_FPS` is set, the window's bottom-left corner shows how many
+//! frames were drawn in the last second, the time between the last two, and
+//! how long the app spent drawing the last one. The drawing time runs from
+//! the start of the shell's render to the end of its paint; the work the GPU
+//! does afterwards is not included.
+//!
+//! `stats.rs` also measures the time between frames from the end of each
+//! frame. So when either the meter or the statistics are on, the window gets
+//! an invisible element that is painted last and records the end of the
+//! frame. When both are off, nothing is added to the window. The meter asks
+//! for no frames of its own, except one a second while nothing else is
+//! drawing, so that it can show `idle`.
 use crate::theme::{self, Text as _};
 use gpui::*;
 use std::collections::VecDeque;
@@ -18,15 +22,16 @@ pub fn enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("PICTO_GPUI_FPS").is_some())
 }
 
-/// The meter's backing, dark enough to read over any picture.
+/// The colour of the rectangle behind the meter's text: black at 70%
+/// opacity, so that the text can be read over any picture.
 const BACKING: u32 = 0x000000b3;
 
 #[derive(Default)]
 struct Meter {
     /// When the frame being drawn began.
     started: Option<Instant>,
-    /// The frame being drawn is the meter's own once-a-second look, which
-    /// does not count as a frame of the app's.
+    /// Whether the frame being drawn is one the meter asked for itself,
+    /// once a second while nothing else draws. Such a frame is not counted.
     idle_look: bool,
     /// When each frame of the last second ended, and how long it took to draw.
     frames: VecDeque<(Instant, Duration)>,
@@ -37,13 +42,15 @@ fn meter() -> &'static Mutex<Meter> {
     METER.get_or_init(Default::default)
 }
 
-/// What the meter shows for the frames it holds, at `now`.
+/// Holds what the meter shows at a given moment for the frames it has
+/// recorded.
 #[derive(Debug, PartialEq)]
 struct Reading {
     frames_per_second: usize,
-    /// Between the last two frames.
+    /// The time between the ends of the last two frames.
     interval: Option<Duration>,
-    /// Drawing the last frame, and the longest in the last second.
+    /// How long drawing the last frame took, and the longest drawing time
+    /// of a frame in the last second.
     draw: Option<(Duration, Duration)>,
 }
 
@@ -70,7 +77,7 @@ fn reading(frames: &VecDeque<(Instant, Duration)>, now: Instant) -> Reading {
     }
 }
 
-/// The shell's render began: a frame is being drawn.
+/// Records that the shell's render began, which is the start of a frame.
 pub fn frame_started() {
     if enabled()
         && let Ok(mut meter) = meter().lock()
@@ -79,14 +86,16 @@ pub fn frame_started() {
     }
 }
 
-/// The next frame is only the meter looking again while nothing draws.
+/// Marks the next frame as one the meter asked for itself while nothing
+/// else draws, so that it is not counted.
 pub fn idle_look() {
     if let Ok(mut meter) = meter().lock() {
         meter.idle_look = true;
     }
 }
 
-/// Whether nothing has been drawn for a second, so the meter should look.
+/// Returns whether no frame has been drawn for a second. The meter then
+/// has to be drawn again so that it shows `idle`.
 pub fn idle() -> bool {
     meter().lock().is_ok_and(|meter| {
         meter
@@ -100,7 +109,7 @@ fn milliseconds(duration: Duration) -> String {
     format!("{:.1}", duration.as_secs_f64() * 1000.)
 }
 
-/// A frame of the window has been painted.
+/// Records that a frame of the window has been painted.
 fn frame_ended() {
     let now = Instant::now();
     crate::stats::frame_drawn(now);
@@ -124,10 +133,13 @@ fn frame_ended() {
     }
 }
 
-/// The meter, to lay over the window as its last child, when it is on; the
-/// end-of-frame marker alone when only the stats are.
+/// Returns the meter as an element to put over the window as its last
+/// child, when the meter is on. Returns only the invisible element that
+/// records the end of the frame when only the statistics of `stats.rs` are
+/// on, and `None` when both are off.
 pub fn overlay(cx: &App) -> Option<AnyElement> {
-    // Painted last, so its paint is the end of the frame's drawing.
+    // This element is painted last, so the moment it is painted is the end
+    // of the frame's drawing.
     let end = || {
         canvas(|_, _, _| {}, |_, _, _, _| frame_ended())
             .absolute()
@@ -179,7 +191,7 @@ mod tests {
         let now = Instant::now();
         let ago = |milliseconds: u64| now - Duration::from_millis(milliseconds);
         let draw = Duration::from_millis;
-        // Three frames in the last second, one before it.
+        // Three frames ended in the last second and one ended before it.
         let frames = VecDeque::from([
             (ago(1500), draw(9)),
             (ago(40), draw(2)),
@@ -190,7 +202,8 @@ mod tests {
         assert_eq!(shown.frames_per_second, 3);
         assert_eq!(shown.interval, Some(Duration::from_millis(16)));
         assert_eq!(shown.draw, Some((draw(3), draw(5))));
-        // Nothing drawn for a second: idle.
+        // Two seconds later no frame ended in the last second, so the meter
+        // shows `idle`.
         let shown = reading(&frames, now + Duration::from_secs(2));
         assert_eq!(shown.frames_per_second, 0);
         assert_eq!(shown.draw, None);

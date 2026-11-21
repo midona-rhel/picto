@@ -1,12 +1,15 @@
-//! A text document's first page as a picture, for its thumbnail. Production
-//! renders the document in its viewer in a hidden 1,328 × 1,200 window and
-//! captures the page (`documentThumbnailService.mjs`,
-//! `entrypoints/documentThumbnail.tsx`). GPUI cannot read back what a window
-//! drew, so the page is laid out here as [`super::reader`] lays it out (the
-//! same widths, padding, sizes, line heights, margins and colours) with
-//! cosmic-text and drawn into an image, at the hidden window's two pixels a
-//! point. Only what the window would show is drawn: the page from its top,
-//! at most as tall as the window below its padding.
+//! Draws the first page of a text document, or of a chapter of a book, as a
+//! picture. `grid::rendered` writes that picture as the item's thumbnail.
+//! GPUI cannot read back what a window drew, so the picture is not taken
+//! from the viewer. The page is laid out here with cosmic-text in the way
+//! [`super::reader`] lays it out, with the same widths, padding, font
+//! sizes, line heights, margins and colours, and is drawn into an image.
+//!
+//! Picto 0.6.19 and earlier made this thumbnail by showing the document in
+//! a window of 1,328 × 1,200 points and capturing the page at two pixels
+//! for each point. The picture drawn here has the same size, so that the
+//! thumbnails look the same: it has two pixels for each point, it starts
+//! at the page's top, and it ends where that window ended.
 use super::reader::{self, PageStyle};
 use super::rich::{Block, Inline, Marks};
 use crate::theme;
@@ -16,19 +19,27 @@ use cosmic_text::{
 use image::{Rgba, RgbaImage};
 use std::sync::Mutex;
 
-/// The capture's two pixels a point.
+/// The number of pixels that the picture has for each point of the page.
 const SCALE: f32 = 2.;
-/// The hidden window's height, less the viewer's padding above the page.
+/// The largest height in points of the page in the picture: the 1,200
+/// points of the window that the top of this file describes, less the 24
+/// points of padding above the page (`shell::VIEWPORT_PADDING`).
 const MAX_HEIGHT: f32 = 1_200. - super::shell::VIEWPORT_PADDING;
-/// The available height the page's minimum is taken from.
+/// The height in points that the page has room for in that window: 1,200
+/// points less the padding above and below the page. The page's smallest
+/// height is computed from it (`page_height`).
 const AVAILABLE_HEIGHT: f32 = 1_200. - 2. * super::shell::VIEWPORT_PADDING;
-/// Inline code's metadata on its glyphs, for its tint.
+/// The metadata value that marks the glyphs of inline code on a text page,
+/// so that `Command::paint` draws the background of code behind them.
 const CODE: usize = 1;
 
-/// The fonts, loaded once: the system's and the two the app bundles.
+/// The fonts that the pages are drawn with: the system's fonts and the two
+/// fonts that the app bundles, Fira Mono and Roboto. They are loaded on the
+/// first call of `draw`.
 static FONTS: Mutex<Option<(FontSystem, SwashCache)>> = Mutex::new(None);
 
-/// The UI face (`--font-family-ui`) as the system names it.
+/// Returns the font family of the interface's text, by the name under which
+/// cosmic-text finds it on this system.
 fn ui_family() -> Family<'static> {
     if cfg!(target_os = "macos") {
         // i18n: a font's name
@@ -41,11 +52,15 @@ fn ui_family() -> Family<'static> {
     }
 }
 
-/// The extra advance, in ems, that brings the system font's default
-/// instance to the width Chromium draws it at `size` with, where it picks
-/// the font's optical size for the text's size: none on a heading's large
-/// sizes, about 6% of an em at the page's 14 px. Measured against
-/// production's thumbnails; elsewhere the system's UI face is static.
+/// Returns the space, in ems, that is added after each character of text
+/// in the macOS system font at `size` points. cosmic-text draws the font's
+/// default instance at every size. At small sizes that instance is narrower
+/// than the one the system picks for the size (the font's optical size),
+/// and the added space makes up the difference. It is about 6% of an em at
+/// the page's 14 points and falls to nothing at about 31 points, so the
+/// largest headings get none. The values were measured against thumbnails
+/// made by Picto 0.6.19. On Windows and Linux the interface's font has one
+/// instance only, and the function returns 0.
 pub fn tracking(size: f32) -> f32 {
     if cfg!(target_os = "macos") {
         (0.062 - (size - 14.) * 0.00364).clamp(0., 0.062)
@@ -69,8 +84,12 @@ fn color(rgb: u32) -> Color {
     Color::rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
 }
 
-/// The page's height in points: its content within its padding, at least
-/// its minimum, and what the window shows of it.
+/// Returns the height in points of the page in the picture. `content` is
+/// the height of the page's content. The page is as high as the content
+/// with the padding above and below it. It is at least as high as its
+/// smallest height, which is `AVAILABLE_HEIGHT` for a book page and the
+/// lesser of `AVAILABLE_HEIGHT` and 1,056 points for a text page. It is at
+/// most `MAX_HEIGHT` high, and a longer page is cut off there.
 pub fn page_height(content: f32, style: PageStyle) -> f32 {
     let (vertical, _) = style.padding();
     let minimum = match style {
@@ -80,7 +99,9 @@ pub fn page_height(content: f32, style: PageStyle) -> f32 {
     (content + 2. * vertical).max(minimum).min(MAX_HEIGHT)
 }
 
-/// Draws the page of `blocks` in `style`.
+/// Draws `blocks` as a page of `style` and returns the picture. The picture
+/// is as wide as the page's largest width and as high as `page_height`
+/// returns, each multiplied by `SCALE`.
 pub fn draw(blocks: &[Block], style: PageStyle) -> RgbaImage {
     let mut fonts = FONTS
         .lock()
@@ -118,7 +139,9 @@ fn paper() -> [u8; 4] {
     [(paper >> 16) as u8, (paper >> 8) as u8, paper as u8, 255]
 }
 
-/// What is drawn, in order, once the page's height is known.
+/// One step of drawing the page. Laying the page out produces a list of
+/// these. `draw` carries them out in order once it knows the page's height
+/// and has made the picture.
 enum Command {
     Fill {
         x: f32,
@@ -164,7 +187,8 @@ impl Command {
                 color: base,
             } => {
                 let (left, top) = ((x * SCALE).round() as i32, (y * SCALE).round() as i32);
-                // Inline code's tint, behind its glyphs, a line high.
+                // Behind each glyph of inline code, a rectangle as high as
+                // the line is filled with the background colour of code.
                 let mut tints = Vec::new();
                 for run in buffer.layout_runs() {
                     for glyph in run.glyphs.iter().filter(|glyph| glyph.metadata == CODE) {
@@ -202,7 +226,9 @@ fn rgba(color: u32) -> [u8; 4] {
     [(color >> 16) as u8, (color >> 8) as u8, color as u8, 255]
 }
 
-/// Blends `color` over the rectangle, clipped to the picture.
+/// Blends `color` over the rectangle of `width` × `height` pixels whose
+/// top-left corner is at (`x`, `y`). The part of the rectangle that lies
+/// outside the picture is left out.
 fn fill(picture: &mut RgbaImage, x: i32, y: i32, width: u32, height: u32, color: [u8; 4]) {
     let alpha = color[3] as u32;
     if alpha == 0 {
@@ -232,9 +258,11 @@ impl Page<'_> {
         self.style.font_size()
     }
 
-    /// Lays out text of `size` on lines of `line` points, `width` wide,
-    /// at (`x`, `y`), and hands back its height and the width of its
-    /// longest line.
+    /// Lays out `spans` as text of `size` points on lines `line` points
+    /// high, with its top-left corner at (`x`, `y`), and adds the command
+    /// that draws it in `color`. Lines are wrapped at `width` points, or
+    /// not at all when `width` is `None`. Returns the height of the text
+    /// and the width of its longest line, both in points.
     #[allow(clippy::too_many_arguments)]
     fn text(
         &mut self,
@@ -252,7 +280,8 @@ impl Page<'_> {
             .first()
             .map(|(_, attrs)| attrs.clone())
             .unwrap_or_else(|| Attrs::new().family(family(self.style)));
-        // The UI face's runs take its tracking at this size.
+        // Text in the interface's font gets the letter spacing that
+        // `tracking` returns for this size.
         let ui = ui_family();
         let spans = spans.iter().map(|(text, attrs)| {
             let attrs = if attrs.family == ui {
@@ -279,7 +308,9 @@ impl Page<'_> {
         (height, widest / SCALE)
     }
 
-    /// An inline paragraph, `width` wide, and its height.
+    /// Lays out `inline` with its marks as a paragraph `width` points wide
+    /// at (`x`, `y`), in bold when `bold` is true, and returns the
+    /// paragraph's height in points.
     #[allow(clippy::too_many_arguments)]
     fn inline(
         &mut self,
@@ -300,7 +331,10 @@ impl Page<'_> {
         self.text(&spans, size, line, x, y, Some(width), color).0
     }
 
-    /// Lays out `blocks` from `y` and hands back where they end.
+    /// Lays out `blocks` one under the other from `y` downward, in the way
+    /// `reader::blocks_view` draws them, and returns the `y` at which they
+    /// end. A block that would start below `MAX_HEIGHT` and the blocks
+    /// after it are left out, because the picture ends there.
     fn blocks(&mut self, blocks: &[Block], x: f32, mut y: f32, width: f32) -> f32 {
         let style = self.style;
         if style == PageStyle::Text && reader::plain_text_page(blocks) {
@@ -385,7 +419,10 @@ impl Page<'_> {
                     text_color,
                 );
                 if style == PageStyle::Text {
-                    // The tint as wide as the text, behind it.
+                    // The background of the code is as wide as the longest
+                    // line of the text with its padding. Its command is
+                    // inserted before the text's command, so that it is
+                    // drawn behind the text.
                     self.commands.insert(
                         at,
                         Command::Fill {
@@ -424,7 +461,8 @@ impl Page<'_> {
                         Some(start) => format!("{}.", start + index as u64),
                         None => "•".to_owned(),
                     };
-                    // The marker hangs left of the item, 6 px from it.
+                    // The marker is drawn to the left of the item and ends
+                    // 6 points before the item's left edge.
                     let attrs = Attrs::new().family(family(style)).color(color(text_color));
                     let marker_width = measure(self.system, &marker, attrs.clone(), font_size);
                     self.text(
@@ -520,7 +558,9 @@ fn spans_of<'a>(
     spans
 }
 
-/// A run's marks as text attributes (`reader::highlight`).
+/// Returns `attrs` with the attributes that `marks` add. They are the ones
+/// that `reader::highlight` gives the same marks in the viewer. Code on a
+/// text page is also tagged with `CODE`, so that its background is drawn.
 fn marked(mut attrs: Attrs<'static>, marks: Marks, style: PageStyle) -> Attrs<'static> {
     if marks.bold {
         attrs = attrs.weight(Weight::BOLD);
@@ -545,7 +585,8 @@ fn marked(mut attrs: Attrs<'static>, marks: Marks, style: PageStyle) -> Attrs<'s
     attrs
 }
 
-/// The width of one line of `text`, in points.
+/// Returns the width in points of `text` laid out on one line at `size`
+/// points with `attrs`.
 fn measure(system: &mut FontSystem, text: &str, attrs: Attrs, size: f32) -> f32 {
     let mut buffer = Buffer::new(system, Metrics::new(size * SCALE, size * SCALE));
     buffer.set_size(None, None);
@@ -558,7 +599,10 @@ fn measure(system: &mut FontSystem, text: &str, attrs: Attrs, size: f32) -> f32 
         / SCALE
 }
 
-/// A chapter's picture at its shown size, in pixels, from GPUI's BGRA frame.
+/// Returns a picture of a book's chapter scaled to `width` × `height`
+/// points, which is `SCALE` times as many pixels. `image` holds the picture
+/// in GPUI's BGRA byte order, and the result is in RGBA order. Returns
+/// `None` when the picture's bytes cannot be read.
 fn picture_pixels(image: &gpui::RenderImage, width: f32, height: f32) -> Option<RgbaImage> {
     let size = image.size(0);
     let (natural_width, natural_height) = (size.width.0 as u32, size.height.0 as u32);
@@ -582,11 +626,11 @@ mod tests {
 
     #[test]
     fn the_page_is_the_window_s_share_of_it() {
-        // A short text page keeps its 1,056 points; a long one is cut where
-        // the hidden window ends, 24 points of padding below its top.
+        // A short text page is 1,056 points high, which is its smallest
+        // height. A long one is cut off at 1,176 points (`MAX_HEIGHT`).
         assert_eq!(page_height(100., PageStyle::Text), 1_056.);
         assert_eq!(page_height(5_000., PageStyle::Text), 1_176.);
-        // A book page is at least the window's height inside its padding.
+        // A book page is at least 1,152 points high (`AVAILABLE_HEIGHT`).
         assert_eq!(page_height(100., PageStyle::Book), 1_152.);
     }
 
@@ -597,7 +641,8 @@ mod tests {
             PageStyle::Text,
         );
         assert_eq!(picture.dimensions(), (1_632, 2_112));
-        // Paper at the corner, ink where the title is.
+        // The pixel in the corner is white paper, and the area of the title
+        // has dark pixels.
         assert_eq!(picture.get_pixel(0, 0).0, [255, 255, 255, 255]);
         let inked = (152..400u32)
             .flat_map(|y| (144..600u32).map(move |x| (x, y)))

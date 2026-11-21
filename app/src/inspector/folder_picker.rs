@@ -1,10 +1,11 @@
-//! The folder picker (`FolderPickerPanel.tsx` in its `OverlayShell`, with
-//! `FolderTree`): the folder tree with a search, the recent and selected
-//! views, and New Subfolder and New Sibling Folder from a row's menu. The
-//! inspector opens it with the items' folders checked, a click adding the
-//! items to a folder or taking them out at once; the sidebar opens it in
-//! its move mode (`onApplyFolderParent`), choosing one new parent, Library
-//! for the top level, among the folders the moving ones can go under.
+//! Holds the state of the folder picker: a panel with the tree of folders, a
+//! search field, the views All, Recent and Selected, and New Subfolder and
+//! New Sibling Folder in the menu of a row. The inspector opens it with the
+//! folders of the items ticked, and a click adds the items to a folder or
+//! takes them out of it at once. The sidebar opens it in the move mode, in
+//! which the user chooses one new parent for the folders being moved: one of
+//! the folders they can be moved under, or Library for the top level. The
+//! filter bar opens it in the filter mode to choose the folders of a filter.
 use super::membership;
 use crate::backend::Navigation;
 use crate::i18n::t;
@@ -27,10 +28,11 @@ mod view;
 const WIDTH: f32 = 360.;
 const HEIGHT: f32 = 480.;
 const ROW: f32 = 26.;
-/// `useRecentFolders(20)`, of the 30 remembered.
+/// The largest number of recently used folders that the Recent view shows.
 const RECENT_SHOWN: usize = 20;
 
-/// `FolderView`
+/// Says which folders the list shows: all of them as a tree, the recently
+/// used ones, or the ones that are ticked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
     All,
@@ -39,7 +41,8 @@ pub enum View {
 }
 
 impl View {
-    /// Tab: All, Recent, Selected, then All again.
+    /// Returns the view that Tab changes to: Recent after All, Selected
+    /// after Recent, and All after Selected.
     pub fn next(self) -> Self {
         match self {
             View::All => View::Recent,
@@ -50,12 +53,14 @@ impl View {
 }
 
 pub enum Event {
-    /// Add the items to the folder (`add`) or take them out.
+    /// The owner is to add the items to the folder when `add` is true, and
+    /// to take them out of it otherwise.
     Toggle { folder: FolderId, add: bool },
-    /// Move mode's Move: the chosen parent, `None` for Library.
+    /// The user pressed Move in the move mode. It holds the chosen parent, or
+    /// `None` for Library, the top level.
     MoveTo(Option<FolderId>),
-    /// In the filter mode, the folders included and excluded and the match
-    /// rule (`onApplyFolderFilter`).
+    /// The choice of folders changed in the filter mode. It holds the folders
+    /// that are included, the folders that are excluded, and the match rule.
     FilterChanged {
         include: Vec<FolderId>,
         exclude: Vec<FolderId>,
@@ -63,16 +68,18 @@ pub enum Event {
     },
 }
 
-/// The move mode: the folders that can be chosen, and whether Library (the
-/// top level) is.
+/// Holds what the picker needs in the move mode: the folders that can be
+/// chosen as the new parent, and in `root` whether Library, the top level,
+/// is the parent that is chosen.
 struct ParentMode {
     available: HashSet<FolderId>,
     root: bool,
 }
 
-/// The picker as the filter bar opens it (`onApplyFolderFilter`): a click
-/// includes a folder (Shift takes the range from the last one clicked), a
-/// right click excludes it, under a match rule.
+/// Holds what the picker needs when the filter bar has opened it. In this
+/// mode a click includes a folder or stops including it, a click with Shift
+/// includes the range from the folder clicked last, and a right-click
+/// excludes a folder, all under a match rule.
 struct FilterMode {
     excluded: BTreeSet<FolderId>,
     mode: SetMatchMode,
@@ -81,8 +88,9 @@ struct FilterMode {
 
 impl EventEmitter<Event> for FolderPicker {}
 
-/// A folder as the sidebar lists it (`SidebarNodeDto`), for the folder
-/// trees of this picker and of the Folders dialog.
+/// A folder with the values that the sidebar's list of destinations has for
+/// it. The folder trees of this picker and of the Folders dialog are built
+/// from these.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Folder {
     pub id: FolderId,
@@ -92,7 +100,8 @@ pub struct Folder {
     pub count: Option<u64>,
 }
 
-/// The library's folders from the sidebar's destinations, in their order.
+/// Returns the library's folders from the sidebar's list of destinations, in
+/// the order of that list.
 pub fn folders(nav: &[Navigation]) -> Vec<Folder> {
     let id = |entry: &Navigation| match entry.scope {
         ItemScope::FolderTree { folder_id } if entry.screen.is_none() => Some(folder_id),
@@ -111,13 +120,15 @@ pub fn folders(nav: &[Navigation]) -> Vec<Folder> {
         .collect()
 }
 
-/// One line of the tree.
+/// Holds one row of the folder tree.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
     pub folder: Folder,
     pub depth: usize,
-    /// For each ancestor below the top level, whether its line continues
-    /// past this row.
+    /// One value for each ancestor of this row that is not at the top level,
+    /// the highest first. A value is true when that ancestor has a sibling
+    /// after it, in which case the vertical line at its level continues past
+    /// this row.
     pub continues: Vec<bool>,
     pub last: bool,
     pub children: bool,
@@ -125,7 +136,8 @@ pub struct Row {
     pub parent_name: Option<String>,
 }
 
-/// `matchesSearch`: the folder's name or a descendant's holds the search.
+/// Returns true if the name of the folder, or of a folder anywhere under it,
+/// contains `query`.
 fn matches(folders: &[Folder], folder: &Folder, query: &str) -> bool {
     folder.name.to_lowercase().contains(query)
         || folders
@@ -134,11 +146,11 @@ fn matches(folders: &[Folder], folder: &Folder, query: &str) -> bool {
             .any(|child| matches(folders, child, query))
 }
 
-/// The visible rows of a folder tree (`FolderTree`, and `renderTreeNode`
-/// over `buildTree` in the Folders dialog): each folder under its parent,
-/// folded branches left out, and while searching only the folders whose
-/// name holds the text and their ancestors. The picker opens every branch
-/// while it searches by passing no folds.
+/// Returns the visible rows of a folder tree, each folder under its parent.
+/// The folders under a folded branch are left out. During a search, only the
+/// folders whose name contains the text, and their ancestors, are kept. The
+/// picker passes an empty `folded` during a search, so that every branch is
+/// open. The Folders dialog passes its folds during a search too.
 pub fn rows(folders: &[Folder], folded: &HashSet<FolderId>, query: &str) -> Vec<Row> {
     let query = query.trim().to_lowercase();
     let known = folders
@@ -203,8 +215,9 @@ pub fn rows(folders: &[Folder], folded: &HashSet<FolderId>, query: &str) -> Vec<
     out
 }
 
-/// The Recent and Selected views: those folders alone, in that order, as a
-/// flat list without their parents.
+/// Returns the folders with the given ids, in the order of `ids`, each
+/// without a parent, so that [`rows`] lists them one under the other and not
+/// as a tree. The Recent view and the Selected view use it.
 pub fn listed(all: &[Folder], ids: &[FolderId]) -> Vec<Folder> {
     ids.iter()
         .filter_map(|id| all.iter().find(|folder| folder.id == *id))
@@ -215,7 +228,8 @@ pub fn listed(all: &[Folder], ids: &[FolderId]) -> Vec<Folder> {
         .collect()
 }
 
-/// The New Subfolder and New Sibling Folder dialog.
+/// Holds the state of the dialog that asks for the name of a new folder, for
+/// New Subfolder and New Sibling Folder.
 struct Create {
     title: &'static str,
     parent: Option<FolderId>,
@@ -232,14 +246,15 @@ pub struct FolderPicker {
     geometry: Geometry,
     query: String,
     view: View,
-    /// The folders the items are in, changed by each click.
+    /// The folders that are ticked. When the inspector opened the picker,
+    /// they are the folders the items are in. Each click changes them.
     selected: BTreeSet<FolderId>,
     dirty: bool,
     folded: HashSet<FolderId>,
     focus_index: Option<usize>,
     scroll: ScrollHandle,
-    /// A row's menu and the dialog it opens; the keyboard goes back to the
-    /// search once each has gone.
+    /// The menu of a row. `create` is the dialog that the menu opens. When
+    /// either has closed, the keyboard focus goes back to the search field.
     menu: menu::Host,
     menu_folder: Option<Folder>,
     create: modal::Host<Create>,
@@ -304,8 +319,8 @@ impl FolderPicker {
         self.show(anchor, folders, window, cx);
     }
 
-    /// Opens in the filter mode below a control of the filter bar, on the
-    /// folders the filter includes and excludes.
+    /// Opens the picker in the filter mode below a control of the filter bar,
+    /// with the folders that the filter includes and excludes.
     pub fn open_filter(
         &mut self,
         below: Point<f32>,
@@ -345,7 +360,7 @@ impl FolderPicker {
         self.view = View::All;
         self.selected = folders.into_iter().collect();
         self.dirty = false;
-        // `FolderTree` opens with every branch open.
+        // Every branch of the tree is open when the picker opens.
         self.folded.clear();
         self.focus_index = None;
         self.scroll.set_offset(point(px(0.), px(0.)));
@@ -354,8 +369,9 @@ impl FolderPicker {
         cx.notify();
     }
 
-    /// The move mode: `available` are the folders the moving ones can go
-    /// under, `current` their shared parent (Library when `None`).
+    /// Opens the picker in the move mode. `available` holds the folders that
+    /// the folders being moved can be put under. `current` is the parent they
+    /// all have now, or `None` when that is Library, the top level.
     pub fn open_for_parent(
         &mut self,
         anchor: Option<Point<f32>>,
@@ -371,18 +387,21 @@ impl FolderPicker {
         });
     }
 
-    /// Library's row: in move mode, unless a search leaves it out.
+    /// Returns true if the row for Library is shown. It is shown in the move
+    /// mode, unless the search text is not part of the word "library".
     fn shows_root(&self) -> bool {
         self.parent_mode.is_some()
             && (self.query.is_empty() || "library".contains(&self.query.to_lowercase()))
     }
 
-    /// The rows the keyboard reaches before the tree's.
+    /// Returns how many rows the keyboard reaches before the first row of the
+    /// tree: 1 when the row for Library is shown, and 0 otherwise.
     fn key_offset(&self) -> usize {
         usize::from(self.shows_root())
     }
 
-    /// Move: the chosen parent goes to the owner, and the picker closes.
+    /// Emits `Event::MoveTo` with the chosen parent and closes the picker.
+    /// The Move button of the move mode calls this.
     fn apply_parent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(mode) = &self.parent_mode else {
             return;
@@ -399,7 +418,8 @@ impl FolderPicker {
         self.close(window, cx);
     }
 
-    /// The items' folders changed (or arrived).
+    /// Sets the ticked folders to `folders`. The owner calls this when the
+    /// folders of the items have changed or have arrived.
     pub fn set_entity(&mut self, folders: Vec<FolderId>, cx: &mut Context<Self>) {
         if self.is_open() {
             self.selected = folders.into_iter().collect();
@@ -456,9 +476,12 @@ impl FolderPicker {
         }
     }
 
-    /// A click on a folder. In the filter mode, Shift takes the range from
-    /// the last one clicked (keeping the rest with Cmd) and a plain click
-    /// toggles; either way the folder is no longer excluded.
+    /// Handles a click on a folder. Outside the filter mode it calls
+    /// [`Self::toggle`]. In the filter mode a click includes the folder or
+    /// stops including it. A click with Shift includes the rows from the
+    /// folder clicked last to this one, and stops including all others unless
+    /// Command or Control is held too. In both cases the folder is no longer
+    /// excluded.
     fn click(&mut self, folder: FolderId, modifiers: Modifiers, cx: &mut Context<Self>) {
         if self.filter.is_none() {
             self.toggle(folder, cx);
@@ -502,8 +525,9 @@ impl FolderPicker {
         cx.notify();
     }
 
-    /// `handleExclude`: in the filter mode, a right click excludes the
-    /// folder, or no longer.
+    /// Excludes the folder from the filter, or stops excluding it. A
+    /// right-click on a row calls this. It does nothing outside the filter
+    /// mode.
     fn exclude(&mut self, folder: FolderId, cx: &mut Context<Self>) {
         let Some(filter) = &mut self.filter else {
             return;
@@ -535,9 +559,11 @@ impl FolderPicker {
         }
     }
 
-    /// `handleToggle` for the inspector's items: added or taken out at once.
+    /// Ticks or unticks the folder. When the inspector opened the picker,
+    /// this adds the items to the folder or takes them out of it at once.
     fn toggle(&mut self, folder: FolderId, cx: &mut Context<Self>) {
-        // Move mode chooses one parent and moves nothing yet.
+        // In the move mode a click only chooses the new parent. Nothing is
+        // moved until the user presses Move.
         if let Some(mode) = &mut self.parent_mode {
             mode.root = false;
             self.selected = [folder].into();
@@ -578,7 +604,7 @@ impl FolderPicker {
             Nav::Confirm => {
                 let at = self.focus_index.unwrap_or(0);
                 if offset == 1 && at == 0 {
-                    // Library: the top level.
+                    // The first row in the move mode is Library, the top level.
                     if let Some(mode) = &mut self.parent_mode {
                         mode.root = true;
                     }
@@ -596,7 +622,8 @@ impl FolderPicker {
 
     fn reveal_focus(&mut self) {
         let Some(at) = self.focus_index else { return };
-        // Library's row sits above the scrolling tree.
+        // The row for Library is above the scrolling tree and is always
+        // visible, so the list is not scrolled for it.
         let Some(at) = at.checked_sub(self.key_offset()) else {
             return;
         };
@@ -613,7 +640,7 @@ impl FolderPicker {
         self.scroll.set_offset(point(px(0.), px(-next.max(0.))));
     }
 
-    // ── New folders ─────────────────────────────────────────────
+    // The functions below open the menu of a row and create a folder from it.
 
     fn open_menu(
         &mut self,
@@ -657,7 +684,8 @@ impl FolderPicker {
         });
         let subscriptions = vec![
             cx.subscribe(&name, |this, _, _: &Submitted, cx| this.submit_create(cx)),
-            // The Create button follows what is typed.
+            // The dialog is drawn again on every change of the name, so that
+            // its Create button is drawn for the name typed so far.
             cx.observe(&name, |_, _, cx| cx.notify()),
         ];
         let handle = name.read(cx).focus_handle(cx);
@@ -672,7 +700,8 @@ impl FolderPicker {
         self.create.open(create, back, cx).focus_first(handle);
     }
 
-    /// `createNamedFolder`: creates it, then adds the items to it.
+    /// Creates the folder that the dialog names and then ticks it, which adds
+    /// the inspector's items to it.
     fn submit_create(&mut self, cx: &mut Context<Self>) {
         let Some(create) = self
             .create
@@ -688,8 +717,8 @@ impl FolderPicker {
         }
         create.busy = true;
         let parent = create.parent;
-        // `foldersController.create` tells of a folder nested too deep;
-        // anything else stays on the console.
+        // `Report::folder_depth()` shows a notification when the folder would
+        // be nested too deep. No other error is shown to the user.
         crate::session::edit_then(
             &self.session,
             Report::folder_depth(),
@@ -759,7 +788,8 @@ mod tests {
         );
         assert_eq!(rows[1].depth, 1);
         assert!(!rows[1].last && rows[2].last);
-        // Oils sits under Paintings, the last child: no line continues.
+        // Oils is under Paintings, which is the last child of Art, so no
+        // line continues past the row of Oils.
         assert_eq!(rows[3].depth, 2);
         assert_eq!(rows[3].continues, [false]);
         assert_eq!(rows[1].parent_name.as_deref(), Some("Art"));
@@ -779,7 +809,8 @@ mod tests {
         let rows = rows(&tree(), &HashSet::new(), " OIL");
         assert_eq!(names(&rows), ["Art", "Paintings", "Oils"]);
         assert!(rows.iter().all(|row| row.expanded));
-        // A folded branch stays folded (the Folders dialog keeps its folds).
+        // A branch that is passed as folded stays folded during a search. The
+        // Folders dialog passes its folds, so that they are kept.
         let folded = HashSet::from([FolderId(3)]);
         assert_eq!(
             names(&super::rows(&tree(), &folded, "oil")),

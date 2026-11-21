@@ -1,10 +1,12 @@
-//! The smart folder being edited as data: the rules typed so far, the
-//! library's input they make, saving and cancelling, and each edit of a
-//! field, operator, value, colour, rule or group.
+//! The data side of the smart-folder editor: reading the rules that the user
+//! has entered, building the definition that is written to the library,
+//! saving and cancelling, and the changes that the editor's controls make to
+//! a field, an operator, a value, a colour, a rule or a group.
 use super::*;
 
 impl SmartFolderEditor {
-    /// The rules as typed so far.
+    /// Returns the groups of rules with the values that the editor's fields
+    /// hold now.
     pub(super) fn current_groups(&self, cx: &App) -> Vec<Group> {
         self.groups
             .iter()
@@ -34,7 +36,10 @@ impl SmartFolderEditor {
         self.groups.iter().map(|group| group.rules.len()).sum()
     }
 
-    /// The definition the dialog holds, with its rules compiled.
+    /// Returns the smart folder's definition as the dialog holds it now,
+    /// with the rules compiled to a filter. When the dialog does not show
+    /// the rules, the filter is the one that the smart folder had when the
+    /// dialog opened. Returns an error when a rule cannot be compiled.
     pub(super) fn input(&self, cx: &App) -> Result<SmartFolderInput, String> {
         let tags = self.tags.clone();
         let resolve = move |name: &str| {
@@ -80,8 +85,11 @@ impl SmartFolderEditor {
         })
     }
 
-    /// Something in the rules changed: an edited folder shows the new rules
-    /// after a pause.
+    /// Redraws the editor after a change to the rules. When the rules of an
+    /// existing smart folder are being edited, the new rules are also
+    /// written to the library after `PREVIEW_DELAY`, so that the grid shows
+    /// the items they match. A later change replaces a write that is still
+    /// waiting.
     pub(super) fn changed(&mut self, cx: &mut Context<Self>) {
         cx.notify();
         let Target::Edit { id, .. } = self.target else {
@@ -107,8 +115,11 @@ impl SmartFolderEditor {
         }));
     }
 
-    /// Cancel, the close button, Escape or the backdrop: an edited folder
-    /// gets the rules it opened with back, then the dialog closes.
+    /// Closes the dialog without saving. Cancel, the close button, Escape
+    /// and a click on the backdrop run this. When the rules of an existing
+    /// smart folder were shown, the definition that the smart folder had
+    /// when the dialog opened is first written back to the library, because
+    /// the preview may have saved changed rules.
     pub(super) fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.closing || self.presence.closing() {
             return;
@@ -137,7 +148,9 @@ impl SmartFolderEditor {
                 this.closing = false;
                 match result {
                     Ok(Ok(_)) => this.presence.close(),
-                    // The previewed rules are still saved, so the dialog stays.
+                    // The definition could not be written back, so the
+                    // library still holds the previewed rules, and the
+                    // dialog stays open.
                     Ok(Err(error)) => ui::notify::error(
                         t("Could not restore smart folder rules"),
                         error.to_string(),
@@ -151,7 +164,9 @@ impl SmartFolderEditor {
         .detach();
     }
 
-    /// Create or Save Changes.
+    /// Saves the definition to the library and closes the dialog. The
+    /// buttons Create and Save Changes run this. A new smart folder is
+    /// created, and an existing one is updated.
     pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_save(cx) || self.presence.closing() {
             return;
@@ -168,8 +183,10 @@ impl SmartFolderEditor {
             Target::Create { .. } => None,
             Target::Edit { id, .. } => Some(*id),
         };
-        // A created folder is revealed in the sidebar, which needs it among
-        // the destinations at once.
+        // The edit also reads the sidebar's destinations again
+        // (`navigation`). The sidebar expands the branch of a new smart
+        // folder as soon as `Event::Created` arrives, and it can do that
+        // only when the smart folder is among the destinations.
         let answer = self.session.update(cx, |session, cx| {
             session.edit(
                 move |library| match target {
@@ -205,14 +222,15 @@ impl SmartFolderEditor {
         .detach();
     }
 
-    /// The primary button's state: a name, and rules that are read and
-    /// within the limit.
+    /// Returns whether the primary button is enabled. The name must not be
+    /// empty. When the dialog shows the rules, they must have been read into
+    /// the editor, and there must be at most `rules::MAX_RULES` of them.
     pub(super) fn can_save(&self, cx: &App) -> bool {
         !self.name.read(cx).value().trim().is_empty()
             && (!self.shows_rules() || (self.ready && self.rule_count() <= rules::MAX_RULES))
     }
 
-    // ── Rule edits ──────────────────────────────────────────────────
+    // The functions below change the rules.
 
     pub(super) fn set_field(
         &mut self,
@@ -259,7 +277,9 @@ impl SmartFolderEditor {
         self.changed(cx);
     }
 
-    /// A select value of a rule: the file type, a rating, or a size unit.
+    /// Sets a value of a rule that the user chose in a select: the file
+    /// type, a rating, or the unit of a file size. `slot` says which of the
+    /// rule's values the select sets.
     pub(super) fn set_choice(
         &mut self,
         group: usize,
@@ -289,7 +309,9 @@ impl SmartFolderEditor {
         self.changed(cx);
     }
 
-    /// A date rule's day, from its picker.
+    /// Sets the day of a date rule to the day that the user chose in its
+    /// date picker. When `second` is true, it sets the second day of a
+    /// "between" rule.
     pub(super) fn set_date(
         &mut self,
         group: usize,
@@ -306,7 +328,8 @@ impl SmartFolderEditor {
             return;
         };
         let input = if second { &row.value2 } else { &row.value };
-        // The field's observer previews the change.
+        // The editor observes this text field (`watch_input`), and the
+        // observer calls `changed`, which previews the change.
         input.update(cx, |input, cx| input.set_text(day, cx));
     }
 

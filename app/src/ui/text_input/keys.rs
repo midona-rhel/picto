@@ -1,16 +1,17 @@
-//! The keys of a text field on each platform.
+//! This file binds the keys of a text field on macOS, Windows and Linux.
 use super::editing::Platform;
 use super::*;
 
-/// The keys of a text field: AppKit's standard key bindings on a Mac (as
-/// Chromium performs them in production's fields), the Windows and Linux
-/// ones elsewhere. Undo and Redo come from the shortcut registry
-/// (`keymap.rs`), which follows the user's keys for them.
+/// Binds the keys of a text field for the system this build runs on. On a
+/// Mac they are AppKit's standard key bindings for a text field. On Windows
+/// and Linux they are the keys that text fields have on those systems. Undo
+/// and Redo are bound by the shortcut registry (`keymap.rs`), which uses
+/// the keys the user has set for them.
 pub fn bind(cx: &mut App) {
     cx.bind_keys(bindings(Platform::CURRENT));
 }
 
-/// The keys of a text field on `platform`.
+/// Returns the key bindings of a text field on `platform`.
 fn bindings(platform: Platform) -> Vec<KeyBinding> {
     let field = Some("TextInput");
     let area = Some("TextArea");
@@ -63,7 +64,7 @@ fn bindings(platform: Platform) -> Vec<KeyBinding> {
             KeyBinding::new("alt-down", ParagraphForward, field),
             KeyBinding::new("alt-shift-up", SelectParagraphBackward, field),
             KeyBinding::new("alt-shift-down", SelectParagraphForward, field),
-            // The Emacs keys every Mac text field takes.
+            // These are the Emacs keys that every text field on a Mac takes.
             KeyBinding::new("ctrl-a", ParagraphStart, field),
             KeyBinding::new("ctrl-e", ParagraphEnd, field),
             KeyBinding::new("ctrl-shift-a", SelectParagraphStart, field),
@@ -115,8 +116,8 @@ fn bindings(platform: Platform) -> Vec<KeyBinding> {
         ]);
     }
     if platform == Platform::Windows {
-        // Windows' second Redo, as its own fields and Electron's Edit menu
-        // take it there.
+        // On Windows Control-Y is a second key for Redo, as it is in the
+        // system's own text fields.
         bindings.push(KeyBinding::new("ctrl-y", Redo, field));
     }
     bindings
@@ -130,7 +131,8 @@ mod tests {
 
     const ALL: [Platform; 3] = [Platform::Mac, Platform::Windows, Platform::Linux];
 
-    /// What `keys` does in a field on `platform`, by the action's name.
+    /// Returns the name of the action that `keys` is bound to in a field on
+    /// `platform`, or `None` when it is bound to no action.
     fn action(platform: Platform, keys: &'static str) -> Option<&'static str> {
         let typed = Keystroke::parse(keys).unwrap();
         bindings(platform)
@@ -221,10 +223,11 @@ mod tests {
             .difference(&actions(Platform::Windows))
             .copied()
             .collect();
-        // The Emacs keys every Mac field takes, Option-Up and -Down by
-        // paragraph, Command-Delete and Control-Delete, and the
-        // character palette: none has a counterpart in a Windows or Linux
-        // field.
+        // These actions are bound on a Mac only: the Emacs keys that every
+        // text field on a Mac takes, Option-Up and Option-Down, which move
+        // by paragraph, Command-Delete, Control-Delete, and the key that
+        // shows the character palette. None of them has a counterpart in a
+        // text field on Windows or Linux.
         let expected = BTreeSet::from([
             "DeleteBackwardDecomposing",
             "DeleteToLineStart",

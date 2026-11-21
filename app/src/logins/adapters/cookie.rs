@@ -1,14 +1,18 @@
-//! `createCookieAdapter`: services whose login is the session cookies a
-//! normal page login sets.
+//! The adapter for the services whose login is the session cookies that
+//! the service sets when the user signs in on its page.
 use super::scripts::{BROWSER_HEADERS_SCRIPT, SIGNED_IN_SCRIPT, VERIFICATION_SCRIPT, fanbox_session_script};
 use super::*;
 
-/// `createCookieAdapter`: a login is its session cookies, once they are set
-/// and the page shows a signed-in session.
+/// The adapter that keeps a service's session cookies as the login. It
+/// keeps them once the cookies of a signed-in session are set, or, for a
+/// service that names no such cookies, once the page shows that the user is
+/// signed in.
 pub struct CookieAdapter {
     pub(super) site: Site,
     pub(super) navigating_to_verification: Cell<bool>,
-    /// The browser's own headers FANBOX's API needs with its cookies.
+    /// The request headers of the sign-in window's web view (its user
+    /// agent). FANBOX's API accepts the cookies only together with them, so
+    /// they are kept with the credential.
     pub(super) fanbox_headers: RefCell<Option<BTreeMap<String, String>>>,
 }
 
@@ -30,8 +34,8 @@ impl CookieAdapter {
                 }
             }
         }
-        // These services have separate accounts; never combine their
-        // cookies.
+        // The three SubscribeStar services have separate accounts, so only
+        // the cookies of the service that the page is on are read.
         let cookie_urls = match (&subscribestar_origin, &site.cookie_urls) {
             (Some(origin), _) => vec![origin.clone()],
             (None, Some(urls)) => urls.clone(),
@@ -40,8 +44,8 @@ impl CookieAdapter {
         let mut values: Vec<(String, String)> = Vec::new();
         for url in &cookie_urls {
             for cookie in page.cookies(url).await {
-                // `new Map(...)`: a later cookie of the same name wins, in
-                // the first one's place.
+                // When two cookies have the same name, the value of the
+                // later one is kept, at the position of the first one.
                 match values.iter_mut().find(|(name, _)| *name == cookie.name) {
                     Some(entry) => entry.1 = cookie.value,
                     None => values.push((cookie.name, cookie.value)),
@@ -152,15 +156,18 @@ impl CookieAdapter {
     }
 }
 
-/// The origin of a SubscribeStar page, when it is the chosen service's own
-/// over plain HTTPS.
+/// Returns the origin of the page at `current` if that page belongs to the
+/// SubscribeStar service that the user chose (`cookie_url`) and was loaded
+/// over HTTPS on the default port without a user name or password in its
+/// address. Returns `None` otherwise.
 fn subscribestar_origin_of(current: &str, cookie_url: &str) -> Option<String> {
     let url = url::Url::parse(current).ok()?;
     let expected = url::Url::parse(cookie_url).ok()?;
     let host = url.host_str()?;
     let bare = |host: &str| host.strip_prefix("www.").unwrap_or(host).to_owned();
     if let Some(origin) = crate::seams::login_origin() {
-        // A local login stands in for the service.
+        // While logins are kept on local pages, every page of the local
+        // origin counts as a page of the chosen service.
         return current
             .starts_with(&origin)
             .then(|| url.origin().ascii_serialization());

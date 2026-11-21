@@ -1,37 +1,38 @@
-//! Which way a key or a click on the grid opens an item, under the Controls
-//! settings, as `GridScreen.tsx` decides it: Space toggles Quick Look (or
-//! pages the grid), a double-click opens the media view or the default
-//! application, and a middle-click a window of its own. Inside a viewer,
-//! Space, Enter and Escape close it through the viewer's own keys.
+//! Decides what a key press or a click on the grid opens, according to the
+//! Controls settings. Space toggles Quick Look or scrolls the grid by a page,
+//! a double-click opens the media view or the file's default application,
+//! and a middle-click opens a detail window. A viewer that is open closes on
+//! Space, Enter and Escape through its own key bindings.
 
-/// What a gesture asks for.
+/// What a key press or a click on the grid asks for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
     OpenMediaView,
     CloseMediaView,
     OpenQuickLook,
     CloseQuickLook,
-    /// A detail window of its own.
+    /// Open the item in a detail window.
     OpenWindow,
-    /// The default application for the file.
+    /// Open the file in its default application.
     OpenDefault,
     /// Scroll the grid down by most of its height.
     ScrollPage,
     Nothing,
 }
 
-/// What the grid has open when the gesture comes.
+/// What the grid has open when the key press or the click arrives.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct State {
     pub media_view: bool,
     pub quick_look: bool,
-    /// Exactly one item is selected.
+    /// Whether exactly one item is selected.
     pub single: bool,
 }
 
-/// `view.quicklook` (Space). The media view takes it first and closes, as
-/// its own handler does; otherwise `spaceKeyAction` either pages the grid
-/// or toggles Quick Look for a single selected item.
+/// Returns what Space (the `view.quicklook` shortcut) does. An open media
+/// view closes, whatever the setting is. Otherwise the setting `scroll`
+/// scrolls the grid by a page, and any other setting toggles Quick Look,
+/// which opens only when exactly one item is selected.
 pub fn space(setting: &str, state: State) -> Action {
     if state.media_view {
         Action::CloseMediaView
@@ -46,9 +47,9 @@ pub fn space(setting: &str, state: State) -> Action {
     }
 }
 
-/// `onTileDoubleClick`: `gridDoubleClickAction` `external` opens a media item
-/// in the default application; a collection, or the `detail` default, opens
-/// the media view.
+/// Returns what a double-click on a tile does. With the setting `external`,
+/// a media item opens in its default application. A collection, and any item
+/// with the default setting `detail`, opens in the media view.
 pub fn double_click(setting: &str, collection: bool) -> Action {
     if setting == "external" && !collection {
         Action::OpenDefault
@@ -57,8 +58,9 @@ pub fn double_click(setting: &str, collection: bool) -> Action {
     }
 }
 
-/// `onTileMiddleClick`: `gridMiddleClickAction` `new_window` (the default)
-/// opens the item in a window of its own; `none` does nothing.
+/// Returns what a middle-click on a tile does. With the setting
+/// `new_window`, which is the default, the item opens in a detail window.
+/// With `none`, nothing happens.
 pub fn middle_click(setting: &str) -> Action {
     if setting == "new_window" {
         Action::OpenWindow
@@ -85,7 +87,8 @@ mod tests {
             ..ONE
         };
         assert_eq!(space("quick_look", open), Action::CloseQuickLook);
-        // Nothing, or several items, selected: nothing to preview.
+        // With no item or several items selected, there is nothing to
+        // preview.
         let several = State {
             single: false,
             ..ONE

@@ -16,10 +16,13 @@ pub(super) fn next_grapheme(text: &str, offset: usize) -> usize {
         .unwrap_or(text.len())
 }
 
-/// The text cut into words, runs of space and marks, as Chromium cuts
-/// it: Unicode's word rules with the dictionaries for Chinese, Japanese
-/// and Thai, except that a full stop parts letters (`example.com`) and
-/// joins only digits (`3.14`), and a colon parts everything.
+/// Returns the byte ranges of the pieces that `text` is cut into: words,
+/// runs of white space, and punctuation marks. The text is cut where
+/// Chromium cuts it. That is by Unicode's word rules with the dictionaries
+/// for Chinese, Japanese and Thai, with two differences. A full stop is a
+/// piece of its own unless it stands between two digits (`example.com` is
+/// three pieces and `3.14` is one), and a colon is always a piece of its
+/// own.
 fn segments(text: &str) -> Vec<Range<usize>> {
     let mut bounds: Vec<usize> = icu_segmenter::WordSegmenter::new_dictionary(Default::default())
         .segment_str(text)
@@ -46,8 +49,9 @@ fn is_space(text: &str, range: &Range<usize>) -> bool {
     text[range.clone()].chars().all(char::is_whitespace)
 }
 
-/// Option-Left (Control-Left elsewhere): the start of the word before
-/// the caret, or of the text.
+/// Returns where Option-Left on a Mac, and Control-Left on Windows and
+/// Linux, move the caret from `offset`: the start of the nearest word that
+/// starts before `offset`, or the start of the text when there is none.
 pub(super) fn word_start_before(text: &str, offset: usize) -> usize {
     segments(text)
         .into_iter()
@@ -56,8 +60,9 @@ pub(super) fn word_start_before(text: &str, offset: usize) -> usize {
         .map_or(0, |segment| segment.start)
 }
 
-/// Option-Right on a Mac: the end of the word after the caret, or of
-/// the text.
+/// Returns where Option-Right on a Mac and Control-Right on Linux move the
+/// caret from `offset`: the end of the nearest word that ends after
+/// `offset`, or the end of the text when there is none.
 fn word_end_after(text: &str, offset: usize) -> usize {
     segments(text)
         .into_iter()
@@ -65,8 +70,9 @@ fn word_end_after(text: &str, offset: usize) -> usize {
         .map_or(text.len(), |segment| segment.end)
 }
 
-/// Control-Right on Windows: past the word the caret is in
-/// and the space after it, to the start of the next word.
+/// Returns where Control-Right on Windows moves the caret from `offset`:
+/// past the rest of the word that `offset` is in and past the white space
+/// after it, to the start of the next word.
 fn next_word_start(text: &str, offset: usize) -> usize {
     let segments = segments(text);
     let mut rest = segments
@@ -83,9 +89,9 @@ fn next_word_start(text: &str, offset: usize) -> usize {
     position
 }
 
-/// Whose text-field conventions a field follows. Chromium edits the same
-/// way everywhere except where its `EditingBehavior` tells the Mac, Windows
-/// and the other systems (Linux) apart.
+/// The system whose conventions for text fields a field follows. The
+/// editing rules are the same on every system except in the three cases
+/// below, in which Chromium also tells macOS, Windows and Linux apart.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum Platform {
     Mac,
@@ -103,29 +109,32 @@ impl Platform {
         Platform::Linux
     };
 
-    /// Control-Right on Windows goes past the space after a word, to the
-    /// next word's start; Option-Right on a Mac and Control-Right on Linux
-    /// stop at the word's end (`ShouldSkipSpaceWhenMovingRight`).
+    /// Returns whether a move to the right by a word goes past the white
+    /// space after the word, to the start of the next word. Control-Right
+    /// on Windows does. Option-Right on a Mac and Control-Right on Linux
+    /// stop at the end of the word.
     pub(super) fn skips_space_moving_right(self) -> bool {
         self == Platform::Windows
     }
 
-    /// A double-click on Windows selects a word with the space after it
-    /// (`select_trailing_whitespace_enabled`, on only there).
+    /// Returns whether a double-click selects a word together with the
+    /// white space after it. It does so on Windows only.
     pub(super) fn selects_trailing_space(self) -> bool {
         self == Platform::Windows
     }
 
-    /// Up on the first row and Down on the last go to the text's start and
-    /// end, except on Windows, where they stay
-    /// (`ShouldMoveCaretToHorizontalBoundaryWhenPastTopOrBottom`).
+    /// Returns whether Up on the first row moves the caret to the start of
+    /// the text and Down on the last row moves it to the end. They do so on
+    /// macOS and Linux. On Windows the caret stays where it is.
     pub(super) fn up_down_reach_the_ends(self) -> bool {
         self != Platform::Windows
     }
 }
 
-/// The word Option-Right (Control-Right elsewhere) and Option-Delete go
-/// to on `platform`.
+/// Returns where a move to the right by a word goes from `offset` on
+/// `platform`. Option-Right on a Mac and Control-Right on Windows and Linux
+/// move the caret there, and the keys that delete the word after the caret
+/// delete up to there.
 pub(super) fn word_right(text: &str, offset: usize, platform: Platform) -> usize {
     if platform.skips_space_moving_right() {
         next_word_start(text, offset)
@@ -134,9 +143,11 @@ pub(super) fn word_right(text: &str, offset: usize, platform: Platform) -> usize
     }
 }
 
-/// What a double-click on the character at `offset` selects: its word,
-/// run of space or mark; with `trailing_space` (Windows), a word with
-/// the space after it.
+/// Returns the range that a double-click on the character at `offset`
+/// selects: the word, the run of white space or the punctuation mark that
+/// contains the character. With `trailing_space`, which is set on Windows,
+/// a word is selected together with the white space after it, unless that
+/// white space contains a line break.
 pub(super) fn word_at(text: &str, offset: usize, trailing_space: bool) -> Range<usize> {
     let segments = segments(text);
     let Some(index) = segments
@@ -158,30 +169,37 @@ pub(super) fn word_at(text: &str, offset: usize, trailing_space: bool) -> Range<
     range
 }
 
-/// The start of the paragraph `offset` is in: just after the line
-/// break before it.
+/// Returns the start of the paragraph that `offset` is in. That is the
+/// offset just after the last line break before `offset`, or 0 when there
+/// is none.
 pub(super) fn paragraph_start(text: &str, offset: usize) -> usize {
     text[..offset].rfind('\n').map_or(0, |index| index + 1)
 }
 
-/// The end of the paragraph `offset` is in: at the line break after it.
+/// Returns the end of the paragraph that `offset` is in. That is the offset
+/// of the first line break at or after `offset`, or the length of the text
+/// when there is none.
 pub(super) fn paragraph_end(text: &str, offset: usize) -> usize {
     text[offset..]
         .find('\n')
         .map_or(text.len(), |index| offset + index)
 }
 
-/// What a triple-click in text of several lines selects: the
-/// paragraph with its line break.
+/// Returns the range that a triple-click selects in a text of several
+/// lines: the paragraph that `offset` is in, together with the line break
+/// after it.
 pub(super) fn paragraph_at(text: &str, offset: usize) -> Range<usize> {
     let end = paragraph_end(text, offset);
     let end = if end < text.len() { end + 1 } else { end };
     paragraph_start(text, offset)..end
 }
 
-/// Control-T: the range to replace, what replaces it and where the
-/// caret goes. The characters either side of the caret swap and the
-/// caret moves past them; at the end of a line, the two before it swap.
+/// Returns what Control-T does with the caret at `offset`: the range to
+/// replace, the text that replaces it, and where the caret goes. The
+/// character before the caret and the character after it change places,
+/// and the caret moves past both. With the caret at the end of a line, the
+/// two characters before it change places. Returns `None` when there are
+/// not two characters to swap, and when one of the two is a line break.
 pub(super) fn transpose(text: &str, offset: usize) -> Option<(Range<usize>, String, usize)> {
     if offset == 0 {
         return None;
@@ -204,9 +222,9 @@ pub(super) fn transpose(text: &str, offset: usize) -> Option<(Range<usize>, Stri
     Some((first.start..second.end, format!("{b}{a}"), second.end))
 }
 
-/// Control-Delete on a Mac: where to delete back to so that only the
-/// last code point of the character before the caret goes (an accent
-/// typed as its own mark, say).
+/// Returns the offset that Control-Delete on a Mac deletes back to from
+/// `offset`. Only the last code point of the character before the caret is
+/// deleted, for example an accent that was typed as a combining mark.
 pub(super) fn decomposed_backward(text: &str, offset: usize) -> usize {
     let start = previous_grapheme(text, offset);
     text[start..offset]
@@ -215,20 +233,22 @@ pub(super) fn decomposed_backward(text: &str, offset: usize) -> usize {
         .map_or(start, |(index, _)| start + index)
 }
 
-/// What a one-line field (`<input>`) keeps of pasted text: line breaks
-/// at the end dropped, the others made spaces.
+/// Returns what a one-line field keeps of pasted text. The line breaks at
+/// the end of the text are removed, and every other line break becomes a
+/// space.
 pub(super) fn one_line(text: &str) -> String {
     text.trim_end_matches(['\r', '\n'])
         .replace("\r\n", " ")
         .replace(['\r', '\n'], " ")
 }
 
-/// Pasted text for a field of several lines, its line breaks all `\n`.
+/// Returns pasted text for a field of several lines, with every line break
+/// written as `\n`.
 pub(super) fn normalize_breaks(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-/// The byte offset of a UTF-16 offset into `text`.
+/// Returns the byte offset in `text` of the UTF-16 offset `utf16`.
 pub(super) fn utf8_offset(text: &str, utf16: usize) -> usize {
     let mut utf8 = 0;
     let mut counted = 0;
@@ -249,22 +269,23 @@ pub(super) struct Snapshot {
     pub(super) selection: Range<usize>,
 }
 
-/// How many steps a field can take back.
+/// The number of steps that Undo can take back in a field.
 const DEPTH: usize = 200;
 
-/// An edit made by typing: characters put in, or deleted one at a time.
+/// The kind of an edit made by typing: a character was put in, or one
+/// character was deleted.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Typing {
     Insert,
     Delete,
 }
 
-/// A field's Undo and Redo, as Chromium's editing keeps them: a run of
-/// typed characters is one step, and so is a run of characters deleted
-/// one at a time with whatever is typed straight after it, until the
-/// caret is moved or another kind of edit comes; every other edit (a
-/// paste, a cut, deleting a word or a line) is a step of its own.
-/// Taking a step back selects the text it brings back.
+/// A field's history for Undo and Redo, divided into steps as Chromium
+/// divides it. A run of typed characters is one step. A run of characters
+/// deleted one at a time, together with what is typed directly after it, is
+/// also one step. Such a run ends when the caret is moved or another kind
+/// of edit is made. Every other edit (a paste, a cut, deleting a word or a
+/// line) is a step of its own. Undo selects the text that it brings back.
 #[derive(Default, Debug)]
 pub(super) struct History {
     undo: Vec<Snapshot>,
@@ -273,7 +294,9 @@ pub(super) struct History {
 }
 
 impl History {
-    /// Notes the state before an edit, and how it was made.
+    /// Records `before`, the state before an edit, and `typing`, how the
+    /// edit was made. The state is stored as a new step unless the edit
+    /// continues the run of typing.
     pub(super) fn record(&mut self, before: Snapshot, typing: Option<Typing>) {
         let continues = match (self.typing, typing) {
             (Some(_), Some(Typing::Insert)) => true,
@@ -290,7 +313,7 @@ impl History {
         self.typing = typing;
     }
 
-    /// Ends the run of typing: what is typed next is a new step.
+    /// Ends the run of typing, so that what is typed next is a new step.
     pub(super) fn close(&mut self) {
         self.typing = None;
     }
@@ -304,8 +327,9 @@ impl History {
         !self.undo.is_empty()
     }
 
-    /// The state before the last step, with what it brings back
-    /// selected, given the state now (which Redo returns to).
+    /// Returns the state before the last step, with the text that Undo
+    /// brings back selected. `current` is the state now, which is stored
+    /// for Redo. Returns `None` when there is no step to take back.
     pub(super) fn undo(&mut self, current: Snapshot) -> Option<Snapshot> {
         let before = self.undo.pop()?;
         self.typing = None;
@@ -317,8 +341,9 @@ impl History {
         })
     }
 
-    /// The state the last Undo left, with the caret after what it
-    /// changes.
+    /// Returns the state that the last Undo took back, with the caret after
+    /// the text that Redo changes. `current` is the state now, which is
+    /// stored for Undo. Returns `None` when there is nothing to redo.
     pub(super) fn redo(&mut self, current: Snapshot) -> Option<Snapshot> {
         let after = self.redo.pop()?;
         self.typing = None;
@@ -331,10 +356,11 @@ impl History {
     }
 }
 
-/// The part of `to` that `from` does not have: what lies between their
-/// common start and their common end. The common start goes no further
-/// than `at`, where the caret in `from` shows the edit was, so that of
-/// two equal characters the one edited is the one found.
+/// Returns the range of `to` that `from` does not have, which is what lies
+/// between the start that the two texts share and the end that they share.
+/// The shared start is not taken further than `at`, the caret's offset in
+/// `from`, which is where the edit was made. Of two equal characters next
+/// to each other, the one that was edited is therefore the one found.
 fn changed(from: &str, to: &str, at: usize) -> Range<usize> {
     let mut prefix = 0;
     for (a, b) in from.chars().zip(to.chars()) {
@@ -353,7 +379,7 @@ fn changed(from: &str, to: &str, at: usize) -> Range<usize> {
     prefix..to.len() - suffix
 }
 
-/// The byte range of each line of `text`, without its line break.
+/// Returns the byte range of each line of `text`, without its line break.
 pub(super) fn hard_lines(text: &str) -> Vec<Range<usize>> {
     let mut lines = Vec::new();
     let mut start = 0;
@@ -382,8 +408,10 @@ mod tests {
         assert_eq!(hard_lines("é\nx"), [0..2, 3..4]);
     }
 
-    /// Byte offsets of the stops reached by pressing a key over and over,
-    /// in UTF-16 units as the browser reports them.
+    /// Returns the places at which the caret stops when `step` is applied
+    /// again and again, starting at the byte offset `from`. Each place is
+    /// given as an offset in UTF-16 units, which is how a browser reports
+    /// the caret's place.
     fn walk(text: &str, from: usize, step: fn(&str, usize) -> usize) -> Vec<usize> {
         let mut stops = Vec::new();
         let mut at = from;
@@ -398,8 +426,9 @@ mod tests {
         stops
     }
 
-    // The stops below were read from the production app (Chromium on
-    // macOS) pressing Option-Right and Option-Left in its search field.
+    // The stops below are the places at which the caret stops in a one-line
+    // text field in Chromium on macOS when Option-Right and Option-Left are
+    // pressed.
 
     #[test]
     fn option_right_stops_where_chromium_does() {
@@ -524,7 +553,7 @@ mod tests {
         assert_eq!(word_at(text, 17, false), 17..19);
         assert_eq!(word_at(text, 0, false), 0..5);
         assert_eq!(word_at(text, text.len(), false), 19..22);
-        // Windows takes the space after a word with it.
+        // On Windows a double-click selects the space after the word too.
         assert_eq!(word_at(text, 1, true), 0..6);
         assert_eq!(word_at(text, 15, true), 14..19);
         assert_eq!(word_at("", 0, false), 0..0);
@@ -542,7 +571,7 @@ mod tests {
         assert_eq!(previous_grapheme(text, 3), 0);
         assert_eq!(previous_grapheme(text, 0), 0);
         assert_eq!(next_grapheme(text, text.len()), text.len());
-        // Control-Delete takes the accent off, not the letter.
+        // Control-Delete deletes the accent and keeps the letter.
         assert_eq!(decomposed_backward(text, 3), 1);
         assert_eq!(decomposed_backward("ab", 2), 1);
         assert_eq!(decomposed_backward("", 0), 0);
@@ -565,11 +594,13 @@ mod tests {
 
     #[test]
     fn control_t_swaps_as_chromium_does() {
-        // "hello br|ave" became "hello barve" with the caret after the pair.
+        // With the caret between "r" and "a" in "hello brave", Control-T
+        // gives "hello barve" and puts the caret after the two letters.
         let text = "hello brave new world";
         assert_eq!(transpose(text, 8), Some((7..9, "ar".into(), 9)));
         assert_eq!(transpose(text, 5), Some((4..6, " o".into(), 6)));
-        // At the end, the two before the caret.
+        // With the caret at the end of the text, the two characters before
+        // it change places.
         assert_eq!(transpose(text, 21), Some((19..21, "dl".into(), 21)));
         assert_eq!(transpose(text, 0), None);
         assert_eq!(transpose("a", 1), None);
@@ -580,7 +611,8 @@ mod tests {
 
     #[test]
     fn pasting_into_one_line_does_what_input_does() {
-        // Read from the production search field.
+        // These are the results of the same pastes into a one-line text
+        // field in Chromium.
         assert_eq!(one_line("a\nb\r\nc\n\n"), "a b c");
         assert_eq!(one_line("\n\nfirst\nsecond"), "  first second");
         assert_eq!(one_line("plain"), "plain");
@@ -619,8 +651,8 @@ mod tests {
         }
     }
 
-    // The steps below were read from the production app's inspector
-    // notes, a field the browser edits by itself.
+    // The steps below are the ones that Undo and Redo take in a text area
+    // in Chromium on macOS.
 
     #[test]
     fn typing_is_one_step_and_deleting_then_typing_another() {
@@ -644,7 +676,9 @@ mod tests {
 
     #[test]
     fn moving_the_caret_or_another_edit_starts_a_new_step() {
-        // "ab xy", Left, "z", Option-Delete; then each Undo.
+        // The text "ab xy" is typed as in the test above. Then Left is
+        // pressed, "z" is typed and Option-Delete is pressed. After that
+        // each Undo and each Redo is checked.
         let mut history = History::default();
         let mut text = String::new();
         type_into(&mut history, &mut text, "ab cd");
@@ -711,7 +745,8 @@ mod tests {
         assert_eq!(changed("", "", 0), 0..0);
         assert_eq!(changed("é", "éé", 2), 2..4);
         assert_eq!(changed("x👍", "x", 5), 1..1);
-        // Of two line breaks, the one deleted where the caret is.
+        // Of the two line breaks in the second text, the one at the caret's
+        // offset is the one that the first text does not have.
         assert_eq!(changed("line\nend", "line\n\nend", 4), 4..5);
         assert_eq!(changed("aa", "aaa", 1), 1..2);
     }

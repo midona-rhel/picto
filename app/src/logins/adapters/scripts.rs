@@ -1,7 +1,10 @@
-//! The scripts run in a sign-in page to read what it shows.
+//! The JavaScript that the adapters run in the page of the sign-in window
+//! to read what the page shows.
 
-/// `inspectAccountApiPage`: the account page's state, its consent banner
-/// accepted, and the API key and user id wherever the page shows them.
+/// Reads a booru's account page: whether the user is signed in, whether
+/// the page is the options page, a login form or a browser check, and the
+/// API key and the user id wherever the page shows them. It also clicks
+/// "Accept" on the page's cookie notice if there is one.
 pub(super) const ACCOUNT_API_SCRIPT: &str = r#"JSON.stringify((() => {
   const text = document.body?.innerText || '';
   const href = location.href;
@@ -61,7 +64,9 @@ pub(super) const ACCOUNT_API_SCRIPT: &str = r#"JSON.stringify((() => {
   };
 })())"#;
 
-/// `hasAuthenticatedDomSignal`: whether the page shows a signed-in session.
+/// Returns whether the page shows that the user is signed in: it has a
+/// control to log out, or it has no password field and has a link or text
+/// for the account, the profile or the dashboard.
 pub(super) const SIGNED_IN_SCRIPT: &str = r#"JSON.stringify((() => {
   const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
   const hasLoginForm = Boolean(document.querySelector('input[type="password"], input[name*="password" i]'));
@@ -85,8 +90,9 @@ pub(super) const SIGNED_IN_SCRIPT: &str = r#"JSON.stringify((() => {
   }) || authPattern.test(normalize(document.body?.innerText));
 })())"#;
 
-/// ExHentai's verification page: a browser check, a refusal, or a blank
-/// page.
+/// Reads ExHentai's verification page and returns whether it is a browser
+/// check (`challenge`), a refusal (`denied`) or a page without any content
+/// (`blank`).
 pub(super) const VERIFICATION_SCRIPT: &str = r#"JSON.stringify((() => {
   const text = [
     document.title,
@@ -102,15 +108,16 @@ pub(super) const VERIFICATION_SCRIPT: &str = r#"JSON.stringify((() => {
   };
 })())"#;
 
-/// The headers the web view sends with its requests that FANBOX's API
-/// checks against the session: its user agent.
+/// Returns the web view's user agent as a request header. FANBOX's API
+/// accepts a session only from the user agent that signed in.
 pub(super) const BROWSER_HEADERS_SCRIPT: &str =
     r#"JSON.stringify({ 'user-agent': navigator.userAgent || '' })"#;
 
-/// `hasAuthenticatedFanboxSession`: whether FANBOX's API answers for the
-/// session. A web view hands back no promise's value, so the page keeps the
-/// answer of the request it starts and the next look reads it (`null`
-/// while it is on its way).
+/// Returns a script that tells whether FANBOX's API at `check_url` accepts
+/// the session. A script run in a web view cannot return the value of a
+/// promise. The first run therefore starts the request and returns `null`,
+/// the page stores the result in `window.__pictoFanboxSession` when it
+/// arrives, and a later run returns the stored `true` or `false`.
 pub(super) fn fanbox_session_script(check_url: &str) -> String {
     let url = serde_json::to_string(check_url).unwrap_or_else(|_| "''".into());
     format!(

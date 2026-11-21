@@ -1,14 +1,16 @@
-//! The previous / count / next strip along the bottom of the media
-//! (`QuickLookNavigation.tsx`): Quick Look's way through the results.
+//! The strip along the bottom of the media in Quick Look, with which the
+//! user steps through the results: a previous button, the item's position
+//! among the results, and a next button.
 use crate::ui::tooltip::{self, Tip};
 use crate::{motion, theme, ui};
 use gpui::*;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
-/// `.button`: 48×32, transparent until hovered, when it takes
-/// `--color-surface-hover` over 200 ms (`ease`). Disabled it dims to 30% and
-/// takes no pointer.
+/// A button of the strip. It is 48×32 and has no background until the
+/// pointer is over it. Its background then changes to the theme's hover
+/// colour over 200 ms. A disabled button is drawn at 30% opacity and takes
+/// no pointer events.
 #[derive(IntoElement)]
 pub struct StripButton {
     id: ElementId,
@@ -33,14 +35,15 @@ pub fn strip_button(id: impl Into<ElementId>, icon: &'static str, tip: Tip) -> S
 }
 
 impl StripButton {
-    /// A button of another width with the same look: Quick Look's 32px
-    /// close button (`.closeButton`).
+    /// Sets another width for a button that otherwise looks the same. Quick
+    /// Look's close button uses this to be 32px wide.
     pub fn width(mut self, width: f32) -> Self {
         self.width = width;
         self
     }
 
-    /// The glyph's colour, when it is not the primary text colour.
+    /// Sets the icon's colour. Without this call the icon has the primary
+    /// text colour.
     pub fn glyph(mut self, color: Rgba) -> Self {
         self.glyph = Some(color);
         self
@@ -77,7 +80,7 @@ impl RenderOnce for StripButton {
             window.request_animation_frame();
         }
         let strength = hover.read(cx).value_with(motion::EASE);
-        // Named by its tooltip.
+        // The button's accessible name is the label of its tooltip.
         let button = div()
             .id(self.id)
             .role(Role::Button)
@@ -122,8 +125,8 @@ impl RenderOnce for StripButton {
     }
 }
 
-/// `.counter`: the member's place, in the monospace face with tabular
-/// figures, 13px on a 13px line.
+/// Draws the item's position among the results, such as "3 / 12", in the
+/// monospace font with figures of equal width.
 pub fn counter(current: usize, total: usize, cx: &App) -> Div {
     let theme = theme::theme(cx);
     div()
@@ -132,7 +135,8 @@ pub fn counter(current: usize, total: usize, cx: &App) -> Div {
         .items_center()
         .justify_center()
         .font_family(theme::FONT_MONO)
-        // `font-variant-numeric: tabular-nums`
+        // Figures of equal width, so that the counter keeps its width when
+        // the numbers change.
         .font_features(FontFeatures(std::sync::Arc::new(vec![("tnum".into(), 1)])))
         .text_size(px(theme::TEXT_MD))
         .line_height(px(theme::TEXT_MD))
@@ -140,11 +144,11 @@ pub fn counter(current: usize, total: usize, cx: &App) -> Div {
         .child(format!("{current} / {total}"))
 }
 
-/// `.toolbar`'s height.
+/// The height of the strip.
 const HEIGHT: f32 = 48.;
 
-/// `.toolbar`: the strip itself, 48px tall along the bottom, over the
-/// picture, centred, 8px between its parts.
+/// Builds the strip itself: a row 48px tall along the bottom edge, drawn
+/// over the picture, with its parts centred and 8px apart.
 pub fn strip() -> Div {
     div()
         .absolute()

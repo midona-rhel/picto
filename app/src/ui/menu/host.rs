@@ -1,23 +1,26 @@
-//! Holding an open context menu for a view: the menu while it is open and
-//! while it fades out, what its rows do, and where the keyboard goes back
-//! to once it has gone.
+//! Holds the open context menu of a view. `Host` keeps the menu while it is
+//! open and while it fades out, passes the rows that are chosen to the view,
+//! and gives the keyboard focus back when the menu has gone.
 use super::{Event, Menu};
 use gpui::*;
 
-/// Where the keyboard goes once a menu or dialog has gone, unless what it
-/// did moved the keyboard somewhere else (into a name field, say).
+/// Says where the keyboard focus goes when a menu or dialog has gone. The
+/// focus does not go there if the action of the menu or dialog moved it
+/// somewhere else, for example into a name field.
 #[derive(Clone)]
 pub enum Return {
-    /// To this handle.
+    /// The focus goes to this handle.
     To(FocusHandle),
-    /// To whatever had the keyboard when it opened.
+    /// The focus goes to whatever had it when the menu or dialog opened.
     Opener,
-    /// Nowhere: the keyboard is left where it is.
+    /// The focus is left where it is.
     Stay,
 }
 
 impl Return {
-    /// The handle to go back to, worked out as the menu or dialog opens.
+    /// Returns the handle that the focus goes back to. This is called when
+    /// the menu or dialog opens, because `Opener` means whatever has the
+    /// focus at that moment.
     pub(crate) fn resolve(&self, window: &Window, cx: &App) -> Option<FocusHandle> {
         match self {
             Return::To(handle) => Some(handle.clone()),
@@ -27,8 +30,8 @@ impl Return {
     }
 }
 
-/// Gives the keyboard back to `back` if it is still in what is going
-/// (`still_there`) or nothing has it.
+/// Gives the keyboard focus to `back`, but only if the focus is still in the
+/// menu or dialog that is going (`still_there`) or nothing has the focus.
 pub(crate) fn give_back(
     back: Option<FocusHandle>,
     still_there: bool,
@@ -44,16 +47,17 @@ pub(crate) fn give_back(
 
 #[derive(Clone, Copy)]
 enum Placement {
-    /// Where [`Host::layer`] is placed in the owner's tree, for the window's
-    /// root view, whose layer already covers the window.
+    /// The menu is drawn where the owner puts [`Host::layer`] among its
+    /// elements. The window's root view uses this, because its layer already
+    /// covers the window.
     Inline,
-    /// Over the whole window, above the owner's other deferred layers drawn
-    /// at a lower priority.
+    /// The menu is drawn over the whole window as a deferred element of this
+    /// priority, above the owner's deferred elements of a lower priority.
     Deferred(usize),
 }
 
-/// One context menu at a time for its owner. A menu opened while another
-/// is showing replaces it at once.
+/// Holds the one context menu that its owner has open. A menu that is opened
+/// while another is showing replaces it at once.
 pub struct Host {
     menu: Option<Entity<Menu>>,
     placement: Placement,
@@ -63,13 +67,15 @@ pub struct Host {
 }
 
 impl Host {
-    /// Menus drawn over the whole window at this `deferred` priority.
+    /// Returns a host whose menus are drawn over the whole window as a
+    /// deferred element of this priority.
     pub fn deferred(priority: usize, back: Return) -> Self {
         Self::with(Placement::Deferred(priority), back)
     }
 
-    /// Menus drawn where the owner places [`Host::layer`]: for the window's
-    /// root view.
+    /// Returns a host whose menus are drawn where the owner puts
+    /// [`Host::layer`] among its elements. This is for the window's root
+    /// view.
     pub fn inline(back: Return) -> Self {
         Self::with(Placement::Inline, back)
     }
@@ -84,8 +90,8 @@ impl Host {
         }
     }
 
-    /// Shows `menu` with the keyboard, and tells `on_choose` the action of
-    /// each row chosen.
+    /// Shows `menu`, gives it the keyboard focus, and calls `on_choose` with
+    /// the action of each row that is chosen.
     pub fn open<V: 'static>(
         &mut self,
         menu: Entity<Menu>,
@@ -105,8 +111,10 @@ impl Host {
         self._chosen = Some(chosen);
     }
 
-    /// Shows a menu whose rows someone else acts on (the sidebar's and the
-    /// filter bar's, which the window shows above everything).
+    /// Shows `menu` and gives it the keyboard focus, without subscribing to
+    /// the rows that are chosen. This is for a menu whose chosen rows
+    /// another view handles. The window shows the menus of the sidebar and
+    /// of the filter bar this way, above everything else.
     pub fn show<V: 'static>(
         &mut self,
         menu: Entity<Menu>,
@@ -114,7 +122,8 @@ impl Host {
         cx: &mut Context<V>,
     ) {
         self._chosen = None;
-        // A menu replacing another goes back where the first would have.
+        // When this menu replaces another, the focus later goes back to
+        // where it would have gone after the first menu.
         if self.menu.is_none() {
             self.back_to = self.back.resolve(window, cx);
         }
@@ -123,18 +132,20 @@ impl Host {
         cx.notify();
     }
 
-    /// Where the keyboard goes back to after the next menu that opens.
+    /// Sets where the keyboard focus goes when the next menu that opens has
+    /// gone.
     pub fn returning(&mut self, back: Return) {
         self.back = back;
     }
 
-    /// Whether a menu is showing, fading out included.
+    /// Returns whether a menu is showing. A menu that is fading out counts
+    /// as showing.
     pub fn is_open(&self) -> bool {
         self.menu.is_some()
     }
 
-    /// Starts the open menu's fade. Returns whether there was one that had
-    /// not already gone.
+    /// Dismisses the open menu, which then fades out. Returns whether there
+    /// was a menu that had not finished fading out.
     pub fn close(&self, cx: &mut App) -> bool {
         match &self.menu {
             Some(menu) if !menu.read(cx).finished() => {
@@ -145,11 +156,11 @@ impl Host {
         }
     }
 
-    /// The menu's layer, to draw from the owner's `render`. A menu that has
-    /// faded out is dropped here, and the keyboard goes back unless the
-    /// menu's action moved it. A menu in pop-up windows can outlive its
-    /// fade by a moment, still holding the keyboard, which counts as not
-    /// moved.
+    /// Returns the element that draws the menu, for the owner to add in its
+    /// `render`. A menu that has finished fading out is dropped here, and
+    /// the keyboard focus goes back unless the menu's action moved it. The
+    /// pop-up windows of a menu can stay open for a moment after the fade
+    /// and still have the focus. This counts as the focus not having moved.
     pub fn layer(&mut self, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
         if let Some(menu) = self.menu.take_if(|menu| menu.read(cx).finished()) {
             self._chosen = None;

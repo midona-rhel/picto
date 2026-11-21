@@ -2,13 +2,16 @@ use super::*;
 use crate::logins::sites::{resolve, with_service_host};
 use futures::executor::block_on;
 
-/// A recorded page: its address, the cookies its store holds by the
-/// address asked for, and what its scripts answer.
+/// A page for the tests, in place of the page of a sign-in window. It
+/// holds an address, the cookies that it returns for every address, and
+/// the values that its scripts return. It records in `asked` the addresses
+/// whose cookies were requested.
 #[derive(Default)]
 pub struct FakePage {
     pub url: RefCell<String>,
     pub cookies: RefCell<Vec<(String, String)>>,
-    /// Answers by a fragment of the script asked for.
+    /// Pairs of a piece of text and a value. A script that contains the
+    /// text returns the value.
     pub scripts: RefCell<Vec<(&'static str, Value)>>,
     pub asked: RefCell<Vec<String>>,
 }
@@ -60,7 +63,9 @@ impl Page for FakePage {
     }
 }
 
-/// Recorded answers to the network and the application.
+/// The network and the application for the tests. `post` and `dispatch`
+/// record the request or the command and return the next of the responses
+/// that the test stored in `answers` and `command_answers`.
 #[derive(Default)]
 pub struct FakeServices {
     pub posts: RefCell<Vec<HttpRequest>>,
@@ -105,7 +110,8 @@ fn inspect(adapter: &Adapter, page: &FakePage) -> Outcome {
     block_on(adapter.inspect(page))
 }
 
-// 'captures only the selected SubscribeStar host'
+// For each of the three SubscribeStar hosts, the cookies of that host are
+// kept, and its origin is kept as the `Origin` header.
 #[test]
 fn subscribestar_keeps_the_chosen_services_cookies_and_origin() {
     for host in [
@@ -143,9 +149,9 @@ fn subscribestar_keeps_the_chosen_services_cookies_and_origin() {
     }
 }
 
-// 'does not capture a SubscribeStar session from a different origin'
-// and 'does not capture a different SubscribeStar service after a
-// redirect'
+// No cookie is read while the page is on a host that only looks like the
+// chosen SubscribeStar service, or on another of the three SubscribeStar
+// services.
 #[test]
 fn subscribestar_reads_no_cookies_off_its_service() {
     for (host, current) in [
@@ -171,8 +177,8 @@ fn subscribestar_reads_no_cookies_off_its_service() {
     }
 }
 
-// 'accepts an existing ExHentai session when the optional igneous
-// cookie is absent'
+// An ExHentai session is kept when it has the two member cookies and the
+// cookie `igneous` is absent.
 #[test]
 fn exhentai_needs_only_the_member_cookies() {
     let adapter = adapter(resolve("ehentai").unwrap()).unwrap();
@@ -201,9 +207,9 @@ fn a_refused_exhentai_check_asks_to_sign_in_again() {
     );
 }
 
-// 'persists cookie credentials in the host and never sends secrets to
-// the renderer': a service without required cookies keeps every cookie
-// once the page shows the session.
+// Danbooru names no cookies that only a signed-in session has. Its
+// cookies are therefore kept, all of them, only once the page shows that
+// the user is signed in.
 #[test]
 fn danbooru_keeps_every_cookie_once_the_page_shows_a_session() {
     let adapter = adapter(resolve("danbooru").unwrap()).unwrap();
@@ -229,7 +235,8 @@ fn danbooru_keeps_every_cookie_once_the_page_shows_a_session() {
     );
 }
 
-// 'captures only cookies required by a source'
+// Of Fur Affinity's cookies only `a` and `b` are kept, and nothing is
+// kept while one of the two is missing.
 #[test]
 fn fur_affinity_keeps_only_its_two_cookies() {
     let adapter = adapter(resolve("furaffinity").unwrap()).unwrap();
@@ -266,7 +273,8 @@ fn newgrounds_waits_for_its_session_cookie() {
     );
 }
 
-// 'does not save a FANBOX cookie before the login redirects to FANBOX'
+// FANBOX's session cookie is not kept while the window is still on
+// Pixiv's login page.
 #[test]
 fn fanbox_waits_until_the_login_reaches_fanbox() {
     let adapter = adapter(resolve("fanbox").unwrap()).unwrap();
@@ -277,8 +285,9 @@ fn fanbox_waits_until_the_login_reaches_fanbox() {
     assert_eq!(outcome.status, Some(Status::Active));
 }
 
-// 'saves a FANBOX cookie after the login redirects to FANBOX' and 'does
-// not treat FANBOX guest cookies as an authenticated login'
+// On a FANBOX page the cookies are kept only when FANBOX's API has
+// accepted the session. The cookie of a visitor who is not signed in is
+// not kept, and nothing is kept while the response of the API is awaited.
 #[test]
 fn fanbox_keeps_its_cookies_only_when_its_api_answers_for_the_session() {
     let adapter = adapter(resolve("fanbox").unwrap()).unwrap();
@@ -347,7 +356,8 @@ fn a_booru_options_page_without_a_key_is_an_error_shown_in_the_window() {
     );
 }
 
-// 'keeps browser challenges active without saving a false login'
+// A browser check, a login form and a page that shows neither each leave
+// the login waiting with its own message, and nothing is saved.
 #[test]
 fn a_browser_check_keeps_the_login_waiting() {
     let adapter = adapter(resolve("rule34").unwrap()).unwrap();
@@ -422,7 +432,8 @@ fn an_oauth2_callback_refused_then_accepted_in_the_same_window_completes() {
     );
 }
 
-// 'persists both OAuth1 token values through the same host boundary'
+// Tumblr's OAuth 1 login keeps both values of the access token: the token
+// and its secret.
 #[test]
 fn tumblr_keeps_both_access_token_values() {
     let adapter = adapter(resolve("tumblr").unwrap()).unwrap();
@@ -467,8 +478,9 @@ fn tumblr_keeps_both_access_token_values() {
     assert!(authorization.contains("oauth_token=\"request\""));
 }
 
-// 'uses one host-owned Pixiv OAuth flow for Pixiv and Pixiv-user
-// queries'
+// The site id `pixivuser` signs in to Pixiv. The adapter gives the code
+// of the callback, the code verifier and the cookie `PHPSESSID` to the
+// application, which saves the login.
 #[test]
 fn pixiv_hands_its_code_and_session_to_the_application() {
     let adapter = adapter(resolve("pixivuser").unwrap()).unwrap();

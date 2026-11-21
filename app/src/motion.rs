@@ -1,9 +1,5 @@
 //! How long each animation in the app lasts and which easing curve it
-//! follows. The values are copied from production's CSS and TypeScript
-//! (production is the Electron app this was ported from). The shared ones are
-//! the motion tokens in `src/shared/styles/tokens.css`. The comment on each
-//! of the others names the production file, class or constant it came from,
-//! where there is one.
+//! follows. The comment on each constant says which animations use it.
 //!
 //! This file also has [`CubicBezier`], which computes the CSS
 //! `cubic-bezier()` timing function those curves are written in, and
@@ -11,8 +7,8 @@
 //! does.
 use std::time::Duration;
 
-/// `--ease-default`: the easing curve most transitions in the app follow.
-/// [`Fade::value`] uses it.
+/// The easing curve most transitions in the app follow. [`Fade::value`]
+/// uses it.
 pub const EASE_DEFAULT: CubicBezier = CubicBezier::new(0.4, 0., 0.22, 1.);
 /// The CSS `ease-in` curve. A dismissed context menu and a closing dialog
 /// fade out on it.
@@ -25,82 +21,78 @@ pub const EASE_OUT: CubicBezier = CubicBezier::new(0., 0., 0.58, 1.);
 /// segment of an indeterminate progress bar, the tag manager's loading
 /// placeholders and the pulse of a syncing subscription's badge follow it.
 pub const EASE_IN_OUT: CubicBezier = CubicBezier::new(0.42, 0., 0.58, 1.);
-/// `--ease-scale-in`: the curve a popover, a context menu and the task
-/// dialog follow while they appear.
+/// The curve a popover, a context menu and the task dialog follow while
+/// they appear. It moves quickly at first and then slows down.
 pub const EASE_SCALE_IN: CubicBezier = CubicBezier::new(0., 0.89, 0.44, 1.);
-/// `--duration-menu-in`: how long a popover or a context menu takes to
-/// appear. A popover's glass panel grows from 96% of its size to its full
-/// size in this time. A context menu fades in over this time. On macOS,
-/// where a context menu is shown in a pop-up window of its own, the window
-/// is scaled from 96% to its full size in this time instead.
+/// How long a popover or a context menu takes to appear. A popover's glass
+/// panel grows from 96% of its size to its full size in this time. A context
+/// menu fades in over this time. On macOS, where a context menu is shown in a
+/// pop-up window of its own, the window is scaled from 96% to its full size
+/// in this time instead.
 pub const MENU_IN: Duration = Duration::from_millis(70);
-/// `menuIn` and `librarySwitcherIn`: the scale a popover's panel, or a
-/// context menu's pop-up window on macOS, has at the moment it opens: 96% of
-/// its full size. It grows to its full size over [`MENU_IN`].
+/// The scale a popover's panel, or a context menu's pop-up window on
+/// macOS, has at the moment it opens: 96% of its full size. It grows to its
+/// full size over [`MENU_IN`].
 pub const MENU_IN_SCALE: f32 = 0.96;
-/// `menuOut`: the scale production shrinks a dismissed context menu to while
-/// the menu fades out: 95% of its full size. [`menu_out`] computes the scale
-/// at each moment of that animation.
+/// The scale a dismissed context menu shrinks to while it fades out: 95%
+/// of its full size. [`menu_out`] computes the scale at each moment of that
+/// animation.
 const MENU_OUT_SCALE: f32 = 0.95;
-/// The CSS `ease` curve, which a CSS transition follows when its rule names
-/// `ease` or names no curve. A tooltip, a toggle switch and the grid's hover
+/// The CSS `ease` curve. A tooltip, a toggle switch and the grid's hover
 /// preview follow it, among others.
 pub const EASE: CubicBezier = CubicBezier::new(0.25, 0.1, 0.25, 1.);
 /// How long the "First item" or "Last item" notice of the media view and
-/// the detail window takes to fade in and to fade out (`200ms ease` in
-/// production). The notice appears when the user tries to step back from
-/// the first item or forward from the last one.
+/// the detail window takes to fade in and to fade out, on [`EASE`]. The
+/// notice appears when the user tries to step back from the first item or
+/// forward from the last one.
 pub const BOUNDARY_FADE: Duration = Duration::from_millis(200);
 /// How long after the "First item" or "Last item" notice is shown it starts
 /// to fade out.
 pub const BOUNDARY_HOLD: Duration = Duration::from_millis(800);
-/// `NAVIGATOR_SHOW_DELAY_MS`: how long the viewer waits, after the image
-/// first becomes larger than the pane, before it shows the navigator. The
-/// navigator is the small square in the bottom-right corner of the viewer
-/// that shows the whole image and marks the part that is on screen.
+/// How long the viewer waits, after the image first becomes larger than the
+/// pane, before it shows the navigator. The navigator is the small square in
+/// the bottom-right corner of the viewer that shows the whole image and marks
+/// the part that is on screen.
 pub const NAVIGATOR_DELAY: Duration = Duration::from_millis(80);
 /// How long the background of a button in Quick Look's previous and next
-/// strip takes to change when the pointer moves onto or off the button
-/// (`QuickLookNavigation`'s `transition: background 200ms ease`).
+/// strip takes to change when the pointer moves onto or off the button, on
+/// [`EASE`].
 pub const STRIP_BUTTON: Duration = Duration::from_millis(200);
-/// How long the detail window's toolbar takes to fade in and to fade out
-/// (`transition: opacity 250ms ease` in production).
+/// How long the detail window's toolbar takes to fade in and to fade out,
+/// on [`EASE`].
 pub const DETAIL_TOOLBAR_FADE: Duration = Duration::from_millis(250);
-/// `TOOLBAR_HIDE_DELAY`: the detail window's toolbar starts to fade out when
-/// the pointer has not moved in the window for this long.
+/// The detail window's toolbar starts to fade out when the pointer has not
+/// moved in the window for this long.
 pub const DETAIL_TOOLBAR_HIDE: Duration = Duration::from_millis(1000);
-/// `--ease-standard`: the curve the background of an empty state's button
-/// follows when the pointer moves onto or off the button.
+/// The curve the background of an empty state's button follows when the
+/// pointer moves onto or off the button.
 pub const EASE_STANDARD: CubicBezier = CubicBezier::new(0.4, 0., 0.2, 1.);
-/// `ScrollToTopButton`: how long the "Return to Top" button takes to move up
-/// into its place and fade in, and to move back down and fade out.
+/// How long the "Return to Top" button takes to move up into its place and
+/// fade in, and to move back down and fade out.
 pub const RETURN_TO_TOP: Duration = Duration::from_millis(150);
 /// How long a context menu row's background takes to change when the row
 /// becomes the highlighted row or stops being it.
 pub const MENU_ROW: Duration = Duration::from_millis(30);
-/// `menuOut`: how long a dismissed context menu takes to fade out.
+/// How long a dismissed context menu takes to fade out.
 pub const MENU_OUT: Duration = Duration::from_millis(80);
-/// `handleSubmenuIntent`: how long an open submenu stays open after the
-/// pointer moves onto another row of its menu that has no submenu. If the
-/// pointer reaches the submenu within this time, the submenu stays open.
+/// How long an open submenu stays open after the pointer moves onto
+/// another row of its menu that has no submenu. If the pointer reaches the
+/// submenu within this time, the submenu stays open.
 pub const MENU_SUBMENU_GRACE: Duration = Duration::from_millis(150);
 /// How long the grid and the scope title take to fade out when the user
 /// goes to another scope (for example from one folder to another), and how
 /// long they take to fade back in once the new scope is ready to show.
 pub const SCOPE_FADE: Duration = Duration::from_millis(170);
-/// `GlassModal`: how long a dialog's panel (`modalIn`) and its backdrop
-/// (`backdropIn`) take to appear.
+/// How long a dialog's panel and its backdrop take to appear.
 pub const MODAL_IN: Duration = Duration::from_millis(150);
-/// `GlassModal`: how long a dialog's panel (`modalOut`) and its backdrop
-/// (`backdropOut`) take to disappear after the dialog is dismissed. The
-/// dialog is removed after the same time (`EXIT_MS`).
+/// How long a dialog's panel and its backdrop take to disappear after the
+/// dialog is dismissed. The dialog is removed after the same time.
 pub const MODAL_OUT: Duration = Duration::from_millis(120);
-/// `HoverPreviewPortal.tsx`: how long the grid's hover preview takes to fade
-/// in. Its dark backdrop and the original image fade in together.
+/// How long the grid's hover preview takes to fade in. Its dark backdrop
+/// and the original image fade in together.
 pub const HOVER_PREVIEW_FADE: Duration = Duration::from_millis(150);
-/// `.action` in `EmptyState.module.css`: how long the background of an empty
-/// state's button takes to change when the pointer moves onto or off the
-/// button.
+/// How long the background of an empty state's button takes to change
+/// when the pointer moves onto or off the button.
 pub const EMPTY_ACTION_HOVER: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug)]
@@ -116,9 +108,9 @@ impl CubicBezier {
         Self { x1, y1, x2, y2 }
     }
 
-    /// The curve's two control points as `(x1, y1, x2, y2)`, the order in
-    /// which CSS `cubic-bezier()` and Core Animation's timing function take
-    /// them.
+    /// Returns the curve's two control points as `(x1, y1, x2, y2)`, the
+    /// order in which CSS `cubic-bezier()` and Core Animation's timing
+    /// function take them.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn points(&self) -> (f32, f32, f32, f32) {
         (self.x1, self.y1, self.x2, self.y2)
@@ -129,9 +121,9 @@ impl CubicBezier {
         3. * inverse * inverse * t * p1 + 3. * inverse * t * t * p2 + t * t * t
     }
 
-    /// The eased progress for the linear progress `x`: how much of an
-    /// animation's change has happened when the share `x` of its time has
-    /// passed. Both are between 0 and 1.
+    /// Returns the eased progress for the linear progress `x`: how much of
+    /// an animation's change has happened when the share `x` of its time
+    /// has passed. Both are between 0 and 1.
     pub fn ease(&self, x: f32) -> f32 {
         if x <= 0. {
             return 0.;
@@ -155,61 +147,54 @@ impl CubicBezier {
     }
 }
 
-/// `--duration-fast`: how long each of these takes to change. The
-/// background of a sidebar row or a sidebar section header when the pointer
-/// moves onto or off it (`--sidebar-list-highlight-transition`). The
+/// How long each of these takes to change. The background of a sidebar row
+/// or a sidebar section header when the pointer moves onto or off it. The
 /// highlight of the library switcher. The ring around a library's avatar.
 /// The border of a text field in a dialog's form row when the field gains
 /// or loses focus.
 pub const FAST: Duration = Duration::from_millis(50);
-/// How long a button's fill and glyph take to change when the pointer moves
+/// How long a button's fill and icon take to change when the pointer moves
 /// onto or off the button, and when an icon button is pressed or released.
-/// It applies to icon buttons (`iconButton.module.css`), a window's close
-/// button, the media player's controls, text buttons and the inspector's
-/// full-width action buttons.
+/// It applies to icon buttons, a window's close button, the media player's
+/// controls, text buttons and the inspector's full-width action buttons.
 pub const BUTTON_HOVER: Duration = Duration::from_millis(150);
-/// `inspectorRailIn` / `inspectorRailOut`: how long the sidebar and the
-/// inspector take to slide out of the window when they are hidden, and back
-/// in when they are shown.
+/// How long the sidebar and the inspector take to slide out of the window
+/// when they are hidden, and back in when they are shown.
 pub const INSPECTOR_SLIDE: Duration = Duration::from_millis(100);
 
-/// `.querySmallBtn`: how long the small icon button of a table row or a job
-/// strip takes to change its opacity and background when the pointer moves
-/// onto or off it, on the `ease` curve. A source's row on a subscription's
-/// page also fades its buttons in and out over this time when the pointer
-/// moves onto or off the row.
+/// How long the small icon button of a table row or a job strip takes to
+/// change its opacity and background when the pointer moves onto or off it,
+/// on [`EASE`]. A source's row on a subscription's page also fades its
+/// buttons in and out over this time when the pointer moves onto or off the
+/// row.
 pub const SMALL_BUTTON: Duration = Duration::from_millis(100);
-/// `.conditionButton`: how long the minus and plus buttons of a smart folder
-/// rule take to change when the pointer moves onto or off them, on the
-/// `ease` curve.
+/// How long the minus and plus buttons of a smart folder rule take to
+/// change when the pointer moves onto or off them, on [`EASE`].
 pub const CONDITION_BUTTON: Duration = Duration::from_millis(120);
-/// `.tagAddBtn`: how long the "+" button after a row of tag chips in the
-/// inspector takes to go from half opacity to full opacity when the pointer
-/// moves onto it, and back when the pointer leaves, on `--ease-default`.
+/// How long the "+" button after a row of tag chips in the inspector takes
+/// to go from half opacity to full opacity when the pointer moves onto it,
+/// and back when the pointer leaves, on [`EASE_DEFAULT`].
 pub const TAG_ADD_BUTTON: Duration = Duration::from_millis(200);
-/// `subscriptionStatusPulse` and `subscriptionActivityPulse`: how long one
-/// pulse of a syncing subscription takes, from its dimmest to full strength
-/// and back, on `ease-in-out`. The status badge on the subscription screens
-/// and the activity dot in the subscription's sidebar row both pulse.
-/// [`pulse`] uses it.
+/// How long one pulse of a syncing subscription takes, from its dimmest to
+/// full strength and back, on [`EASE_IN_OUT`]. The status badge on the
+/// subscription screens and the activity dot in the subscription's sidebar
+/// row both pulse. [`pulse`] uses it.
 const STATUS_PULSE: Duration = Duration::from_millis(2400);
 
-/// `.fullImage` in `GroupSurface.module.css`: in a collection's reader, how
-/// long a member's original image takes to fade in over its thumbnail once
-/// the original has decoded. A member that is not an image (a video or a
-/// document, for example) fades its thumbnail out over the same time once
-/// its own viewer has drawn its first frame or page.
+/// In a collection's reader, how long a member's original image takes to fade
+/// in over its thumbnail once the original has decoded. A member that is not
+/// an image (a video or a document, for example) fades its thumbnail out over
+/// the same time once its own viewer has drawn its first frame or page.
 pub const FULL_IMAGE_FADE: Duration = Duration::from_millis(130);
-/// `LOADING_MESSAGE_DELAY_MS`: how long the Duplicates screen waits before
-/// it shows its loading message or a scan's progress bar, so that a load or
-/// a scan that finishes sooner shows neither.
+/// How long the Duplicates screen waits before it shows its loading
+/// message or a scan's progress bar, so that a load or a scan that finishes
+/// sooner shows neither.
 pub const LOADING_MESSAGE_DELAY: Duration = Duration::from_millis(200);
 
 /// How long an image must stay on screen before its original file is read,
 /// both in the viewers and in the grid. Until then only its thumbnail is
 /// shown, so stepping or scrolling quickly past many images does not read
-/// their original files. Production waits 100 ms in its viewers and 250 ms
-/// in its grid.
+/// their original files.
 pub const ORIGINAL_DELAY: Duration = Duration::from_millis(200);
 /// The longest the viewer keeps the previous item on screen while the next
 /// item is opening. A video is shown when its first frame is ready and a
@@ -217,123 +202,112 @@ pub const ORIGINAL_DELAY: Duration = Duration::from_millis(200);
 /// the viewer stops showing the previous item anyway.
 pub const MEDIA_HOLD: Duration = Duration::from_millis(1500);
 
-/// `--duration-normal`: how long each of these takes to change, among
-/// others. A disclosure arrow turning when its inspector section or sidebar
-/// row is folded or unfolded. A tag chip's look when the pointer moves onto
-/// or off it. An inspector field's border and background when the field
-/// gains or loses focus. The resize edge of the sidebar or the inspector
-/// when the pointer moves onto or off it.
+/// How long each of these takes to change, among others. A disclosure arrow
+/// turning when its inspector section or sidebar row is folded or unfolded. A
+/// tag chip's look when the pointer moves onto or off it. An inspector
+/// field's border and background when the field gains or loses focus. The
+/// resize edge of the sidebar or the inspector when the pointer moves onto or
+/// off it.
 pub const NORMAL: Duration = Duration::from_millis(200);
 /// How long each of these takes to change when the pointer moves onto or
-/// off it (`background 100ms ease` in production): the background of a
-/// check box row, the background of a section in the Settings window's
-/// navigation, and the outline of a theme swatch in Settings.
+/// off it, on [`EASE`]: the background of a check box row, the background
+/// of a section in the Settings window's navigation, and the outline of a
+/// theme swatch in Settings.
 pub const ROW_HOVER: Duration = Duration::from_millis(100);
-/// `CompactNumberInput`: how long the up and down arrows of a number field
-/// take to change opacity when the pointer moves onto or off them
-/// (`opacity 120ms`), and how long the number field's border takes to change
-/// when the field gains or loses focus.
+/// How long the up and down arrows of a number field take to change
+/// opacity when the pointer moves onto or off them, and how long the number
+/// field's border takes to change when the field gains or loses focus.
 pub const STEPPER: Duration = Duration::from_millis(120);
 /// How long the border and background of the grid toolbar's search field
 /// take to change when the field gains or loses focus.
 pub const FIELD_FOCUS: Duration = Duration::from_millis(160);
-/// `fieldExpand`: how long an inspector field takes to fade from 92% to
-/// full opacity when it expands. A focused inspector field whose text does
-/// not fit on one line expands over the fields below it.
+/// How long an inspector field takes to fade from 92% to full opacity when
+/// it expands. A focused inspector field whose text does not fit on one
+/// line expands over the fields below it.
 pub const FIELD_EXPAND: Duration = Duration::from_millis(100);
-/// `.pinBtn` in `OverlayShell`: how long the background of a button in a
-/// picker's header takes to change when the pointer moves onto or off the
-/// button.
+/// How long the background of a button in a picker's header takes to
+/// change when the pointer moves onto or off the button.
 pub const PIN_BUTTON: Duration = Duration::from_millis(120);
-/// `.sidebar` in `TagSelectPanel.module.css`: how long the sidebar on the
-/// left of the tag picker takes to fade in when it is shown. The AI
-/// tagger's sidebar takes the same time.
+/// How long the sidebar on the left of the tag picker takes to fade in
+/// when it is shown. The AI tagger's sidebar takes the same time.
 pub const PICKER_RAIL_IN: Duration = Duration::from_millis(150);
 /// How long the tag picker's sidebar, and the AI tagger's, takes to fade
 /// out when it is hidden.
 pub const PICKER_RAIL_OUT: Duration = Duration::from_millis(100);
-/// `GlassInput`: how long the border of a text field in a dialog takes to
-/// change colour when the field gains or loses focus.
+/// How long the border of a text field in a dialog takes to change colour
+/// when the field gains or loses focus.
 pub const FIELD_BORDER: Duration = Duration::from_millis(120);
-/// `KbdTooltip`'s `openDelay`: how long the pointer must stay on a control
-/// before the control's tooltip starts to appear.
+/// How long the pointer must stay on a control before the control's
+/// tooltip starts to appear.
 pub const TOOLTIP_DELAY: Duration = Duration::from_millis(400);
-/// How long a tooltip takes to appear and to disappear. This is the
-/// duration of the `pop` transition that `KbdTooltip` uses.
+/// How long a tooltip takes to appear and to disappear.
 pub const TOOLTIP_FADE: Duration = Duration::from_millis(150);
-/// `KbdTooltip`'s `offset`: the gap between a control and its tooltip, in
-/// pixels.
+/// The gap between a control and its tooltip, in pixels.
 pub const TOOLTIP_OFFSET: f32 = 6.;
-/// Mantine's `pop` transition, which `KbdTooltip` uses, draws a hidden
-/// tooltip at `scale(.9) translateY(10px)` about its centre. This is that
-/// scale: a tooltip grows from 90% of its size while it appears.
+/// The scale of a tooltip when it is fully hidden: 90% of its size, about
+/// its centre. The tooltip grows from this scale while it appears.
 const TOOLTIP_POP_SCALE: f32 = 0.9;
-/// The `translateY(10px)` of the same transition: a hidden tooltip is this
-/// many pixels below its place, before the scale is applied, and moves up
-/// while it appears.
+/// How many pixels below its place a tooltip is when it is fully hidden,
+/// before the scale is applied. The tooltip moves up while it appears.
 const TOOLTIP_POP_RISE: f32 = 10.;
 
-/// `inspectorFadeIn` / `inspectorFadeOut`: how long the inspector takes to
-/// fade out when the user opens a screen that has no inspector, and to fade
-/// in when the user leaves that screen. When the user hides or shows the
-/// inspector with its toggle, it slides instead ([`INSPECTOR_SLIDE`]).
+/// How long the inspector takes to fade out when the user opens a screen that
+/// has no inspector, and to fade in when the user leaves that screen. When
+/// the user hides or shows the inspector with its toggle, it slides instead
+/// ([`INSPECTOR_SLIDE`]).
 pub const INSPECTOR_FADE: Duration = Duration::from_millis(170);
 
-/// `modalIn` / `modalOut`: the scale of a dialog's panel when it is fully
-/// hidden: 97% of its size. The panel grows from this scale while it
-/// appears and shrinks to it while it disappears.
+/// The scale of a dialog's panel when it is fully hidden: 97% of its size.
+/// The panel grows from this scale while it appears and shrinks to it while
+/// it disappears.
 const MODAL_SCALE: f32 = 0.97;
-/// `modalIn` / `modalOut`: how many pixels below its place a dialog's panel
-/// is when it is fully hidden (`translateY(4px)`, before the scale is
-/// applied).
+/// How many pixels below its place a dialog's panel is when it is fully
+/// hidden, before the scale is applied.
 const MODAL_DROP: f32 = 4.;
 
-/// `.inspectorResizeHandle`'s `transition-delay`: after the pointer leaves
-/// the resize edge of the sidebar or the inspector, the edge waits this
-/// long before it starts to change back to its resting width and colour.
+/// After the pointer leaves the resize edge of the sidebar or the
+/// inspector, the edge waits this long before it starts to change back to
+/// its resting width and colour.
 pub const RESIZE_EDGE_DELAY: Duration = Duration::from_millis(100);
 
-/// `notifications.ts`: how long a notification stays on screen when the
-/// code that shows it does not give a duration.
+/// How long a notification stays on screen when the code that shows it
+/// does not give a duration.
 pub const NOTIFICATION_DURATION: Duration = Duration::from_millis(4000);
-/// `.notification`'s `transition` in `NotificationHost.module.css`, and
-/// `EXIT_DURATION_MS`: how long a notification takes to move up and fade
-/// out when it leaves.
+/// How long a notification takes to move up and fade out when it leaves.
 pub const NOTIFICATION_EXIT: Duration = Duration::from_millis(400);
-/// The curve a leaving notification follows:
-/// `cubic-bezier(0, 1.1, 0.79, 1.03)`. Its output goes slightly above 1
-/// before the end, so the notification moves a little further up than
-/// [`NOTIFICATION_RISE`] before it is removed.
+/// The curve a leaving notification follows. Its output goes slightly
+/// above 1 before the end, so the notification moves a little further up
+/// than [`NOTIFICATION_RISE`] before it is removed.
 pub const NOTIFICATION_EASE: CubicBezier = CubicBezier::new(0., 1.1, 0.79, 1.03);
-/// `.hidden`: how many pixels above its place a notification is when it has
-/// finished leaving.
+/// How many pixels above its place a notification is when it has finished
+/// leaving.
 pub const NOTIFICATION_RISE: f32 = 48.;
 
-/// `ScrollToTopButton`: how long the "Return to Top" button waits before it
-/// starts to appear or to disappear.
+/// How long the "Return to Top" button waits before it starts to appear or
+/// to disappear.
 pub const RETURN_TO_TOP_DELAY: Duration = Duration::from_millis(30);
 
-/// `.viewLeaving` in `TagManagerScreen.module.css`: how long the tag
-/// manager's list takes to fade out when the user changes which tags the
-/// list shows (`handleNamespaceChange` and `handleStarredChange` in
-/// production). The list changes its contents after this fade.
+/// How long the tag manager's list takes to fade out when the user changes
+/// which tags the list shows, by choosing another tag group or by turning
+/// the filter for starred tags on or off. The list changes its contents
+/// after this fade.
 pub const TAG_VIEW_LEAVE: Duration = Duration::from_millis(100);
-/// `.viewEntering`: how long the tag manager's list takes to fade back in
-/// with the new tags.
+/// How long the tag manager's list takes to fade back in with the new
+/// tags.
 pub const TAG_VIEW_ENTER: Duration = Duration::from_millis(140);
-/// `.tagListInner`: how long the rows of the tag manager's list take to
-/// fade in each time the list's contents are replaced.
+/// How long the rows of the tag manager's list take to fade in each time
+/// the list's contents are replaced.
 pub const TAG_LIST_FADE: Duration = Duration::from_millis(90);
-/// `tagSkeleton`: how long the moving highlight takes to cross a loading
-/// placeholder in the tag manager's list once.
+/// How long the moving highlight takes to cross a loading placeholder in
+/// the tag manager's list once.
 pub const TAG_SHIMMER: Duration = Duration::from_millis(800);
 
-/// `@keyframes stackPreviewLeft`: in the inspector's stacked preview of a
-/// multiple selection, how long a card that rests turned to the left takes
-/// to move into its place in the stack, shrinking and fading in on the way.
+/// In the inspector's stacked preview of a multiple selection, how long a
+/// card that rests turned to the left takes to move into its place in the
+/// stack, shrinking and fading in on the way.
 pub const STACK_ENTER_LEFT: Duration = Duration::from_millis(200);
-/// `@keyframes stackPreviewRight`: the same for a card that rests turned to
-/// the right.
+/// The same as [`STACK_ENTER_LEFT`], for a card that rests turned to the
+/// right.
 pub const STACK_ENTER_RIGHT: Duration = Duration::from_millis(250);
 /// How long a card that leaves the inspector's stacked preview takes to
 /// fade out.
@@ -342,38 +316,37 @@ pub const STACK_EXIT_FADE: Duration = Duration::from_millis(200);
 /// the card is removed. This is 20 ms after its fade ends.
 pub const STACK_EXIT_REMOVE: Duration = Duration::from_millis(220);
 
-/// `HOVER_PREVIEW_DELAY_MS`: how long the pointer must rest on a grid tile's
-/// magnifier before the hover preview opens. The magnifier is the icon in
-/// the bottom-right corner of the image under the pointer.
+/// How long the pointer must rest on a grid tile's magnifier before the
+/// hover preview opens. The magnifier is the icon in the bottom-right
+/// corner of the image under the pointer.
 pub const HOVER_PREVIEW_DELAY: Duration = Duration::from_millis(200);
-/// `HOVER_HIDE_DELAY_MS`: how long the hover preview stays open after the
-/// pointer moves off the magnifier while it is still over the grid.
+/// How long the hover preview stays open after the pointer moves off the
+/// magnifier while it is still over the grid.
 pub const HOVER_PREVIEW_HIDE: Duration = Duration::from_millis(90);
-/// `MIN_WAIT_MS` in `HoverPreviewPortal.tsx`: the hover preview shows
-/// nothing for at least this long after it opens, even when the image has
-/// already decoded.
+/// The hover preview shows nothing for at least this long after it opens,
+/// even when the image has already decoded.
 pub const HOVER_PREVIEW_MIN_WAIT: Duration = Duration::from_millis(150);
-/// `HOVER_RESUME_DELAY_MS`: scrolling the grid removes the hover highlight
-/// and the magnifier from the tile under the pointer. They come back when
-/// this long has passed since the last scroll.
+/// Scrolling the grid removes the hover highlight and the magnifier from
+/// the tile under the pointer. They come back when this long has passed
+/// since the last scroll.
 pub const MAGNIFIER_RESUME: Duration = Duration::from_millis(80);
-/// `thumbnailTiming.ts`: how long a grid tile waits, after it enters the
-/// area the grid treats as visible, before its thumbnail starts to fade in.
+/// How long a grid tile waits, after it enters the area the grid treats as
+/// visible, before its thumbnail starts to fade in.
 pub const THUMBNAIL_REVEAL_DELAY: Duration = Duration::from_millis(100);
-/// `thumbnailTiming.ts`: how long a grid thumbnail takes to fade in.
+/// How long a grid thumbnail takes to fade in.
 pub const THUMBNAIL_REVEAL: Duration = Duration::from_millis(500);
 
 /// How long a zoom animation lasts. In the viewer, a zoom step from the
 /// keyboard or from one notch of the wheel animates the picture for this
-/// long (the viewer's `ANIM_DURATION_MS`). In the grid, a change of zoom
-/// animates the tiles to their new positions and sizes for this long.
+/// long. In the grid, a change of zoom animates the tiles to their new
+/// positions and sizes for this long.
 pub const ZOOM_GLIDE: Duration = Duration::from_millis(150);
 
-/// The share of a zoom animation's distance that is covered `elapsed` after
-/// it started, from 0 to 1. The curve is an ease-out cubic: the speed is
-/// highest at the start and falls to zero at 150 ms. A second zoom step
-/// during the animation therefore starts from tiles that are already
-/// moving fast, and does not look like a stop followed by a restart.
+/// Returns the share of a zoom animation's distance that is covered `elapsed`
+/// after it started, from 0 to 1. The curve is an ease-out cubic: the speed
+/// is highest at the start and falls to zero at 150 ms. A second zoom step
+/// during the animation therefore starts from tiles that are already moving
+/// fast, and does not look like a stop followed by a restart.
 pub fn zoom_glide_progress(elapsed: Duration) -> f32 {
     1. - (1. - progress(elapsed, ZOOM_GLIDE)).powi(3)
 }
@@ -381,23 +354,21 @@ pub fn zoom_glide_progress(elapsed: Duration) -> f32 {
 /// The caret of a focused text field blinks: it is drawn for this long,
 /// then not drawn for this long, and so on.
 pub const CARET_BLINK: Duration = Duration::from_millis(500);
-/// `ToggleSwitch`: how long a toggle switch takes to change between off and
-/// on (`transition: 0.2s ease`).
+/// How long a toggle switch takes to change between off and on, on
+/// [`EASE`].
 pub const TOGGLE_SWITCH: Duration = Duration::from_millis(200);
-/// `progress-indeterminate`: how long the moving segment of an
-/// indeterminate progress bar takes to cross the bar once.
+/// How long the moving segment of an indeterminate progress bar takes to
+/// cross the bar once.
 pub const PROGRESS_SWEEP: Duration = Duration::from_millis(900);
-/// `backdropIn` and `dialogIn` in `TaskDialog.module.css`: how long the task
-/// dialog and its backdrop take to fade in, on `--ease-scale-in`.
+/// How long the task dialog and its backdrop take to fade in, on
+/// [`EASE_SCALE_IN`].
 pub const TASK_DIALOG_IN: Duration = Duration::from_millis(200);
-/// `.fill { transition: width 250ms var(--ease-default) }`: how long the
-/// filled part of a progress bar takes to grow or shrink to its new width
-/// when the progress changes. `ProgressBar` and the task dialog's progress
-/// bar (its `.fill`) both use it.
+/// How long the filled part of a progress bar takes to grow or shrink to
+/// its new width when the progress changes, on [`EASE_DEFAULT`]. The shared
+/// progress bar and the task dialog's progress bar both use it.
 pub const PROGRESS_FILL: Duration = Duration::from_millis(250);
-/// `.fill[data-indeterminate]`: how long the moving segment of a task's
-/// progress bar takes to cross the bar once, while the task's total is not
-/// known.
+/// How long the moving segment of a task's progress bar takes to cross the
+/// bar once, while the task's total is not known.
 pub const TASK_PROGRESS_SWEEP: Duration = Duration::from_millis(1100);
 /// A Flash movie is advanced and redrawn this often (about 60 frames a
 /// second).
@@ -405,33 +376,29 @@ pub const FLASH_FRAME: Duration = Duration::from_millis(16);
 /// Settings shows "Saving…" only for a save that takes longer than this.
 pub const SAVING_MESSAGE_DELAY: Duration = Duration::from_millis(160);
 
-/// `.controls` in `VideoPlayer.module.css`: how long the media player's
-/// controls take to fade in and to fade out, on `ease`. The Flash player's
-/// controls take the same time.
+/// How long the media player's controls take to fade in and to fade out,
+/// on [`EASE`]. The Flash player's controls take the same time.
 pub const MEDIA_CONTROLS_FADE: Duration = Duration::from_millis(300);
-/// `.progressTrack`: how long the media player's scrubber takes to get
-/// thicker when the pointer moves onto it or a seek starts, and to get
-/// thinner again afterwards.
+/// How long the media player's scrubber takes to get thicker when the
+/// pointer moves onto it or a seek starts, and to get thinner again
+/// afterwards.
 pub const MEDIA_SCRUBBER_EXPAND: Duration = Duration::from_millis(100);
-/// `volumeHudFadeIn`: how long the media player's volume display takes to
-/// fade in after a volume key is pressed.
+/// How long the media player's volume display takes to fade in after a
+/// volume key is pressed.
 pub const MEDIA_VOLUME_HUD_IN: Duration = Duration::from_millis(150);
-/// `VolumePanel`: how long the media player's volume slider stays open
-/// after the pointer leaves both the volume button and the slider.
+/// How long the media player's volume slider stays open after the pointer
+/// leaves both the volume button and the slider.
 pub const MEDIA_VOLUME_PANEL_GRACE: Duration = Duration::from_millis(300);
 
-/// `reviewPillIn` in `InboxReviewControls.module.css`: how long the Inbox
-/// review pill (the Accept and Reject buttons) takes to move up into its
-/// place when it appears, on `--ease-default`.
+/// How long the Inbox review pill (the Accept and Reject buttons) takes to
+/// move up into its place when it appears, on [`EASE_DEFAULT`].
 pub const REVIEW_PILL_IN: Duration = Duration::from_millis(130);
-/// `.glow`'s `opacity` and the glyph's `filter` in the same file: how long
-/// the light behind the Accept or Reject button, and the shadow of the
-/// button's glyph, take to change when the pointer moves onto or off the
-/// button, on `ease`.
+/// How long the light behind the Accept or Reject button, and the shadow
+/// of the button's icon, take to change when the pointer moves onto or off
+/// the button, on [`EASE`].
 pub const REVIEW_GLOW: Duration = Duration::from_millis(160);
-/// `.action`'s `color`: how long the glyph of the Accept or Reject button
-/// takes to change colour when the pointer moves onto or off the button, on
-/// `ease`.
+/// How long the icon of the Accept or Reject button takes to change colour
+/// when the pointer moves onto or off the button, on [`EASE`].
 pub const REVIEW_TINT: Duration = Duration::from_millis(140);
 
 /// A value that is 0 in one state and 1 in the other, and that moves
@@ -462,8 +429,8 @@ impl Default for Fade {
 }
 
 impl Fade {
-    /// A fade that is already fully in the given state and is not moving:
-    /// its value is 1 when `on` is true and 0 when `on` is false.
+    /// Returns a fade that is already fully in the given state and is not
+    /// moving: its value is 1 when `on` is true and 0 when `on` is false.
     pub fn at(on: bool) -> Self {
         Self {
             on,
@@ -497,8 +464,9 @@ impl Fade {
         self.duration = duration.mul_f32(distance.clamp(0., 1.));
     }
 
-    /// The value now: 0 when the fade is fully off, 1 when it is fully on,
-    /// and in between while it moves. It moves on [`EASE_DEFAULT`].
+    /// Returns the value now: 0 when the fade is fully off, 1 when it is
+    /// fully on, and in between while it moves. It moves on
+    /// [`EASE_DEFAULT`].
     pub fn value(&self) -> f32 {
         self.value_with(EASE_DEFAULT)
     }
@@ -574,8 +542,8 @@ impl Fades {
         self.fades.entry(key).or_default().set(hovered, duration);
     }
 
-    /// The value of the fade under `key`: 0 when it is fully off or has
-    /// never been set, 1 when it is fully on.
+    /// Returns the value of the fade under `key`: 0 when it is fully off
+    /// or has never been set, 1 when it is fully on.
     pub fn value(&self, key: (&'static str, usize)) -> f32 {
         self.fades.get(&key).map_or(0., Fade::value)
     }
@@ -604,52 +572,51 @@ pub fn scaled_frame(w: f32, h: f32, scale: f32, origin: (f32, f32)) -> (f32, f32
     )
 }
 
-/// The scale a popover's panel is drawn at when `elapsed` has passed since
-/// it opened (`menuIn` and `librarySwitcherIn` in production). The scale
-/// grows from 0.96 to 1 over `--duration-menu-in` on `--ease-scale-in`.
+/// Returns the scale a popover's panel is drawn at when `elapsed` has
+/// passed since it opened. The scale grows from [`MENU_IN_SCALE`] to 1 over
+/// [`MENU_IN`] on [`EASE_SCALE_IN`].
 pub fn menu_in(elapsed: Duration) -> f32 {
     MENU_IN_SCALE + (1. - MENU_IN_SCALE) * EASE_SCALE_IN.ease(progress(elapsed, MENU_IN))
 }
 
-/// `menuOut`: the scale and the opacity of a dismissed context menu when
+/// Returns the scale and the opacity of a dismissed context menu when
 /// `elapsed` has passed since it was dismissed, as `(scale, opacity)`. Over
-/// 80 ms, on `ease-in`, the scale goes from 1 to 0.95 and the opacity from 1
-/// to 0. The context menu in `ui/menu.rs` uses only the opacity, because
-/// GPUI cannot scale a panel's contents.
+/// [`MENU_OUT`], on [`EASE_IN`], the scale goes from 1 to 0.95 and the
+/// opacity from 1 to 0. The context menu in `ui/menu.rs` uses only the
+/// opacity, because GPUI cannot scale a panel's contents.
 pub fn menu_out(elapsed: Duration) -> (f32, f32) {
     let eased = EASE_IN.ease(progress(elapsed, MENU_OUT));
     (1. - (1. - MENU_OUT_SCALE) * eased, 1. - eased)
 }
 
-/// Where a tooltip is drawn while Mantine's `pop` transition is `shown` of
-/// the way from hidden to shown (0 is hidden, 1 is shown; the caller has
-/// already applied the easing curve). Returns the tooltip's scale about its
-/// centre, and how many pixels below its final place its centre is. The CSS
-/// transform is `scale(s) translateY(t)`, which moves the centre down by
-/// `s × t`.
+/// Returns where a tooltip is drawn when it is `shown` of the way from
+/// hidden to shown (0 is hidden, 1 is shown; the caller has already applied
+/// the easing curve). The result is the tooltip's scale about its centre,
+/// and how many pixels below its final place its centre is. The tooltip is
+/// moved down first and scaled afterwards, so its centre is the scale times
+/// the distance below its place.
 pub fn tooltip_pop(shown: f32) -> (f32, f32) {
     let scale = TOOLTIP_POP_SCALE + (1. - TOOLTIP_POP_SCALE) * shown;
     (scale, scale * TOOLTIP_POP_RISE * (1. - shown))
 }
 
-/// Where a dialog's panel is drawn while `modalIn` or `modalOut` is `shown`
-/// of the way from hidden to shown (0 is hidden, 1 is shown; the caller has
-/// already applied the easing curve). Returns the panel's scale about its
-/// centre, and how many pixels below its final place its centre is. Hidden,
-/// the CSS transform is `scale(0.97) translateY(4px)`, which puts the centre
-/// `0.97 × 4` pixels down.
+/// Returns where a dialog's panel is drawn when it is `shown` of the way
+/// from hidden to shown (0 is hidden, 1 is shown; the caller has already
+/// applied the easing curve). The result is the panel's scale about its
+/// centre, and how many pixels below its final place its centre is. The
+/// panel is moved down first and scaled afterwards, so a fully hidden panel
+/// has its centre `0.97 × 4` pixels down.
 pub fn modal_pop(shown: f32) -> (f32, f32) {
     let scale = MODAL_SCALE + (1. - MODAL_SCALE) * shown;
     (scale, scale * MODAL_DROP * (1. - shown))
 }
 
-/// The time since this function was first called. Every animation that
-/// repeats for as long as something is running (the moving segment of an
+/// Returns the time since this function was first called. Every animation
+/// that repeats for as long as something is running (the moving segment of an
 /// indeterminate progress bar, the pulse of a syncing subscription's badge)
-/// computes its position from this one clock. Two animations of the same
-/// kind are therefore always at the same point of their cycle, and an
-/// animation does not start again from its beginning when its view is drawn
-/// again.
+/// computes its position from this one clock. Two animations of the same kind
+/// are therefore always at the same point of their cycle, and an animation
+/// does not start again from its beginning when its view is drawn again.
 pub fn loop_clock() -> Duration {
     static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
     START.get_or_init(std::time::Instant::now).elapsed()
@@ -694,18 +661,17 @@ pub fn loop_frame(window: &gpui::Window, cx: &mut gpui::App) {
     .detach();
 }
 
-/// How far along a syncing subscription's pulse is when the loop clock
-/// reads `elapsed` (`subscriptionStatusPulse` and
-/// `subscriptionActivityPulse` in production). The result goes from 0 to 1
-/// during the first half of [`STATUS_PULSE`] and back to 0 during the
-/// second half, each half on `ease-in-out`, and then repeats.
+/// Returns how far along a syncing subscription's pulse is when the loop
+/// clock reads `elapsed`. The result goes from 0 to 1 during the first half
+/// of [`STATUS_PULSE`] and back to 0 during the second half, each half on
+/// [`EASE_IN_OUT`], and then repeats.
 pub fn pulse(elapsed: Duration) -> f32 {
     let period = STATUS_PULSE.as_secs_f32();
     let phase = (elapsed.as_secs_f32() % period) / (period / 2.);
     EASE_IN_OUT.ease(if phase < 1. { phase } else { 2. - phase })
 }
 
-/// The share of an animation's `duration` that has passed when the
+/// Returns the share of an animation's `duration` that has passed when the
 /// animation began `elapsed` ago: 0 at the start and 1 once `duration` has
 /// passed. No easing curve is applied.
 pub fn progress(elapsed: Duration, duration: Duration) -> f32 {
@@ -806,12 +772,12 @@ mod tests {
     fn a_menu_grows_in_then_shrinks_and_fades_out() {
         assert_eq!(menu_in(Duration::ZERO), MENU_IN_SCALE);
         assert_eq!(menu_in(MENU_IN), 1.);
-        // `--ease-scale-in` moves quickly at first: after 10 of the 70 ms
+        // `EASE_SCALE_IN` moves quickly at first: after 10 of the 70 ms
         // the scale is already more than halfway from 0.96 to 1.
         assert!(menu_in(Duration::from_millis(10)) > 0.98);
         assert_eq!(menu_out(Duration::ZERO), (1., 1.));
         assert_eq!(menu_out(MENU_OUT), (MENU_OUT_SCALE, 0.));
-        // `ease-in` starts slowly: after a quarter of the 80 ms the opacity
+        // `EASE_IN` starts slowly: after a quarter of the 80 ms the opacity
         // is still above 0.9 and the scale above 0.995.
         let (scale, opacity) = menu_out(MENU_OUT / 4);
         assert!(opacity > 0.9 && scale > 0.995, "{scale} {opacity}");
@@ -836,8 +802,8 @@ mod tests {
         let mut fade = Fade::default();
         fade.set_after(true, Duration::from_secs(10), Duration::from_secs(10));
         // The delay has not passed yet, so the value has not moved.
-        // `animating` is already true, so that the owner keeps drawing
-        // frames until the fade starts.
+        // `animating` is already true, so that the view that holds the
+        // fade keeps drawing frames until the fade starts.
         assert_eq!(fade.value(), 0.);
         assert!(fade.animating());
     }

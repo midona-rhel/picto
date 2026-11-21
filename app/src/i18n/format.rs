@@ -1,17 +1,19 @@
-//! Numbers and dates as production writes them: `toLocaleString()`,
-//! `toLocaleDateString()`, `Intl.DateTimeFormat` and
-//! `Intl.RelativeTimeFormat`, all without a locale, so in the language
-//! Chromium takes from the system (`navigator.language`), whatever the
-//! interface's language. The patterns are ICU's for the eight interface
-//! languages (checked against Node's ICU 78 in the tests); a system language
-//! outside them is written as American English, and regions are not told
-//! apart (British English writes as American, Portugal's Portuguese as
-//! Brazil's).
+//! Writes numbers and dates as text.
+//!
+//! They are written in the system's language, whichever language the
+//! interface is shown in. Picto 0.6.19 and earlier did the same. The formats
+//! are the ones that ICU, the Unicode library for numbers and dates, has for
+//! the eight interface languages. The tests compare them with what ICU 78
+//! writes. A system language that is not one of the eight is written as
+//! American English. Regions are not told apart: British English is written
+//! as American English, and the Portuguese of Portugal as the Portuguese of
+//! Brazil.
 use super::Locale;
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 use std::sync::LazyLock;
 
-/// The language numbers and dates are written in.
+/// The language that numbers and dates are written in: the system's language
+/// when it is one of the eight interface languages, and English otherwise.
 static SYSTEM: LazyLock<Locale> = LazyLock::new(|| {
     sys_locale::get_locale()
         .as_deref()
@@ -19,13 +21,15 @@ static SYSTEM: LazyLock<Locale> = LazyLock::new(|| {
         .unwrap_or(Locale::En)
 });
 
-/// English in tests, so that what they expect does not depend on the
-/// machine.
+/// Returns the language that numbers and dates are written in. In a test
+/// build it is always English, so that the tests expect the same text on
+/// every machine.
 pub fn system() -> Locale {
     if cfg!(test) { Locale::En } else { *SYSTEM }
 }
 
-/// `count.toLocaleString()`.
+/// Returns `count` with its digits in groups of three, as the system's
+/// language writes it: `1,234,567` in English and `1.234.567` in German.
 pub fn grouped(count: impl Into<i128>) -> String {
     grouped_in(system(), count.into())
 }
@@ -38,7 +42,7 @@ pub fn grouped_in(locale: Locale, count: i128) -> String {
         Locale::Fi => "\u{a0}",
     };
     let digits = count.unsigned_abs().to_string();
-    // Spanish groups only from five digits on.
+    // Spanish writes a number of fewer than five digits without a separator.
     let groups = !(locale == Locale::Es && digits.len() < 5);
     let mut out = String::with_capacity(digits.len() + digits.len() / 3 * 3 + 3);
     if count < 0 {
@@ -57,7 +61,9 @@ pub fn grouped_in(locale: Locale, count: i128) -> String {
     out
 }
 
-/// `{ month: 'short' }` within a date, January first.
+/// Returns the short name of the month, as it is written inside a date.
+/// `month` is 1 for January. Japanese, Chinese and Finnish dates are written
+/// with the month's number, so these languages have no names here.
 fn short_month(locale: Locale, month: u32) -> &'static str {
     const EN: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -87,7 +93,9 @@ fn short_month(locale: Locale, month: u32) -> &'static str {
     names[(month as usize).saturating_sub(1).min(11)]
 }
 
-/// `{ month: 'long' }` beside a year, January first.
+/// Returns the full name of the month, as it is written beside a year.
+/// `month` is 1 for January. Japanese and Chinese write the month's number,
+/// so these languages have no names here.
 fn long_month(locale: Locale, month: u32) -> &'static str {
     const EN: [&str; 12] = [
         "January",
@@ -184,7 +192,8 @@ fn long_month(locale: Locale, month: u32) -> &'static str {
     names[(month as usize).saturating_sub(1).min(11)]
 }
 
-/// The numeric date `toLocaleDateString()` and `toLocaleString()` write.
+/// Returns the date written with numbers only: `8/26/2026` in English and
+/// `26.8.2026` in German.
 fn numeric_date(locale: Locale, date: NaiveDate) -> String {
     let (y, m, d) = (date.year(), date.month(), date.day());
     match locale {
@@ -196,7 +205,8 @@ fn numeric_date(locale: Locale, date: NaiveDate) -> String {
     }
 }
 
-/// A time of day, with or without seconds.
+/// Returns the time of day, with seconds when `seconds` is true: `3:05 PM`
+/// in English and `15:05` in German.
 fn time(locale: Locale, time: NaiveDateTime, seconds: bool) -> String {
     let (h, mi, s) = (time.hour(), time.minute(), time.second());
     let tail = |separator: char| {
@@ -218,7 +228,7 @@ fn time(locale: Locale, time: NaiveDateTime, seconds: bool) -> String {
     }
 }
 
-/// What joins a date and a time.
+/// Returns the text that is written between a date and a time.
 fn joiner(locale: Locale) -> &'static str {
     match locale {
         Locale::En | Locale::De | Locale::Es | Locale::Pt => ", ",
@@ -227,12 +237,13 @@ fn joiner(locale: Locale) -> &'static str {
     }
 }
 
-/// `date.toLocaleDateString()`.
+/// Returns the date written with numbers only, in the system's language.
 pub fn date(date: NaiveDate) -> String {
     numeric_date(system(), date)
 }
 
-/// `date.toLocaleString()`: the date, then the time with seconds.
+/// Returns the date written with numbers only, then the time with seconds,
+/// in the system's language: `8/26/2026, 3:05:09 PM` in English.
 pub fn date_time(value: NaiveDateTime) -> String {
     date_time_in(system(), value)
 }
@@ -246,8 +257,8 @@ pub fn date_time_in(locale: Locale, value: NaiveDateTime) -> String {
     )
 }
 
-/// `toLocaleDateString(undefined, { year: 'numeric', month: 'short', day:
-/// 'numeric' })`.
+/// Returns the date with the short name of the month, in the system's
+/// language: `Aug 26, 2026` in English and `26. Aug. 2026` in German.
 pub fn short_month_date(date: NaiveDate) -> String {
     short_month_date_in(system(), date)
 }
@@ -265,8 +276,9 @@ pub fn short_month_date_in(locale: Locale, date: NaiveDate) -> String {
     }
 }
 
-/// `Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle:
-/// 'short' })`.
+/// Returns the date with the short name of the month, then the time without
+/// seconds, in the system's language: `Aug 26, 2026, 3:05 PM` in English.
+/// German, Japanese and Finnish write this date with numbers only.
 pub fn medium_date_time(value: NaiveDateTime) -> String {
     medium_date_time_in(system(), value)
 }
@@ -286,7 +298,8 @@ pub fn medium_date_time_in(locale: Locale, value: NaiveDateTime) -> String {
     format!("{date}{join}{}", time(locale, value, false))
 }
 
-/// `toLocaleDateString(undefined, { month: 'long', year: 'numeric' })`.
+/// Returns the full name of the month and the year, in the system's
+/// language: `August 2026` in English and `agosto de 2026` in Spanish.
 pub fn month_year(date: NaiveDate) -> String {
     month_year_in(system(), date)
 }
@@ -301,7 +314,7 @@ pub fn month_year_in(locale: Locale, date: NaiveDate) -> String {
     }
 }
 
-/// A unit `Intl.RelativeTimeFormat` is given.
+/// The unit of time that [`relative`] counts in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unit {
     Minute,
@@ -310,8 +323,10 @@ pub enum Unit {
     Month,
 }
 
-/// `new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(amount,
-/// unit)` for a whole amount.
+/// Returns how far a time is from now, as a whole number of `unit`, in the
+/// system's language. A negative `amount` is in the past: `3 days ago`,
+/// `in 2 hours`. For some amounts the language has a word that is written
+/// instead of the number, such as `yesterday` (`relative_word`).
 pub fn relative(amount: i64, unit: Unit) -> String {
     relative_in(system(), amount, unit)
 }
@@ -450,7 +465,9 @@ pub fn relative_in(locale: Locale, amount: i64, unit: Unit) -> String {
     }
 }
 
-/// The words `numeric: 'auto'` uses instead of a number.
+/// Returns the word that `locale` writes instead of a number for this amount
+/// of this unit, such as `yesterday` for -1 day. Returns `None` when the
+/// language writes the number.
 fn relative_word(locale: Locale, amount: i64, unit: Unit) -> Option<&'static str> {
     use Unit::*;
     let words: &[(i64, Unit, &str)] = match locale {

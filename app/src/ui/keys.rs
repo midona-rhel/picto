@@ -1,27 +1,28 @@
-//! The keys every floating surface takes: Escape, the arrows, Enter and
-//! Tab, as one set of actions. Each surface binds the ones it uses in its
+//! The keys that every floating surface handles: Escape, the arrow keys, Enter
+//! and Tab, as one set of actions. Each surface binds the keys it uses in its
 //! own key context (`Modal`, `Popover`, `OverlayShell`, `SelectionModal`,
-//! `Menu`), and the innermost surface holding the keyboard handles them,
-//! so a list open in a dialog takes Escape before the dialog does.
+//! `Menu`). The innermost surface that has the keyboard focus handles a key
+//! first, so a list that is open in a dialog handles Escape before the dialog
+//! does.
 use gpui::*;
 
 actions!(
     keys,
     [
-        /// Escape: close what is open.
+        /// Escape, which closes what is open.
         Dismiss,
         Up,
         Down,
         Left,
         Right,
-        /// Enter.
+        /// The Enter key.
         Confirm,
-        /// Tab: the next view of a panel's rail.
+        /// Tab, which shows the next view of a panel's rail.
         NextView,
     ]
 );
 
-/// A key a surface takes in its context.
+/// A key that a surface binds in its key context.
 #[derive(Clone, Copy)]
 pub enum Key {
     Escape,
@@ -30,7 +31,8 @@ pub enum Key {
     Left,
     Right,
     Enter,
-    /// Tab, and Shift-Tab the same way, since production reads only the key.
+    /// Tab. Shift-Tab does the same as Tab, as it did in Picto 0.6.19 and
+    /// earlier.
     Tab,
 }
 

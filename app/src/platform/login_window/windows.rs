@@ -1,9 +1,14 @@
-//! Windows: the sign-in web view's cookies, from WebView2's cookie manager,
-//! handed back when it answers through the thread's messages rather than
-//! by running them until it does (which would re-enter GPUI); its
-//! main-frame load failures, from a `NavigationCompleted` handler of its
-//! own beside `wry`'s; and the removal of the web view's user data folder
-//! once its browser process has let go of it.
+//! The parts of the sign-in window that are specific to Windows.
+//!
+//! The cookies of the web view are read from WebView2's cookie manager.
+//! The manager calls back later, through the thread's messages, and the
+//! cookies are sent when it does. The code does not process the thread's
+//! messages until the manager has called back, because that would run
+//! GPUI's code from inside GPUI's code.
+//!
+//! The failed loads of the main frame are reported by a
+//! `NavigationCompleted` handler that this module adds next to `wry`'s
+//! handler.
 use super::Event;
 use crate::logins::cookies::Cookie;
 use futures::channel::{mpsc, oneshot};
@@ -34,8 +39,8 @@ pub fn cookies_for(view: &wry::WebView, url: &str, sender: oneshot::Sender<Vec<C
         let mut cookies = Vec::new();
         if let (Ok(()), Some(list)) = (result, list) {
             let mut count = 0;
-            // SAFETY: the list and its cookies are WebView2's, valid for the
-            // call.
+            // SAFETY: the list and its cookies belong to WebView2 and are
+            // valid for as long as the call lasts.
             unsafe {
                 if list.Count(&mut count).is_ok() {
                     for index in 0..count {
@@ -51,21 +56,23 @@ pub fn cookies_for(view: &wry::WebView, url: &str, sender: oneshot::Sender<Vec<C
         answer(cookies);
         Ok(())
     }));
-    // SAFETY: `GetCookies` takes the address (cookies sent to it, as
-    // Electron's `cookies.get({ url })` answers) and a handler WebView2
-    // calls once on this thread.
+    // SAFETY: `GetCookies` takes an address and a handler that WebView2
+    // calls once on this thread. It gives the handler the cookies that the
+    // web view would send with a request to that address.
     if unsafe { manager.GetCookies(&HSTRING::from(url), &handler) }.is_err() {
         reply(Vec::new());
     }
 }
 
-/// One cookie's fields.
+/// Returns the fields of one cookie, or `None` if one of them could not be
+/// read.
 ///
 /// # Safety
-/// `cookie` is WebView2's, valid for the call.
+/// `cookie` must be a cookie of WebView2 that is valid for as long as the
+/// call lasts.
 unsafe fn read(cookie: &ICoreWebView2Cookie) -> Option<Cookie> {
-    // SAFETY: each getter writes a string WebView2 allocated, which
-    // `take_pwstr` takes and frees, or a BOOL.
+    // SAFETY: each getter writes either a BOOL or a string that WebView2
+    // allocated. `take_pwstr` copies such a string and frees it.
     unsafe {
         let mut name = PWSTR::null();
         cookie.Name(&mut name).ok()?;
@@ -87,10 +94,11 @@ unsafe fn read(cookie: &ICoreWebView2Cookie) -> Option<Cookie> {
     }
 }
 
-/// Reports a main-frame load that did not complete as [`Event::Failed`]:
-/// one with no answer from the server (a page the server answered, a 404,
-/// loads as Electron loads it), and not one stopped by a newer one or
-/// refused by the window (`OPERATION_CANCELED`, Electron's `ERR_ABORTED`).
+/// Sends [`Event::Failed`] when a load of the main frame fails because the
+/// server gave no response. A page that the server answered with an error
+/// status, such as 404, is not reported: the window shows that page. A
+/// load that a newer load stopped, or that the window itself refused
+/// (`OPERATION_CANCELED`), is not reported either.
 pub fn watch_failures(view: &wry::WebView, events: mpsc::UnboundedSender<Event>) {
     let handler = NavigationCompletedEventHandler::create(Box::new(move |sender, args| {
         let Some(args) = args else {
@@ -98,8 +106,8 @@ pub fn watch_failures(view: &wry::WebView, events: mpsc::UnboundedSender<Event>)
         };
         let mut success = BOOL::default();
         let mut status = COREWEBVIEW2_WEB_ERROR_STATUS::default();
-        // SAFETY: the arguments are WebView2's, valid for the call; each
-        // getter writes a BOOL or a status.
+        // SAFETY: the arguments belong to WebView2 and are valid for as
+        // long as the call lasts. Each getter writes a BOOL or a status.
         unsafe {
             args.IsSuccess(&mut success)?;
             args.WebErrorStatus(&mut status)?;
@@ -109,8 +117,8 @@ pub fn watch_failures(view: &wry::WebView, events: mpsc::UnboundedSender<Event>)
         }
         if let Ok(args) = args.cast::<ICoreWebView2NavigationCompletedEventArgs2>() {
             let mut code = 0;
-            // SAFETY: as above; the getter writes the HTTP status, 0 when
-            // there was no answer.
+            // SAFETY: the same holds as above. The getter writes the HTTP
+            // status, which is 0 when the server gave no response.
             if unsafe { args.HttpStatusCode(&mut code) }.is_ok() && code != 0 {
                 return Ok(());
             }
@@ -118,8 +126,8 @@ pub fn watch_failures(view: &wry::WebView, events: mpsc::UnboundedSender<Event>)
         let url = sender
             .and_then(|webview| {
                 let mut source = PWSTR::null();
-                // SAFETY: `Source` writes a string WebView2 allocated, which
-                // `take_pwstr` takes and frees.
+                // SAFETY: `Source` writes a string that WebView2 allocated.
+                // `take_pwstr` copies the string and frees it.
                 unsafe { webview.Source(&mut source) }.ok()?;
                 Some(take_pwstr(source))
             })
@@ -131,15 +139,16 @@ pub fn watch_failures(view: &wry::WebView, events: mpsc::UnboundedSender<Event>)
         Ok(())
     }));
     let mut token = 0;
-    // SAFETY: the handler is WebView2's to call on this thread for as long
-    // as the web view lives; the token is not needed, as the handler goes
-    // with the web view.
+    // SAFETY: WebView2 calls the handler on this thread for as long as the
+    // web view exists. The token is not kept, because the handler is never
+    // removed: it is released together with the web view.
     if let Err(error) = unsafe { view.webview().add_NavigationCompleted(&handler, &mut token) } {
         eprintln!("picto: the sign-in window cannot report pages that fail to load: {error}");
     }
 }
 
-/// WebView2's name for why a page did not load.
+/// Returns WebView2's name of the reason why a page could not be loaded,
+/// without the prefix `COREWEBVIEW2_WEB_ERROR_STATUS_`.
 fn status_name(status: COREWEBVIEW2_WEB_ERROR_STATUS) -> &'static str {
     match status {
         COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_COMMON_NAME_IS_INCORRECT => {
@@ -173,9 +182,10 @@ fn status_name(status: COREWEBVIEW2_WEB_ERROR_STATUS) -> &'static str {
     }
 }
 
-/// Saves a picture of the window as it is on the screen: the screen's
-/// pixels inside the window's rectangle, which hold WebView2's own window
-/// as the system composed it.
+/// Saves a picture of the window at `path`. The picture is copied from the
+/// pixels of the screen inside the window's rectangle. It is taken from the
+/// screen because WebView2 draws in a window of its own, which is on the
+/// screen but is not part of what the GPUI window draws.
 #[cfg(debug_assertions)]
 pub fn capture(window: &gpui::Window, path: &std::path::Path) -> Result<(), String> {
     use windows::Win32::Foundation::RECT;
@@ -187,7 +197,7 @@ pub fn capture(window: &gpui::Window, path: &std::path::Path) -> Result<(), Stri
     use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
     let hwnd = crate::platform::windows::hwnd(window).ok_or("The sign-in window has no handle.")?;
     let mut rect = RECT::default();
-    // SAFETY: `hwnd` is the live window; the rectangle is written in full.
+    // SAFETY: `hwnd` is the open window; the call writes the whole rectangle.
     if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
         return Err("The sign-in window has no rectangle.".into());
     }
@@ -196,10 +206,10 @@ pub fn capture(window: &gpui::Window, path: &std::path::Path) -> Result<(), Stri
         return Err("The sign-in window has no size.".into());
     }
     let mut pixels = vec![0u8; width as usize * height as usize * 4];
-    // SAFETY: the screen's device context, a memory one and a bitmap of the
-    // window's size are made, used and released here; `GetDIBits` writes
-    // `height` top-down rows of `width` 32-bit pixels into `pixels`, which
-    // holds exactly that.
+    // SAFETY: the device context of the screen, a memory device context and
+    // a bitmap of the window's size are made, used and released in this
+    // block. `GetDIBits` writes `height` rows of `width` 32-bit pixels, from
+    // the top row down, into `pixels`, which has exactly that size.
     let copied = unsafe {
         let screen = GetDC(None);
         let memory = CreateCompatibleDC(Some(screen));

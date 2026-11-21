@@ -1,13 +1,14 @@
-//! OnlyFans' session pasted by hand (`createManualOnlyFansCredential` in
-//! `electron/windows/externalOnlyFansAuth.mjs`): its `Cookie` header, the
-//! browser's User-Agent and the X-BC signature its API requests carry.
+//! Makes an OnlyFans login from the values of a session that the user
+//! copied out of a browser and pasted into the Accounts dialog: the `Cookie`
+//! header, the browser's `User-Agent`, and the `X-BC` header that the
+//! requests to OnlyFans' API carry.
 use super::Credential;
 use std::collections::BTreeMap;
 
-/// The cookies of OnlyFans' that a session needs.
+/// The names of the OnlyFans cookies that are kept as the login.
 const COOKIE_NAMES: [&str; 3] = ["sess", "auth_id", "auth_uid"];
 
-/// What the manual form holds.
+/// The three values that the user pastes into the form.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ManualInput {
     pub cookie: String,
@@ -15,7 +16,8 @@ pub struct ManualInput {
     pub x_bc: String,
 }
 
-/// `parseCookieHeader`: OnlyFans' session cookies out of a `Cookie` header.
+/// Returns the cookies named in [`COOKIE_NAMES`] that the `Cookie` header
+/// `value` holds with a value that is not empty.
 pub fn parse_cookie_header(value: &str) -> BTreeMap<String, String> {
     value
         .split(';')
@@ -28,7 +30,9 @@ pub fn parse_cookie_header(value: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// The credential the form describes, or what is missing from it.
+/// Returns the credential made from the pasted values. Returns an error
+/// that names what is missing if the cookies `sess` or `auth_id`, the
+/// User-Agent or the X-BC value is absent.
 pub fn manual_credential(input: &ManualInput) -> Result<Credential, String> {
     let cookies = parse_cookie_header(&input.cookie);
     let missing: Vec<&str> = ["sess", "auth_id"]
@@ -65,7 +69,8 @@ pub fn manual_credential(input: &ManualInput) -> Result<Credential, String> {
 mod tests {
     use super::*;
 
-    // 'validates and saves a manually supplied OnlyFans session'
+    // Of the pasted `Cookie` header only the three session cookies are
+    // kept, and the two headers are kept under lower-case names.
     #[test]
     fn a_pasted_session_keeps_only_its_session_cookies_and_headers() {
         let credential = manual_credential(&ManualInput {

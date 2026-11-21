@@ -1,11 +1,12 @@
-//! A palette colour written out the ways the swatch menu copies it
-//! (`colorCopyEntries` in `ColorPalette.tsx`).
+//! Writes a colour of an item's palette as text in each format that the menu
+//! of a palette swatch can copy: hex, RGB, RGBA, HSL, HSV, HWB and CMYK. The
+//! texts are the same as the ones that Picto 0.6.19 and earlier copied.
 
 fn channels(color: u32) -> [u8; 3] {
     [(color >> 16) as u8, (color >> 8) as u8, color as u8]
 }
 
-/// `labToHex`: `#rrggbb` in lower case.
+/// Returns the colour as `#rrggbb` in lower case.
 pub fn hex(color: u32) -> String {
     format!("#{:06x}", color & 0xff_ffff)
 }
@@ -24,7 +25,9 @@ fn unit(color: u32) -> [f32; 3] {
     channels(color).map(|channel| channel as f32 / 255.)
 }
 
-/// JavaScript's `Math.round`: halves go up.
+/// Rounds `value` to the nearest whole number. A value that lies halfway
+/// between two whole numbers is rounded up, also when it is negative, where
+/// `f32::round` would round it down.
 fn round(value: f32) -> i32 {
     (value + 0.5).floor() as i32
 }
@@ -57,7 +60,7 @@ pub fn hsl(color: u32) -> String {
     )
 }
 
-/// The hue of `rgbToHsv`, in whole degrees.
+/// Returns the hue of the colour in the HSV model, in whole degrees.
 fn hsv_hue(color: u32) -> i32 {
     let [r, g, b] = unit(color);
     let max = r.max(g).max(b);
@@ -65,7 +68,8 @@ fn hsv_hue(color: u32) -> i32 {
     let hue = if delta == 0. {
         0.
     } else if max == r {
-        // JavaScript's `%` keeps the sign of the dividend, as Rust's does.
+        // Rust's `%` gives a negative result when `g - b` is negative, so the
+        // hue can be negative here. 360 is added to a negative hue below.
         60. * (((g - b) / delta) % 6.)
     } else if max == g {
         60. * ((b - r) / delta + 2.)

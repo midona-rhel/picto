@@ -1,17 +1,20 @@
-//! The folder and smart-folder trees as the Electron sidebar reasons about
-//! them when moving nodes: which nodes can take others, which of a
-//! selection actually moves, and where a dragged node lands.
+//! This file holds the rules for moving nodes in the tree of folders and in
+//! the tree of smart folders: under which nodes a node can be moved, which
+//! of several selected nodes are moved, and what a drop of a dragged node on
+//! a row does.
 use crate::backend::Navigation;
 use crate::ui::sidebar_row::DropPosition;
 
-/// One node of a tree, in the order the sidebar shows siblings.
+/// One node of a tree: its id and the id of its parent. A list of nodes is
+/// in the order in which the sidebar shows them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node {
     pub id: String,
     pub parent: Option<String>,
 }
 
-/// The nodes of one section (`folder:` or `smart:`), from the destinations.
+/// Returns the nodes of one section out of the list of destinations.
+/// `prefix` is `folder:` or `smart:`.
 pub fn nodes(entries: &[Navigation], prefix: &str) -> Vec<Node> {
     let ids = entries.iter().map(Navigation::id).collect::<Vec<_>>();
     entries
@@ -25,7 +28,8 @@ pub fn nodes(entries: &[Navigation], prefix: &str) -> Vec<Node> {
         .collect()
 }
 
-/// `isDescendantOf`: whether `node` sits somewhere under `ancestor`.
+/// Returns whether `node` is a child of `ancestor` or a descendant further
+/// down.
 pub fn is_descendant(nodes: &[Node], node: &str, ancestor: &str) -> bool {
     let parent_of = |id: &str| {
         nodes
@@ -48,8 +52,9 @@ pub fn is_descendant(nodes: &[Node], node: &str, ancestor: &str) -> bool {
     false
 }
 
-/// `deduplicateParentChild`: a selected node whose ancestor is also
-/// selected moves with that ancestor, so only the topmost ones move.
+/// Returns the ids in `ids` that have no ancestor in `ids`. A selected node
+/// whose ancestor is also selected moves with that ancestor, so it is not
+/// moved by itself.
 pub fn top_level(nodes: &[Node], ids: &[String]) -> Vec<String> {
     ids.iter()
         .filter(|id| {
@@ -60,8 +65,9 @@ pub fn top_level(nodes: &[Node], ids: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// `availableTreeMoveTargetIds`: every node that is neither moving nor
-/// under a moving node, in tree order.
+/// Returns every node under which the nodes `moving` can be moved, in the
+/// order of `nodes`. These are the nodes that are neither moving nor under
+/// a moving node.
 pub fn move_targets(nodes: &[Node], moving: &[String]) -> Vec<String> {
     nodes
         .iter()
@@ -74,9 +80,10 @@ pub fn move_targets(nodes: &[Node], moving: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// `resolveSidebarTreeDrop`: where on a row the pointer is, by the share of
-/// the row's height above it: the top 30% drops before, the bottom 30%
-/// after, the middle inside.
+/// Returns where a drop on a row lands. `ratio` is the pointer's distance
+/// from the top of the row divided by the row's height. The top 30% of the
+/// row drops before the row, the bottom 30% drops after it, and the middle
+/// drops inside it.
 pub fn position_at(ratio: f32) -> DropPosition {
     if ratio < 0.3 {
         DropPosition::Before
@@ -87,15 +94,14 @@ pub fn position_at(ratio: f32) -> DropPosition {
     }
 }
 
-/// Whether `target` can take a drop of `dragged` at all: not itself and not
-/// one of its own descendants.
+/// Returns whether `dragged` can be dropped on `target`. A node cannot be
+/// dropped on itself or on one of its descendants.
 pub fn can_take(nodes: &[Node], dragged: &str, target: &str) -> bool {
     target != dragged && !is_descendant(nodes, target, dragged)
 }
 
-/// What a drop does (`SidebarTreeMovePlan`): the nodes that move, the parent
-/// they move under (`None` for the top level), and the new order of that
-/// parent's children.
+/// Holds what a drop does: the nodes that move, the parent they move under
+/// (`None` for the top level), and the new order of that parent's children.
 #[derive(Debug, PartialEq)]
 pub struct Plan {
     pub moving: Vec<String>,
@@ -103,9 +109,11 @@ pub struct Plan {
     pub ordered: Vec<String>,
 }
 
-/// `planSidebarTreeDrop`: the dragged node moves, or the whole selection
-/// when the dragged node is part of a larger one, without the nodes that
-/// move with an ancestor. A drop on a moving node or under one does nothing.
+/// Returns what a drop of `dragged` on `target` at `position` does. The
+/// dragged node moves alone, unless it is one of several selected nodes of
+/// its section, in which case all of those move. A node that has an
+/// ancestor among the moving nodes moves with that ancestor. Returns `None`
+/// when the target is a moving node or is under one.
 pub fn plan_drop(
     nodes: &[Node],
     selected: &[String],
@@ -136,7 +144,7 @@ pub fn plan_drop(
     if moving_set.iter().any(|id| is_descendant(nodes, target, id)) {
         return None;
     }
-    // In tree order.
+    // The moving nodes are put in the order in which the tree shows them.
     let moving = nodes
         .iter()
         .filter(|node| moving_set.contains(&node.id))
@@ -169,7 +177,8 @@ mod tests {
     use super::{Node, Plan, can_take, move_targets, plan_drop, position_at, top_level};
     use crate::ui::sidebar_row::DropPosition;
 
-    /// 1 ─ 2 ─ 3, then 4 and 5 at the top level.
+    /// Returns a tree in which folder 2 is in folder 1, folder 3 is in
+    /// folder 2, and folders 4 and 5 are at the top level.
     fn tree() -> Vec<Node> {
         let node = |id: &str, parent: Option<&str>| Node {
             id: id.into(),
@@ -217,9 +226,9 @@ mod tests {
     }
 
     #[test]
-    fn drops_reorder_and_reparent_as_the_electron_plan_does() {
+    fn drops_reorder_and_reparent_as_the_earlier_versions_plan_did() {
         let tree = tree();
-        // 5 before 4 at the top level.
+        // Folder 5 is dropped before folder 4 at the top level.
         assert_eq!(
             plan_drop(&tree, &[], "folder:5", "folder:4", DropPosition::Before),
             Some(Plan {
@@ -228,7 +237,8 @@ mod tests {
                 ordered: ids(&["folder:1", "folder:5", "folder:4"]),
             })
         );
-        // 4 inside 2, after its children.
+        // Folder 4 is dropped inside folder 2 and comes after the children
+        // that folder 2 already has.
         assert_eq!(
             plan_drop(&tree, &[], "folder:4", "folder:2", DropPosition::Inside),
             Some(Plan {
@@ -237,7 +247,7 @@ mod tests {
                 ordered: ids(&["folder:3", "folder:4"]),
             })
         );
-        // The selection moves when the dragged row is part of it.
+        // All selected nodes move when the dragged node is one of them.
         assert_eq!(
             plan_drop(
                 &tree,
@@ -252,7 +262,7 @@ mod tests {
                 ordered: ids(&["folder:1", "folder:4", "folder:5"]),
             })
         );
-        // Nothing lands on or under a moving node.
+        // A node cannot be dropped on a moving node or under one.
         assert_eq!(
             plan_drop(&tree, &[], "folder:1", "folder:3", DropPosition::After),
             None

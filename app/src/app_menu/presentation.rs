@@ -45,24 +45,20 @@ pub(super) fn gpui_menus(context: &MenuContext) -> Vec<Menu> {
         .collect()
 }
 
-/// Returns whether the main window has the application menu button
-/// (`ApplicationMenuButton` in production). It has the button on Windows and
-/// Linux, where there is no menu bar. On macOS it has the button only when
-/// the environment variable `PICTO_GPUI_APP_MENU` is `window`. Production's
-/// development build shows the button on macOS in the same way, so that the
-/// Windows and Linux menu can be checked there.
+/// Returns whether the main window has the application menu button. It has
+/// the button on Windows and Linux, where there is no menu bar. On macOS it
+/// has the button only when the environment variable `PICTO_GPUI_APP_MENU`
+/// is `window`, so that the Windows and Linux menu can be checked on a Mac.
 pub fn in_window() -> bool {
     !cfg!(target_os = "macos") || crate::seams::app_menu_in_window()
 }
 
-/// The width of the menu inside the window, in pixels (`width={220}` in
-/// production).
+/// The width of the menu inside the window, in pixels.
 pub const IN_WINDOW_WIDTH: f32 = 220.;
 
 /// Returns the menus that the menu inside the window shows. They are this
-/// platform's menus. On macOS the first menu, "Picto", is left out, because
-/// the File and Help menus already hold its rows. This is what production's
-/// `picto:application-menu:get` returns.
+/// platform's menus. On macOS the first menu, "Picto", is left out, so that
+/// the menu has the same menus as on Windows and Linux.
 pub(super) fn in_window_menus(cx: &App) -> Vec<TopMenu> {
     let mut menus = model(&context(cx), Platform::CURRENT);
     if Platform::CURRENT.is_mac() {
@@ -82,8 +78,8 @@ pub fn handled(action: &dyn Action, window: &Window, cx: &mut App) -> bool {
 }
 
 /// Returns whether the menu enables the row `item` now. The row is enabled
-/// when production's rule for it holds (`item.enabled`) and a handler would
-/// run its action ([`handled`]).
+/// when its rule holds (`item.enabled`) and a handler would run its action
+/// ([`handled`]).
 fn row_enabled(item: &Item, window: &Window, cx: &mut App) -> bool {
     item.enabled && handled(item.action.as_ref(), window, cx)
 }
@@ -208,13 +204,13 @@ pub fn other_rows(window: &Window, cx: &mut App) -> Vec<OtherRow> {
     rows
 }
 
-/// Returns the rows of the menu inside the window (`toMenuEntries` in
-/// production). Each menu of the model is a submenu of the button's menu. A
-/// submenu inside a menu, such as Recent Libraries or Set Rating, is laid
-/// out in its parent after a separator, because the shared menu control
-/// nests only one level. A row is enabled when the menu bar would enable it
-/// ([`row_enabled`]). A row's value is the path of its position in the
-/// menus, and [`in_window_action`] finds the row's action from that path.
+/// Returns the rows of the menu inside the window. Each menu of the model
+/// is a submenu of the button's menu. A submenu inside a menu, such as
+/// Recent Libraries or Set Rating, is laid out in its parent after a
+/// separator, because the shared menu control nests only one level. A row
+/// is enabled when the menu bar would enable it ([`row_enabled`]). A row's
+/// value is the path of its position in the menus, and
+/// [`in_window_action`] finds the row's action from that path.
 pub fn in_window_entries(window: &Window, cx: &mut App) -> Vec<crate::ui::menu::Entry> {
     use crate::ui::menu::{self as ui_menu, Entry as Row};
     let (preset, overrides) = crate::settings::keyboard(cx);

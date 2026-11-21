@@ -1,6 +1,7 @@
-//! The pieces of `VideoPlayer.module.css` the media player and Flash's
-//! controls (`FlashControls.tsx`) share: the shaded bar along the bottom,
-//! its row of buttons, and `VolumePanel`.
+//! The parts of the controls that the media player and the Flash player's
+//! controls (`viewer/flash_controls.rs`) both use: the shaded bar along the
+//! bottom edge of the player, the row of buttons in it, and the volume
+//! control.
 use super::button::media_button;
 use super::model;
 use crate::i18n::t;
@@ -10,11 +11,14 @@ use gpui::*;
 use std::cell::Cell;
 use std::rc::Rc;
 
-/// `.controls`: the bar along the bottom, shaded from black at 60% below to
-/// clear above, 24px over its rows and 12px from either side, at opacity
-/// `shown`. While `visible` it takes the pointer, so the media beneath it
-/// does not; hidden (`.controlsHidden`) it passes the pointer through, even
-/// while it fades out.
+/// Returns the bar that holds the controls, along the bottom edge of the
+/// player. Its background goes from black at 60% at its bottom edge to
+/// fully transparent at its top edge. It has 24 px of padding above its
+/// rows, 12 px at either side and 10 px below, and 4 px between its rows.
+/// It is drawn at the opacity `shown`. While `visible` is true the bar
+/// occludes what is behind it, so the pointer does not reach the media
+/// under the bar. While `visible` is false, which includes the time the
+/// bar takes to fade out, pointer events pass through the bar.
 pub fn controls_bar(shown: f32, visible: bool) -> Div {
     let bar = div()
         .absolute()
@@ -36,7 +40,8 @@ pub fn controls_bar(shown: f32, visible: bool) -> Div {
     if visible { bar.occlude() } else { bar }
 }
 
-/// `.buttonRow`: the left and right groups of buttons at either end.
+/// Returns the row of buttons of the controls: the group `left` at the left
+/// end of the row and the group `right` at the right end.
 pub fn button_row(left: impl IntoElement, right: impl IntoElement) -> Div {
     div()
         .flex()
@@ -47,24 +52,32 @@ pub fn button_row(left: impl IntoElement, right: impl IntoElement) -> Div {
         .child(right)
 }
 
-/// `.volumeTrack`'s height.
+/// The height of the volume slider's track, in pixels.
 const TRACK: f32 = 80.;
 
 type VolumeHandler = Rc<dyn Fn(f32, &mut Window, &mut App)>;
 type MuteHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
+/// What the volume control keeps from one frame to the next.
 #[derive(Default)]
 struct VolumeState {
+    /// True while the volume slider is shown.
     shown: bool,
+    /// True while the slider's track is dragged.
     dragging: Rc<Cell<bool>>,
-    /// Counts the pointer's visits, so only the latest leave's timer hides
-    /// the slider.
+    /// Counts the times the pointer has come onto, or left, the mute button
+    /// or the slider. Each time the pointer leaves starts a timer, and only
+    /// the timer that was started at the latest count hides the slider.
     visit: u64,
 }
 
-/// `VolumePanel`'s `enter` and `leave`: the slider shows at once and goes
-/// 300 ms after the pointer leaves the button and the slider, unless it is
-/// being dragged.
+/// Called when the pointer comes onto the mute button or the volume slider
+/// (`inside` is true) and when it leaves one of them (`inside` is false).
+/// Coming onto either shows the slider at once. Leaving starts a timer of
+/// 300 ms (`motion::MEDIA_VOLUME_PANEL_GRACE`) that hides the slider. The
+/// timer does nothing if the pointer has come onto the button or the
+/// slider again in that time, or if the slider is being dragged when it
+/// ends. No timer is started when the pointer leaves during a drag.
 fn hover(state: &Entity<VolumeState>, inside: bool, window: &mut Window, cx: &mut App) {
     let leave = state.update(cx, |state, cx| {
         state.visit += 1;
@@ -94,8 +107,10 @@ fn hover(state: &Entity<VolumeState>, inside: bool, window: &mut Window, cx: &mu
     }
 }
 
-/// `VolumePanel`: the mute button, and above it while the pointer is over
-/// either the percentage and an 80px vertical track to press or drag.
+/// The volume control: the mute button and, while the pointer is over the
+/// button or the slider, the volume slider above the button. The slider is
+/// a box that shows the volume as a percentage and, under it, a vertical
+/// track 80 px tall that is pressed or dragged to set the volume.
 #[derive(IntoElement)]
 pub struct VolumePanel {
     id: ElementId,
@@ -105,6 +120,8 @@ pub struct VolumePanel {
     on_mute: Option<MuteHandler>,
 }
 
+/// Returns a volume control with the element id `id` that shows the volume
+/// `volume`, from 0 to 1, and whether the player is muted.
 pub fn volume_panel(id: impl Into<ElementId>, volume: f32, muted: bool) -> VolumePanel {
     VolumePanel {
         id: id.into(),
@@ -116,12 +133,14 @@ pub fn volume_panel(id: impl Into<ElementId>, volume: f32, muted: bool) -> Volum
 }
 
 impl VolumePanel {
-    /// Told the volume the track was pressed or dragged to.
+    /// Sets the handler that is called with the new volume, from 0 to 1,
+    /// when the track is pressed or dragged.
     pub fn on_change(mut self, handler: impl Fn(f32, &mut Window, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(handler));
         self
     }
 
+    /// Sets the handler that is called when the mute button is clicked.
     pub fn on_mute(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_mute = Some(Rc::new(handler));
         self
@@ -161,11 +180,13 @@ impl RenderOnce for VolumePanel {
         }
         let change = self.on_change.clone();
         let drag = state.clone();
-        // `.volumeTrack` with its `.volumeFill`; a press sets the volume
-        // where the pointer is, and a drag follows it anywhere in the window
-        // until the button is up.
-        // The volume as a slider in percent, which assistive technology
-        // steps by tenths.
+        // The track is 4 px wide, and the part of it from its bottom up to
+        // the volume is filled. A press on the track sets the volume at the
+        // pointer's position, and a drag that starts on it follows the
+        // pointer anywhere in the window until the mouse button is
+        // released. Assistive technology sees the track as a slider named
+        // "Volume" whose value is the volume in percent. Its increment and
+        // decrement actions change the volume by 10%.
         let stepped = |delta: f32| {
             let change = self.on_change.clone();
             move |_: Option<&gpui::accesskit::ActionData>, window: &mut Window, cx: &mut App| {
@@ -227,7 +248,10 @@ impl RenderOnce for VolumePanel {
                 .inset_0(),
             );
         let entered = state.clone();
-        // `.volumePopup`: `bottom: 36px; left: 50%; transform: translateX(-50%)`.
+        // The slider's box is drawn above the mute button, centred on it,
+        // with its bottom edge 36 px above the bottom edge of the volume
+        // control. It occludes what is behind it, and it reports when the
+        // pointer comes onto it or leaves it, as the mute button does.
         let popup = div()
             .id(child("popup"))
             .occlude()

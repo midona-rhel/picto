@@ -1,6 +1,5 @@
-//! The filter bar's controls (`GridFilterMenu.module.css`): a filter field
-//! (`FilterControl`, `.filterItem`) and the bar's glyph buttons
-//! (`.filterAction`, `.addButton`).
+//! The controls of the filter bar: a filter field ([`FilterControl`]) and the
+//! bar's glyph buttons ([`FilterAction`]).
 use super::tooltip::{self, Tip};
 use crate::theme::Text as _;
 use crate::{motion, theme};
@@ -13,23 +12,28 @@ type ClearHandler = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 /// What a filter field shows before its label.
 pub enum Glyph {
     Icon(&'static str),
-    /// The chosen colour, as `.colorDot`.
+    /// A dot in the chosen colour.
     Color(Rgba),
 }
 
 /// What a filter field keeps between frames.
 struct State {
-    /// `transition: background-color 200ms var(--ease-default)`.
+    /// The fade of the field's background when the pointer comes onto the
+    /// field or leaves it. It takes `motion::NORMAL` and follows
+    /// `motion::EASE_DEFAULT`.
     hover: motion::Fade,
     clear_hovered: bool,
-    /// Where it was last painted, which places its menu.
+    /// Where the field was last painted. Its editor is placed from these
+    /// bounds.
     bounds: Rc<Cell<Bounds<Pixels>>>,
 }
 
-/// One filter of the bar: a 24px pill with its glyph and label, on the
-/// subtle overlay while it holds a value or is hovered. A click opens its
-/// editor below it; a right click, or the round clear button that shows at
-/// its corner while it is set and hovered, clears it.
+/// One filter of the bar: a field 24px high with its glyph and its label. The
+/// field has a background while the filter has a value or the pointer is over
+/// the field. A click opens the filter's editor below the field. A right click
+/// clears the filter, and so does the round button that is shown at the
+/// field's top right corner while the filter has a value and the pointer is
+/// over the field.
 #[derive(IntoElement)]
 pub struct FilterControl {
     id: ElementId,
@@ -57,7 +61,8 @@ pub fn filter_control(
 }
 
 impl FilterControl {
-    /// Called with the field's bounds, to open its editor below it.
+    /// Sets the handler that is called with the field's bounds on a click. The
+    /// caller opens the filter's editor below those bounds.
     pub fn on_open(
         mut self,
         handler: impl Fn(Bounds<Pixels>, &mut Window, &mut App) + 'static,
@@ -71,9 +76,10 @@ impl FilterControl {
     }
 }
 
-/// `.filterLabel`'s `max-width`.
+/// The largest width of the field's label.
 const LABEL_MAX: f32 = 180.;
-/// `.clearButton`: 16px, 6px out from the top-right corner.
+/// The diameter of the round clear button. The button reaches 6px beyond the
+/// field's top edge and 6px beyond its right edge.
 const CLEAR: f32 = 16.;
 
 impl RenderOnce for FilterControl {
@@ -102,15 +108,16 @@ impl RenderOnce for FilterControl {
         if animating || hint.read(cx).animating() {
             window.request_animation_frame();
         }
-        // At rest nothing, or the subtle overlay while set; hovered, the
-        // subtle overlay, or 15% of the text colour while set.
+        // Without the pointer, the background is `Theme::contrast` at 0%, or
+        // at 10% while the filter has a value. Under the pointer it is at 10%,
+        // or at 15% while the filter has a value.
         let (rest, lifted) = if self.active { (10., 15.) } else { (0., 10.) };
         let fill = theme.contrast(rest + (lifted - rest) * hover);
         let glyph = match self.glyph {
             Glyph::Icon(name) => super::icon(name, 16., theme.text()).into_any_element(),
             Glyph::Color(color) => {
-                // `outline: 1px solid` of half the text colour, outside the
-                // 12px dot.
+                // A 1px ring in the text colour at half that colour's opacity,
+                // around the 12px dot.
                 let mut ring = theme.text();
                 ring.a *= 0.5;
                 div()
@@ -130,7 +137,8 @@ impl RenderOnce for FilterControl {
         } else {
             self.label.to_string()
         };
-        // `role="button"` named by its label.
+        // Assistive technology is told that the field is a button, named by
+        // its label.
         let mut control = div()
             .id(self.id.clone())
             .role(Role::Button)
@@ -234,8 +242,9 @@ impl RenderOnce for FilterControl {
 
 type ClickHandler = Rc<dyn Fn(Bounds<Pixels>, &mut Window, &mut App) + 'static>;
 
-/// `.filterAction` and `.addButton`: the shared icon button's filter look,
-/// which tells its click where it is, for a menu that opens below it.
+/// A glyph button of the filter bar: the shared icon button with the look
+/// `icon_button::Look::Filter`. Its click handler is called with the button's
+/// bounds, so that a menu can be opened below the button.
 #[derive(IntoElement)]
 pub struct FilterAction {
     id: ElementId,
@@ -262,13 +271,14 @@ pub fn filter_action(id: impl Into<ElementId>, icon: &'static str) -> FilterActi
 }
 
 impl FilterAction {
-    /// What assistive technology calls the button when its tooltip says
-    /// something else (production's `aria-label`).
+    /// Sets what assistive technology calls the button, when that is not the
+    /// text of its tooltip.
     pub fn name(mut self, name: impl Into<SharedString>) -> Self {
         self.name = Some(name.into());
         self
     }
-    /// Reports the button as a toggle (`aria-pressed`).
+    /// Tells assistive technology that the button is a toggle, and whether it
+    /// is on.
     pub fn pressed(mut self, pressed: bool) -> Self {
         self.pressed = Some(pressed);
         self
@@ -285,7 +295,8 @@ impl FilterAction {
         self.tip = Some(tip);
         self
     }
-    /// Called with the button's bounds, for a menu that opens below it.
+    /// Sets the handler that is called with the button's bounds on a click, so
+    /// that a menu can be opened below the button.
     pub fn on_click(
         mut self,
         handler: impl Fn(Bounds<Pixels>, &mut Window, &mut App) + 'static,
@@ -311,7 +322,7 @@ impl RenderOnce for FilterAction {
                 .absolute()
                 .inset_0()
         };
-        // a11y: named by its tooltip or name, given below.
+        // a11y: the button is named by its tooltip or `name`, both set below.
         let mut button = super::icon_button(self.id, self.icon)
             .look(super::icon_button::Look::Filter)
             .toggled(self.active)

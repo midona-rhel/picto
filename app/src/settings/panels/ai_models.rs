@@ -1,8 +1,9 @@
-//! The AI Tagging section (`AiTaggingPanel.tsx`): the runtime's models with
-//! their state and the commands that download, optimize and delete them,
-//! the confidence thresholds, and automatic tagging. Model commands act at
-//! once, as production's do; the thresholds and switches are part of the
-//! draft that Save & Close or Apply writes.
+//! The AI Models section of the Settings window. It lists the models of the
+//! AI model runtime, each with its state and with the buttons that
+//! download, optimize and delete it. Below the models are the confidence
+//! thresholds and the switches for automatic tagging. A button of a model
+//! takes effect at once. The thresholds and the switches are part of the
+//! draft that the Save & Close button or the Apply button writes.
 use crate::ai_tagger::{self, model_size, short_label};
 use crate::i18n::{en, t};
 use crate::settings::model::{AppSettings, Threshold};
@@ -18,8 +19,8 @@ use picto_core::ai_runtime::{AiModelStatus, AiRuntimeStatus};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-/// While a model downloads or is optimized, its progress is read this
-/// often.
+/// How often the progress of a model is read while the model is being
+/// downloaded or optimized.
 const POLL: Duration = Duration::from_millis(200);
 
 // i18n: translated where drawn
@@ -32,8 +33,10 @@ const THRESHOLDS: [(Threshold, &str, &str); 6] = [
     (Threshold::Rating, "Rating", "rating"),
 ];
 
-/// The section's own state: the runtime's status and the operations under
-/// way.
+/// The state of the AI Models section: the status of the AI model runtime,
+/// the error of the last model command that failed, the slugs of the models
+/// that are being downloaded or optimized, and the task that reads their
+/// progress.
 #[derive(Default)]
 pub struct AiState {
     status: Option<AiRuntimeStatus>,
@@ -43,7 +46,8 @@ pub struct AiState {
     poll: Option<Task<()>>,
 }
 
-/// How far a download or optimization has gone, in percent.
+/// Returns how far the download or the optimization of `model` has gone, as
+/// a percentage from 0 to 100.
 fn operation_percent(model: &AiModelStatus) -> f64 {
     let total = model.download_total_bytes.unwrap_or(model.size_bytes);
     if total == 0 {
@@ -52,9 +56,10 @@ fn operation_percent(model: &AiModelStatus) -> f64 {
     (model.downloaded_bytes.unwrap_or(0) as f64 / total as f64 * 100.).clamp(0., 100.)
 }
 
-/// Auto-tag new imports switched on: the models already chosen for it stay;
-/// with none chosen among those downloaded, the recommended one (else the
-/// first downloaded) is chosen too.
+/// Switches "Auto-tag new imports" on. If a downloaded model is already
+/// switched on for tagging new imports, nothing else changes. If none is,
+/// one downloaded model is switched on as well: the first recommended one
+/// or, when no recommended model is downloaded, the first downloaded one.
 fn enable_auto_tag(settings: &mut AppSettings, models: &[AiModelStatus]) {
     settings.ai_tagger_auto_on_import = true;
     let downloaded = models.iter().filter(|model| model.downloaded);
@@ -85,7 +90,7 @@ fn copy(
         .child(
             div()
                 .text(theme::TEXT_MD)
-                // Mantine's body `line-height: 1.55`.
+                // The name has the line height of body text.
                 .line_height(px(theme::TEXT_MD * 1.55))
                 .text_color(theme.text())
                 .child(name.into()),
@@ -101,7 +106,8 @@ fn copy(
 }
 
 impl SettingsWindow {
-    /// Reads the runtime's status again.
+    /// Reads the status of the AI model runtime again. If it cannot be
+    /// read, the error is shown in the section.
     pub(in crate::settings) fn refresh_ai(&mut self, cx: &mut Context<Self>) {
         let session = self.model.read(cx).session.clone();
         let status = ai_tagger::status(session.read(cx));
@@ -118,7 +124,9 @@ impl SettingsWindow {
         .detach();
     }
 
-    /// While an operation goes on, its progress is read every 200 ms.
+    /// Starts a task that reads the status of the AI model runtime every
+    /// 200 ms for as long as a model is being downloaded or optimized. It
+    /// does nothing when the task is already running.
     fn poll_ai(&mut self, cx: &mut Context<Self>) {
         if self.ai.poll.is_some() {
             return;
@@ -144,7 +152,8 @@ impl SettingsWindow {
         }));
     }
 
-    /// Sends a model command; `then` has its answer.
+    /// Sends the command `command` for the model `slug` to the library, and
+    /// calls `then` with the answer.
     fn model_command(
         &mut self,
         command: &'static str,
@@ -164,8 +173,10 @@ impl SettingsWindow {
         .detach();
     }
 
-    /// `startDownload`: the command answers once the model is downloaded,
-    /// fails, or is cancelled; a cancel is not an error.
+    /// Starts the download of the model `slug`. The command answers when
+    /// the model has been downloaded, when the download has failed, or when
+    /// the download has been cancelled. A cancelled download is not shown
+    /// as an error.
     fn download_model(&mut self, slug: String, cx: &mut Context<Self>) {
         self.ai.error = None;
         self.ai.downloading.insert(slug.clone());
@@ -240,7 +251,9 @@ impl SettingsWindow {
         );
     }
 
-    /// `.error`: a failed model command, in the danger colour.
+    /// Returns the error message of the last model command that failed, as
+    /// small text in the theme's negative colour. Returns `None` when there
+    /// is no error.
     fn ai_error(&self, cx: &App) -> Option<AnyElement> {
         let theme = theme::theme(cx);
         let error = self.ai.error.clone()?;
@@ -254,8 +267,11 @@ impl SettingsWindow {
         )
     }
 
-    /// One model's row: its name and facts, and its state with the
-    /// commands that change it, over the 2px progress track.
+    /// Draws the row of one model. On the left are the model's short name
+    /// and its dataset, size and reference speed. On the right is the
+    /// model's state with the buttons that change it. While the model is
+    /// being downloaded or optimized, a progress bar 2px high is drawn
+    /// along the bottom edge of the row.
     fn model_row(
         &self,
         index: usize,
@@ -313,9 +329,9 @@ impl SettingsWindow {
                 .padding(0.)
         };
         let slug = model.slug.clone();
-        // `.modelState` is 286px and lets a longer state overflow over the
-        // model's description (German's "Heruntergeladen" with two
-        // buttons); here it grows instead and the description gives way.
+        // The state is at least 286px wide. A longer state, such as the
+        // German "Heruntergeladen" with two buttons, makes it wider, and
+        // the model's description then has less room.
         let mut state = div()
             .min_w(px(286.))
             .flex_none()
@@ -399,8 +415,9 @@ impl SettingsWindow {
                 cx.listener(move |this, _, _, cx| this.download_model(slug.clone(), cx)),
             ));
         }
-        // `.modelProgressTrack`: 2px under the row, drawn only while an
-        // operation runs.
+        // The progress bar is 2px high and lies along the bottom edge of
+        // the row. It is drawn only while the model is being downloaded or
+        // optimized.
         let mut track = div()
             .absolute()
             .left_0()
@@ -445,7 +462,8 @@ impl SettingsWindow {
         let theme = theme::theme(cx);
         let model = &self.model;
         let app = model.read(cx).draft.app.clone();
-        // Nothing until the runtime has answered, as production's panel.
+        // Until the status of the AI model runtime has been read, the
+        // section shows no cards. It shows only the error, if there is one.
         let Some(status) = self.ai.status.clone() else {
             return self.ai_error(cx).into_iter().collect();
         };
@@ -546,7 +564,8 @@ impl SettingsWindow {
                     ),
                 ),
         );
-        // Each downloaded model's own switch shows while auto-tagging is on.
+        // While "Auto-tag new imports" is on, each downloaded model that
+        // has a setting for tagging new imports has a switch of its own.
         for info in downloaded
             .iter()
             .filter(|info| auto && AppSettings::has_model_setting(&info.slug))
@@ -565,8 +584,9 @@ impl SettingsWindow {
                                 SharedString::from(info.slug.clone()),
                                 app.runs_model(&info.slug),
                             )
-                            // `Run ${label} on new imports`, which production
-                            // writes in English.
+                            // The switch's name for assistive technology
+                            // has no translations, so it is in English in
+                            // every language.
                             .name(format!("Run {} on new imports", info.label))
                             .on_toggle(edit(model, move |draft| {
                                 let on = draft.app.runs_model(&slug);
@@ -663,12 +683,14 @@ mod tests {
         assert!(settings.ai_tagger_auto_on_import);
         assert!(settings.runs_model("wd14-swinv2-v3"));
         assert!(!settings.runs_model("wd14-eva02-large-v3"));
-        // One already chosen stays the only one.
+        // A model that is already switched on stays the only one that is
+        // switched on.
         let mut settings = AppSettings::default();
         settings.set_runs_model("wd14-eva02-large-v3", true);
         enable_auto_tag(&mut settings, &models);
         assert!(!settings.runs_model("wd14-swinv2-v3"));
-        // No recommended model downloaded: the first downloaded.
+        // When no recommended model is downloaded, the first downloaded
+        // model is switched on.
         let mut settings = AppSettings::default();
         enable_auto_tag(&mut settings, &models[..1]);
         assert!(settings.runs_model("wd14-eva02-large-v3"));

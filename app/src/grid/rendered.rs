@@ -1,28 +1,28 @@
-//! Thumbnails the application's media worker cannot make, drawn here as the
-//! Electron main process draws them (`flashThumbnailService.mjs`,
-//! `pdfThumbnailService.mjs`, `documentThumbnailService.mjs`): the first
-//! page of a PDF, DjVu or comic archive, a Flash movie five seconds in, and
-//! the first page of a text, Markdown, JSON or RTF document or an EPUB's
-//! first chapter as the document viewer shows it. Each is written beside
-//! the library's own thumbnails as `<hash>.png`, where the media protocol
-//! and this grid look for it, and where the application's own thumbnail
-//! work then finds it and stops retrying.
+//! Thumbnails that the application's media worker cannot make and that this
+//! app draws itself: the first page of a PDF, of a DjVu document or of a
+//! comic archive, a Flash movie after it has played for five seconds, the
+//! first page of a text, Markdown, JSON or RTF document, and the first
+//! chapter of an EPUB as the document viewer shows it. Each thumbnail is
+//! written into the folder of the library's own thumbnails as `<hash>.png`.
+//! The grid looks for it there, and the application's own thumbnail work
+//! finds it there and stops retrying.
 use crate::viewer::document::kind::{RendererKind, renderer_kind};
 use anyhow::{Result, anyhow};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-/// `pdfThumbnail.ts` and `flashThumbnailService`: the picture fits 800 ×
-/// 800 points, never enlarged past twice its size, drawn at the hidden
-/// window's two pixels a point.
+/// The side, in points, of the square that a thumbnail's picture is scaled
+/// to fit. The picture is never enlarged to more than `MAX_SCALE` times its
+/// size, and it is drawn with `PIXELS_PER_POINT` pixels for each point.
 const BOX: f32 = 800.;
 const MAX_SCALE: f32 = 2.;
 const PIXELS_PER_POINT: f32 = 2.;
-/// `FLASH_THUMBNAIL_SETTLE_MS` and `FLASH_THUMBNAIL_TIMEOUT_MS`.
+/// How long a Flash movie plays before its picture is taken, and how long
+/// the app waits for a movie that draws nothing before it gives up.
 const FLASH_SETTLE: Duration = Duration::from_millis(5_000);
 const FLASH_TIMEOUT: Duration = Duration::from_millis(20_000);
 
-/// Whether this app draws thumbnails of this type itself.
+/// Whether this app draws the thumbnail of a file of the type `mime` itself.
 pub fn draws(mime: &str) -> bool {
     mime == "application/x-shockwave-flash"
         || matches!(
@@ -35,7 +35,8 @@ pub fn draws(mime: &str) -> bool {
         )
 }
 
-/// The size a page of `width` × `height` points is drawn at, in pixels.
+/// Returns the size in pixels at which a page of `width` × `height` points
+/// is drawn.
 pub fn page_pixels(width: f32, height: f32) -> (u32, u32) {
     let scale = (BOX / width).min(BOX / height).min(MAX_SCALE) * PIXELS_PER_POINT;
     (
@@ -44,9 +45,9 @@ pub fn page_pixels(width: f32, height: f32) -> (u32, u32) {
     )
 }
 
-/// Draws the thumbnail of `original` (of type `mime`) to `output`, a
-/// `.png`. Blocks for as long as the drawing takes: run it off the drawing
-/// thread.
+/// Draws the thumbnail of `original`, a file of the type `mime`, and writes
+/// it to `output` as a PNG. The call blocks for as long as the drawing
+/// takes, so it must run on a background thread.
 pub fn render(mime: &str, original: &Path, output: &Path) -> Result<()> {
     use crate::viewer::document::{epub, page_picture, reader};
     let picture = if mime == "application/x-shockwave-flash" {
@@ -55,7 +56,8 @@ pub fn render(mime: &str, original: &Path, output: &Path) -> Result<()> {
         let (blocks, _) = reader::load_text(original, mime)?;
         page_picture::draw(&blocks, reader::PageStyle::Text)
     } else if renderer_kind(mime) == RendererKind::Epub {
-        // The book viewer opens on the first chapter of the spine.
+        // The thumbnail shows the first chapter of the book's spine, which is
+        // the chapter the book viewer opens on.
         let first = epub::chapters(original)?
             .into_iter()
             .next()
@@ -71,8 +73,9 @@ pub fn render(mime: &str, original: &Path, output: &Path) -> Result<()> {
         .parent()
         .ok_or_else(|| anyhow!("no thumbnail folder"))?;
     std::fs::create_dir_all(directory)?;
-    // Written whole before it takes the thumbnail's name; a partial file
-    // that could not be finished is not left behind.
+    // The picture is written to a temporary file, which is renamed to the
+    // thumbnail's name once it is complete. A temporary file that could not
+    // be completed is deleted.
     let partial = output.with_extension(format!("{}.tmp", std::process::id()));
     let saved = picture
         .save_with_format(&partial, image::ImageFormat::Png)
@@ -84,7 +87,8 @@ pub fn render(mime: &str, original: &Path, output: &Path) -> Result<()> {
     saved
 }
 
-/// The movie's picture once it has played, muted, for the settling time.
+/// Returns the picture of a Flash movie once it has played, muted, for
+/// `FLASH_SETTLE`.
 fn flash(original: &Path) -> Result<image::RgbaImage> {
     let mut movie = crate::viewer::flash::Flash::open(original.to_path_buf());
     movie.toggle_mute();
@@ -95,7 +99,10 @@ fn flash(original: &Path) -> Result<image::RgbaImage> {
         match frame {
             Some(Err(error)) => return Err(anyhow!(error)),
             Some(Ok(picture)) if started.elapsed() >= FLASH_SETTLE => {
-                // The stage's own size within the box, at two pixels a point.
+                // The picture's size in points is its size in pixels divided by
+                // `PIXELS_PER_POINT`. The picture is scaled down to the size
+                // at which a page of that many points is drawn, and it is
+                // never enlarged.
                 let (width, height) = page_pixels(
                     picture.width() as f32 / PIXELS_PER_POINT,
                     picture.height() as f32 / PIXELS_PER_POINT,
@@ -121,9 +128,10 @@ mod tests {
 
     #[test]
     fn pages_fit_the_box_at_two_pixels_a_point() {
-        // A US letter page: 612 × 792 points fits 800 high.
+        // A US letter page of 612 × 792 points is scaled to 800 points high,
+        // which is 1600 pixels.
         assert_eq!(page_pixels(612., 792.), (1236, 1600));
-        // A tiny page is enlarged at most twice.
+        // A small page is enlarged to at most twice its size in points.
         assert_eq!(page_pixels(100., 50.), (400, 200));
     }
 }

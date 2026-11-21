@@ -9,8 +9,8 @@ use std::cmp::Ordering;
 /// Returns the class of a character: 0 for punctuation and symbols, 1 for
 /// digits and 2 for letters. Two characters are compared by class first and
 /// by case-folded value after that, so punctuation and symbols sort before
-/// digits, and digits before letters. This is the order of the collator in
-/// the Electron app.
+/// digits, and digits before letters. Picto 0.6.19 and earlier sorted names
+/// in the same order.
 fn class(character: char) -> u8 {
     if character.is_numeric() {
         1
@@ -21,10 +21,9 @@ fn class(character: char) -> u8 {
     }
 }
 
-/// The ASCII punctuation marks and symbols, in the order in which the
-/// Unicode root collation sorts them. Chromium's `localeCompare` follows
-/// that order. Any other punctuation mark sorts after all of these, by its
-/// code point.
+/// The ASCII punctuation marks and symbols, in the order in which the Unicode
+/// root collation sorts them. Any other punctuation mark sorts after all of
+/// these, by its code point.
 const PUNCTUATION_ORDER: &str = " _-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$";
 
 /// Returns the value that orders a character among the characters of its
@@ -37,10 +36,9 @@ fn within_class(character: char) -> (usize, String) {
     (rank, character.to_lowercase().collect())
 }
 
-/// Compares two names as production's
-/// `localeCompare(…, { sensitivity: 'base', numeric: true })` does. Upper
-/// and lower case are treated as the same, and a run of digits is compared
-/// as a number, so `item9` comes before `item10`.
+/// Compares two names for sorting. Upper and lower case are treated as the
+/// same, and a run of digits is compared as a number, so `item9` comes before
+/// `item10`.
 pub fn natural_order(left: &str, right: &str) -> Ordering {
     let (mut left, mut right) = (left.chars().peekable(), right.chars().peekable());
     loop {
@@ -79,11 +77,11 @@ pub fn natural_order(left: &str, right: &str) -> Ordering {
 
 // The functions in this section rank and highlight search matches.
 
-/// Returns how well `text` matches `needle`, as `matchRank` in production's
-/// `searchRank.ts` does: 0 when the two are equal, 1 when `text` starts
-/// with `needle`, 2 when `needle` is at the start of a word in `text`, and
-/// 3 when `needle` is anywhere else in `text`. Returns `None` when `text`
-/// does not contain `needle`. The caller passes both in lower case.
+/// Returns how well `text` matches `needle`: 0 when the two are equal, 1 when
+/// `text` starts with `needle`, 2 when `needle` is at the start of a word in
+/// `text`, and 3 when `needle` is anywhere else in `text`. Returns `None`
+/// when `text` does not contain `needle`. The caller passes both in lower
+/// case.
 pub fn match_rank(text: &str, needle: &str) -> Option<u8> {
     if text == needle {
         return Some(0);
@@ -92,8 +90,8 @@ pub fn match_rank(text: &str, needle: &str) -> Option<u8> {
         return Some(1);
     }
     // This loop looks at every place where `needle` occurs in `text`,
-    // including a place that overlaps an earlier one, because production
-    // steps through them with `indexOf` in the same way.
+    // including a place that overlaps an earlier one, because the overlapping
+    // place can be the one at the start of a word.
     let mut found = false;
     let mut from = 0;
     while let Some(at) = text[from..].find(needle).map(|at| at + from) {
@@ -108,8 +106,8 @@ pub fn match_rank(text: &str, needle: &str) -> Option<u8> {
 }
 
 /// Returns the items whose key contains `query`, with the best rank first.
-/// Items of the same rank keep the order they came in. A blank query
-/// returns every item. This is production's `rankMatches`.
+/// Items of the same rank keep the order they came in. A blank query returns
+/// every item.
 pub fn rank_matches<T>(items: Vec<T>, query: &str, key: impl Fn(&T) -> &str) -> Vec<T> {
     let needle = query.trim().to_lowercase();
     if needle.is_empty() {
@@ -127,10 +125,9 @@ pub fn rank_matches<T>(items: Vec<T>, query: &str, key: impl Fn(&T) -> &str) -> 
 }
 
 /// Returns the byte range of the first match of `query` in `text`, ignoring
-/// case. It is used to highlight the match, as production's
-/// `highlightMatch` does. Returns `None` when there is no match, when the
-/// query is blank, and when lower-casing `text` changes its length in
-/// bytes, because the range would then be for the wrong bytes.
+/// case. It is used to highlight the match. Returns `None` when there is no
+/// match, when the query is blank, and when lower-casing `text` changes its
+/// length in bytes, because the range would then be for the wrong bytes.
 pub fn match_range(text: &str, query: &str) -> Option<std::ops::Range<usize>> {
     let query = query.trim();
     let lower = text.to_lowercase();
@@ -141,9 +138,9 @@ pub fn match_range(text: &str, query: &str) -> Option<std::ops::Range<usize>> {
     Some(start..start + query.len())
 }
 
-// The functions in this section write byte sizes. Production writes sizes
-// in a different way in each place. This app shows two of those ways, and
-// each has its own function here.
+// The functions in this section write byte sizes. The inspector writes a size
+// in one way, and Settings, the cloud sync bar and the Picto Pack dialog
+// write it in another way, so each way has its own function here.
 
 /// Writes a size for the inspector's Size row, in binary units: whole bytes
 /// below 1024 bytes, then KB and MB with one decimal, and GB with two
@@ -161,15 +158,15 @@ pub fn size_to_gigabytes(bytes: u64) -> String {
     }
 }
 
-/// Writes a size as `formatBytes` does in production's Settings, cloud sync
-/// bar and Picto Pack dialog: whole bytes below 1024 bytes, and otherwise
-/// the largest binary unit up to TB, with two decimals when the number is
-/// below ten and one decimal when it is ten or more.
+/// Writes a size for Settings, the cloud sync bar and the Picto Pack dialog:
+/// whole bytes below 1024 bytes, and otherwise the largest binary unit up to
+/// TB, with two decimals when the number is below ten and one decimal when it
+/// is ten or more.
 pub fn size_to_terabytes(value: u64) -> String {
     if value < 1024 {
         return format!("{value} B");
     }
-    // i18n: units, English as production's formatBytes writes them
+    // i18n: units, which are written in English in every language
     let units = ["KB", "MB", "GB", "TB"];
     let mut amount = value as f64 / 1024.;
     let mut unit = 0;
@@ -182,11 +179,9 @@ pub fn size_to_terabytes(value: u64) -> String {
 }
 
 /// Returns `text` whole when it fits in the width `max`, and otherwise as
-/// many of its first characters as fit, with "…" after them. This is what
-/// production's `truncateText` does, and how Chromium draws
-/// `text-overflow: ellipsis`. Punctuation just before the cut is kept,
-/// which GPUI's own truncation does not do. `measure` returns the width of
-/// a string.
+/// many of its first characters as fit, with "…" after them. Punctuation just
+/// before the cut is kept, which GPUI's own truncation does not do. `measure`
+/// returns the width of a string.
 ///
 /// Each call to `measure` shapes the text. A window of new tiles (after a
 /// jump or a fast scroll) shapes every name it shows, so this function
@@ -240,10 +235,9 @@ pub fn truncate_to(
 
 // The date formats are in this section.
 
-/// The `chrono` format strings for the dates that the views write in a
-/// fixed format and not in the system's format. The system's formats are in
-/// `crate::i18n::format`. Each constant is named for the production format
-/// that it is a port of.
+/// The `chrono` format strings for the dates that the views write in a fixed
+/// format and not in the system's format. The system's formats are in
+/// `crate::i18n::format`.
 pub mod date_format {
     /// The format of the inspector's date rows: `YYYY/MM/DD HH:MM`.
     pub const INSPECTOR: &str = "%Y/%m/%d %H:%M";
@@ -268,9 +262,8 @@ fn subtype_name(subtype: &str) -> String {
     subtype.strip_prefix("x-").unwrap_or(subtype).to_uppercase()
 }
 
-/// Returns the name that the inspector's Type row shows for a media type,
-/// as production's `fmtExt` does. Only the subtype, which is the part after
-/// the `/`, decides the name.
+/// Returns the name that the inspector's Type row shows for a media type.
+/// Only the subtype, which is the part after the `/`, decides the name.
 pub fn inspector_type(mime: &str) -> String {
     let subtype = mime.split_once('/').map_or("", |(_, subtype)| subtype);
     if subtype == "epub+zip" {
@@ -282,12 +275,12 @@ pub fn inspector_type(mime: &str) -> String {
         .map_or_else(|| subtype_name(subtype), |(_, name)| (*name).into())
 }
 
-/// Returns the name that the filter bar's type menu shows for a media
-/// type, as production's `mimeLabel` does: the name of the family for a
-/// pattern such as `image/*`, the usual name for a few common types, and
-/// otherwise the subtype in capital letters without a leading `x-`.
+/// Returns the name that the filter bar's type menu shows for a media type:
+/// the name of the family for a pattern such as `image/*`, the usual name for
+/// a few common types, and otherwise the subtype in capital letters without a
+/// leading `x-`.
 pub fn filter_type(mime: &str) -> String {
-    // i18n: translated where drawn (the filter menu's rows, as production's)
+    // i18n: translated where drawn (these are the rows of the filter menu)
     let family = match mime {
         "image/*" => Some("Images"),
         "video/*" => Some("Videos"),
@@ -324,8 +317,7 @@ mod tests {
             truncate_to("Main Four - Communal", 100., measure, none),
             "Main Four…"
         );
-        // A space just before the cut is kept, as production's `slice`
-        // keeps it.
+        // A space just before the cut is kept.
         assert_eq!(truncate_to("Main Four - C", 60., measure, none), "Main …");
         assert_eq!(truncate_to("ab", 5., measure, none), "…");
         // Punctuation just before the cut in a chip's label is kept as
@@ -358,8 +350,7 @@ mod tests {
         assert_eq!(natural_order("art", "artist"), Ordering::Less);
         assert_eq!(natural_order("apple", "Banana"), Ordering::Less);
         assert_eq!(natural_order("artist 010", "Artist 10"), Ordering::Equal);
-        // Punctuation sorts before digits, which is the order that the
-        // collator uses.
+        // Punctuation sorts before digits.
         assert_eq!(natural_order("a-b", "a1"), Ordering::Less);
         assert_eq!(natural_order("a_", "a1"), Ordering::Less);
         // Punctuation marks are ordered among themselves by the Unicode
@@ -384,8 +375,8 @@ mod tests {
         assert_eq!(match_rank("black_cat", "cat"), Some(2));
         assert_eq!(match_rank("bobcat", "cat"), Some(3));
         assert_eq!(match_rank("dog", "cat"), None);
-        // A later occurrence that overlaps an earlier one can be at the
-        // start of a word, and production's `indexOf` loop finds it.
+        // A later occurrence that overlaps an earlier one can be at the start
+        // of a word, and the loop in `match_rank` finds it.
         assert_eq!(match_rank("xaa-aa", "aa"), Some(2));
         assert_eq!(match_rank("x-aaa", "aa"), Some(2));
         assert_eq!(match_rank("baaa a", "aa"), Some(3));

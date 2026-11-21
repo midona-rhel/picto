@@ -1,8 +1,6 @@
 //! The viewer of the documents whose pages are drawn as pictures: PDF files,
 //! DjVu files and comic archives (CBZ). It shows all the pages of a document
-//! in one column, one under the other, and the column scrolls. Production's
-//! `PdfViewer.tsx`, `DjvuViewer.tsx` and the comic part of
-//! `ArchiveDocumentViewer.tsx` show one page at a time instead.
+//! in one column, one under the other, and the column scrolls.
 //!
 //! The document is opened on a thread that is started for it
 //! (`pages::PageWorker`), and that thread first measures every page. When the
@@ -58,11 +56,10 @@ pub struct ZoomChanged;
 pub struct Progressed;
 
 /// The padding in pixels between the edges of the scrolling viewport and
-/// the column of pages (the padding of `.viewport` in production's
-/// `DocumentViewerShell.module.css`).
+/// the column of pages. It is equal to `shell::VIEWPORT_PADDING`, the
+/// padding around the page of the other document viewers.
 pub const PADDING: f32 = 24.;
-/// The space in pixels between two pages of the column. It has the value of
-/// production's `--space-4`.
+/// The space in pixels between two pages of the column.
 pub const GAP: f32 = 16.;
 /// The space in pixels between two pages of a document that the collection
 /// reader shows inline.
@@ -136,8 +133,9 @@ pub struct PagedViewer {
     /// document, and it stays `None` when the document cannot be opened.
     worker: Option<PageWorker>,
     /// The natural width and height of every page: for a PDF in points,
-    /// which are CSS pixels at a scale of 100%, and for a DjVu file or a
-    /// comic archive in pixels. It is empty until the document has opened.
+    /// each of which is drawn as one logical pixel at a scale of 100%, and
+    /// for a DjVu file or a comic archive in pixels. It is empty until the
+    /// document has opened.
     sizes: Vec<PageSize>,
     /// How the pages are scaled. It starts as `ScaleMode::PageFit`, and
     /// only the zoom controls of a PDF that is not inline change it. An
@@ -513,24 +511,23 @@ impl PagedViewer {
 
     /// Sets the scale mode to `PageFit`: a page that is wider than the
     /// viewport has room for is scaled down to fit, and no page is made
-    /// larger than its natural size. It is this viewer's version of the
-    /// zoom control `fitToWindow` in production's `PdfViewer.tsx`.
+    /// larger than its natural size. The media surface calls this for the
+    /// "Fit to window" control of the viewer toolbar and for its shortcut.
     pub fn fit(&mut self, cx: &mut Context<Self>) {
         self.set_mode(ScaleMode::PageFit, cx);
     }
 
     /// Sets the scale mode to `Actual`: every page has its natural size,
-    /// which the toolbar shows as 100%. It is this viewer's version of the
-    /// zoom control `fitActual` in production's `PdfViewer.tsx`.
+    /// which the toolbar shows as 100%. The media surface calls this for
+    /// the "Actual size" control of the viewer toolbar and for its
+    /// shortcut.
     pub fn actual_size(&mut self, cx: &mut Context<Self>) {
         self.set_mode(ScaleMode::Actual, cx);
     }
 
     /// Scales every page to `percent` percent of its natural size. A value
     /// below 25 is treated as 25, and a value above 800 as 800. The zoom
-    /// slider and the zoom menu of the viewer toolbar call this. It is this
-    /// viewer's version of the zoom control `setZoomScale` in production's
-    /// `PdfViewer.tsx`.
+    /// slider and the zoom menu of the viewer toolbar call this.
     pub fn set_percent(&mut self, percent: f32, cx: &mut Context<Self>) {
         self.set_mode(ScaleMode::custom(percent / 100.), cx);
     }
@@ -538,9 +535,8 @@ impl PagedViewer {
     /// Zooms in or out by one step. The scale of the current page is
     /// multiplied by 1.2 (`geometry::STEP`) when `zoom_in` is true and
     /// divided by 1.2 when it is false. The result, kept between 25% and
-    /// 800%, becomes the scale of every page. It is this viewer's version
-    /// of the zoom controls `zoomIn` and `zoomOut` in production's
-    /// `PdfViewer.tsx`.
+    /// 800%, becomes the scale of every page. The Zoom In and Zoom Out
+    /// shortcuts call this.
     pub fn step_zoom(&mut self, zoom_in: bool, cx: &mut Context<Self>) {
         let factor = if zoom_in {
             geometry::STEP
@@ -899,9 +895,9 @@ impl PagedViewer {
         let error = self.error.clone().map(|error| {
             // The error message is drawn in the centre of the viewport, or
             // of the whole view for an inline document, in 12 px text with
-            // a line height of 1.5 (production's `.message`). A message
-            // that is one of production's translation keys is shown in the
-            // app's language, and any other message is shown as it is.
+            // a line height of 1.5 times the text size. A message that has
+            // a translation is shown in the app's language, and any other
+            // message is shown as it is.
             div()
                 .absolute()
                 .inset_0()

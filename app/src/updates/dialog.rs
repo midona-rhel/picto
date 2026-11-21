@@ -1,8 +1,9 @@
-//! The update dialog (`UpdateModal.tsx`): this version, what the last check
-//! found or the download under way, and the release's notes, with Check
-//! Again and the step that follows (Open Download Page on macOS, Restart
-//! and Install elsewhere). Closing it after a new version's first start
-//! marks its notes as read.
+//! The update dialog. It shows this version, then what the last check found
+//! or the progress of the download, then the release notes. Its buttons are
+//! Check Again and the next step, which is Open Download Page on macOS and
+//! Restart and Install on Windows and Linux. At the first start of a
+//! version the dialog shows that version's release notes and has the button
+//! Done only; closing it then records that the user has closed the notes.
 use super::{Status, VERSION};
 use crate::i18n::{en, t};
 use crate::theme::{self, Text as _};
@@ -17,8 +18,9 @@ pub struct UpdateDialog {
 }
 
 impl UpdateDialog {
-    /// The dialog of the main window, open at once when this version's
-    /// notes are still to be read.
+    /// Makes the update dialog of the main window. It opens at once when
+    /// the status is `Installed`, which means that the user has not closed
+    /// this version's release notes yet.
     pub fn new(back: FocusHandle, cx: &mut Context<Self>) -> Self {
         let updates = super::entity(cx);
         let observe = cx.observe(&updates, |_, _, cx| cx.notify());
@@ -49,7 +51,7 @@ impl UpdateDialog {
     }
 }
 
-/// A block of the release notes (`NoteBlock`).
+/// One block of the release notes: a heading, a paragraph or a list item.
 #[derive(Debug, PartialEq)]
 enum Block {
     Heading(String),
@@ -57,8 +59,12 @@ enum Block {
     Bullet(String),
 }
 
-/// `parseReleaseNotes`, without a leading level-one heading and with bold
-/// marks taken out, as `NoteBody` shows them.
+/// Splits release notes written in Markdown into blocks. A line that starts
+/// with one to three `#` is a heading. A line that starts with `- ` or `* `
+/// starts a list item. Any other line starts a paragraph, or continues the
+/// paragraph or list item before it. An empty line ends a block. A
+/// level-one heading at the very start is left out. The `**` marks of bold
+/// text are removed, because the dialog draws no bold text inside a block.
 fn blocks(text: &str) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut levels = Vec::new();
@@ -124,7 +130,9 @@ fn blocks(text: &str) -> Vec<Block> {
         .collect()
 }
 
-/// `new Date(releaseDate).toLocaleDateString()`.
+/// Returns the day of the release in the local time zone, written with
+/// numbers only in the system's language. Returns `None` when `value` is
+/// not an RFC 3339 time.
 fn release_date(value: &str) -> Option<String> {
     let date = chrono::DateTime::parse_from_rfc3339(value)
         .ok()?
@@ -319,11 +327,13 @@ impl Render for UpdateDialog {
                     .disabled(state.busy())
                     .on_click(|_, _, cx| super::check(cx)),
             );
-            // `actionLabel`, which production's dialog leaves in English.
+            // The label of the next step is shown in English in every
+            // language, although the catalogs have translations of it.
+            // Picto 0.6.19 and earlier did the same.
             let label = if state.mac() {
-                "Open Download Page" // i18n: production keeps it in English
+                "Open Download Page" // i18n: shown in English in every language
             } else {
-                "Restart and Install" // i18n: production keeps it in English
+                "Restart and Install" // i18n: shown in English in every language
             };
             let next = (state.status == Status::Downloaded
                 || (state.status == Status::Available && state.mac()))

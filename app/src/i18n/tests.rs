@@ -1,10 +1,11 @@
-//! The catalogs and the message rules, and the number and date formats
-//! against what Node's ICU 78 (the ICU family Chromium ships) writes.
+//! Tests of the catalogs, of the lookup and filling of messages, and of the
+//! number and date formats. The numbers and dates that the tests expect are
+//! what ICU 78 writes. They were taken from the ICU that Node.js includes.
 use super::format::{self, Unit};
 use super::*;
 use chrono::NaiveDate;
 
-/// The `{name}` tokens of a text, in order.
+/// Returns the `{name}` tokens of `text`, in order.
 fn tokens(text: &str) -> Vec<&str> {
     let mut found = Vec::new();
     let mut rest = text;
@@ -81,7 +82,8 @@ fn a_missing_message_shows_in_english() {
 
 #[test]
 fn a_label_kept_from_another_language_is_shown_again() {
-    // `translateMessage` recovers the English key of a translation.
+    // `translate` finds the English key of the German text and returns that
+    // key's text in the language asked for.
     assert_eq!(translate(Locale::En, "Einstellungen"), "Settings");
     assert_eq!(
         translate(Locale::Es, "Einstellungen"),

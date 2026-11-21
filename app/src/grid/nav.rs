@@ -1,6 +1,6 @@
-//! Keyboard movement through the grid. A port of `useGridArrowNav.ts`: the
-//! same moves and the same rule for scrolling the target tile into view.
-//! The number of columns and the row height come from the layout
+//! Keyboard movement through the grid: which item each move goes to, and
+//! how far the grid scrolls so that the item is in view. The number of
+//! columns and the row height come from the layout
 //! (`layout::keyboard_step`), so the Up, Down and page keys agree with what
 //! is drawn.
 use super::layout::Tile;

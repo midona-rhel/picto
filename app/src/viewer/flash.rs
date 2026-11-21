@@ -1,4 +1,7 @@
-//! Ruffle's native player owns its GPU context on a worker, never the GPUI thread.
+//! Plays a Flash movie with Ruffle's native player. The player and its GPU
+//! context live on a worker thread of their own, never on the thread that
+//! GPUI draws on. The worker publishes each frame it draws, and it receives
+//! input events and control messages through channels.
 use ruffle_core::{PlayerBuilder, events::PlayerEvent, tag_utils::SwfMovie};
 use ruffle_render_wgpu::{backend::WgpuRenderBackend, target::TextureTarget};
 use std::{
@@ -9,8 +12,8 @@ use std::{
 
 pub type Frame = Result<image::RgbaImage, String>;
 
-/// The movie's stage, in pixels: Ruffle draws every movie at this size and
-/// the viewer fits it to the pane.
+/// The size of the movie's stage, in pixels. Ruffle draws every movie at
+/// this size, and the viewer scales the picture to fit the pane.
 pub const STAGE: (u32, u32) = (960, 720);
 
 pub fn key_descriptor(key: &str) -> ruffle_core::events::KeyDescriptor {
@@ -55,7 +58,8 @@ pub struct Flash {
     control: mpsc::Sender<Control>,
     pub playback: Playback,
     pub frame: Arc<Mutex<Option<Frame>>>,
-    /// What the movie's ActionScript traced, for the checks that play one.
+    /// The last 64 messages that the movie's ActionScript traced. The tests
+    /// that play a movie read them.
     #[cfg(test)]
     pub traces: Arc<Mutex<std::collections::VecDeque<String>>>,
 }
@@ -80,7 +84,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_controls_keep_production_playback_rules() {
+    fn the_controls_keep_the_earlier_versions_playback_rules() {
         let mut playback = Playback {
             playing: true,
             volume: 1.,
@@ -93,14 +97,15 @@ mod tests {
         assert_eq!(playback.set_volume(0.4), Control::Volume(0.4));
         assert_eq!(playback.toggle_mute(), Control::Volume(0.));
         assert!(playback.muted);
-        // Unmuting restores the set volume; a new volume unmutes.
+        // Unmuting restores the volume that was set. Setting a new volume
+        // unmutes.
         assert_eq!(playback.toggle_mute(), Control::Volume(0.4));
         playback.toggle_mute();
         assert_eq!(playback.set_volume(1.5), Control::Volume(1.));
         assert!(!playback.muted);
     }
 
-    /// The interactive movie the checks play, a test fixture.
+    /// Returns the path of the interactive movie that the tests play.
     fn fixture() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/fixtures/interactive.swf")
     }
@@ -176,18 +181,21 @@ mod tests {
         }
     }
 }
-/// What the controls ask of the movie (`FlashPlaybackController`).
+/// A message from the controls to the worker thread that plays the movie.
 #[derive(Debug, PartialEq)]
 pub enum Control {
-    /// `runtime.resume()` / `runtime.suspend()`
+    /// Resumes the movie when the value is `true` and pauses it when the
+    /// value is `false`.
     Playing(bool),
-    /// `runtime.volume`, from 0 to 1.
+    /// Sets the volume, from 0 to 1.
     Volume(f32),
-    /// Back to the first frame, suspended: production reloads the movie.
+    /// Goes back to the first frame and stays there, paused. The worker
+    /// does this by loading the movie again.
     Stop,
 }
 
-/// The controls' view of the movie, as `FlashPlayer.tsx` keeps it.
+/// What the controls show of the movie: whether it is playing, its volume
+/// and whether it is muted.
 pub struct Playback {
     pub playing: bool,
     pub volume: f32,
@@ -195,19 +203,22 @@ pub struct Playback {
 }
 
 impl Playback {
-    /// `togglePlay`
+    /// Switches between playing and paused, and returns the message that
+    /// tells the worker to do the same.
     pub fn toggle_play(&mut self) -> Control {
         self.playing = !self.playing;
         Control::Playing(self.playing)
     }
 
-    /// `stop`
+    /// Marks the movie as not playing, and returns the message that tells
+    /// the worker to stop it.
     pub fn stop(&mut self) -> Control {
         self.playing = false;
         Control::Stop
     }
 
-    /// `setVolume`: clamped to 0–1; a volume above zero unmutes.
+    /// Sets the volume, limited to the range from 0 to 1. A volume above
+    /// zero unmutes.
     pub fn set_volume(&mut self, volume: f32) -> Control {
         self.volume = volume.clamp(0., 1.);
         if self.volume > 0. {
@@ -216,7 +227,8 @@ impl Playback {
         Control::Volume(self.volume)
     }
 
-    /// `toggleMute`: silent while muted, the set volume again after.
+    /// Mutes or unmutes. The returned message sets the worker's volume to 0
+    /// when muting, and back to the set volume when unmuting.
     pub fn toggle_mute(&mut self) -> Control {
         self.muted = !self.muted;
         Control::Volume(if self.muted { 0. } else { self.volume })
@@ -262,7 +274,8 @@ impl Flash {
                 let url = url::Url::from_file_path(&path)
                     .map_err(|_| anyhow::anyhow!("Invalid Flash path"))?
                     .to_string();
-                // A player for the movie, playing or held at its first frame.
+                // Builds a player for the movie. The player either plays at
+                // once or stays at the movie's first frame.
                 let build = |autoplay: bool, volume: f32| -> anyhow::Result<_> {
                     let movie = SwfMovie::from_data(&data, url.clone(), None, None)?;
                     let renderer = WgpuRenderBackend::<TextureTarget>::for_offscreen(
@@ -271,7 +284,9 @@ impl Flash {
                         wgpu::PowerPreference::LowPower,
                     )
                     .map_err(|e| anyhow::anyhow!("Ruffle renderer: {e}"))?;
-                    // Null navigator/storage defaults deliberately deny network and persistent writes.
+                    // The builder's default navigator and storage backends are
+                    // left in place. They refuse network requests and
+                    // persistent writes, so a movie can do neither.
                     let mut builder = PlayerBuilder::new()
                         .with_movie(movie)
                         .with_renderer(renderer)
@@ -292,8 +307,8 @@ impl Flash {
                     player.lock().unwrap().set_volume(volume);
                     Ok(player)
                 };
-                // `PICTO_GPUI_SILENT=1` starts the movie muted, as it does
-                // the media player, for checks run while nobody is there.
+                // With `PICTO_GPUI_SILENT=1` the movie starts muted, as the
+                // media player does, so that automated checks make no sound.
                 let mut volume = if silent { 0. } else { 1. };
                 let mut player = build(true, volume)?;
                 let mut previous = Instant::now();

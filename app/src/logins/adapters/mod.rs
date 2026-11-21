@@ -1,11 +1,13 @@
-//! How each kind of service's login is read (`createCookieAdapter`,
-//! `createAccountApiAdapter`, `createOAuthAdapter`, `createPixivAdapter` in
-//! `electron/windows/authSessions.mjs`): what page the window opens, what
-//! a page must show before the login counts, and the credential kept.
+//! The adapters, one for each way in which the app obtains a login
+//! (`sites::Strategy`). An adapter decides which page the sign-in window
+//! opens first, what a page must show before the user counts as signed in,
+//! and which credential is kept.
 //!
-//! Adapters see the sign-in window only through [`Page`] and the network
-//! and the application only through [`Services`], so their rules are
-//! checked against recorded pages and cookies.
+//! An adapter reads the sign-in window only through the trait [`Page`], and
+//! reaches the network and the application only through the trait
+//! [`Services`]. The tests implement both traits with recorded pages,
+//! cookies and responses, so they check the adapters without a window and
+//! without a network.
 use super::cookies::Cookie;
 use super::sites::{OAUTH_CALLBACK_URL, Site, Strategy};
 use super::{Credential, Status};
@@ -25,18 +27,21 @@ pub use account_api::AccountApiAdapter;
 pub use cookie::CookieAdapter;
 pub use oauth::{OAuthAdapter, PixivAdapter};
 
-/// The sign-in window's page as an adapter reads it.
+/// What an adapter can read of the page in the sign-in window.
 pub trait Page {
-    /// The address the page is at (`webContents.getURL()`).
+    /// Returns the address of the page that the window shows.
     fn current_url(&self) -> String;
-    /// The cookies a request to `url` would carry.
+    /// Returns the cookies that the web view would send with a request to
+    /// `url`.
     fn cookies(&self, url: &str) -> impl Future<Output = Vec<Cookie>>;
-    /// Runs `script`, an expression whose value is a JSON string, in the
-    /// page, and hands back that JSON; nothing when it could not run.
+    /// Runs `script` in the page. `script` is a JavaScript expression whose
+    /// value is a JSON string. Returns the parsed JSON, or `None` if the
+    /// script could not be run.
     fn eval(&self, script: &str) -> impl Future<Output = Option<Value>>;
 }
 
-/// A form `POST` (OAuth's token requests).
+/// A `POST` request with a form as its body. The OAuth adapters send
+/// their token requests with it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HttpRequest {
     pub url: String,
@@ -56,30 +61,34 @@ impl HttpResponse {
     }
 }
 
-/// What a login reaches outside its window.
+/// What an adapter can reach outside the sign-in window: the network and
+/// the application.
 pub trait Services {
     fn post(&self, request: HttpRequest) -> impl Future<Output = Result<HttpResponse, String>>;
-    /// A command of the application (`core/src/ipc.rs`).
+    /// Runs a command of the application (`core/src/ipc.rs`) and returns
+    /// its result.
     fn dispatch(&self, command: &str, args: Value) -> impl Future<Output = Result<Value, String>>;
 }
 
-/// The window's first page and what the Accounts window says meanwhile.
+/// The address of the first page that the sign-in window loads, and the
+/// message that the Accounts dialog shows while the user signs in.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Prepared {
     pub url: String,
     pub message: String,
 }
 
-/// What a look at the page or a completed callback decided
-/// (`applyResult`'s argument).
+/// What an adapter decided after it looked at the page (`inspect`) or
+/// handled the callback (`complete`). `Machine::apply` carries it out.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Outcome {
     pub credential: Option<Credential>,
-    /// The application already saved the login (Pixiv).
+    /// Whether the application has already saved the login, so that it is
+    /// not saved a second time. Only the Pixiv adapter sets it.
     pub already_persisted: bool,
     pub status: Option<Status>,
     pub message: Option<String>,
-    /// An address the window goes to next.
+    /// An address that the sign-in window loads next.
     pub navigate: Option<String>,
     pub hide: bool,
     pub show: bool,
@@ -105,7 +114,8 @@ impl Outcome {
     }
 }
 
-/// One login's adapter, which keeps what it has seen between looks.
+/// The adapter of one login. It keeps values from one look at the page to
+/// the next, so a new one is made for every login.
 pub enum Adapter {
     Cookies(CookieAdapter),
     AccountApi(AccountApiAdapter),
@@ -113,8 +123,9 @@ pub enum Adapter {
     Pixiv(PixivAdapter),
 }
 
-/// `createAdapter`. OnlyFans has none: its login runs in a browser outside
-/// the app or is pasted.
+/// Returns the adapter for `site`. OnlyFans has no adapter, because its
+/// login runs in a browser outside the app or is pasted, so for OnlyFans
+/// this returns an error.
 pub fn adapter(site: Site) -> Result<Adapter, String> {
     Ok(match site.strategy {
         Strategy::Cookies => Adapter::Cookies(CookieAdapter {
@@ -134,7 +145,7 @@ pub fn adapter(site: Site) -> Result<Adapter, String> {
             site,
             code_verifier: RefCell::new(None),
         }),
-        // i18n: production's error text (English)
+        // i18n: an error text, shown in English in every language
         Strategy::OnlyFans => return Err("Unsupported authentication strategy: onlyfans".into()),
     })
 }
@@ -161,8 +172,9 @@ impl Adapter {
         }
     }
 
-    /// Whether the window's pages are looked at every 750 ms (OAuth logins
-    /// only wait for their callback).
+    /// Returns whether the page in the sign-in window is looked at every
+    /// 750 ms. The OAuth and Pixiv adapters are not: they only wait for the
+    /// window to be sent to their callback address.
     pub fn inspects(&self) -> bool {
         matches!(self, Adapter::Cookies(_) | Adapter::AccountApi(_))
     }
@@ -175,8 +187,9 @@ impl Adapter {
         }
     }
 
-    /// Whether `url` is the login's callback, which the window does not
-    /// load but hands to [`Adapter::complete`].
+    /// Returns whether `url` is the callback address of the login. The
+    /// window does not load that address; it is given to
+    /// [`Adapter::complete`] instead.
     pub fn handles(&self, url: &str) -> bool {
         match self {
             Adapter::OAuth(adapter) => adapter.handles(url),

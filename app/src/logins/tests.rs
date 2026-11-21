@@ -1,6 +1,7 @@
-//! The login session against production's `authSessions.test.mjs`: the
-//! machine driven by the events a sign-in window reports, its adapter run on
-//! recorded pages, and the credential it asks to save.
+//! Tests of whole logins. Each test gives the machine the events that a
+//! sign-in window reports, runs the adapter on recorded pages and recorded
+//! responses, and checks the state of the login and the credential that the
+//! machine asks to save.
 use super::adapters::tests::{FakePage, FakeServices};
 use super::adapters::{HttpResponse, Outcome};
 use super::machine::{Effect, Machine};
@@ -11,11 +12,15 @@ use futures::executor::block_on;
 use serde_json::json;
 use std::collections::BTreeMap;
 
-/// Plays a login the way the driver does: each effect performed against a
-/// recorded page and recorded services; what was persisted, loaded, shown
-/// and hidden written down. With `holding`, the effects whose answers come
-/// later in the app (a save, an outside browser) are kept in `held`
-/// instead, so a test answers them when it chooses, after other events.
+/// Performs the machine's effects the way `logins::Logins` does, but with a
+/// recorded page and recorded services in place of a window and the
+/// network. It records what was saved, which addresses were loaded, and how
+/// often the window was opened, shown, hidden and closed.
+///
+/// When `holding` is true, the two effects whose results arrive later in
+/// the app (saving a credential and starting the browser outside the app)
+/// are not performed. They are put in `held`, so a test can give the
+/// machine their results after other events.
 #[derive(Default)]
 struct Harness {
     machine: Machine,
@@ -116,7 +121,8 @@ impl Harness {
         }
     }
 
-    /// `did-finish-load` at the page's address.
+    /// Tells the machine that the page at the recorded page's address has
+    /// finished loading, and performs the effects that follow.
     fn finish_load(&mut self) {
         let url = self.page.url.borrow().clone();
         let effects = self.machine.loaded(&url);
@@ -128,8 +134,8 @@ impl Harness {
     }
 }
 
-// 'rejects unsupported sites without creating a browser window' and
-// 'rejects an unsupported SubscribeStar login host'
+// A site id that is not known and a SubscribeStar host that is not one of
+// the three services are refused with an error, and no window is opened.
 #[test]
 fn unknown_services_and_hosts_open_nothing() {
     let mut harness = Harness::default();
@@ -147,8 +153,8 @@ fn unknown_services_and_hosts_open_nothing() {
     assert_eq!(harness.state().status, Status::Idle);
 }
 
-// 'opens every cookie and account source at its declared direct-site login
-// route'
+// Every service whose strategy is `Cookies` or `AccountApi` loads its own
+// login address first, and its page is then looked at every 750 ms.
 #[test]
 fn every_page_login_opens_its_login_page_and_is_active() {
     for (site, login) in login_routes() {
@@ -172,8 +178,8 @@ fn every_page_login_opens_its_login_page_and_is_active() {
     }
 }
 
-// 'opens Newgrounds and DeviantArt at desktop width without changing other
-// login windows'
+// Newgrounds and DeviantArt open in the wide window, and Patreon opens in
+// the window of the usual size.
 #[test]
 fn the_window_opens_at_the_services_size() {
     for (site, size) in [
@@ -190,8 +196,8 @@ fn the_window_opens_at_the_services_size() {
     }
 }
 
-// 'persists cookie credentials in the host and never sends secrets to the
-// renderer'
+// The cookies of a signed-in page are saved as the credential, and the
+// state that the Accounts dialog shows does not contain their values.
 #[test]
 fn a_captured_login_is_saved_and_the_state_holds_no_secret() {
     let page = FakePage::at("https://danbooru.donmai.us/session/new")
@@ -225,14 +231,15 @@ fn a_captured_login_is_saved_and_the_state_holds_no_secret() {
         harness.state().message.as_deref(),
         Some("Danbooru session captured.")
     );
-    // The window closes, and its storage with it.
+    // The sign-in window is closed once the credential is saved.
     assert_eq!(harness.closed, 1);
     let state = format!("{:?}", harness.state());
     assert!(!state.contains("secret"));
 }
 
-// 'verifies ExHentai in the managed login popup before persisting its
-// gallery-dl cookies'
+// With ExHentai's cookies set, the window is first sent to the
+// verification page, and the cookies are saved only after that page has
+// loaded.
 #[test]
 fn exhentai_moves_to_its_check_then_saves() {
     let page = FakePage::at("").with_cookies(&[
@@ -273,7 +280,9 @@ fn exhentai_moves_to_its_check_then_saves() {
     );
 }
 
-// 'reads booru API credentials from account settings after login'
+// Once a booru's page shows that the user is signed in, the window is
+// hidden and sent to the options page, and the API key and the user id
+// read there are saved.
 #[test]
 fn a_booru_login_hides_the_window_while_it_reads_the_key() {
     let page = FakePage::at("").answering(
@@ -311,8 +320,10 @@ fn a_booru_login_hides_the_window_while_it_reads_the_key() {
     );
 }
 
-// 'uses gallery-dl DeviantArt OAuth and keeps its refresh token plus session
-// cookies'
+// DeviantArt's login uses the client and the redirect address of
+// gallery-dl's DeviantArt application. The callback address is not loaded;
+// its code is exchanged for the refresh token, which is saved together
+// with DeviantArt's session cookies.
 #[test]
 fn an_oauth_callback_is_not_loaded_but_completed() {
     let page = FakePage::at("").with_cookies(&[
@@ -349,7 +360,7 @@ fn an_oauth_callback_is_not_loaded_but_completed() {
         status: 200,
         body: r#"{"refresh_token":"durable"}"#.into(),
     });
-    // A page of the login itself loads.
+    // An address that is not the callback may be loaded.
     let (allowed, effects) = harness
         .machine
         .may_navigate("https://www.deviantart.com/users/login");
@@ -363,8 +374,8 @@ fn an_oauth_callback_is_not_loaded_but_completed() {
         Some("Completing DeviantArt login…")
     );
     harness.run(effects);
-    // The code goes to the token address with the client's basic
-    // authorization, never its secret in the body.
+    // The code is sent to the token address. The client's id and secret
+    // are in the `Authorization: Basic` header and not in the body.
     {
         use base64::Engine as _;
         let posts = harness.services.posts.borrow();
@@ -400,7 +411,7 @@ fn an_oauth_callback_is_not_loaded_but_completed() {
     );
 }
 
-// 'retains active state for renderer remounts and cancels cleanly'
+// Cancelling a login closes its window and sets the state back to idle.
 #[test]
 fn a_login_cancels_to_idle_and_closes_its_window_keeping_nothing() {
     let mut harness = Harness::default();
@@ -410,7 +421,8 @@ fn a_login_cancels_to_idle_and_closes_its_window_keeping_nothing() {
     harness.run(effects);
     assert_eq!(*harness.state(), AuthState::idle());
     assert_eq!(harness.closed, 1);
-    // Events from the closed window change nothing.
+    // An event that arrives from the window after it was closed changes
+    // nothing.
     assert!(
         harness
             .machine
@@ -448,7 +460,8 @@ fn a_window_the_system_cannot_open_ends_the_login_with_why() {
     assert!(harness.machine.tick().is_empty());
 }
 
-// 'reports main-frame load failures without completing authentication'
+// A page that cannot be loaded gives the status `Error` with the reason,
+// shows the window, and saves nothing.
 #[test]
 fn a_page_that_fails_to_load_is_reported_and_nothing_is_saved() {
     let mut harness = Harness::default();
@@ -469,7 +482,8 @@ fn a_page_that_fails_to_load_is_reported_and_nothing_is_saved() {
     );
     assert_eq!(harness.shown, shown + 1);
     assert!(harness.persisted.is_empty());
-    // A closed window's late report changes nothing.
+    // A failed load that is reported after the window was closed changes
+    // nothing.
     harness.machine.window_closed();
     assert!(harness.machine.load_failed("https://www.patreon.com/", "TIMEOUT").is_empty());
     assert_eq!(harness.state().status, Status::Cancelled);
@@ -487,7 +501,8 @@ fn a_look_already_under_way_is_not_started_twice() {
             .loaded("https://www.patreon.com/")
             .is_empty()
     );
-    // A look given up after 4 s lets the next one start.
+    // After a look at the page that was given up after 4 s, the next look
+    // can start.
     assert!(harness.machine.inspected(None).is_empty());
     assert_eq!(harness.machine.tick(), [Effect::Inspect]);
 }
@@ -525,8 +540,9 @@ fn a_credential_the_application_refuses_is_an_error() {
     );
 }
 
-// 'uses an external browser for OnlyFans and persists only the captured
-// session'
+// An OnlyFans login starts the browser outside the app and saves the
+// credential that was read from it. If no browser can be started, the
+// login has the status `Error`.
 #[test]
 fn onlyfans_signs_in_in_a_browser_outside_the_app() {
     let mut machine = Machine::new();
@@ -574,7 +590,8 @@ fn onlyfans_signs_in_in_a_browser_outside_the_app() {
     assert_eq!(missing.state().status, Status::Error);
 }
 
-// 'validates and saves a manually supplied OnlyFans session'
+// A pasted OnlyFans session that is complete is saved, and one without
+// the cookies `sess` and `auth_id` is refused with an error.
 #[test]
 fn a_pasted_onlyfans_session_is_saved() {
     let mut machine = Machine::new();
@@ -609,8 +626,9 @@ fn a_pasted_onlyfans_session_is_saved() {
     );
 }
 
-// 'cancels any active session before saving a manual session': also when
-// the pasted session is refused, the browser login under way is closed.
+// A pasted session cancels the login that is under way before it is
+// checked. The browser outside the app is therefore closed also when the
+// pasted session is refused.
 #[test]
 fn a_refused_pasted_session_still_ends_the_login_under_way() {
     let mut harness = Harness::default();
@@ -625,8 +643,9 @@ fn a_refused_pasted_session_still_ends_the_login_under_way() {
     assert_eq!(*harness.state(), AuthState::idle());
 }
 
-// `externalAuth !== session`: a cancelled browser's ending is not the
-// next login's.
+// The result of a browser login that was cancelled carries the number of
+// its own session, so it does not change the login that was started after
+// it.
 #[test]
 fn a_cancelled_browser_logins_ending_is_not_applied_to_the_next() {
     let mut harness = Harness {
@@ -653,8 +672,9 @@ fn a_cancelled_browser_logins_ending_is_not_applied_to_the_next() {
     );
 }
 
-// A save that answers after its login was cancelled and another started
-// leaves the new one alone.
+// The result of saving a credential can arrive after its login was
+// cancelled and another login was started. It then does not change the new
+// login.
 #[test]
 fn a_late_save_does_not_complete_the_next_login() {
     let page = FakePage::at("https://danbooru.donmai.us/session/new")

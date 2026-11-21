@@ -20,7 +20,7 @@ use picto_library::query::ItemScope;
 use picto_library::selection::SelectionTarget;
 use picto_library::{FolderId, Library, MutationReceipt, Rating, RootId, TagId, TagRecord};
 
-/// What the inspector's edits apply to: the items, their tags and their
+/// Holds what the inspector's edits apply to: the items, their tags and their
 /// folders. When the inspector describes several items, `tags` and `folders`
 /// are the ones that every one of the items has.
 pub(super) struct Target {
@@ -209,8 +209,8 @@ impl Inspector {
         }
     }
 
-    /// Whether an edit of the kind `touches` may change which items the grid
-    /// shows in the open destination with its filters and its search.
+    /// Returns true if an edit of the kind `touches` may change which items
+    /// the grid shows in the open destination with its filters and its search.
     fn changes_results(&self, touches: Touches, cx: &App) -> bool {
         let session = self.session.read(cx);
         session.nav.get(session.scope).is_some_and(|entry| {
@@ -254,7 +254,7 @@ impl Inspector {
         .detach();
     }
 
-    // ── Tags and folders ────────────────────────────────────────
+    // The functions below edit the tags and the folders of the items.
 
     /// Puts the tag `tag_name` on the items when `add` is set, or takes it off
     /// them. `created` says that the tag did not exist before this edit.
@@ -266,8 +266,8 @@ impl Inspector {
         cx: &mut Context<Self>,
     ) {
         if add {
-            // As `addTargetTags` does, record the tag as used, so that the
-            // pickers list it in their Recent view.
+            // The tag is recorded as used, so that the pickers list it in their
+            // Recent view.
             let added = [tag_name.clone()];
             self.session
                 .update(cx, |session, _| session.record_tags_use(&added));
@@ -321,9 +321,9 @@ impl Inspector {
         }
     }
 
-    /// `showTagItems`: adds the tag to the tags the grid's filter includes and
-    /// keeps the filters that are already set, so that the grid shows only the
-    /// items that have the tag.
+    /// Adds the tag to the tags the grid's filter includes and keeps the
+    /// filters that are already set, so that the grid shows only the items
+    /// that have the tag.
     fn show_tag_items(&mut self, tag: TagId, cx: &mut Context<Self>) {
         self.session.update(cx, |session, cx| {
             let mut filters = session.filters.clone();
@@ -342,7 +342,7 @@ impl Inspector {
         });
     }
 
-    // ── The pickers ─────────────────────────────────────────────
+    // The functions below open the tag picker and the folder picker.
 
     pub(super) fn open_tag_picker_at(
         &mut self,
@@ -398,11 +398,10 @@ impl Inspector {
         });
     }
 
-    /// `inspectorAnchor`: where a picker that was opened with its shortcut is
-    /// placed. With `visible` set, which means the inspector is shown, the
-    /// picker is placed at the inspector's left edge, 80 px below the
-    /// inspector's top. Otherwise this returns `None` and the picker is
-    /// centred in the window.
+    /// Returns where a picker that was opened with its shortcut is placed.
+    /// With `visible` set, which means the inspector is shown, the picker is
+    /// placed at the inspector's left edge, 80 px below the inspector's top.
+    /// Otherwise this returns `None` and the picker is centred in the window.
     fn keyboard_anchor(&self, visible: bool) -> Option<Point<f32>> {
         let rail = *self.places.borrow().get("rail")?;
         visible.then(|| point(f32::from(rail.left()), f32::from(rail.top()) + 80.))
@@ -422,19 +421,19 @@ impl Inspector {
         self.open_folder_picker(anchor, window, cx);
     }
 
-    // ── The dialogs ─────────────────────────────────────────────
+    // The functions below open the Add Tags dialog and the Folders dialog and
+    // apply what was chosen in them.
 
-    /// The grid's selection as the target of an edit. It also covers selected
-    /// items that the grid has not loaded.
+    /// Returns the grid's selection as the target of an edit. It also covers
+    /// selected items that the grid has not loaded.
     fn grid_selection(&self, cx: &App) -> Option<SelectionTarget> {
         self.session.read(cx).selection_target()
     }
 
-    /// Opens the Add Tags dialog (`TagSelectModal`), for the T key and for Add
-    /// Tags in the grid's menu. The dialog ticks the tags of the item the
-    /// inspector shows or last showed (`displayedInspectorItemDetailsAtom`),
-    /// whatever is selected in the grid. The tags are given as records,
-    /// because the dialog's Selected view shows each tag's count.
+    /// Opens the Add Tags dialog, for the T key and for Add Tags in the grid's
+    /// menu. The dialog ticks the tags of the item the inspector shows or last
+    /// showed, whatever is selected in the grid. The tags are given as
+    /// records, because the dialog's Selected view shows each tag's count.
     pub fn open_tag_dialog(&mut self, cx: &mut Context<Self>) {
         let tags = {
             let session = self.session.read(cx);
@@ -450,9 +449,10 @@ impl Inspector {
             .update(cx, |dialog, cx| dialog.open(&tags, selected, cx));
     }
 
-    /// Opens the Folders dialog (`FolderPickerModal`), for the F key, ⌘⇧J and
-    /// Add to Folder in the grid's menu. The dialog ticks the folders of the
-    /// item the inspector shows or last showed.
+    /// Opens the Folders dialog, for the F key, for Command+Shift+J
+    /// (Control+Shift+J on Windows and Linux) and for Add to Folder in the
+    /// grid's menu. The dialog ticks the folders of the item the inspector
+    /// shows or last showed.
     pub fn open_folder_dialog(&mut self, cx: &mut Context<Self>) {
         let members = self
             .item
@@ -464,9 +464,9 @@ impl Inspector {
             .update(cx, |dialog, cx| dialog.open(members, selected, cx));
     }
 
-    /// Apply in the Add Tags dialog: puts the tags in `add` on the selected
-    /// items, takes the tags in `remove` off them, and records the tags in
-    /// `add` as recently used.
+    /// Handles Apply in the Add Tags dialog. It puts the tags in `add` on the
+    /// selected items, takes the tags in `remove` off them, and records the
+    /// tags in `add` as recently used.
     pub(super) fn apply_tag_dialog(
         &mut self,
         add: Vec<String>,
@@ -498,10 +498,9 @@ impl Inspector {
         );
     }
 
-    /// Apply in the Folders dialog: adds the selected items to the folders in
-    /// `add`, takes them out of the folders in `remove`, records the folders
-    /// in `add` as recently used, and then clears the selection
-    /// (`settleSelectionAfterMutation`).
+    /// Handles Apply in the Folders dialog. It adds the selected items to the
+    /// folders in `add`, takes them out of the folders in `remove`, records
+    /// the folders in `add` as recently used, and then clears the selection.
     pub(super) fn apply_folder_dialog(
         &mut self,
         add: Vec<FolderId>,
@@ -548,9 +547,9 @@ impl Inspector {
 
     /// Opens the Auto Tag review, from a menu or from its shortcut. It reviews
     /// `target`, or the grid's selection when `target` is `None`. With
-    /// `docked` set, the review is placed where a picker opened with its
-    /// shortcut is placed (`inspectorAnchor`). Otherwise it is centred in the
-    /// window.
+    /// `docked` set, the review is placed where `Inspector::keyboard_anchor`
+    /// places a picker that was opened with its shortcut. Otherwise it is
+    /// centred in the window.
     pub fn open_auto_tag(
         &mut self,
         target: Option<picto_library::selection::SelectionTarget>,
@@ -563,7 +562,8 @@ impl Inspector {
             .update(cx, |tagger, cx| tagger.open(anchor, target, window, cx));
     }
 
-    // ── Chips ───────────────────────────────────────────────────
+    // The functions below build the chips of the Folders section and the Tags
+    // section, and the menu of a chip.
 
     /// Builds the Folders section: one chip for each folder, in the folder's
     /// colour, followed by the "+" button.
@@ -602,7 +602,7 @@ impl Inspector {
 
     /// Builds the Tags section: one chip for each tag, followed by the "+"
     /// button. With `sort` set, which is used for a single item, the chips are
-    /// ordered by tag group and then by name (`tagKey`).
+    /// ordered by tag group and then by name.
     pub(super) fn tag_chips(
         &self,
         mut tags: Vec<TagRecord>,
@@ -644,7 +644,7 @@ impl Inspector {
     }
 
     /// Opens the menu of a chip at `position`. A tag's menu has the rows that
-    /// every tag menu has (`buildCommonTagContextEntries`) and Remove Tag. A
+    /// every tag menu has (`crate::tags::common_menu`) and Remove Tag. A
     /// folder's menu has Open Folder and Remove.
     fn open_chip_menu(
         &mut self,
@@ -683,7 +683,7 @@ impl Inspector {
                 _ => {}
             },
             Some(ChipMenu::Folder(folder)) => match action {
-                // As `navigateToFolder` does: open the folder's destination.
+                // The grid goes to the folder's destination.
                 "open-folder" => self.session.update(cx, |session, cx| {
                     if let Some(index) = session.nav.iter().position(|entry| {
                         matches!(entry.scope, ItemScope::FolderTree { folder_id } if folder_id == folder)
@@ -698,11 +698,12 @@ impl Inspector {
         }
     }
 
-    // ── Sources and notes of several items ──────────────────────
+    // The functions below save source addresses, and ask before notes or
+    // addresses of several items are replaced.
 
     /// Saves `urls` as the source addresses of the items. When several items
     /// are selected and some of them already have addresses, it first asks
-    /// whether to replace them (`commitSources`).
+    /// whether to replace them.
     pub(super) fn set_sources(&mut self, urls: Vec<String>, cx: &mut Context<Self>) {
         match self.shown {
             Mode::Item => self.edit(
@@ -736,8 +737,8 @@ impl Inspector {
     /// Opens the dialog that asks whether to replace the notes or addresses
     /// that some of the `count` selected items already have.
     pub(super) fn ask(&mut self, overwrite: Overwrite, count: u64, cx: &mut Context<Self>) {
-        // `Return::Stay`: when the dialog closes, the keyboard focus is not
-        // moved back to what had it before the dialog opened.
+        // With `Return::Stay`, the keyboard focus is not moved back to what had
+        // it before the dialog opened when the dialog closes.
         self.confirm
             .open(Confirm { overwrite, count }, menu::Return::Stay, cx);
     }
@@ -758,9 +759,8 @@ impl Inspector {
         }
     }
 
-    /// Builds the dialog that asks before notes or addresses are replaced
-    /// (`ConfirmModal`, as `confirmSelectionOverwrite` opens it). Returns
-    /// `None` while the dialog is closed.
+    /// Builds the dialog that asks before notes or addresses are replaced.
+    /// Returns `None` while the dialog is closed.
     pub(super) fn confirm_dialog(
         &mut self,
         window: &mut Window,
@@ -775,19 +775,19 @@ impl Inspector {
             window.focus(&confirm.focus, cx);
             window.request_animation_frame();
         }
-        // Production puts the field's English name into the title and into the
-        // button's label without translating it, and its message exists in
-        // English only. The same is done here.
+        // The title and the button's label contain the English name of the
+        // field in every language, and the message exists in English only.
+        // Picto 0.6.19 and earlier showed the same texts.
         let (title, label, what) = match confirm.content.overwrite {
             Overwrite::Notes(_) => (
                 crate::tf!("Overwrite {value0}?", "notes"),
-                // i18n: production fills in the English name
+                // i18n: the field's name, which is English in every language
                 crate::tf!("Overwrite {value0}", "Notes"),
                 "notes",
             ),
             Overwrite::Sources(_) => (
                 crate::tf!("Overwrite {value0}?", "sources"),
-                // i18n: production fills in the English name
+                // i18n: the field's name, which is English in every language
                 crate::tf!("Overwrite {value0}", "Sources"),
                 "source URLs",
             ),

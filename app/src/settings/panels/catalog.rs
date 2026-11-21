@@ -2,14 +2,16 @@
 //! the search that finds them.
 use crate::i18n::t;
 
-/// A section of the window (`PANELS`).
+/// One section of the Settings window. `PANELS` lists the sections.
 pub struct PanelDef {
     pub id: &'static str,
     pub label: &'static str,
-    /// The Tabler glyph, drawn at 1.8 in the navigation and at 2 in search
-    /// results.
+    /// The name of the section's Tabler icon. The list of sections draws it
+    /// with a stroke width of 1.8, and a search result draws it with a
+    /// stroke width of 2.
     pub icon: &'static str,
-    /// Terms the settings search matches for this section.
+    /// English words, separated by spaces, that the search of the Settings
+    /// window matches for this section.
     pub keywords: &'static str,
     pub description: &'static str,
     pub separator_before: bool,
@@ -149,7 +151,9 @@ pub const PANELS: [PanelDef; 14] = [
     ),
 ];
 
-/// `ALL_SETTINGS`: individual settings the search finds, by section.
+/// Single settings that the search of the Settings window finds. Each entry
+/// is the setting's label, the English words that the search matches for
+/// the setting, and the id of the section that holds it.
 // i18n: translated where drawn (searched as shown)
 const ALL_SETTINGS: [(&str, &str, &str); 14] = [
     (
@@ -224,9 +228,11 @@ const ALL_SETTINGS: [(&str, &str, &str); 14] = [
     ),
 ];
 
-/// The sections a search finds (`matchedPanels`): by their label, their
-/// keywords, or a setting of theirs whose label or keywords match. The
-/// query is already trimmed and lower-cased.
+/// Returns the indexes in `PANELS` of the sections that a search for
+/// `query` finds. A section is found when `query` is part of its label, of
+/// its keywords, or of the label or the keywords of one of its settings.
+/// `query` must already be trimmed and in lower case. An empty query finds
+/// nothing.
 pub fn matched_panels(query: &str) -> Vec<usize> {
     if query.is_empty() {
         return Vec::new();
@@ -235,7 +241,8 @@ pub fn matched_panels(query: &str) -> Vec<usize> {
         .iter()
         .enumerate()
         .filter(|(_, panel)| {
-            // Labels as shown; the keywords are English, as production's are.
+            // A label is compared in the language in which it is shown. The
+            // keywords are English in every language.
             t(panel.label).to_lowercase().contains(query)
                 || panel.keywords.contains(query)
                 || ALL_SETTINGS.iter().any(|(label, keywords, of)| {

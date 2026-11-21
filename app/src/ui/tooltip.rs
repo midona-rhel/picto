@@ -2,17 +2,16 @@ use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::*;
 
-/// What a tooltip says: a label and the keys of its shortcut, one badge each
-/// (`KbdTooltip.tsx`).
+/// What a tooltip shows: a label and the keys of the control's shortcut, each
+/// key in its own badge.
 #[derive(Clone)]
 pub struct Tip {
     label: SharedString,
     keys: Vec<SharedString>,
-    /// Opens above the control, where Mantine flips a tooltip that would
-    /// leave the window below it.
+    /// Whether the tooltip opens above the control and not below it.
     above: bool,
-    /// The plain CSS bubble Settings draws where it has no Mantine tooltip
-    /// (`.themeSwatch[data-tooltip]::after`).
+    /// Whether the tooltip is drawn as the simpler bubble that Settings uses
+    /// for its theme swatches; see [`Tip::plain`].
     plain: bool,
 }
 
@@ -20,8 +19,9 @@ pub fn tip(label: impl Into<SharedString>) -> Tip {
     Tip::new(label)
 }
 
-/// Gives a control a tooltip. The control must not have its own `on_hover`;
-/// one that does keeps a [`Hover`] itself and adds its layer.
+/// Gives a control a tooltip. The control must not have its own `on_hover`
+/// handler. A control that has one keeps a [`Hover`] itself and adds the
+/// element that [`Hover::layer`] returns.
 pub fn attach(
     control: Stateful<Div>,
     id: impl Into<ElementId>,
@@ -51,71 +51,79 @@ impl Tip {
         }
     }
 
-    /// What the tooltip says, which also names an icon-only control for
-    /// assistive technology (production's `aria-label` repeats it).
+    /// Returns the tooltip's label. For a control that shows only an icon, the
+    /// label is also the control's name for assistive technology.
     pub fn label(&self) -> &SharedString {
         &self.label
     }
 
-    /// `.themeSwatch[data-tooltip]::after`, Settings' own bubble: shown at
-    /// once (give its [`Hover`] [`Hover::set_now`]), above the control, in
-    /// the small text, with a `--color-contrast-15` top edge, growing from
-    /// 95% without rising.
+    /// Makes this the simpler bubble that Settings uses for its theme
+    /// swatches. It opens above the control, in the small text size, with a
+    /// top edge in `Theme::contrast(15.)`. While it appears it grows from 95%
+    /// of its size and does not move. For it to open as soon as the pointer
+    /// arrives, the control passes hover changes to [`Hover::set_now`].
     pub fn plain(mut self) -> Self {
         self.plain = true;
         self.above = true;
         self
     }
 
-    /// Opens above the control: for controls along the window's bottom edge.
+    /// Makes the tooltip open above the control. This is for controls along
+    /// the window's bottom edge.
     pub fn above(mut self) -> Self {
         self.above = true;
         self
     }
 
-    /// The keys a registry shortcut is bound to now, so the tooltip
-    /// follows a rebinding (`shortcutId`).
+    /// Shows the keys that the shortcut `id` of the shortcut registry is bound
+    /// to now, one badge per key. When the user binds the shortcut to other
+    /// keys, the tooltip shows the new keys.
     pub fn shortcut(mut self, id: &str, cx: &App) -> Self {
         self.keys = crate::keymap::badges(id, cx);
         self
     }
 
-    /// The keys a registry shortcut is bound to now, written as one badge,
-    /// as a tooltip given the keys as text shows them
-    /// (`shortcut={formatKeysDisplay(keys)}`).
+    /// Shows the keys that the shortcut `id` of the shortcut registry is bound
+    /// to now, written as one text in a single badge.
     pub fn shortcut_written(mut self, id: &str, cx: &App) -> Self {
         self.keys = crate::keymap::hint(id, cx).into_iter().collect();
         self
     }
 }
 
-/// The bubble's height, and how far a tooltip keeps from the window's edge.
+/// The height of a tooltip's bubble. `WINDOW_MARGIN` is the smallest distance
+/// between a tooltip and the window's edge.
 const BUBBLE_HEIGHT: f32 = 24.;
 const WINDOW_MARGIN: f32 = 5.;
 
-/// A control's tooltip timing, kept between frames: it opens once the pointer
-/// has rested on the control for 400 ms and closes when the pointer leaves,
-/// popping in and out over 150 ms each way.
+/// Holds the state of one control's tooltip between frames. The tooltip opens
+/// once the pointer has stayed on the control for 400 ms, and closes when the
+/// pointer leaves. It takes 150 ms to appear and 150 ms to disappear.
 #[derive(Default)]
 pub struct Hover {
     hovered: bool,
-    /// Counts hovers, so a timer from an earlier one opens nothing.
+    /// The number of times the pointer has come onto the control or left it. A
+    /// timer that an earlier hover started compares its own number with this
+    /// one, and opens nothing when they differ.
     visit: u64,
     shown: motion::Fade,
-    /// Whether the window has no room for the tooltip below the control,
-    /// as last measured while it was drawn: it opens above then, rather
-    /// than being pushed up over the control it names.
+    /// Whether the window has no room for the tooltip below the control. This
+    /// is measured each time the control is drawn. When it is true, the
+    /// tooltip opens above the control, so that it is not pushed up over the
+    /// control it describes.
     no_room_below: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 impl Hover {
-    /// The pointer came onto the control or left it: the tooltip opens
-    /// after it has rested there.
+    /// Records that the pointer came onto the control or left it. The tooltip
+    /// opens after the pointer has stayed on the control for
+    /// `motion::TOOLTIP_DELAY`, and closes when the pointer leaves.
     pub fn set(&mut self, hovered: bool, cx: &mut Context<Self>) {
         self.set_after(hovered, motion::TOOLTIP_DELAY, cx);
     }
 
-    /// As [`Hover::set`], opening as the pointer arrives.
+    /// Does the same as [`Hover::set`], except that the tooltip opens as soon
+    /// as the pointer arrives.
     pub fn set_now(&mut self, hovered: bool, cx: &mut Context<Self>) {
         self.set_after(hovered, std::time::Duration::ZERO, cx);
     }
@@ -151,18 +159,21 @@ impl Hover {
         self.shown.animating()
     }
 
-    /// The tooltip, to add as the last child of its control, below which it
-    /// opens. The control must be positioned (`relative` or `absolute`);
-    /// `extent` is its height.
+    /// Returns the tooltip's element, or `None` while the tooltip is hidden.
+    /// The control adds it as its last child, and the tooltip opens below the
+    /// control. The control must be positioned (`relative` or `absolute`).
+    /// `extent` is the control's height.
     pub fn layer(&self, tip: &Tip, extent: f32, cx: &App) -> Option<AnyElement> {
-        // Mantine's `pop` on CSS `ease`: the tooltip fades in while growing
-        // from 90% about its centre and rising the last 9px into place.
+        // The tooltip fades in along `motion::EASE`. While it does, it grows
+        // from 90% of its size about its centre and rises the last 9px into
+        // its place.
         let shown = self.shown.value_with(motion::EASE);
         if shown <= 0. {
             return None;
         }
         let (scale, below) = if tip.plain {
-            // `transform: scale(0.95)` to `scale(1)` on the same `ease`.
+            // The plain bubble grows from 95% to 100% of its size along the
+            // same curve, and does not move.
             (0.95 + 0.05 * shown, 0.)
         } else {
             motion::tooltip_pop(shown)
@@ -189,8 +200,10 @@ impl Hover {
         .drop_shadows(vec![
             BoxShadow::new(px(0.), px(2.), rgba(theme::BLACK_30).into()).blur_radius(px(8.)),
         ])
-        // `--glass-border-top`: the top edge is brighter than the sides
-        // (the plain bubble's whole top border is `--color-contrast-15`).
+        // The top edge is brighter than the sides: a 1px line in
+        // `Theme::glass_border_top` that ends 3px before each corner. On the
+        // plain bubble the line is in `Theme::contrast(15.)` and runs the
+        // whole width.
         .child(if tip.plain {
             div()
                 .absolute()
@@ -208,7 +221,9 @@ impl Hover {
                 .h(px(1.))
                 .bg(theme.glass_border_top())
         });
-        // `padding: 0 6px` inside the 1px border, which the surface draws.
+        // The label has 6px of padding on each side inside the 1px border. The
+        // surface draws the border over the bubble, so the padding here is
+        // 7px.
         let mut bubble = div()
             .relative()
             .h(px(BUBBLE_HEIGHT))
@@ -249,8 +264,9 @@ impl Hover {
             (extent + motion::TOOLTIP_OFFSET + below, Anchor::TopCenter)
         };
         let slot = div().absolute().top(px(top)).left(relative(0.5));
-        // Where the control ends in the window, measured as it is drawn
-        // (the first frame, on which the tooltip is still invisible).
+        // The canvas measures where the control ends in the window. It does so
+        // each time the control is drawn, the first time on the frame on which
+        // the tooltip is still invisible.
         let no_room = self.no_room_below.clone();
         let probe = canvas(
             move |bounds, window, _| {

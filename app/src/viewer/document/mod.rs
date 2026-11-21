@@ -1,8 +1,8 @@
-//! Every way of viewing media other than images, Flash, video and audio
-//! (`src/features/viewer/document/`): PDF, DjVu and comic pages, text,
-//! Markdown, JSON, RTF and EPUB on a page, fonts, and the view for files
-//! that cannot be shown. The media surface asks [`kind::renderer_kind`]
-//! what an item gets and hands document kinds to [`Document`].
+//! The viewers of every kind of media other than images, Flash, video and
+//! audio: PDF, DjVu and comic pages; text, Markdown, JSON, RTF and EPUB on
+//! a page; fonts; and the view for files that cannot be shown. The media
+//! surface asks [`kind::renderer_kind`] which viewer an item gets, and
+//! opens a [`Document`] for an item of a document kind.
 pub mod epub;
 pub mod font;
 pub mod geometry;
@@ -43,14 +43,16 @@ actions!(
     ]
 );
 
-/// The key context a host adds while it shows a document's pages, for the
-/// keys that scroll them.
+/// The key context that a view adds while it shows a paged document. The
+/// keys that scroll the pages (`scroll_bindings`) are bound in this context
+/// only.
 pub const PAGES_CONTEXT: &str = "Pages";
 
-/// Home, End, Page Up, Page Down and Space scroll a document's pages as
-/// they scroll any page. Space otherwise closes the media view, so these
-/// are made after the registry's bindings, which they then take precedence
-/// over in a host that shows pages.
+/// Returns the bindings of the keys that scroll a paged document: Home,
+/// End, Page Up, Page Down, Space and Shift+Space. Space otherwise closes
+/// the media view. These bindings must therefore be added after the
+/// shortcut registry's bindings, so that they take precedence over them in
+/// a view that shows pages.
 pub fn scroll_bindings() -> Vec<KeyBinding> {
     let mut bindings = Vec::new();
     for scope in [Scope::Viewer, Scope::DetailWindow] {
@@ -68,14 +70,16 @@ pub fn scroll_bindings() -> Vec<KeyBinding> {
     bindings
 }
 
-/// The font preview's keys, which `FontViewer.tsx` handles itself rather
-/// than through the shortcut registry, in each host that shows a document:
-/// `=` or `+` (Shift+= on most layouts) larger, `-` smaller, with Command
-/// or Control on the Mac and Control elsewhere (`metaKey || ctrlKey`).
-/// Command+0 (Control+0 elsewhere) is the registry's Actual Size, which
-/// resets the preview too; Control+0 on the Mac resets it here. A key the
-/// preview does not take goes on to the interface zoom. The registry's J
-/// and L pages are bound by `crate::keymap`.
+/// Binds the keys that change the size of the font preview, in the media
+/// view and in a detail window. These keys are not in the shortcut
+/// registry. `=` or `+` (Shift+= on most layouts) makes the preview larger
+/// and `-` makes it smaller, with Command or Control on the Mac and with
+/// Control elsewhere. Command+0 (Control+0 elsewhere) is the registry's
+/// Actual Size shortcut, which also sets the preview back to its first
+/// size, so only Control+0 on the Mac is bound here for that. When the
+/// open item is not a font, these keys change the interface zoom. The J
+/// and L keys, which the registry gives to Previous Page and Next Page,
+/// are bound by `crate::keymap`.
 pub fn bind(cx: &mut App) {
     let modifiers: &[&str] = if cfg!(target_os = "macos") {
         &["Mod", "Ctrl"]
@@ -111,7 +115,8 @@ pub fn bind(cx: &mut App) {
     }
 }
 
-/// A scroll of a document's pages by a key.
+/// How far a key scrolls the pages of a paged document: to the start, to
+/// the end, or by about one viewport's height up or down.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Scroll {
     Start,
@@ -129,9 +134,11 @@ pub enum Document {
 }
 
 impl Document {
-    /// Opens a file of a document kind. Reading and rendering start on
-    /// other threads; the view shows what it has meanwhile. `inline` lays a
-    /// paged document's pages out for the collection reader.
+    /// Opens the file at `path`, which is of the document kind `kind`, and
+    /// returns the view that shows it. The file is read and drawn on other
+    /// threads, and the view shows what it has until they finish. With
+    /// `inline` true, a paged document lays its pages out for the
+    /// collection reader, which shows it as a member of a collection.
     pub fn open(
         kind: RendererKind,
         path: PathBuf,
@@ -152,7 +159,8 @@ impl Document {
                 let mime = mime.to_owned();
                 Document::Font(cx.new(|cx| FontViewer::new(path, name, mime, cx)))
             }
-            // Every type without a renderer.
+            // Every other kind has no viewer, so the item gets the view for
+            // files that cannot be shown.
             _ => Document::Unsupported {
                 mime: mime.to_owned(),
                 scroll: ScrollHandle::new(),
@@ -160,8 +168,9 @@ impl Document {
         }
     }
 
-    /// Calls `changed` whenever the document's zoom changes, for the
-    /// toolbar.
+    /// Calls `changed` whenever the zoom of a paged document may have
+    /// changed, so that the viewer toolbar can show the new zoom. Returns
+    /// `None` for any other document, whose zoom never changes.
     pub fn observe_zoom<T: 'static>(
         &self,
         cx: &mut Context<T>,
@@ -175,8 +184,10 @@ impl Document {
         }
     }
 
-    /// Calls `progressed` when a paged document becomes presentable or draws
-    /// its first page.
+    /// Calls `progressed` when `presentable` begins to return true for a
+    /// paged document, and again when `settled` begins to return true for
+    /// it. Returns `None` for any other document, for which both return
+    /// true from the start.
     pub fn observe_progress<T: 'static>(
         &self,
         cx: &mut Context<T>,
@@ -192,16 +203,22 @@ impl Document {
         }
     }
 
-    /// Hands the item's thumbnail, once its load has settled, to a view that
-    /// shows it first.
+    /// Gives a paged document the item's thumbnail, which it draws on its
+    /// first page until that page has been drawn. The caller calls this
+    /// when the loading of the thumbnail has ended, and passes `None` when
+    /// the thumbnail could not be loaded. Any other document ignores it.
     pub fn set_thumbnail(&self, thumbnail: Option<Arc<RenderImage>>, cx: &mut App) {
         if let Document::Paged(paged) = self {
             paged.update(cx, |paged, cx| paged.set_thumbnail(thumbnail, cx));
         }
     }
 
-    /// Whether the document has something to show without a gap. Only
-    /// paged documents wait; the others draw at once.
+    /// Returns whether the document has what it needs to be drawn in place
+    /// of what was shown before it. A paged document returns false until
+    /// its pages have been measured and either the loading of the item's
+    /// thumbnail has ended or its first page has been drawn
+    /// (`PagedViewer::presentable`). Every other document returns true at
+    /// once.
     pub fn presentable(&self, cx: &App) -> bool {
         match self {
             Document::Paged(paged) => paged.read(cx).presentable(),
@@ -209,8 +226,11 @@ impl Document {
         }
     }
 
-    /// Whether the document has drawn what it opened to (for a paged one,
-    /// its first page in view).
+    /// Returns whether the document has drawn its content. A paged
+    /// document returns false until the first drawing of one of its pages
+    /// has arrived or has failed, or the document could not be opened
+    /// (`PagedViewer::settled`). Every other document returns true at
+    /// once.
     pub fn settled(&self, cx: &App) -> bool {
         match self {
             Document::Paged(paged) => paged.read(cx).settled(),
@@ -229,13 +249,14 @@ impl Document {
         }
     }
 
-    /// Whether this is a paged document, whose keys scroll its pages.
+    /// Returns whether this is a paged document. Only a paged document has
+    /// pages that Home, End, Page Up, Page Down and Space scroll.
     pub fn paged(&self) -> bool {
         matches!(self, Document::Paged(_))
     }
 
-    /// Whether the viewer toolbar's zoom controls drive this document: PDF
-    /// pages only, as `usesRendererZoom` says.
+    /// Returns whether the zoom controls of the viewer toolbar change this
+    /// document's zoom. They do so for the pages of a PDF only.
     pub fn zoomable(&self, cx: &App) -> bool {
         matches!(self, Document::Paged(paged) if paged.read(cx).zoomable())
     }
@@ -253,7 +274,9 @@ impl Document {
         }
     }
 
-    /// Cmd+0: a PDF page at 100%, a font preview at its own size.
+    /// Carries out the Actual Size command: shows the pages of a PDF at
+    /// 100% and sets a font preview back to 100%, the scale it opens with.
+    /// Any other document does nothing.
     pub fn actual_size(&self, cx: &mut App) {
         match self {
             Document::Paged(paged) => paged.update(cx, |paged, cx| paged.actual_size(cx)),
@@ -309,15 +332,18 @@ impl Document {
     }
 }
 
-/// Runs a parser on a file that came from outside. A panic in it fails
-/// like any other error: on GPUI's background threads a panic would end the
-/// app, as it unwinds into the platform's thread pool, which cannot unwind.
+/// Runs `parse`, which reads a file that the app did not write, and
+/// returns its result. A panic in `parse` is returned as the error "Could
+/// not read this file." On GPUI's background threads a panic would
+/// otherwise end the app, because it unwinds into the platform's thread
+/// pool, which cannot unwind.
 pub fn guarded<T>(parse: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Result<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(parse))
         .unwrap_or_else(|_| Err(anyhow::anyhow!("Could not read this file.")))
 }
 
-/// A decoded picture in the BGRA order GPUI draws.
+/// Converts a decoded picture from RGBA to the BGRA byte order that GPUI
+/// draws, and returns it as a picture GPUI can draw.
 pub fn render_image(mut image: image::RgbaImage) -> Arc<RenderImage> {
     for pixel in image.chunks_exact_mut(4) {
         pixel.swap(0, 2);

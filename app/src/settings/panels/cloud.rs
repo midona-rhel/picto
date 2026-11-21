@@ -1,8 +1,10 @@
-//! The Cloud section (`CloudPanel`): the library's sync, its pending work,
-//! how long recovery snapshots are kept, and its restore history. Sync now,
-//! Pause or Resume, Create snapshot and the retention fields act at once
-//! through the core's commands, as production's do; Restore puts a
-//! snapshot's database in place of the library's (`host::restore`).
+//! The Cloud section of the Settings window. It shows the library's cloud
+//! sync, the work that is waiting to be synced, how long recovery snapshots
+//! are kept, and the recovery snapshots that can be restored. Sync now,
+//! Pause or Resume, Create snapshot and the retention fields take effect at
+//! once through the core's commands; they do not wait for the Save & Close
+//! button or the Apply button. Restore puts the database of a snapshot in
+//! place of the library's database (`host::restore`).
 use crate::cloud::{self, RestorePoint};
 use crate::i18n::{en, t};
 use crate::settings::pieces::{block, card, hint, row, separator, title, value};
@@ -12,8 +14,8 @@ use crate::theme::Text as _;
 use crate::ui::{self, action_button::Look};
 use gpui::*;
 
-/// The section's own state: the restore points, an operation under way,
-/// and the restore the user is asked about.
+/// The state of the Cloud section: the restore points, whether an operation
+/// is under way, and the dialog that asks the user to confirm a restore.
 #[derive(Default)]
 pub struct CloudPanel {
     restore_points: Vec<RestorePoint>,
@@ -21,8 +23,10 @@ pub struct CloudPanel {
     asking: ui::modal::Host<String>,
 }
 
-/// `formatCloudDate`: a stored timestamp in the local time, as
-/// `toLocaleString` writes it.
+/// Returns a stored timestamp as a date and a time in the local time zone,
+/// written as the app's language writes them. Returns "Never" when there is
+/// no timestamp. Returns the stored text as it is when it cannot be read as
+/// a timestamp.
 fn cloud_date(value: Option<&str>) -> String {
     let Some(value) = value else {
         return t("Never").into();
@@ -35,10 +39,11 @@ fn cloud_date(value: Option<&str>) -> String {
 }
 
 impl SettingsWindow {
-    /// Reads the restore points again (`cloud.restore.list`), for a library
-    /// that syncs: they list the provider's folder, so they are read when
-    /// the window opens, after an operation and when the sync state
-    /// changes, never on a timer.
+    /// Reads the restore points again with the command
+    /// `cloud.restore.list`. For a library that does not sync, it empties
+    /// the list instead. The command lists the provider's folder, so the
+    /// restore points are read only when the window opens, after an
+    /// operation and when the sync state changes, and not on a timer.
     pub(in crate::settings) fn refresh_restore_points(&mut self, cx: &mut Context<Self>) {
         let configured = self
             .cloud
@@ -69,8 +74,11 @@ impl SettingsWindow {
         .detach();
     }
 
-    /// Runs a cloud command while nothing else runs, then reads the state
-    /// again; a failure is told as production tells it.
+    /// Runs a cloud command and then reads the restore points again. It
+    /// does nothing while another cloud command of this section is still
+    /// running. When the command succeeds and `success` is given, a
+    /// notification with that title is shown. When the command fails, an
+    /// error notification with the title "Cloud operation failed" is shown.
     fn cloud_run(
         &mut self,
         command: &'static str,
@@ -105,9 +113,11 @@ impl SettingsWindow {
         });
     }
 
-    /// The user confirmed a restore: the library is closed, its database
-    /// replaced by the snapshot's (the current one kept as an emergency
-    /// copy) and opened again, which closes this window too.
+    /// Restores the snapshot `snapshot` after the user has confirmed the
+    /// restore. The library is closed, its database is replaced by the
+    /// database of the snapshot, and the library is opened again. The
+    /// database that was replaced is kept as an emergency copy. Opening the
+    /// library again also closes this window.
     fn restore(&mut self, snapshot: String, cx: &mut Context<Self>) {
         self.cloud_panel.asking.dismiss(cx);
         self.cloud_panel.busy = true;
@@ -120,7 +130,8 @@ impl SettingsWindow {
         });
     }
 
-    /// The question before a restore (`window.confirm`).
+    /// Returns the dialog that asks the user to confirm a restore, or
+    /// `None` when no restore is waiting for an answer.
     pub(in crate::settings) fn restore_question(
         &mut self,
         window: &mut Window,
@@ -188,11 +199,13 @@ impl SettingsWindow {
                 value(
                     theme,
                     configuration.root_path.clone().unwrap_or_else(|| {
-                        // Production writes it without a key.
+                        // This text has no translations, so it is shown in
+                        // English in every language.
                         en("Choose a cloud folder in Libraries").into()
                     }),
                 )
-                // A long folder is cut short rather than drawn over its label.
+                // A folder path that does not fit is cut short, so that it
+                // is not drawn over its label.
                 .min_w_0()
                 .truncate(),
             ))
@@ -206,8 +219,8 @@ impl SettingsWindow {
             ))
             .child(separator(theme))
             .child(
-                // `.cloudActions`' 10px top margin collapses into the
-                // separator's 12px, as the card is a block.
+                // The row of buttons has no space of its own above it. The
+                // 12px below the separator is the space between the two.
                 div()
                     .flex()
                     .flex_wrap()
@@ -241,7 +254,8 @@ impl SettingsWindow {
                                 this.cloud_run(
                                     "cloud.snapshot.create",
                                     serde_json::json!({}),
-                                    // Production writes it without a key.
+                                    // This text has no translations, so it
+                                    // is shown in English in every language.
                                     Some(en("Recovery snapshot created")),
                                     cx,
                                 )
@@ -319,7 +333,7 @@ impl SettingsWindow {
         }
         for (index, point) in self.cloud_panel.restore_points.iter().enumerate() {
             let snapshot = point.snapshot_id.clone();
-            // Each point follows a separator (`Row sep`).
+            // A separator is drawn above each restore point.
             history = history.child(separator(theme)).child(row(
                 theme,
                 cloud_date(Some(&point.created_at)),

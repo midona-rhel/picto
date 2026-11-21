@@ -1,9 +1,11 @@
-//! Sound: one CPAL output stream per player, the output the Flash player
-//! already uses, fed by a worker thread that decodes, fits the samples to the
-//! device and stretches them for the playback rate. The samples played are
-//! the clock: the position is the seek target plus what the device has
-//! consumed since, scaled by the rate. The last samples played are kept for
-//! the visualizer, as the media element's analyser sees them.
+//! The sound of the media player. Each player has one output stream of
+//! CPAL, which the Flash player also uses for its sound. A worker thread
+//! decodes the audio, fits the samples to the output device's channels and
+//! sample rate, and stretches them for the playback rate. The playback
+//! position is computed from the samples that the device has played: it is
+//! the position of the last seek, plus the time the device has played since
+//! then multiplied by the playback rate. The samples that were played last
+//! are kept for the audio visualizer.
 use super::backend::{Backend, Frame, Status};
 use super::dsp::{Resampler, Stretch, map_channels};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -13,34 +15,44 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-/// How much decoded sound the worker keeps ahead of the device.
+/// How much sound, in seconds, the worker keeps decoded and queued ahead of
+/// what the device is playing.
 const AHEAD: f64 = 0.25;
-/// How many recent samples the visualizer can read: the oscilloscope's
-/// 1024-sample window and some room.
+/// How many of the samples played last are kept for the visualizer. The
+/// oscilloscope reads the most at a time, 1024 samples.
 const RECENT: usize = 4096;
 
-/// A decoder of interleaved `f32` samples.
+/// A decoder that produces the audio of one file as interleaved `f32`
+/// samples.
 pub trait Source: Send {
-    /// Sample rate and channel count.
+    /// Returns the sample rate and the number of channels.
     fn spec(&self) -> (u32, usize);
+    /// Returns the length of the audio in seconds, or `None` when it is not
+    /// known.
     fn duration(&self) -> Option<f64>;
-    /// Moves to `seconds`; the next chunk starts there.
+    /// Moves to the position `seconds`. The next chunk starts there.
     fn seek(&mut self, seconds: f64) -> Result<(), String>;
-    /// The next chunk, `None` at the end.
+    /// Returns the next chunk of samples, or `None` at the end of the
+    /// audio.
     fn next_chunk(&mut self) -> Option<Result<Vec<f32>, String>>;
 }
 
-/// Opens a source starting at a position.
+/// A function that opens a source at the position it is given, in seconds.
 pub type OpenSource = Box<dyn Fn(f64) -> Result<Box<dyn Source>, String> + Send>;
 
-/// The samples most recently played, mixed to mono, for the visualizer.
+/// The samples that the output device played last, mixed to mono. The audio
+/// visualizer reads them.
 #[derive(Clone)]
 pub struct Analysis(Arc<Mutex<Recent>>);
 
+/// The last `RECENT` mono samples, kept in a ring.
 struct Recent {
+    /// The samples. The oldest one is at the index `at`.
     samples: Vec<f32>,
+    /// The index at which the next sample is written.
     at: usize,
-    /// Bumped whenever samples arrive, so a reader can tell new data from old.
+    /// Raised by 1 each time samples arrive, so that a reader can tell
+    /// whether new samples have arrived since it last read.
     written: u64,
 }
 
@@ -53,7 +65,8 @@ impl Analysis {
         })))
     }
 
-    /// The last `count` samples, oldest first.
+    /// Returns the `count` samples that were played last, the oldest
+    /// first. `count` is limited to `RECENT`.
     pub fn latest(&self, count: usize) -> Vec<f32> {
         let recent = self.0.lock().unwrap();
         let count = count.min(RECENT);
@@ -62,11 +75,13 @@ impl Analysis {
             .collect()
     }
 
-    /// A count that changes whenever new samples have been played.
+    /// Returns a count that changes each time new samples have been played.
     pub fn written(&self) -> u64 {
         self.0.lock().unwrap().written
     }
 
+    /// Adds the interleaved samples of `channels` channels that the device
+    /// has just taken. Each frame is stored as the mean of its channels.
     fn push(&self, interleaved: &[f32], channels: usize) {
         let mut recent = self.0.lock().unwrap();
         for frame in interleaved.chunks(channels) {
@@ -79,25 +94,35 @@ impl Analysis {
     }
 }
 
-/// What the device plays from, and the clock it keeps.
+/// The queue of samples that the output device plays from, and the values
+/// that the playback position is computed from.
 struct Buffer {
+    /// The interleaved samples that are queued for the device.
     samples: VecDeque<f32>,
-    /// Frames the device has taken since `base`.
+    /// The number of frames the device has taken since the position `base`.
     played: u64,
-    /// The media position the queue started at.
+    /// The position in the media, in seconds, of the first sample that was
+    /// queued after the queue was last emptied.
     base: f64,
+    /// The playback rate that the queued samples were stretched for.
     rate: f64,
+    /// The sample rate of the output device.
     device_rate: u32,
     channels: usize,
-    /// The source has run out; what is queued is all there is.
+    /// True when the source has reached its end, so that no more samples
+    /// will be queued.
     input_ended: bool,
     duration: Option<f64>,
+    /// The error that stopped the worker, or `None`.
     error: Option<String>,
-    /// The output device is open.
+    /// True once the output device is open.
     open: bool,
 }
 
 impl Buffer {
+    /// Returns the playback position in seconds: `base` plus the time the
+    /// device has played since then multiplied by the rate. It is not more
+    /// than the length of the audio.
     fn position(&self) -> f64 {
         let played = self.played as f64 / self.device_rate.max(1) as f64 * self.rate;
         let position = self.base + played;
@@ -105,28 +130,39 @@ impl Buffer {
             .map_or(position, |duration| position.min(duration))
     }
 
+    /// Returns true when the source has reached its end and the device has
+    /// played everything that was queued.
     fn ended(&self) -> bool {
         self.input_ended && self.samples.is_empty()
     }
 }
 
+/// What the engine, the worker thread and the output stream share.
 struct Shared {
     buffer: Mutex<Buffer>,
+    /// True while playback is paused. The output stream then takes no
+    /// samples from the queue and plays silence.
     paused: AtomicBool,
-    /// The gain applied as samples go out, as `f32` bits.
+    /// The volume, from 0 to 1, that each sample is multiplied by as it
+    /// goes to the device. It is stored as the bits of an `f32`.
     volume: AtomicU32,
     analysis: Analysis,
 }
 
+/// What the engine asks of the worker: a seek to a position in seconds, or
+/// a new playback rate.
 enum Command {
     Seek(f64),
     Rate(f32),
 }
 
-/// What a run of queued commands comes to: the last position asked for
-/// and the last rate. A scrub queues a seek per pointer move; restarting the
-/// source once for the run, not once per move, keeps the worker (and, for
-/// video through ffmpeg, the processes it starts) to one restart at a time.
+/// Returns what a series of queued commands amounts to: the position of the
+/// last seek and the last rate, each `None` when the series has none. A
+/// drag of the progress bar queues one seek for each move of the pointer.
+/// The worker restarts its source once for all the commands that are
+/// queued, and not once for each of them. For a video that `ffmpeg` plays,
+/// each restart starts a new `ffmpeg` process, so this also keeps down the
+/// number of processes that are started.
 fn folded(commands: impl IntoIterator<Item = Command>) -> (Option<f64>, Option<f32>) {
     let (mut seek, mut rate) = (None, None);
     for command in commands {
@@ -138,15 +174,18 @@ fn folded(commands: impl IntoIterator<Item = Command>) -> (Option<f64>, Option<f
     (seek, rate)
 }
 
-/// A source played through the default output device.
+/// Plays one source through the default output device.
 pub struct Engine {
     shared: Arc<Shared>,
     commands: mpsc::Sender<Command>,
 }
 
 impl Engine {
-    /// Starts the worker, which opens the device and the source; this
-    /// returns at once.
+    /// Starts the worker thread, which opens the source at `start` seconds
+    /// and the output device, and returns at once. `rate` is the playback
+    /// rate, and `paused` says whether playback is paused at first. The
+    /// volume is 0 until `set_volume` is called. When the worker fails, its
+    /// error is recorded and `error` returns it.
     pub fn start(open: OpenSource, start: f64, rate: f32, paused: bool) -> Self {
         let shared = Arc::new(Shared {
             buffer: Mutex::new(Buffer {
@@ -181,18 +220,23 @@ impl Engine {
         Self { shared, commands }
     }
 
+    /// Pauses playback or continues it.
     pub fn set_paused(&self, paused: bool) {
         self.shared.paused.store(paused, Ordering::Relaxed);
     }
 
+    /// Sets the volume, limited to the range from 0 to 1.
     pub fn set_volume(&self, volume: f32) {
         self.shared
             .volume
             .store(volume.clamp(0., 1.).to_bits(), Ordering::Relaxed);
     }
 
+    /// Moves the position to `seconds`.
     pub fn seek(&self, seconds: f64) {
-        // The clock moves at once; the worker refills from there.
+        // The queue is emptied and the position is set here, so that
+        // `position` returns the new position at once. The worker then
+        // restarts the source at that position and fills the queue again.
         {
             let mut buffer = self.shared.buffer.lock().unwrap();
             buffer.samples.clear();
@@ -203,32 +247,42 @@ impl Engine {
         let _ = self.commands.send(Command::Seek(seconds));
     }
 
+    /// Sets the playback rate.
     pub fn set_rate(&self, rate: f32) {
         let _ = self.commands.send(Command::Rate(rate));
     }
 
+    /// Returns the playback position in seconds.
     pub fn position(&self) -> f64 {
         self.shared.buffer.lock().unwrap().position()
     }
 
+    /// Returns the length of the audio in seconds, or `None` while it is
+    /// not known.
     pub fn duration(&self) -> Option<f64> {
         self.shared.buffer.lock().unwrap().duration
     }
 
+    /// Returns true when the source has reached its end and everything that
+    /// was queued has been played.
     pub fn ended(&self) -> bool {
         self.shared.buffer.lock().unwrap().ended()
     }
 
-    /// The device is open and the clock runs on its samples.
+    /// Returns true when the output device is open and no error has
+    /// occurred. The position then advances as the device plays samples.
     pub fn running(&self) -> bool {
         let buffer = self.shared.buffer.lock().unwrap();
         buffer.open && buffer.error.is_none()
     }
 
+    /// Returns the error that stopped the worker, or `None`.
     pub fn error(&self) -> Option<String> {
         self.shared.buffer.lock().unwrap().error.clone()
     }
 
+    /// Returns access to the samples that were played last, for the
+    /// visualizer.
     pub fn analysis(&self) -> Analysis {
         self.shared.analysis.clone()
     }
@@ -236,12 +290,21 @@ impl Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        // Dropping the sender ends the worker, which drops the stream.
+        // The output stream stops taking samples at once. After this
+        // function the engine's sender of commands is dropped. The worker
+        // then finds its channel disconnected and returns, which drops the
+        // output stream.
         self.shared.paused.store(true, Ordering::Relaxed);
     }
 }
 
-/// Opens the default output device, playing from the shared buffer.
+/// Opens the default output device with its default configuration and
+/// starts a stream that plays the samples of the shared queue. Returns the
+/// stream, the device's sample rate and its number of channels. Each time
+/// the device asks for samples, the stream takes whole frames from the
+/// queue, unless playback is paused, counts them, adds them to the samples
+/// for the visualizer, and multiplies them by the volume. What the device
+/// asked for beyond that is filled with silence.
 fn open_output(shared: &Arc<Shared>) -> Result<(cpal::Stream, u32, usize), String> {
     let host = cpal::default_host();
     let device = host
@@ -297,8 +360,12 @@ fn open_output(shared: &Arc<Shared>) -> Result<(cpal::Stream, u32, usize), Strin
     Ok((stream, rate, channels))
 }
 
-/// The worker: owns the stream and the source, and keeps the queue a little
-/// ahead of the device.
+/// The body of the worker thread. It opens the source and the output
+/// device. Then it keeps 0.25 s of sound (`AHEAD`) queued ahead of the
+/// device: it takes chunks from the source, fits them to the device's
+/// channels and sample rate, stretches them for the playback rate and adds
+/// them to the queue. It returns when the engine has been dropped, or with
+/// an error when the source or the device fails.
 fn run(
     shared: Arc<Shared>,
     open: OpenSource,
@@ -326,8 +393,9 @@ fn run(
     let ahead = (AHEAD * device_rate as f64) as usize * device_channels;
     let mut finished = false;
     loop {
-        // While the queue is full (or the source done), wait for a command;
-        // otherwise only look for one.
+        // While enough sound is queued, or the source has ended, the worker
+        // waits up to 10 ms for a command. Otherwise it takes a command
+        // only if one is waiting, and goes on to decode the next chunk.
         let queued = shared.buffer.lock().unwrap().samples.len();
         let command = if finished || queued >= ahead {
             match commands.recv_timeout(Duration::from_millis(10)) {
@@ -342,7 +410,11 @@ fn run(
                 Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
             }
         };
-        // A seek or a new rate restarts the pipeline from that position.
+        // For a seek or a new rate, all the commands that are waiting are
+        // taken together. The source seeks to the position of the last
+        // seek, or to the current position when only the rate changed. The
+        // resampler and the stretcher are made again, and the queue is
+        // emptied and starts at that position.
         if let Some(command) = command {
             let (seek, new_rate) = folded(
                 std::iter::once(command).chain(std::iter::from_fn(|| commands.try_recv().ok())),
@@ -381,7 +453,8 @@ fn run(
     }
 }
 
-/// Audio files decoded in-process by Symphonia.
+/// A source that decodes an audio file inside the app's process with the
+/// Symphonia library.
 pub struct SymphoniaSource {
     format: Box<dyn symphonia::core::formats::FormatReader>,
     decoder: Box<dyn symphonia::core::codecs::Decoder>,
@@ -389,11 +462,16 @@ pub struct SymphoniaSource {
     rate: u32,
     channels: usize,
     duration: Option<f64>,
-    /// Samples before this timestamp are dropped after a seek.
+    /// After a seek, the timestamp of the first sample to return. The
+    /// samples before it are dropped. It is 0 when no samples are to be
+    /// dropped, and `u64::MAX` after a seek past the end, when all the
+    /// samples that follow are dropped.
     skip_until: u64,
 }
 
 impl SymphoniaSource {
+    /// Opens the audio file `path` and makes a decoder for its default
+    /// track.
     pub fn open(path: &Path) -> Result<Self, String> {
         use symphonia::core::{
             codecs::DecoderOptions, formats::FormatOptions, io::MediaSourceStream,
@@ -473,7 +551,9 @@ impl Source for SymphoniaSource {
                 self.decoder.reset();
                 Ok(())
             }
-            // A seek past the end leaves nothing to play.
+            // A seek to a position past the end fails with a seek error.
+            // All the samples that follow are then dropped, so the audio
+            // ends.
             Err(symphonia::core::errors::Error::SeekError(_)) => {
                 self.skip_until = u64::MAX;
                 Ok(())
@@ -503,7 +583,8 @@ impl Source for SymphoniaSource {
             }
             let decoded = match self.decoder.decode(&packet) {
                 Ok(decoded) => decoded,
-                // A damaged packet is skipped, as players do.
+                // A packet that cannot be decoded is skipped, and decoding
+                // goes on with the next packet.
                 Err(Error::DecodeError(_)) => continue,
                 Err(error) => return Some(Err(error.to_string())),
             };
@@ -525,7 +606,8 @@ impl Source for SymphoniaSource {
     }
 }
 
-/// An audio file: Symphonia's decoder through the engine.
+/// The backend for an audio file. It plays a `SymphoniaSource` through an
+/// `Engine`.
 pub struct AudioPlayer {
     engine: Engine,
     playing: bool,
@@ -533,6 +615,9 @@ pub struct AudioPlayer {
 }
 
 impl AudioPlayer {
+    /// Makes a player for the audio file `path`. Playback is paused at
+    /// first. The worker thread opens the file, so an error in opening it
+    /// is reported later, through `status`.
     pub fn open(path: &Path) -> Result<Self, String> {
         let path = path.to_path_buf();
         let source_path = path.clone();
@@ -586,7 +671,7 @@ impl Backend for AudioPlayer {
         Status {
             position: self.engine.position(),
             duration,
-            // The whole file is local.
+            // The file is on disk, so all of it counts as buffered.
             buffered: duration,
             playing: self.playing && !ended && error.is_none(),
             ended,
@@ -623,9 +708,12 @@ mod tests {
         assert_eq!(folded([Command::Rate(2.)]), (None, Some(2.)));
     }
 
-    /// Plays the file in `PICTO_GPUI_TEST_AUDIO` silently through the
-    /// default output device: the clock follows the samples played, a seek
-    /// moves it, and at double speed it runs twice as fast.
+    /// Plays the file named by the environment variable
+    /// `PICTO_GPUI_TEST_AUDIO` through the default output device, with the
+    /// volume at 0. It checks that the position advances by about 1 s a
+    /// second at the rate 1, that a seek changes the position at once, that
+    /// the position advances by about 2 s a second at the rate 2, and that
+    /// it does not advance while playback is paused.
     #[test]
     #[ignore = "needs an audio file in PICTO_GPUI_TEST_AUDIO and an output device"]
     fn plays_through_the_output_device() {
@@ -639,7 +727,7 @@ mod tests {
             std::thread::sleep(wait);
             (player.status().position - start) / since.elapsed().as_secs_f64()
         };
-        // Let the device start.
+        // The worker needs some time to open the output device.
         std::thread::sleep(Duration::from_millis(300));
         let status = player.status();
         assert!(status.error.is_none(), "{status:?}");
@@ -658,8 +746,9 @@ mod tests {
         eprintln!("{}: {:?}", path.display(), player.status());
     }
 
-    /// Decodes an audio file named by `PICTO_GPUI_TEST_AUDIO`, seeks into it
-    /// and checks the samples keep coming from there.
+    /// Decodes more than one second of the audio file named by the
+    /// environment variable `PICTO_GPUI_TEST_AUDIO`. Then it seeks to 1 s
+    /// and checks that the next chunk holds samples.
     #[test]
     #[ignore = "needs an audio file in PICTO_GPUI_TEST_AUDIO"]
     fn decodes_and_seeks_a_real_audio_file() {

@@ -1,76 +1,96 @@
-//! The one seam between the player and whatever decodes the media. The
-//! player's model and controls know only this trait; each platform's decoder
-//! implements it.
+//! The interface between the media player and the code that decodes the
+//! media. The player calls only the `Backend` trait, which has three
+//! implementations:
 //!
-//! - macOS video (QuickTime, MPEG-4): AVFoundation (`avf.rs`), whose frames
-//!   GPUI presents as CoreVideo pixel buffers without copying.
-//! - Other video (WebM, Matroska, and anything AVFoundation refuses): the
-//!   `ffmpeg` binary the project already bundles for thumbnails
-//!   (`ffmpeg.rs`), frames uploaded as images, sound through `audio.rs`.
-//! - Audio: decoded in-process (`audio.rs`), played through CPAL, the output
-//!   the Flash player uses, which also hands the visualizer its samples.
+//! - On macOS, AVFoundation (`avf.rs`) plays QuickTime and MPEG-4 video.
+//!   Its frames are CoreVideo pixel buffers, which GPUI draws without
+//!   copying them.
+//! - The `ffmpeg` program that Picto ships with for making thumbnails
+//!   (`ffmpeg.rs`) plays every other video, such as WebM and Matroska, and
+//!   a video that AVFoundation cannot play. Its frames are drawn as images,
+//!   and `audio.rs` plays its sound.
+//! - `audio.rs` decodes an audio file inside the app's process and plays it
+//!   through CPAL, which the Flash player also uses for its sound. It also
+//!   gives the audio visualizer the samples that are playing.
 use super::audio::Analysis;
 use gpui::RenderImage;
 use std::path::Path;
 use std::sync::Arc;
 
-/// A decoded picture ready to draw.
+/// A decoded video frame that is ready to be drawn.
 #[derive(Clone)]
 pub enum Frame {
-    /// A CoreVideo buffer in the bi-planar full-range 4:2:0 format, the only
-    /// one GPUI's `surface` element accepts.
+    /// A CoreVideo pixel buffer in the bi-planar full-range 4:2:0 format,
+    /// which is the only format that GPUI's `surface` element draws.
     #[cfg(target_os = "macos")]
     Surface(objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>),
-    /// Pixels uploaded as an image (BGRA, as `RenderImage` holds them).
+    /// An image whose pixels are in the order blue, green, red, alpha,
+    /// which is the order `RenderImage` holds them in.
     Image(Arc<RenderImage>),
 }
 
-/// What the media is doing, polled once per drawn frame.
+/// The state of the media, as a backend reports it. The player asks for it
+/// once each time the player is drawn.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Status {
-    /// Where playback is, in seconds.
+    /// The playback position, in seconds.
     pub position: f64,
-    /// The length, once known; 0 until then.
+    /// The length of the media in seconds. It is 0 until the length is
+    /// known.
     pub duration: f64,
     /// The end of the last buffered range, in seconds.
     pub buffered: f64,
-    /// Playing (not paused, not stopped at the end).
+    /// True while the media plays. It is false while playback is paused and
+    /// after the media has stopped at its end.
     pub playing: bool,
-    /// Stopped at the end.
+    /// True when the media has stopped at its end.
     pub ended: bool,
-    /// The media cannot be played; the reason.
+    /// The reason the media cannot be played, or `None` when it can.
     pub error: Option<String>,
-    /// The picture's size in pixels, once known.
+    /// The width and the height of the video's picture in pixels, or `None`
+    /// while they are not known.
     pub size: Option<(u32, u32)>,
-    /// Frames per second, when the decoder knows it.
+    /// The video's frame rate in frames a second, or `None` while the
+    /// backend does not know it.
     pub fps: Option<f64>,
 }
 
-/// A media decoder and its output. Every call returns at once: decoding and
-/// file reading happen on the backend's own threads, never on the thread
-/// that draws.
+/// What plays one media file: it decodes the file and produces its frames
+/// and its sound. Every function returns at once. A backend reads and
+/// decodes the file on its own threads, never on the thread that draws.
 pub trait Backend {
+    /// Starts playback, or continues it after a pause.
     fn play(&mut self);
+    /// Pauses playback.
     fn pause(&mut self);
-    /// Moves to `seconds`, keeping whether it plays.
+    /// Moves the position to `seconds`. Media that plays keeps playing, and
+    /// media that is paused stays paused.
     fn seek(&mut self, seconds: f64);
+    /// Sets the playback rate, where 1 is the normal speed.
     fn set_rate(&mut self, rate: f32);
+    /// Sets the volume, from 0 to 1, and whether the sound is muted.
     fn set_volume(&mut self, volume: f32, muted: bool);
+    /// Returns the state of the media now.
     fn status(&mut self) -> Status;
-    /// The picture to show now, if it changed since the last call.
+    /// Returns the video frame to draw now. Returns `None` when that is
+    /// still the frame the last call returned, or when there is no frame.
     fn take_frame(&mut self) -> Option<Frame>;
-    /// The samples the sound card is playing, for the audio visualizer.
+    /// Returns access to the samples that the output device played last,
+    /// which the audio visualizer draws. The default returns `None`, for a
+    /// backend that does not keep these samples.
     fn analysis(&self) -> Option<Analysis> {
         None
     }
-    /// Whether this backend is AVFoundation, which the player falls back from
-    /// to `ffmpeg` when it refuses a file.
+    /// Returns true when the backend is AVFoundation. When AVFoundation
+    /// reports an error for a file before it has delivered a frame, the
+    /// player opens the file with `ffmpeg` in its place.
     fn is_native(&self) -> bool {
         false
     }
 }
 
-/// Container types AVFoundation plays on macOS.
+/// Returns true when `mime` is one of the media types that AVFoundation
+/// plays on macOS: QuickTime, MPEG-4 and 3GPP video.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn native_video(mime: &str) -> bool {
     matches!(
@@ -79,12 +99,15 @@ pub fn native_video(mime: &str) -> bool {
     )
 }
 
-/// Opens a video with the platform's player when it takes the container,
-/// else through `ffmpeg`.
+/// Opens the video file `path`. On macOS a file whose media type
+/// AVFoundation plays (`native_video`) is opened with AVFoundation. Every
+/// other file, and on Windows and Linux every file, is opened with
+/// `ffmpeg`.
 pub fn open_video(path: &Path, mime: &str) -> Result<Box<dyn Backend>, String> {
-    // AVFoundation can refuse at once (off the main thread, as in the
-    // off-screen checks); `ffmpeg` then plays the file, as it does when
-    // AVFoundation turns the file down later.
+    // AVFoundation can fail to open the file at once. It does so when this
+    // function is not called on the main thread, which is the case in the
+    // checks of `offscreen.rs`. The file is then opened with `ffmpeg`, as
+    // it is when AVFoundation reports an error for the file later.
     #[cfg(target_os = "macos")]
     if native_video(mime)
         && let Ok(player) = super::avf::AvPlayer::open(path)
@@ -95,12 +118,13 @@ pub fn open_video(path: &Path, mime: &str) -> Result<Box<dyn Backend>, String> {
     open_video_fallback(path)
 }
 
-/// Opens a video through the bundled `ffmpeg`.
+/// Opens the video file `path` with the `ffmpeg` program that Picto ships
+/// with.
 pub fn open_video_fallback(path: &Path) -> Result<Box<dyn Backend>, String> {
     Ok(Box::new(super::ffmpeg::FfmpegPlayer::open(path)?))
 }
 
-/// Opens an audio file.
+/// Opens the audio file `path` with the decoder in `audio.rs`.
 pub fn open_audio(path: &Path) -> Result<Box<dyn Backend>, String> {
     Ok(Box::new(super::audio::AudioPlayer::open(path)?))
 }

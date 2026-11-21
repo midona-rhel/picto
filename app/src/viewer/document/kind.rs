@@ -1,5 +1,5 @@
-//! Which renderer an item's media type gets (`detailRendererKind.ts`). The
-//! media surface asks this one function what to show.
+//! Decides from an item's media type which viewer shows the item. The media
+//! surface calls `renderer_kind` for every item it opens.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RendererKind {
@@ -42,9 +42,10 @@ pub fn renderer_kind(mime: &str) -> RendererKind {
 }
 
 impl RendererKind {
-    /// The kinds this module draws: paged documents, text, fonts and the
-    /// unsupported view. Images, JPEG XL and Flash stay on the media
-    /// surface's camera; video and audio have players of their own.
+    /// Returns whether the document viewers (`viewer::document`) draw this
+    /// kind: paged documents, text, fonts and the view for files that cannot
+    /// be shown. The media surface draws images, JPEG XL and Flash itself,
+    /// and video and audio have players of their own.
     pub fn is_document(self) -> bool {
         use RendererKind::*;
         matches!(
@@ -59,7 +60,7 @@ mod tests {
     use super::{RendererKind::*, renderer_kind};
 
     #[test]
-    fn routes_each_type_as_production_does() {
+    fn routes_each_type_as_the_earlier_version_did() {
         for (mime, kind) in [
             ("image/png", Image),
             ("image/jxl", JpegXl),

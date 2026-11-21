@@ -2,27 +2,28 @@ use crate::theme;
 use gpui::*;
 use std::{cell::Cell, rc::Rc};
 
-/// The gutter every scrolling surface reserves (`::-webkit-scrollbar` width).
+/// The width of the gutter that every scrolling surface keeps free for its
+/// scrollbar.
 pub const GUTTER: f32 = 8.;
-/// The thumb is inset by a 2px transparent border on each side.
+/// The space between the thumb and each edge of the gutter.
 const INSET: f32 = 2.;
-/// Chromium's shortest thumb for a styled scrollbar, border included: a
-/// destination of thousands of items shows a 22px thumb inside its 2px
-/// borders.
+/// The shortest thumb, including the 2px above it and below it. The thumb of a
+/// list of thousands of items is therefore drawn 22px high.
 const MINIMUM_THUMB: f32 = 26.;
 
-/// What survives between frames: whether the pointer is over the thumb and,
-/// while the thumb is dragged, how far into the thumb it was grabbed.
+/// What is kept between frames: whether the pointer is over the thumb and,
+/// while the thumb is dragged, how far below the thumb's top edge the pointer
+/// grabbed it.
 #[derive(Default)]
 struct State {
     hovered: Cell<bool>,
     grab: Cell<Option<Pixels>>,
 }
 
-/// The app's one scrollbar, as `globals.css` styles it: an 8px gutter with a
-/// rounded thumb inset 2px, at a quarter contrast and at half while the
-/// pointer is over the thumb or dragging it. Place it as the last child of the element
-/// that wraps the scrolling surface tracked by `scroll`.
+/// Returns the app's scrollbar: an 8px gutter with a rounded thumb that is
+/// inset by 2px. The thumb is drawn in `Theme::contrast` at 25%, and at 50%
+/// while the pointer is over it or drags it. Place it as the last child of the
+/// element that wraps the scrolling surface that `scroll` tracks.
 pub fn scrollbar(
     id: impl Into<ElementId>,
     scroll: &ScrollHandle,
@@ -65,7 +66,8 @@ pub fn scrollbar(
                 {
                     return;
                 }
-                // A press beside the thumb brings the thumb's middle to it.
+                // A press in the gutter outside the thumb moves the thumb so
+                // that its middle is at the pointer.
                 let grab = if thumb_bounds.contains(&event.position) {
                     event.position.y - top
                 } else {
@@ -107,7 +109,8 @@ pub fn scrollbar(
     .w(px(GUTTER))
 }
 
-/// Scrolls so the thumb's top edge sits at `thumb_top`, within its travel.
+/// Scrolls so that the thumb's top edge is at `thumb_top`, limited to the
+/// range in which the thumb can move.
 fn drag_to(
     scroll: &ScrollHandle,
     track: Bounds<Pixels>,

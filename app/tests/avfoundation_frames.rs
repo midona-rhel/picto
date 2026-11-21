@@ -1,20 +1,24 @@
-//! Headless check of the macOS video path: opens the QuickTime or MPEG-4
-//! file named by `PICTO_GPUI_TEST_VIDEO` through the player's AVFoundation
-//! backend, plays it muted and pulls frames as the window does. The frames
-//! must be the bi-planar full-range buffers GPUI's `surface` draws, of the
-//! item's size, carrying the BT.601 matrix the composition asks for, at
-//! advancing times; a seek must move the clock.
+//! A check of video playback on macOS that opens no window. It opens the
+//! QuickTime or MPEG-4 file that `PICTO_GPUI_TEST_VIDEO` names with the
+//! player's AVFoundation backend, plays it muted, and takes frames from the
+//! player as the viewer's window does. It checks that the frames are bi-planar
+//! full-range buffers, which is what GPUI's `surface` draws, that they have
+//! the item's size, that they carry the BT.601 matrix that the video
+//! composition asks for, and that their times advance. It also checks that a
+//! seek moves the player's position.
 //!
-//! AVFoundation delivers its state on the main thread's run loop, which the
-//! standard harness does not give a test, so this is a plain program
-//! (`harness = false`) that skips without the variable:
+//! AVFoundation reports its state on the run loop of the main thread, and the
+//! standard test harness does not run a test there. So this is a plain program
+//! (`harness = false`). It skips the check when the variable is not set:
 //!
 //! ```sh
 //! PICTO_GPUI_TEST_VIDEO=/path/to/video.mov cargo test --test avfoundation_frames
 //! ```
 
 #[cfg(target_os = "macos")]
-// The modules' own unit tests are not run here.
+// This program includes the player's modules from the app's sources. It does
+// not run their unit tests and does not use all of their code, so the warnings
+// about unused code and unused imports are turned off.
 #[allow(dead_code, unused_imports)]
 #[path = "../src/viewer/video"]
 mod video {
@@ -44,13 +48,15 @@ fn main() {
     };
     assert!(objc2::MainThreadMarker::new().is_some());
     let path = PathBuf::from(path);
-    // Runs the main run loop for a moment, so AVFoundation's updates land.
+    // Runs the main run loop for `duration`, so that AVFoundation can deliver
+    // its updates.
     let spin = |duration: Duration| unsafe {
         CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, duration.as_secs_f64(), false);
     };
-    // Opened paused, as a collection member is, the item still hands over
-    // its first frame (the player primes it with a seek to the start), at
-    // the start, soon.
+    // A player that was opened and not started still gives its first frame,
+    // because the player seeks to the start when it opens. A file in a
+    // collection is opened this way. The frame must arrive within 10 seconds
+    // and must be at the start of the video.
     for _ in 0..2 {
         let opened = Instant::now();
         let mut paused = video::avf::AvPlayer::open(&path).unwrap();
@@ -137,7 +143,8 @@ fn main() {
         Some(expected.as_str()),
         "the composition writes BT.601"
     );
-    // A seek moves the clock there, playing or not.
+    // A seek moves the player's position to the target while the player is
+    // paused.
     player.pause();
     player.seek(2.);
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -145,7 +152,7 @@ fn main() {
         assert!(Instant::now() < deadline, "seek: {:?}", player.status());
         spin(Duration::from_millis(10));
     }
-    // And the picture there arrives while paused.
+    // The frame at the new position arrives while the player is paused.
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         assert!(Instant::now() < deadline, "no picture after the seek");

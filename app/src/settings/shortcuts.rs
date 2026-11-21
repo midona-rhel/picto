@@ -1,6 +1,8 @@
-//! The Shortcuts section (`ShortcutsPanel.tsx`): the keyboard preset, a
-//! search, and one table per group with two binding fields per shortcut
-//! that capture the next key pressed.
+//! The Shortcuts section of the Settings window. It has a select for the
+//! keyboard preset, a search field, and one table for each group of
+//! shortcuts. Each row of a table has the two binding fields of one
+//! shortcut. After the user clicks a binding field, the field binds the
+//! next keys that the user presses.
 use super::registry::{self, KeyboardPreset, Slot};
 use super::window::SettingsWindow;
 use crate::i18n::t;
@@ -10,12 +12,16 @@ use crate::ui::{self, choice, field::Look};
 use gpui::*;
 use std::time::Duration;
 
-/// A conflicting first binding stays marked for this long.
+/// How long a row stays marked after the user tried to give the shortcut's
+/// first binding keys that another shortcut already has.
 const CONFLICT_SHOWN: Duration = Duration::from_millis(1500);
-/// A captured binding shows in its field this long before the field lets go.
+/// How long a binding field shows the keys that it has just captured before
+/// it gives up the keyboard focus.
 const CAPTURE_HOLD: Duration = Duration::from_millis(150);
 
-/// Sets a flex item's grow factor with a zero basis (`flex: <grow>`).
+/// Makes `element` a flex item that grows by `factor`, can shrink, and has
+/// a basis of zero. Items made this way share the width of their row in
+/// proportion to their factors.
 fn grow(mut element: Div, factor: f32) -> Div {
     let style = element.style();
     style.flex_grow = Some(factor);
@@ -25,9 +31,10 @@ fn grow(mut element: Div, factor: f32) -> Div {
 }
 
 impl SettingsWindow {
-    /// Binds a shortcut slot, unless another shortcut already has the keys
-    /// (`handleChange`): then the row is marked instead, the first slot's
-    /// mark fading after 1.5 s.
+    /// Sets one of the two bindings of the shortcut `id` to `keys` in the
+    /// draft. If another shortcut already has those keys, nothing is bound
+    /// and the shortcut's row is marked as a conflict. When `slot` is the
+    /// first binding, the mark is removed after 1.5 s.
     pub(super) fn bind(
         &mut self,
         id: &'static str,
@@ -76,7 +83,10 @@ impl SettingsWindow {
         });
     }
 
-    /// A key pressed while a binding field listens.
+    /// Handles a key that is pressed while a binding field is waiting for
+    /// keys. The field shows the keys and binds them, and 150 ms later it
+    /// gives up the keyboard focus. A modifier key that is pressed on its
+    /// own is ignored.
     fn captured(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some((id, slot, _)) = self.capturing.clone() else {
             return;
@@ -111,7 +121,9 @@ impl SettingsWindow {
         .detach();
     }
 
-    /// One binding field (`ShortcutInput`).
+    /// Draws one binding field of the shortcut `id`. `keys` is what the
+    /// binding holds now. `conflict` is whether the shortcut's row is marked
+    /// as a conflict.
     fn binding(
         &self,
         id: &'static str,
@@ -147,8 +159,9 @@ impl SettingsWindow {
             Slot::Keys => 0,
             Slot::Keys2 => 1,
         };
-        // A button read as the keys it holds (or "Click to bind"); pressing
-        // it listens for new keys.
+        // Assistive technology is told that the field is a button whose
+        // name is the text it shows: the keys it holds, or "Click to bind"
+        // when it holds none. Pressing the field makes it wait for new keys.
         let mut input = div()
             .id(ElementId::Name(format!("binding-{id}-{slot_index}").into()))
             .role(Role::Button)
@@ -172,8 +185,8 @@ impl SettingsWindow {
                 cx.listener(move |this, _, window, cx| {
                     this.capturing = Some((id, slot, None));
                     window.focus(&this.capture_focus, cx);
-                    // The window's root takes the focus on a press unless
-                    // told the press was handled.
+                    // Without this call, the window's root element takes the
+                    // keyboard focus when the mouse button is pressed.
                     window.prevent_default();
                     cx.notify();
                 }),
@@ -183,8 +196,10 @@ impl SettingsWindow {
         } else {
             input.text_color(theme.text())
         };
-        // The field chosen to listen holds the keyboard focus from the frame
-        // after the press; a focus handle no element tracks is let go.
+        // Only the field that was pressed tracks `capture_focus`, so that
+        // field has the keyboard focus from the frame after the press. GPUI
+        // takes the keyboard focus away from a handle that no element
+        // tracks.
         let chosen = self
             .capturing
             .as_ref()
@@ -222,8 +237,9 @@ impl SettingsWindow {
         grow(div().p(px(4.)), 3.).child(wrap)
     }
 
-    /// The section's content: the preset block over the shortcut tables,
-    /// which scroll on their own.
+    /// Draws the content of the section: the block with the keyboard preset
+    /// at the top, and below it the search field and the tables of
+    /// shortcuts. Only the tables scroll.
     pub(super) fn shortcuts_panel(
         &self,
         window: &mut Window,
@@ -320,7 +336,7 @@ impl SettingsWindow {
                     .mb(px(8.))
                     .flex()
                     .text(theme::TEXT_SM)
-                    // Mantine's body `line-height: 1.55`.
+                    // The group's name has the line height of body text.
                     .line_height(px(theme::TEXT_SM * 1.55))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_secondary())
@@ -349,9 +365,10 @@ impl SettingsWindow {
                     .px(px(12.))
                     .overflow_hidden()
                     .child(
-                        // Mantine's body `line-height: 1.55` for both lines,
-                        // which overflow the 36px row evenly when there is a
-                        // description.
+                        // The label and the description both have the line
+                        // height of body text. Together they are taller than
+                        // the 36px row, and they overflow it by the same
+                        // amount above and below.
                         ui::a11y::text(
                             div().id(ElementId::Name(format!("label-{}", item.id).into())),
                             t(item.label),
@@ -385,8 +402,9 @@ impl SettingsWindow {
                 if index < last {
                     row = row.border_b_1().border_color(theme.border_secondary());
                 }
-                // Even rows are shaded; the shading keeps inside the
-                // table's rounded corners.
+                // Every second row is shaded. When the last row is shaded,
+                // its bottom corners are rounded, so that the shading stays
+                // inside the table's rounded corners.
                 if index % 2 == 1 {
                     row = row.bg(theme.contrast(3.));
                     if index == last {

@@ -1,51 +1,56 @@
-//! One sign-in at a time (`createAuthSessions`): the state the Accounts
-//! window shows, and what each event from the sign-in window, its adapter
-//! or the application leads to. It does nothing itself; it hands back the
-//! effects for the driver (`logins::Logins`) to perform, so production's
-//! session tests run against it directly.
+//! The state machine of the one sign-in that can be under way. It holds
+//! the state that the Accounts dialog shows, and decides what follows from
+//! each event of the sign-in window, of the adapter and of the application.
+//! It performs nothing itself: every function returns the [`Effect`]s that
+//! `logins::Logins` then performs. The tests therefore call it directly,
+//! without a window.
 use super::adapters::{self, Adapter, Outcome, Prepared};
 use super::sites::{self, Site, Strategy, WindowSize};
 use super::{AuthState, Credential, Status};
 use std::rc::Rc;
 
-/// What the driver does for the machine.
+/// One thing that `logins::Logins` does when the machine returns it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
-    /// Opens the sign-in window, hidden until its first page is ready, on a
-    /// web view whose storage is fresh and its own.
+    /// Opens the sign-in window. It stays hidden until its first page has
+    /// loaded. Its web view has an empty storage that no other window
+    /// shares.
     OpenWindow {
         title: String,
         size: WindowSize,
     },
-    /// Runs the adapter's `prepare` and reports [`Machine::prepared`].
+    /// Runs the adapter's `prepare` and calls [`Machine::prepared`] with
+    /// the result.
     Prepare,
     Load(String),
-    /// Looks at the page every 750 ms ([`Machine::tick`]).
+    /// Starts calling [`Machine::tick`] every 750 ms.
     StartPolling,
     Focus,
     Show,
     Hide,
-    /// Runs the adapter's `inspect`, bounded to 4 s, and reports
-    /// [`Machine::inspected`].
+    /// Runs the adapter's `inspect` for at most 4 s and calls
+    /// [`Machine::inspected`] with the result.
     Inspect,
-    /// Runs the adapter's `complete` on a callback and reports
-    /// [`Machine::completed`].
+    /// Runs the adapter's `complete` with the address of a callback and
+    /// calls [`Machine::completed`] with the result.
     Complete(String),
-    /// Saves the credential through `auth.credentials.set` and reports
-    /// [`Machine::persisted`] with the session it was asked for.
+    /// Saves the credential with the command `auth.credentials.set` and
+    /// calls [`Machine::persisted`] with `session` and the result.
     Persist { credential: Credential, session: u64 },
-    /// Closes the window. Its storage goes with it: every sign-in window
-    /// has storage of its own.
+    /// Closes the sign-in window. The storage of its web view is deleted
+    /// with it.
     CloseWindow,
-    /// Opens OnlyFans in a browser of the user's outside the app, reports
-    /// [`Machine::external_launched`], and then [`Machine::external_finished`]
-    /// with the session it was asked for.
+    /// Opens OnlyFans in a browser that is installed on the computer,
+    /// outside the app. Calls [`Machine::external_launched`] with whether
+    /// the browser started, and later [`Machine::external_finished`] with
+    /// `session` and the login that was read from the browser.
     LaunchExternal { session: u64 },
-    /// Ends that browser's login.
+    /// Ends the login in that browser and closes the browser.
     CloseExternal,
 }
 
-/// The sign-in under way and what the Accounts window is told of it.
+/// Holds the sign-in that is under way and the state that the Accounts
+/// dialog shows for it.
 pub struct Machine {
     state: AuthState,
     adapter: Option<Rc<Adapter>>,
@@ -54,11 +59,12 @@ pub struct Machine {
     inspecting: bool,
     finishing: bool,
     completed: bool,
-    /// What the Accounts window says once the credential is saved.
+    /// The message that the Accounts dialog shows after the credential has
+    /// been saved.
     pending_message: String,
-    /// Counts sessions: each start, cancel and pasted session is a new
-    /// one, and a late answer for an earlier one changes nothing
-    /// (production's `externalAuth !== session`).
+    /// The number of the current session. Every start, every cancel and
+    /// every pasted session adds one to it. A result that arrives for an
+    /// earlier number is ignored.
     session: u64,
 }
 
@@ -83,7 +89,7 @@ impl Machine {
         }
     }
 
-    /// `getAuthSessionState`.
+    /// Returns the state that the Accounts dialog shows.
     pub fn state(&self) -> &AuthState {
         &self.state
     }
@@ -92,10 +98,10 @@ impl Machine {
         self.adapter.clone()
     }
 
-    /// `startAuthSession`: the sign-in for `site_id` (and, for
-    /// SubscribeStar, the service chosen), after whatever was under way is
-    /// cancelled. An unknown service or host is refused before anything
-    /// opens.
+    /// Starts the sign-in for `site_id`, and for SubscribeStar for the
+    /// service at `service_host`. A sign-in that is under way is cancelled
+    /// first. Returns an error, before anything is cancelled or opened, if
+    /// the service or the host is not known.
     pub fn start(
         &mut self,
         site_id: &str,
@@ -144,8 +150,9 @@ impl Machine {
         Ok(effects)
     }
 
-    /// The system could not open the sign-in window (no web view: the
-    /// WebView2 Runtime or WebKitGTK missing); the login ends with why.
+    /// Ends the login with the status `Error` and `error` as its message.
+    /// It is called when the sign-in window could not be opened, for
+    /// example because the WebView2 Runtime or WebKitGTK is not installed.
     pub fn could_not_open(&mut self, error: String) -> Vec<Effect> {
         self.window_open = false;
         self.adapter = None;
@@ -153,7 +160,9 @@ impl Machine {
         Vec::new()
     }
 
-    /// The adapter's first page, or why it could not make one.
+    /// Takes the result of the adapter's `prepare`. On success the window
+    /// loads the returned address; on failure the window is shown and the
+    /// state holds the error.
     pub fn prepared(&mut self, prepared: Result<Prepared, String>) -> Vec<Effect> {
         if !self.window_open {
             return Vec::new();
@@ -183,7 +192,8 @@ impl Machine {
         }
     }
 
-    /// `did-navigate`: the window moved to another page.
+    /// Records that the sign-in window started to load the page at `url`,
+    /// and asks for a look at the page.
     pub fn navigated(&mut self, url: &str) -> Vec<Effect> {
         if !self.window_open {
             return Vec::new();
@@ -192,7 +202,8 @@ impl Machine {
         self.inspect()
     }
 
-    /// `did-finish-load`: the page has loaded.
+    /// Records that the page at `url` has finished loading, and asks for a
+    /// look at the page.
     pub fn loaded(&mut self, url: &str) -> Vec<Effect> {
         if !self.window_open {
             return Vec::new();
@@ -201,9 +212,10 @@ impl Machine {
         self.inspect()
     }
 
-    /// `did-fail-load` for the main frame: the window is shown, and the
-    /// Accounts window told why. Nothing is saved; the next look at the page
-    /// says what it shows, as production's does.
+    /// Records that the page at `url` could not be loaded. The window is
+    /// shown, and the state gets the status `Error` and a message with
+    /// `description`. Nothing is saved, and the login is not ended: the next
+    /// look at the page sets the state again from what the page shows.
     pub fn load_failed(&mut self, url: &str, description: &str) -> Vec<Effect> {
         let Some(adapter) = self.adapter.clone().filter(|_| self.window_open) else {
             return Vec::new();
@@ -226,15 +238,17 @@ impl Machine {
         vec![Effect::Show]
     }
 
-    /// `page-title-updated`.
+    /// Records the title of the page in the sign-in window.
     pub fn titled(&mut self, title: &str) {
         if self.window_open {
             self.state.title = Some(title.to_owned());
         }
     }
 
-    /// `will-navigate` and `will-redirect`: whether the window may go to
-    /// `url`. The login's callback never loads; the adapter completes it.
+    /// Returns whether the sign-in window may load `url`. The address of
+    /// the login's callback is not loaded: for it this returns false and
+    /// the effect [`Effect::Complete`], which gives the address to the
+    /// adapter.
     pub fn may_navigate(&mut self, url: &str) -> (bool, Vec<Effect>) {
         let Some(adapter) = self.adapter.clone().filter(|_| self.window_open) else {
             return (true, Vec::new());
@@ -250,7 +264,8 @@ impl Machine {
         (false, vec![Effect::Complete(url.to_owned())])
     }
 
-    /// The 750 ms poll.
+    /// Asks for a look at the page. `logins::Logins` calls it every 750 ms
+    /// while the window is open.
     pub fn tick(&mut self) -> Vec<Effect> {
         self.inspect()
     }
@@ -267,8 +282,9 @@ impl Machine {
         vec![Effect::Inspect]
     }
 
-    /// What a look at the page found; `None` when it took longer than 4 s
-    /// (a page mid-navigation can leave a script unanswered).
+    /// Takes the result of a look at the page. `outcome` is `None` when
+    /// the look took longer than 4 s, which happens when the page moves to
+    /// another address while a script runs and the script never returns.
     pub fn inspected(&mut self, outcome: Option<Outcome>) -> Vec<Effect> {
         self.inspecting = false;
         match outcome {
@@ -277,7 +293,8 @@ impl Machine {
         }
     }
 
-    /// What the adapter made of the callback.
+    /// Takes the result of the adapter's `complete`, which ran with the
+    /// address of the callback.
     pub fn completed(&mut self, outcome: Result<Outcome, String>) -> Vec<Effect> {
         match outcome {
             Ok(outcome) => self.apply(outcome),
@@ -291,7 +308,9 @@ impl Machine {
         }
     }
 
-    /// `applyResult`.
+    /// Applies an [`Outcome`]: hides or shows the window, saves the
+    /// credential if there is one, and otherwise sets the status and the
+    /// message and loads the next address.
     fn apply(&mut self, outcome: Outcome) -> Vec<Effect> {
         if self.completed || !self.window_open {
             return Vec::new();
@@ -314,8 +333,9 @@ impl Machine {
         effects
     }
 
-    /// `finish`: saves the credential (unless the application already
-    /// did), once.
+    /// Saves the credential of `outcome`, unless the application has
+    /// already saved it (`already_persisted`). A second call while the first
+    /// save is under way, or after it, does nothing.
     fn finish(&mut self, outcome: Outcome) -> Vec<Effect> {
         if self.completed || self.finishing {
             return Vec::new();
@@ -339,7 +359,9 @@ impl Machine {
         }
     }
 
-    /// Whether `auth.credentials.set` saved the credential.
+    /// Takes the result of saving the credential. On success the login is
+    /// completed, and the sign-in window or the browser outside the app is
+    /// closed. On failure the state holds the error and nothing is closed.
     pub fn persisted(&mut self, session: u64, saved: Result<(), String>) -> Vec<Effect> {
         if session != self.session {
             return Vec::new();
@@ -359,7 +381,8 @@ impl Machine {
         }
     }
 
-    /// The window was closed by the user rather than by the machine.
+    /// Records that the user closed the sign-in window. The login gets the
+    /// status `Cancelled`.
     pub fn window_closed(&mut self) -> Vec<Effect> {
         if !self.window_open {
             return Vec::new();
@@ -375,7 +398,7 @@ impl Machine {
         Vec::new()
     }
 
-    /// The outside browser opened (or could not).
+    /// Takes whether the browser outside the app started.
     pub fn external_launched(&mut self, opened: Result<(), String>) -> Vec<Effect> {
         if !self.external {
             return Vec::new();
@@ -391,7 +414,8 @@ impl Machine {
         Vec::new()
     }
 
-    /// What the outside browser's login captured, or why it ended.
+    /// Takes the login that was read from the browser outside the app, or
+    /// the reason why that login ended without one.
     pub fn external_finished(
         &mut self,
         session: u64,
@@ -413,9 +437,10 @@ impl Machine {
         }
     }
 
-    /// `saveManualOnlyFansCredential`: a session the user pasted. What was
-    /// under way is cancelled first, as production's does, so its effects
-    /// are handed back also when the pasted session is refused.
+    /// Saves an OnlyFans session that the user pasted. A sign-in that is
+    /// under way is cancelled first, also when the pasted session is then
+    /// refused, so the effects of the cancellation are returned in both
+    /// cases.
     pub fn save_manual_onlyfans(
         &mut self,
         input: &super::onlyfans::ManualInput,
@@ -442,7 +467,8 @@ impl Machine {
         (effects, Ok(()))
     }
 
-    /// `cancelAuthSession`: closes whatever is open and forgets it.
+    /// Cancels the sign-in: closes the sign-in window or the browser
+    /// outside the app, and sets the state back to idle.
     pub fn cancel(&mut self) -> Vec<Effect> {
         let effects = self.close_effects();
         self.session += 1;
@@ -452,7 +478,8 @@ impl Machine {
         effects
     }
 
-    /// `closePopup`.
+    /// Returns the effects that close the sign-in window and the browser
+    /// outside the app, whichever is open, and drops the adapter.
     fn close_effects(&mut self) -> Vec<Effect> {
         let mut effects = Vec::new();
         if self.external {
@@ -468,7 +495,8 @@ impl Machine {
         effects
     }
 
-    /// `emit` with only the fields given changed.
+    /// Changes those of the state's status, message and address that are
+    /// given as `Some`, and leaves the others as they are.
     fn patch(&mut self, status: Option<Status>, message: Option<String>, url: Option<String>) {
         if let Some(status) = status {
             self.state.status = status;

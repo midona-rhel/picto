@@ -1,9 +1,11 @@
-//! `SmartFolderModal.tsx`: creates a smart folder or edits one, its name,
-//! icon, colour and notes ("Edit Smart Folder..."), its rules ("Edit
-//! Rules..."), or all of them for a new one. Rules are groups of rules
-//! (`RuleGroupEditor`, `RuleEditor`); while rules are edited the folder is
-//! saved after each change, 100 ms later, so the grid shows what they match,
-//! and Cancel writes the rules it opened with back.
+//! The smart-folder editor, a dialog that creates a smart folder or edits an
+//! existing one. It shows the details (name, icon, colour and notes), the
+//! rules, or both: "Edit Smart Folder..." shows the details, "Edit Rules..."
+//! shows the rules, and a new smart folder shows both. The rules are
+//! arranged in groups. While the rules of an existing smart folder are
+//! edited, the smart folder is saved 100 ms after each change, so that the
+//! grid shows the items that the rules match. Cancel writes back the
+//! definition that the smart folder had when the dialog opened.
 mod model;
 
 use super::rules::{self, Group, Rule, ValueType};
@@ -24,7 +26,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-/// Which parts the dialog edits (`editor`).
+/// Which parts of a smart folder the dialog shows: its details (name, icon,
+/// colour and notes), its rules, or both.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Part {
     All,
@@ -32,8 +35,9 @@ pub enum Part {
     Rules,
 }
 
-/// A new smart folder, or the one being edited with what it held when the
-/// dialog opened.
+/// What the dialog edits: a new smart folder under `parent`, or the existing
+/// smart folder `id`. `original` is the definition that the existing smart
+/// folder had when the dialog opened.
 pub enum Target {
     Create {
         parent: Option<SmartFolderId>,
@@ -44,47 +48,57 @@ pub enum Target {
     },
 }
 
-/// The dialog is done: the sidebar reveals a created folder.
+/// The event that the editor emits after it created a smart folder. The
+/// sidebar then expands the branch that holds the new smart folder.
 pub enum Event {
     Created(SmartFolderId),
 }
 
 impl EventEmitter<Event> for SmartFolderEditor {}
 
-/// The live preview waits this long after the last change.
+/// The time between the last change to the rules and the write of the rules
+/// to the library, after which the grid shows the items they match.
 const PREVIEW_DELAY: Duration = Duration::from_millis(100);
-/// `.rulesModal`: `min(760px, 100vw - 48px)`.
+/// The width in pixels of the dialog when it shows only the rules. In a
+/// window narrower than 808px, the dialog is 48px narrower than the window.
 const RULES_WIDTH: f32 = 760.;
-/// `.colorPickerPopover`: 230px wide and placed as if 286px tall, as the
-/// day picker's calendar is: 5px under its trigger, above it without room,
-/// kept 8px inside the window.
+/// The size of the colour popover of a Color rule. The popover is 230px
+/// wide, and it is placed as if it were 286px tall. `COLOR_PLACEMENT` puts
+/// it 5px under its button, or above the button when there is no room
+/// below, and keeps it 8px inside the window. The day picker's calendar is
+/// placed in the same way.
 const COLOR_POPOVER: gpui::Size<f32> = gpui::Size {
     width: 230.,
     height: 286.,
 };
 const COLOR_PLACEMENT: Placement = Placement::new(Side::Below, 5., 8.).flip(Flip::WhenNoRoom);
-/// `.pickerPopover`: 260×308, 4px under its trigger, kept 4px inside the
-/// window.
+/// The size of the icon picker's popover, 260px by 308px. `ICON_PLACEMENT`
+/// puts it 4px under its button and keeps it 4px inside the window.
 const ICON_POPOVER: gpui::Size<f32> = gpui::Size {
     width: 260.,
     height: 308.,
 };
 const ICON_PLACEMENT: Placement = Placement::new(Side::Below, 4., 4.);
 
-/// One rule's editor: the rule and the fields its values are typed in.
+/// One rule in the editor: the rule, and the text fields and the tag field
+/// that hold its values.
 struct RuleRow {
     rule: Rule,
     value: Entity<TextInput>,
     value2: Entity<TextInput>,
     tags: Entity<TagTokenInput>,
-    /// A colour rule's `#rrggbb`, chosen in its popover.
+    /// The colour of a Color rule as `#rrggbb`. The user chooses it in the
+    /// colour popover.
     color: String,
-    /// Where the colour's trigger is, to open its popover under it.
+    /// The bounds of the button that shows the colour. The colour popover
+    /// opens under them.
     color_trigger: Rc<Cell<Bounds<Pixels>>>,
     _subscriptions: Vec<Subscription>,
 }
 
-/// `ColorRuleInput`'s open popover: the rule it edits and its editor.
+/// The open colour popover of a Color rule: the group and the rule it
+/// belongs to, its colour editor, and the bounds of the button it opened
+/// under.
 struct ColorPopover {
     group: usize,
     rule: usize,
@@ -109,18 +123,22 @@ pub struct SmartFolderEditor {
     color: Option<String>,
     sort: ItemSort,
     groups: Vec<GroupRows>,
-    /// The rules have been read into the editor.
+    /// Whether the rules have been read from the smart folder's filter into
+    /// the editor.
     ready: bool,
-    /// The library's tags, to resolve the names the rules hold.
+    /// The library's tags. They are used to find the id of each tag that a
+    /// rule names.
     tags: Rc<Vec<TagRecord>>,
     presence: Presence,
     focus: FocusHandle,
-    /// The icon picker's popover, and the trigger it opens under.
+    /// The icon picker while its popover is open. `icon_trigger` holds the
+    /// bounds of the button that the popover opens under.
     icon_picker: Option<Entity<ui::icon_picker::IconPicker>>,
     icon_trigger: Rc<Cell<Bounds<Pixels>>>,
     color_popover: Option<ColorPopover>,
     preview: Option<Task<()>>,
-    /// Closing waits for the rules it opened with to be written back.
+    /// Whether the dialog is waiting to close until the definition it opened
+    /// with has been written back to the library.
     closing: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -135,7 +153,7 @@ impl SmartFolderEditor {
     ) -> Self {
         let (name, icon, color, notes, view) = match &target {
             Target::Create { .. } => (
-                // i18n: the new smart folder's name, English as production's
+                // i18n: a new smart folder's name, English in every language
                 "New Smart Folder".to_owned(),
                 None,
                 None,
@@ -175,7 +193,8 @@ impl SmartFolderEditor {
         } else {
             window.focus(&name.focus_handle(cx), cx);
         }
-        // The library's tags, then the rules read from the filter.
+        // The library's tags are read first, because the rules are read from
+        // the filter with the names of the tags.
         let answer = session.read(cx).run(|library| library.tags());
         cx.spawn_in(window, async move |this, cx| {
             let tags = answer.await.ok().and_then(Result::ok).unwrap_or_default();
@@ -227,7 +246,8 @@ impl SmartFolderEditor {
         }
     }
 
-    /// Whether the dialog has faded out and can be dropped.
+    /// Returns whether the dialog has finished fading out. After that it can
+    /// be dropped.
     pub fn finished(&self) -> bool {
         self.presence.finished()
     }
@@ -318,7 +338,9 @@ impl SmartFolderEditor {
     }
 }
 
-/// A value field previews the rules as it changes, and Enter saves.
+/// Subscribes to a text field that holds a value of a rule. A change of the
+/// field's text calls `changed`, which previews the rules, and Enter in the
+/// field saves the dialog.
 fn watch_input(
     input: &Entity<TextInput>,
     window: &mut Window,
@@ -339,7 +361,8 @@ fn watch_input(
     ]
 }
 
-/// Which of a rule's select values changed.
+/// Which value of a rule a select sets: the first value, the second value,
+/// or the unit.
 #[derive(Clone, Copy)]
 enum Slot {
     Value,
@@ -354,12 +377,14 @@ fn choices(options: &'static [(&'static str, &'static str)]) -> Vec<ui::select::
         .collect()
 }
 
-/// `modalStyles.inlineLabel`.
+/// Draws a short label that stands between the controls of a line, such as
+/// "and" or a unit. It is drawn like help text.
 fn inline_label(text: &'static str, cx: &App) -> Div {
     ui::form::help_text(theme::theme(cx), text).flex_none()
 }
 
-/// `.label`.
+/// Draws the label above a field of the form, with 8px between the label
+/// and the field.
 fn label(text: &'static str, cx: &App) -> Div {
     div()
         .mb(px(8.))
@@ -369,7 +394,9 @@ fn label(text: &'static str, cx: &App) -> Div {
         .child(text)
 }
 
-/// `.conditionButton`: a 24px square with a minus, or a plus.
+/// Builds a button that removes or adds a rule or a group. It shows a minus
+/// sign, or a plus sign when `plus` is true. `tip` is the text of its
+/// tooltip, and the button is disabled when `enabled` is false.
 fn condition_button(
     id: impl Into<ElementId>,
     plus: bool,
@@ -705,8 +732,8 @@ impl SmartFolderEditor {
             .into_any_element()
     }
 
-    /// `IconPickerPopover`'s trigger: the icon, its name or "Default", and a
-    /// chevron.
+    /// Draws the button that opens the icon picker. It shows the smart
+    /// folder's icon, the icon's name or "Default", and a chevron.
     fn icon_trigger(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
         let bounds = self.icon_trigger.clone();
@@ -748,7 +775,8 @@ impl SmartFolderEditor {
                     .inset_0(),
             )
             .on_click(cx.listener(|this, _, _, cx| this.toggle_icon_picker(cx)));
-        // `.iconTrigger` is a `<button>`.
+        // The button is a tab stop, so it can be reached and pressed with
+        // the keyboard.
         ui::focus::stop(
             "icon-trigger",
             trigger,
@@ -773,8 +801,9 @@ impl SmartFolderEditor {
         cx.notify();
     }
 
-    /// `ColorRuleInput`'s trigger (`.colorTrigger`): the swatch and the code
-    /// in capitals, which opens the colour popover.
+    /// Draws the button of a Color rule. It shows a swatch of the rule's
+    /// colour and the colour's hex code in capitals. A click opens the
+    /// colour popover.
     fn color_trigger(
         &self,
         group: usize,
@@ -811,7 +840,7 @@ impl SmartFolderEditor {
                     .bg(theme.surface_hover())
             })
             .child(
-                // `.colorSwatch`
+                // The swatch of the rule's colour, 14px square.
                 div()
                     .size(px(14.))
                     .flex_none()
@@ -825,7 +854,7 @@ impl SmartFolderEditor {
                     ]),
             )
             .child(
-                // `.colorValue`
+                // The colour's hex code in capitals, in the monospaced font.
                 div()
                     .min_w_0()
                     .truncate()
@@ -839,7 +868,8 @@ impl SmartFolderEditor {
                     .inset_0(),
             )
             .on_click(cx.listener(move |this, _, _, cx| this.toggle_color(group, index, cx)));
-        // `.colorTrigger` is a `<button>`.
+        // The button is a tab stop, so it can be reached and pressed with
+        // the keyboard.
         ui::focus::stop(
             SharedString::from(format!("rule-{group}-{index}-color")),
             trigger,
@@ -847,8 +877,9 @@ impl SmartFolderEditor {
         )
     }
 
-    /// `.colorPickerPopover`: the colour editor, 230px wide below the
-    /// trigger (above it without room), over a backdrop that closes it.
+    /// Draws the colour popover when it is open: the colour editor in a
+    /// panel 230px wide, under the rule's button, or above the button when
+    /// there is no room below. A click outside the popover closes it.
     fn color_popover(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let open = self.color_popover.as_ref()?;
         let corner = place(
@@ -873,8 +904,9 @@ impl SmartFolderEditor {
                     ui::glass_panel("color-popover", theme::RADIUS_LG, cx)
                         .w(px(COLOR_POPOVER.width))
                         .min_h(px(COLOR_POPOVER.height))
-                        // `.colorPickerPopover`'s 7px padding inside its
-                        // 1px glass border.
+                        // The panel's 1px edge is drawn over the padding, so
+                        // 8px of padding leave 7px between the edge and the
+                        // colour editor.
                         .p(px(8.))
                         .child(open.editor.clone()),
                 )
@@ -882,8 +914,9 @@ impl SmartFolderEditor {
         )
     }
 
-    /// The icon picker's popover: 260×308 below the trigger, kept on screen,
-    /// over a backdrop that closes it.
+    /// Draws the icon picker's popover when it is open: a panel 260px by
+    /// 308px under the icon button, kept inside the window. A click outside
+    /// the popover closes it.
     fn icon_popover(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let picker = self.icon_picker.clone()?;
         let corner = place(
@@ -908,8 +941,9 @@ impl SmartFolderEditor {
                     ui::glass_panel("icon-picker-popover", theme::RADIUS_LG, cx)
                         .w(px(ICON_POPOVER.width))
                         .h(px(ICON_POPOVER.height))
-                        // `.pickerPopover`'s 4px padding inside its 1px
-                        // glass border.
+                        // The panel's 1px edge is drawn over the padding, so
+                        // 5px of padding leave 4px between the edge and the
+                        // icon picker.
                         .p(px(5.))
                         .overflow_hidden()
                         .child(picker),
@@ -977,8 +1011,8 @@ impl Render for SmartFolderEditor {
                     ),
                 )
                 .child(section(false).child(label(t("Notes"), cx)).child(
-                    // A `<textarea>` sits on its line's baseline, so the
-                    // line's descent (5px at 13px) shows below it.
+                    // The notes field has 5px of space below it, in addition
+                    // to the 16px of padding at the bottom of the section.
                     div().pb(px(5.)).child(ui::field(
                         "smart-folder-notes",
                         &self.notes,

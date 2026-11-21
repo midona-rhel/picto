@@ -1,19 +1,22 @@
-//! A library replaced from the cloud: Restore in Settings › Cloud, and a
-//! library joined from a cloud folder.
+//! Replaces the open library's database with a snapshot from the cloud
+//! (Restore in Settings › Cloud), and makes a library from a cloud folder
+//! (Open from Cloud…).
 use super::*;
 
-/// How long a restore waits for this app to let the library's connections
-/// go before it gives up and replaces nothing.
+/// How long a restore waits for this app to close every connection to the
+/// library's database. After that time the restore stops and replaces
+/// nothing.
 const RELEASE_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// Restore in Settings › Cloud (`cloud.restore.start`), once the user
-/// confirmed: the library's views close and this app lets go of every
-/// connection to its database (otherwise the database could not be renamed
-/// on Windows, and elsewhere a connection left open would go on reading
-/// the file set aside); the core then sets the current database aside as
-/// an emergency copy, puts the snapshot's in its place and opens it, and
-/// this app opens the library again. A copy keeps the cloud folder it was
-/// connected to. `done` hears how it went.
+/// Does Restore in Settings › Cloud (`cloud.restore.start`), after the user
+/// has confirmed it. It closes the library's views and waits until this app
+/// has closed every connection to the library's database. On Windows the
+/// database could not be renamed otherwise, and on the other systems an
+/// open connection would go on reading the file that is set aside. The core
+/// then sets the current database aside as an emergency copy, puts the
+/// snapshot's database in its place and opens it. After that this app opens
+/// the library again. A disposable copy keeps the cloud folder it was
+/// connected to. The result is passed to `done`.
 pub fn restore(
     snapshot: String,
     cx: &mut App,
@@ -51,9 +54,9 @@ pub fn restore(
                 } else {
                     Err(en("The library is still in use; nothing was restored.").to_owned())
                 };
-                // Whatever the core has open now (the restored library, or
-                // the previous one put back) is closed, and opened again
-                // below as any library is.
+                // The core now has open either the restored library or,
+                // after a failure, the previous one. It is closed here, and
+                // `start_with` below opens it again like any other library.
                 restoring.close();
                 drop(restoring);
                 let _ = sent.send(result);
@@ -62,9 +65,10 @@ pub fn restore(
         let result = crate::application::answer(answered).await;
         drop(application);
         cx.update(|cx| {
-            // The restored database is a new file; the user's consent to
-            // this library, given before they restored it here, is kept
-            // for it once it opens.
+            // The restored database is a new file, so the stored consent
+            // no longer matches it. Setting `created` makes the host store
+            // the consent for the new file when the library has opened,
+            // without asking the user again.
             host.update(cx, |host, _| {
                 host.busy = false;
                 host.created = (kind == Kind::Real).then(|| root.clone());
@@ -76,12 +80,15 @@ pub fn restore(
     .detach();
 }
 
-/// Open from Cloud… (`joinCloudLibrary`), once the user chose where: the
-/// library opened here (if any) closes, the core makes `target` from the
-/// cloud library's newest verified snapshot (its media are then restored
-/// in the background, blocking the window), and it opens as a library the
-/// user made here. A failed join removes what it made and opens the
-/// previous library again. `done` hears how it went.
+/// Does Open from Cloud… (`cloud.library.join`), after the user has chosen
+/// where the library goes. It closes the open library, if there is one. The
+/// core makes the library at `target` from the newest verified snapshot of
+/// the cloud library. The library is then opened as one that the user made
+/// in this app, so the user is not asked for consent. Its media files are
+/// restored in the background after that, and a progress dialog blocks the
+/// window meanwhile (`cloud::bar`). If the join fails, what it made at
+/// `target` is removed and the library that was open before is opened again.
+/// The result is passed to `done`.
 pub fn join(
     choice: crate::cloud::Choice,
     target: PathBuf,
@@ -117,8 +124,9 @@ pub fn join(
         std::thread::Builder::new()
             .name("picto-join".into())
             .spawn(move || {
-                // An application of its own for the join, whose events go
-                // nowhere: the library is opened again as any other below.
+                // The join runs in an application of its own, and nothing
+                // receives that application's events. After the join,
+                // `begin` below opens the library like any other library.
                 let (events, _) = std::sync::mpsc::channel();
                 let application = Application::new(joined.clone(), Kind::Real, events);
                 let result = application.run_unopened(
@@ -172,9 +180,9 @@ pub fn join(
     .detach();
 }
 
-/// What a failed join left at `target`, which did not exist before it:
-/// removed only while it is a plain `.library` folder (not a link) with no
-/// library in it.
+/// Removes what a failed join left at `target`, which did not exist before
+/// the join. The folder is removed only if it is a real folder (not a link)
+/// whose name ends in `.library` and it holds no `library.sqlite`.
 fn remove_remnants(target: &Path) {
     let plain = target
         .symlink_metadata()

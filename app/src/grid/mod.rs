@@ -113,17 +113,16 @@ pub struct GridView {
     /// position of the middle of the viewport at that moment, in pixels
     /// from the top of the items' scrollable height. When the window
     /// arrives, it is placed so that the top of that item's tile is at that
-    /// position (production's `windowAnchorRef`). It is cleared when the
-    /// grid scrolls after the request, because the position was measured
-    /// for the scroll position at the time of the request. It is also
-    /// cleared when the results become a different set of items.
+    /// position. It is cleared when the grid scrolls after the request,
+    /// because the position was measured for the scroll position at the
+    /// time of the request. It is also cleared when the results become a
+    /// different set of items.
     window_anchor: Option<(usize, f32)>,
     /// The timer that `schedule_window` starts. When it ends, after
     /// `window::REQUEST_INTERVAL` (40 ms), the grid asks the session for
     /// the window of results the viewport needs at that moment. While the
     /// timer runs, `schedule_window` does not start another one, so the
-    /// grid asks at most once every 40 ms however often it scrolls
-    /// (production's `CoalescedGridRequest`).
+    /// grid asks at most once every 40 ms however often it scrolls.
     window_timer: Option<Task<()>>,
     reveal: reveal::RevealTracker,
     /// The moment this grid was created. The grid measures time in
@@ -210,21 +209,20 @@ pub struct GridView {
     subfolders: subfolders::Header,
     /// Set while items are dragged over the grid of a folder whose items
     /// can be reordered by dragging. It is the place where a drop would
-    /// put the dragged items (production's `reorderDropRef`): the index in
-    /// `layout` of a tile, and the side of that tile they would go to. The
-    /// reorder marker is drawn there.
+    /// put the dragged items: the index in `layout` of a tile, and the side
+    /// of that tile they would go to. The reorder marker is drawn there.
     reorder: Option<(usize, drag::Side)>,
     /// The paths of the files of the dragged items. The grid gives them to
-    /// the operating system if the drag leaves the window (production's
-    /// `resolveNativeDragHashes`). The outer `Option` is `None` when no
-    /// drag is in progress. The inner `Option` is `None` from the start of
-    /// a drag until the session has answered with the paths.
+    /// the operating system if the drag leaves the window. The outer
+    /// `Option` is `None` when no drag is in progress. The inner `Option`
+    /// is `None` from the start of a drag until the session has answered
+    /// with the paths.
     drag_files: Option<Option<Vec<PathBuf>>>,
     /// True when the drag left the window before the paths in `drag_files`
     /// arrived. When they arrive, `resolve_drag_files` calls `hand_out`,
-    /// which gives the files to the operating system (production's
-    /// `nativeDragRequestRef.pending`). It is set back to false if the
-    /// pointer comes back into the window before the paths arrive.
+    /// which gives the files to the operating system. It is set back to
+    /// false if the pointer comes back into the window before the paths
+    /// arrive.
     drag_out_waiting: bool,
     /// Numbers the requests for the files of dragged items. Each drag makes
     /// one request. When an answer arrives, the grid uses it only if it is
@@ -252,9 +250,9 @@ type LayoutKey = (u32, u32, u32, ViewMode, u32, u64);
 
 /// Returns the paths from an answer of [`Session::resolve_files`], which is
 /// a list of pairs of a content hash and a path. When the same content hash
-/// is in the list more than once, only the first path for it is returned, as
-/// in production's `resolveNativeDragHashes`. The paths are returned in the
-/// order of the list.
+/// is in the list more than once, only the first path for it is returned, so
+/// that each file is dragged out once. The paths are returned in the order
+/// of the list.
 fn drag_out_paths(found: Vec<(String, PathBuf)>) -> Vec<PathBuf> {
     let mut seen = std::collections::HashSet::new();
     found
@@ -401,8 +399,7 @@ impl GridView {
     /// height of the subfolder header above the items. 0 means that the top
     /// of the items is at the top of the grid. The value is negative while
     /// the top of the items is below the top of the grid, which is while
-    /// part of the header is in view (production's `visibleScrollTop` and
-    /// `toLayoutCoords`).
+    /// part of the header is in view.
     fn scroll_top(&self) -> f32 {
         self.raw_scroll() - self.subfolders.height()
     }
@@ -472,12 +469,12 @@ impl GridView {
     }
 
     /// Works out which window of results the viewport needs at the current
-    /// scroll position (`window::destination`, production's
-    /// `gridWindowDestination`) and asks the session for it. It asks for
-    /// nothing when the session holds every item of the destination, or
-    /// when the middle of the viewport is inside the window's tiles and
-    /// the viewport is at least three times its own height away from each
-    /// end of the window that has more items beyond it.
+    /// scroll position (`window::destination`) and asks the session for it.
+    /// It asks for nothing when the session holds every item of the
+    /// destination, or when the middle of the viewport is inside the
+    /// window's tiles and the viewport is at least three times its own
+    /// height away from each end of the window that has more items beyond
+    /// it.
     ///
     /// It also sets `window_anchor`, so that the window that arrives is
     /// placed where the viewport is.
@@ -531,14 +528,14 @@ impl GridView {
             cx.notify();
         }
         if let Some(index) = pointer::magnifier(hit, &self.layout, self.text_height) {
-            // As in production's grid, the hover preview shows the item
-            // that is under the magnifier when the preview's timer starts,
-            // even if another item is there when the timer ends 200 ms
-            // later. The item is read from the session's items at the
-            // tile's index, and used only if it is the item the tile was
-            // laid out for (`layout_ids`). It can be another item when the
-            // session already holds a window of results that the grid has
-            // not laid out yet. A video has no hover preview.
+            // The hover preview shows the item that is under the magnifier
+            // when the preview's timer starts, even if another item is
+            // there when the timer ends 200 ms later. The item is read
+            // from the session's items at the tile's index, and used only
+            // if it is the item the tile was laid out for (`layout_ids`).
+            // It can be another item when the session already holds a
+            // window of results that the grid has not laid out yet. A
+            // video has no hover preview.
             let laid_out = self.layout_ids.get(index).copied();
             let target = self
                 .session
@@ -736,11 +733,11 @@ impl GridView {
                 drags.out_since = Some(std::time::Instant::now())
             });
         }
-        // End the grid's own drag, as production's `cancelDrag` does,
-        // whether or not the operating system started a drag of the files.
-        // This forgets the press, releases the thumbnails that were pinned
-        // for the picture of the dragged items, and tells the views that
-        // accept drops that the drag was cancelled.
+        // End the grid's own drag, whether or not the operating system
+        // started a drag of the files. This forgets the press, releases
+        // the thumbnails that were pinned for the picture of the dragged
+        // items, and tells the views that accept drops that the drag was
+        // cancelled.
         self.press = None;
         self.dragging = false;
         self.drag_files = None;
@@ -796,8 +793,7 @@ impl GridView {
             return;
         };
         // A rubber band whose rectangle covers subfolder tiles selects
-        // those folders and no items (production's
-        // `collectHeaderMarqueeHits`). When the rubber band adds to the
+        // those folders and no items. When the rubber band adds to the
         // selection and no items are selected, the folders are added to
         // the folders that are already selected. Otherwise they replace
         // the selection.
@@ -858,13 +854,11 @@ impl GridView {
     }
 
     /// Zooms the grid from a scroll event over the tiles. This runs only
-    /// when the Controls setting "Mouse wheel" is "Adjust thumbnail size"
-    /// (production's `onGridWheel`).
+    /// when the Controls setting "Mouse wheel" is "Adjust thumbnail size".
     ///
-    /// `delta_y` is the scrolled distance with the browser's sign: positive
-    /// is scrolling down, which zooms out. `notch` is true for a mouse
-    /// wheel, which reports lines, and false for a trackpad, which reports
-    /// pixels.
+    /// `delta_y` is the scrolled distance. Positive is scrolling down,
+    /// which zooms out. `notch` is true for a mouse wheel, which reports
+    /// lines, and false for a trackpad, which reports pixels.
     ///
     /// - A mouse wheel event is one zoom step.
     /// - A trackpad makes one zoom step for every 60 px it scrolls
@@ -905,7 +899,7 @@ impl GridView {
     /// Is meant to scroll the grid down by nine tenths of its visible
     /// height, and not past the end of its content. The shell calls this
     /// when Space is pressed and the Controls setting for the Space key is
-    /// set to scroll (`spaceKeyAction: 'scroll'`).
+    /// set to scroll (the setting `spaceKeyAction` has the value `scroll`).
     ///
     /// TODO: this scrolls the grid to its top instead.
     /// `ScrollHandle::max_offset` is 0 or positive, so `bottom` below is 0
@@ -920,12 +914,12 @@ impl GridView {
         cx.notify();
     }
 
-    /// Moves the selection with the keyboard, as production's grid does
-    /// (`useGridArrowNav.ts`). `action` is the move, for example one item
-    /// to the right or one page down. With `extend` set, which the shell
-    /// does when Shift is held, the range from the item where the selection
-    /// started to the new item is selected. Without it the new item is
-    /// selected alone. The grid then scrolls the new item into view.
+    /// Moves the selection with the keyboard. `action` is the move, for
+    /// example one item to the right or one page down. With `extend` set,
+    /// which the shell does when Shift is held, the range from the item
+    /// where the selection started to the new item is selected. Without it
+    /// the new item is selected alone. The grid then scrolls the new item
+    /// into view.
     pub fn move_selection(&mut self, action: nav::Move, extend: bool, cx: &mut Context<Self>) {
         let height = f32::from(self.bounds.size.height);
         let target = self
@@ -958,10 +952,9 @@ impl GridView {
 }
 
 /// Returns an element that, while it is drawn, listens for mouse events in
-/// the whole window. This is what pointer capture does in a browser. The
-/// grid draws it during a rubber band selection, and from a press on a tile
-/// until the end of the drag that may follow, so that both keep working
-/// while the pointer is outside the grid.
+/// the whole window. The grid draws it during a rubber band selection, and
+/// from a press on a tile until the end of the drag that may follow, so
+/// that both keep working while the pointer is outside the grid.
 ///
 /// `moved` is called for each move of the pointer while the left button is
 /// held. `released` is called when the left button is released. `released`
@@ -1084,14 +1077,13 @@ impl GridView {
         } = frame;
         // `windowed` is true when the destination has more items than the
         // session holds and the results are not loading. The grid then
-        // asks for the window of results the viewport needs, as
-        // production's `CanvasGrid` does, in three cases. The first is
-        // after a scroll. The second is while the middle of the viewport
-        // is outside the window's tiles, which happens when a saved scroll
-        // position was restored, an item was scrolled into view, or the
-        // scrollbar's thumb was dragged far. The third is after a change
-        // of zoom, which also puts other items in the viewport without a
-        // scroll.
+        // asks for the window of results the viewport needs in three
+        // cases. The first is after a scroll. The second is while the
+        // middle of the viewport is outside the window's tiles, which
+        // happens when a saved scroll position was restored, an item was
+        // scrolled into view, or the scrollbar's thumb was dragged far.
+        // The third is after a change of zoom, which also puts other items
+        // in the viewport without a scroll.
         if windowed
             && (moved
                 || zoom_changed

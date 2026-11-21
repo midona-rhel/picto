@@ -8,8 +8,9 @@ use std::{cell::Cell, rc::Rc};
 
 type ChangeHandler = Box<dyn Fn(&'static str, &mut Window, &mut App) + 'static>;
 
-/// One choice of a select: the value it stands for, its label, and an
-/// optional 14px glyph (turned a quarter left when `rotated`).
+/// One choice of a select: the value it stands for and its label. `icon` is
+/// the name of an optional 14px glyph, and whether the glyph is drawn turned
+/// a quarter turn to the left.
 #[derive(Clone)]
 pub struct Choice {
     pub value: &'static str,
@@ -17,8 +18,8 @@ pub struct Choice {
     pub icon: Option<(&'static str, bool)>,
 }
 
-/// A choice; its label is shown in the interface's language, as
-/// `CmSelect` shows each through `translateMessage`.
+/// Returns a choice with this value and label. The label is translated into
+/// the interface's language here.
 pub fn choice(value: &'static str, label: impl Into<SharedString>) -> Choice {
     Choice {
         value,
@@ -32,40 +33,46 @@ impl Choice {
         self.icon = Some((icon, false));
         self
     }
-    /// The glyph turned -90°, as the Justified layout's is.
+    /// Sets the choice's glyph and draws it turned a quarter turn to the
+    /// left. The choice for the Justified layout uses this.
     pub fn rotated_icon(mut self, icon: &'static str) -> Self {
         self.icon = Some((icon, true));
         self
     }
 }
 
-/// What a select keeps between frames.
+/// Holds what a select keeps between frames.
 struct State {
     open: bool,
-    /// The row under the pointer, which starts at the current choice.
+    /// The highlighted row of the open list. It starts at the current choice
+    /// and follows the pointer and the arrow keys.
     highlighted: Option<usize>,
-    /// Where the button was last painted, which places the menu.
+    /// The bounds that the button was last painted at. The list is placed
+    /// with them.
     button: Rc<Cell<Bounds<Pixels>>>,
-    /// In a pop-up menu, the list's own pop-up window, and whether it is on
-    /// its way.
+    /// For a select inside a pop-up window of a menu: the pop-up window of
+    /// the select's list (`list`), and whether that window is being opened
+    /// (`opening`).
     list: Option<AnyWindowHandle>,
     opening: bool,
-    /// The menu's list, which scrolls past seven choices.
+    /// The scroll position of the list, which scrolls when it has more than
+    /// seven choices.
     scroll: ScrollHandle,
 }
 
-/// `CmSelect.tsx`: a 26px button showing the current choice with a selector
-/// glyph, as wide as its widest choice unless given a width, and a menu of
-/// the choices 4px below it (above it when there is no room below), as wide
-/// as the button. A press anywhere else closes the menu.
+/// A select. It is a 26px button that shows the current choice and a
+/// selector glyph. The button is as wide as its widest choice unless it is
+/// given a width. A click opens a list of the choices 4px below the button,
+/// or above it when there is too little room below. The list is as wide as
+/// the button. A press anywhere else closes the list.
 #[derive(IntoElement)]
 pub struct Select {
     id: ElementId,
     value: SharedString,
     choices: Vec<Choice>,
     width: Option<f32>,
-    /// Its accessible name (`CmSelect`'s `ariaLabel`); without one it is
-    /// known by the choice it shows.
+    /// The name that assistive technology gives the select. Without a name,
+    /// assistive technology has only the choice that the select shows.
     name: Option<SharedString>,
     on_change: Option<ChangeHandler>,
     disabled: bool,
@@ -92,7 +99,8 @@ impl Select {
         self.width = Some(width);
         self
     }
-    /// What assistive technology calls the select (and its list).
+    /// Sets the name that assistive technology gives the select and its
+    /// list.
     pub fn name(mut self, name: impl Into<SharedString>) -> Self {
         self.name = Some(name.into());
         self
@@ -104,30 +112,35 @@ impl Select {
         self.on_change = Some(Box::new(handler));
         self
     }
-    /// A disabled select (`<select disabled>`): faded to 35%, it takes no
-    /// pointer or keys, and a menu it had open closes.
+    /// Disables the select. A disabled select is drawn at 35% opacity and
+    /// does not react to the pointer or to keys, and a list that it had open
+    /// is closed.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
     }
 }
 
-/// The open menu's layer (`--layer-menu`): above whatever holds the
-/// select, dialogs included, as `CmSelect`'s portal is.
+/// The layer that the open list is drawn on. It is above whatever holds the
+/// select, also above a dialog.
 const LAYER: usize = super::layer::MENU;
 
-/// `--control-height-sm`, the height of the button and of each choice.
+/// The height of the button and of each choice.
 const ROW: f32 = theme::CONTROL_SM;
-/// `.drop`: 4px padding, rows 2px apart, a 1px border, at most seven rows.
+/// The measures of the list: 4px of padding and 2px between rows. `LIST_MAX`
+/// is the greatest height of the list with its 1px border: seven rows, the
+/// six gaps between them, and 12px.
 const LIST_PADDING: f32 = 4.;
 const LIST_GAP: f32 = 2.;
 const LIST_MAX: f32 = VISIBLE as f32 * ROW + 6. * LIST_GAP + 12.;
-/// The list keeps this far below (or above) the button.
+/// The distance between the button and the list.
 const LIST_OFFSET: f32 = 4.;
-/// `CmSelect`'s placement: as wide as the button, 4px below it, or above it
-/// when the menu (as `CmSelect` measures it, 26px a choice and 8px, at
-/// most 164px) does not fit above the window's last 8px and there is more
-/// room above. It is never moved sideways.
+/// Returns the placement of the list for this number of choices: 4px below
+/// the button. The list goes above the button when its height does not fit
+/// between the button and a margin of 8px at the bottom of the window, and
+/// there is more room above than below. The height used in this test is 26px
+/// for each choice plus 8px, and at most 164px. The list is never moved
+/// sideways.
 fn placement(choices: usize) -> Placement {
     Placement::new(Side::Below, LIST_OFFSET, 8.)
         .flip(Flip::ToRoomierSide {
@@ -136,10 +149,10 @@ fn placement(choices: usize) -> Placement {
         .unclamped()
 }
 
-/// The choices the menu shows before it scrolls.
+/// The number of choices that the list shows without scrolling.
 const VISIBLE: usize = 7;
 
-/// The list's height for this many choices.
+/// Returns the height of the list for this number of choices.
 fn list_height(choices: usize) -> f32 {
     let rows = choices as f32 * ROW + choices.saturating_sub(1) as f32 * LIST_GAP;
     (rows + 2. * LIST_PADDING + 2.).min(LIST_MAX)
@@ -148,12 +161,14 @@ fn list_height(choices: usize) -> f32 {
 /// A rectangle as `[x, y, width, height]`.
 type Area = [f32; 4];
 
-/// Where a select's list goes when it opens as a pop-up window of its own
-/// (inside a pop-up menu): `button` and `area` (the display's usable part)
-/// in display coordinates. The list is placed as in the window, the
-/// display standing for the window, and moved sideways to stay on the
-/// display. Returns the list's rectangle and the window's, which leaves
-/// room for the shadow but not past the display.
+/// Returns where a select's list goes when it opens in a pop-up window of
+/// its own, which it does when the select is inside a pop-up window of a
+/// menu. `button` is the button's rectangle and `area` is the usable part of
+/// the display, both in display coordinates. The list is placed as it is
+/// inside a window, with the display's area in place of the window, and is
+/// moved sideways to stay on the display. The first rectangle returned is
+/// the list's. The second is the window's, which has room around the list
+/// for its shadow but does not reach past the display's area.
 fn pop_up_list(button: Area, choices: usize, area: Area) -> (Area, Area) {
     let [bx, by, bw, bh] = button;
     let [ax, ay, aw, ah] = area;
@@ -218,8 +233,8 @@ impl RenderOnce for Select {
         };
         let has_icons = self.choices.iter().any(|choice| choice.icon.is_some());
 
-        // The label column holds every choice's label at no height, so the
-        // button is as wide as the widest one.
+        // The label column also holds the label of every choice at a height
+        // of 0, which makes the button as wide as the widest label.
         let mut label = div()
             .flex_1()
             .min_w_0()
@@ -248,8 +263,8 @@ impl RenderOnce for Select {
         let shown = current
             .map(|at| self.choices[at].label.clone())
             .unwrap_or_else(|| self.value.clone());
-        // `aria-haspopup="listbox"` with `aria-expanded`: a combo box whose
-        // value is the choice it shows.
+        // Assistive technology gets the button as a combo box whose value is
+        // the choice it shows, and is told whether its list is open.
         let mut button = div()
             .id(self.id.clone())
             .role(Role::ComboBox)
@@ -286,17 +301,19 @@ impl RenderOnce for Select {
                     .opacity(0.5)
                     .child(super::icon("selector-2", 14., theme.text())),
             )
-            // Records where the button is, for the menu. A move while open
-            // (the page scrolled) draws again with the new place. The canvas
-            // fills the button inside its 1px border.
+            // The canvas records where the button is, for placing the list. It
+            // fills the button inside the button's 1px border, so the bounds
+            // are made 1px larger on each side.
             .child({
                 let measured = measured.clone();
                 let open = open;
                 canvas(
                     move |bounds, window, _| {
                         let bounds = bounds.dilate(px(1.));
-                        // The open list is placed from these bounds; while
-                        // drawing, only a requested frame repaints it.
+                        // When the button has moved while the list is open,
+                        // for example because the page scrolled, another frame
+                        // is requested, so that the list is drawn at the new
+                        // place.
                         if measured.replace(bounds) != bounds && open {
                             window.request_animation_frame();
                         }
@@ -391,7 +408,8 @@ impl RenderOnce for Select {
                 LAYER,
             )
             .anchored(corner)
-            // A press on the button itself is the button's to toggle.
+            // A press on the button does not close the list here, because the
+            // button's own click handler opens and closes it.
             .dismiss(Dismissal::Outside(bounds), move |_, cx| {
                 state.update(cx, |state, cx| {
                     state.open = false;
@@ -403,12 +421,14 @@ impl RenderOnce for Select {
     }
 }
 
-/// Makes the button a stop with `CmSelect`'s keys: Space opens or closes
-/// the list as a click does; Enter opens it, or takes the highlighted choice
-/// and closes it; Up and Down open it at the current choice, then move the
-/// highlight; Home and End open it at the first or last choice; Escape
-/// closes it (and with it closed reaches the dialog); Tab closes it on its
-/// way to the next stop. It draws no ring.
+/// Makes the button a tab stop and gives it the select's keys. Space opens
+/// or closes the list, as a click does. Enter opens the list, or, when the
+/// list is open, takes the highlighted choice and closes it. Up and Down
+/// open the list at the current choice, and move the highlight when the list
+/// is open. Home and End open the list at the first or the last choice.
+/// Escape closes the list; when the list is closed, Escape is passed on, for
+/// example to the dialog that holds the select. Tab closes the list and
+/// moves on to the next tab stop. The button draws no focus ring.
 #[allow(clippy::too_many_arguments)]
 fn keys(
     button: Stateful<Div>,
@@ -514,7 +534,8 @@ fn keys(
     })
 }
 
-/// What the list shows and whom it tells.
+/// Holds what the list shows, and the handler that is called when a choice
+/// is taken.
 #[derive(Clone)]
 struct Listed {
     choices: Vec<Choice>,
@@ -525,9 +546,9 @@ struct Listed {
     name: Option<SharedString>,
 }
 
-/// `.drop` with its rows (`.opt`), the current choice and the row under the
-/// pointer lit. Choosing a row closes the list, and its pop-up window when
-/// it has one.
+/// Returns the list of choices with its frame. The current choice and the
+/// highlighted row have a background. A click on a row takes that choice,
+/// closes the list, and closes the list's pop-up window when it has one.
 fn list(
     listed: &Listed,
     highlighted: Option<usize>,
@@ -538,8 +559,8 @@ fn list(
 ) -> Div {
     let theme = theme::theme(cx);
     let scroll = listed.state.read(cx).scroll.clone();
-    // More than seven choices scroll, and the list gives the scrollbar's
-    // gutter room beside it, as `.drop`'s `overflow-y: auto` does.
+    // A list of more than seven choices scrolls. Its rows are then narrower
+    // by the scrollbar's gutter, which is to their right.
     let scrolls = listed.choices.len() > VISIBLE;
     let mut menu = div()
         .id(ElementId::NamedChild(
@@ -549,7 +570,7 @@ fn list(
         .role(Role::ListBox)
         .when_some(listed.name.clone(), |list, name| list.aria_label(name))
         .w_full()
-        // Seven rows, their gaps and the padding, inside the border.
+        // The greatest height of the list inside its 1px border.
         .max_h(px(LIST_MAX - 2.))
         .overflow_y_scroll()
         .track_scroll(&scroll)
@@ -592,8 +613,8 @@ fn list(
                 .items_center()
                 .gap(px(6.))
                 .rounded(px(theme::RADIUS_SM))
-                // `--color-menu-hover` and the chosen row's
-                // `--color-hover-overlay` are the same colour.
+                // The highlighted row and the current choice have the same
+                // background colour.
                 .when(lit, |row| row.bg(theme.hover_overlay()))
                 .whitespace_nowrap()
                 .cursor_pointer()
@@ -652,10 +673,11 @@ fn close_list(list: AnyWindowHandle, cx: &mut App) {
     });
 }
 
-/// A select inside a pop-up menu's window, which cannot draw past its own
-/// small window: its list opens as a pop-up window of its own at the button,
-/// on the same display, and closes with the menu. A press elsewhere in the
-/// menu's window closes it, as a press outside the list does in the window.
+/// Returns the select for a pop-up window of a menu. Nothing can be drawn
+/// past the edge of that small window, so the select's list opens in a
+/// pop-up window of its own, at the button and on the same display. That
+/// window closes when the menu closes. A press anywhere else in the menu's
+/// window closes the list.
 fn pop_up(
     button: Stateful<Div>,
     listed: Listed,
@@ -680,8 +702,9 @@ fn pop_up(
         && let Some(display) = window.display(cx)
     {
         state.update(cx, |state, _| state.opening = true);
-        // The pop-up's frame is its content: it has no titlebar. Placed in
-        // the interface zoom's points, framed in the screen's.
+        // The pop-up window has no titlebar, so its frame is its content. The
+        // list is placed in the points of the interface zoom, and the
+        // window's frame is then converted to the points of the screen.
         let origin = crate::zoom::content_origin_in_ui(window);
         let bounds = measured.get();
         let area = crate::zoom::screen_to_ui(display.visible_bounds(), window.ui_zoom());
@@ -724,8 +747,9 @@ fn pop_up(
                 is_resizable: false,
                 is_minimizable: false,
                 window_background: WindowBackgroundAppearance::Transparent,
-                // Never the key window: without this its hover and fades
-                // would run at 30 frames a second.
+                // A pop-up window is never the key window. With GPUI's
+                // default interval for inactive windows, its hover
+                // highlights would be drawn at 30 frames a second.
                 inactive_frame_interval: None,
                 ..Default::default()
             };
@@ -751,7 +775,8 @@ fn pop_up(
                             let _ = handle.update(cx, |_, window, _| window.remove_window());
                         });
                     }
-                    // No pop-up windows here: the list stays closed.
+                    // The pop-up window could not be opened, so the list
+                    // stays closed.
                     None => state.open = false,
                 }
             });
@@ -765,7 +790,8 @@ fn pop_up(
         .flex()
         .child(button)
         .on_mouse_down_out(move |event, _, cx| {
-            // A press on the button itself is the button's to toggle.
+            // A press on the button does not close the list here, because
+            // the button's own click handler opens and closes it.
             if bounds.contains(&event.position) {
                 return;
             }
@@ -776,8 +802,9 @@ fn pop_up(
         })
 }
 
-/// The root view of a select list's pop-up window: the list at its place in
-/// the transparent window, following the select's highlight.
+/// The root view of the pop-up window of a select's list. It draws the list
+/// at its place in the transparent window, and draws it again whenever the
+/// select's state changes, for example when the highlight moves.
 struct PopUpList {
     listed: Listed,
     at: (f32, f32),
@@ -824,23 +851,24 @@ mod tests {
     #[test]
     fn a_pop_up_list_sits_below_its_button_with_room_for_its_shadow() {
         let display = [0., 25., 1440., 875.];
-        // Three choices: three rows, two gaps, the padding and the border.
+        // Three choices are three rows, two gaps, the padding and the border.
         assert_eq!(list_height(3), 3. * 26. + 2. * 2. + 8. + 2.);
         let (list, window) = pop_up_list([500., 200., 130., 26.], 3, display);
         assert_eq!(list, [500., 230., 130., list_height(3)]);
         assert_eq!(window, [460., 190., 210., list_height(3) + 80.]);
-        // Many choices stop at seven rows.
+        // A list of many choices is as tall as a list of seven.
         assert_eq!(list_height(12), 7. * 26. + 6. * 2. + 12.);
     }
 
     #[test]
     fn a_pop_up_list_flips_above_and_stays_on_the_display() {
         let display = [0., 25., 1440., 875.];
-        // Near the display's bottom it opens above, its bottom 4px over the
-        // button, and the window stops at the display's edge.
+        // Near the display's bottom the list opens above the button, with its
+        // bottom 4px over the button, and the window ends at the display's
+        // edge.
         let (list, window) = pop_up_list([1380., 860., 130., 26.], 6, display);
         assert_eq!(list[1] + list[3], 856.);
-        // Moved left to stay on the display.
+        // The list is moved left to stay on the display.
         assert_eq!(list[0], 1310.);
         assert_eq!(window[0] + window[2], 1440.);
         assert_eq!(window[1] + window[3], list[1] + list[3] + 40.);

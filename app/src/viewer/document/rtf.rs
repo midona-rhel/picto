@@ -1,8 +1,9 @@
-//! RTF documents as `TextDocumentViewer.tsx` shows them: the visible text,
-//! one paragraph per `\par`, without character formatting.
+//! Reads RTF documents. Only the visible text is taken, as one paragraph for
+//! each `\par`. The formatting of characters is not kept.
 use super::rich::{Block, Inline};
 
-/// An RTF document's text, one paragraph per `\par`. Character formatting
+/// Returns the text of an RTF document as blocks: one paragraph for each
+/// line of the text that `rtf_text` returns. The formatting of characters
 /// is not kept.
 pub fn rtf(source: &str) -> Vec<Block> {
     rtf_text(source)
@@ -11,8 +12,10 @@ pub fn rtf(source: &str) -> Vec<Block> {
         .collect()
 }
 
-/// The visible text of an RTF document: control words dropped, the
-/// destinations that hold no body text skipped, escapes decoded.
+/// Returns the visible text of an RTF document. Control words are left out
+/// and escapes are decoded. The groups that hold no body text, such as the
+/// font table and the document's information, are skipped. Each `\par`,
+/// `\line`, `\sect` and `\page` becomes a line feed.
 pub fn rtf_text(source: &str) -> String {
     const SKIPPED: [&str; 10] = [
         "fonttbl",
@@ -28,9 +31,12 @@ pub fn rtf_text(source: &str) -> String {
     ];
     let bytes = source.as_bytes();
     let mut out = String::new();
-    // For each open group, whether its text is skipped.
+    // One entry for each group that is open. It is true when the group's
+    // text is skipped.
     let mut groups: Vec<bool> = vec![false];
-    // Characters to drop after a `\uN` escape (`\ucN`, default 1).
+    // The number of characters that are left out after a `\uN` escape. They
+    // are the replacement text for programs that cannot show the Unicode
+    // character. `\ucN` sets the number, and it is 1 until then.
     let mut unicode_skip = 1usize;
     let mut pending_skip = 0usize;
     let mut index = 0;
@@ -103,8 +109,10 @@ pub fn rtf_text(source: &str) -> String {
                         _ => {}
                     }
                 } else {
-                    // A control symbol is one character, which need not be
-                    // one byte: the index stays on a character boundary.
+                    // A control symbol is a backslash and one character.
+                    // That character can be several bytes long, so the
+                    // index moves by the character's length and stays on a
+                    // character boundary.
                     index += char_len(source, index);
                     match next {
                         b'*' => {
@@ -113,8 +121,11 @@ pub fn rtf_text(source: &str) -> String {
                             }
                         }
                         b'\'' => {
-                            // Two hex digits are two bytes; anything else
-                            // after `\'` is read as text.
+                            // The two hexadecimal digits after `\'` are two
+                            // bytes. When fewer than two bytes follow, or
+                            // the two bytes end inside a character, nothing
+                            // is taken here and what follows is read as
+                            // text.
                             let hex = source.get(index..index + 2).unwrap_or("");
                             if hex.len() == 2 {
                                 index += 2;
@@ -150,7 +161,8 @@ pub fn rtf_text(source: &str) -> String {
     out.trim_end().to_owned()
 }
 
-/// A byte of the Windows-1252 code page RTF's `\'hh` escapes use.
+/// Returns the character that `byte` stands for in the Windows-1252 code
+/// page, in which the `\'hh` escapes of RTF are read.
 fn windows_1252(byte: u8) -> char {
     const HIGH: [char; 32] = [
         '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž',
@@ -163,8 +175,9 @@ fn windows_1252(byte: u8) -> char {
     }
 }
 
-/// The length of the character at byte `index`, at least 1, so a scan
-/// moves on whatever is there.
+/// Returns the length in bytes of the character that starts at byte `index`
+/// of `source`. It returns 1 when no character starts there, so that the
+/// caller always moves forward.
 fn char_len(source: &str, index: usize) -> usize {
     source
         .get(index..)
@@ -184,13 +197,15 @@ mod tests {
 
     #[test]
     fn a_control_symbol_that_is_not_ascii_does_not_split_a_character() {
-        // A backslash before a letter of several bytes is a control symbol
-        // of one character, dropped; the text around it stays.
+        // A backslash before a letter that is several bytes long is a
+        // control symbol of one character. It is left out, and the text
+        // around it is kept.
         assert_eq!(rtf_text("{\\rtf1 a\\\u{e9}b}"), "ab");
         assert_eq!(rtf_text("{\\rtf1 x\\'\u{20ac}y}"), "x\u{20ac}y");
         assert_eq!(rtf_text("{\\rtf1 \\'e"), "e");
         assert_eq!(rtf_text("\\\u{1f600}"), "");
-        // Every way a file can end mid-escape.
+        // A file that ends in the middle of an escape must not make
+        // `rtf_text` panic.
         for source in ["\\", "\\'", "\\'4", "{\\u", "{\\u-", "\\uc99999999999 x"] {
             rtf_text(source);
         }

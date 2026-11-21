@@ -1,22 +1,19 @@
 //! The media surface (`MediaSurface`): the part of a viewer that shows the
-//! open item (the media area of production's `MediaView.tsx`). The media
-//! view, Quick Look and the detail window each have one, and the collection
-//! reader has one for each member that is not a still picture. A view that
-//! has a surface is called its host. The surface fills the rectangle its
-//! host lays it out in, which is called the pane.
+//! open item. The media view, Quick Look and the detail window each have
+//! one, and the collection reader has one for each member that is not a
+//! still picture. A view that has a surface is called its host. The surface
+//! fills the rectangle its host lays it out in, which is called the pane.
 //!
 //! [`document::kind::renderer_kind`] decides from the item's media type how
 //! the item is shown:
 //!
 //! - A picture, including a JPEG XL picture, is drawn with a [`Camera`],
-//!   which holds its zoom and pan (production's `useImageZoom.ts`). Its
-//!   thumbnail is drawn first, and its original is drawn in place of the
-//!   thumbnail once it has been decoded (production's
-//!   `ImageCrossfadeFrame`). A picture that has several frames, such as a
-//!   GIF, is played as an animation. While the picture is larger than the
-//!   pane, the navigator is shown: a square of 120 px in the pane's
-//!   bottom-right corner that shows the whole picture and marks the part
-//!   that is on screen.
+//!   which holds its zoom and pan. Its thumbnail is drawn first, and its
+//!   original is drawn in place of the thumbnail once it has been decoded.
+//!   A picture that has several frames, such as a GIF, is played as an
+//!   animation. While the picture is larger than the pane, the navigator
+//!   is shown: a square of 120 px in the pane's bottom-right corner that
+//!   shows the whole picture and marks the part that is on screen.
 //! - A Flash movie is played by Ruffle. Its frames are fitted to the pane.
 //! - Video and audio play in the media player (`video/`).
 //! - A document, a font, and a file of a type that cannot be shown get a
@@ -39,8 +36,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use std::{path::PathBuf, sync::Arc, time::Instant};
 
-/// The length in pixels of each side of the navigator, which is a square
-/// (production's `NAV_SIZE`).
+/// The length in pixels of each side of the navigator, which is a square.
 const NAVIGATOR: f32 = 120.;
 /// The distance in pixels between the navigator and the pane's right edge,
 /// and between the navigator and the pane's bottom edge.
@@ -109,10 +105,10 @@ pub struct Options {
     /// detail window and the collection reader set it.
     pub follows_resize: bool,
     /// True for the surface of a collection's member in the collection
-    /// reader (production's `GroupDeferredRenderer`). A video or audio
-    /// member does not start to play by itself, does not loop, and starts
-    /// with its sound on (a video that is opened elsewhere starts muted).
-    /// A paged document's pages are laid out for the collection reader.
+    /// reader. A video or audio member does not start to play by itself,
+    /// does not loop, and starts with its sound on (a video that is opened
+    /// elsewhere starts muted). A paged document's pages are laid out for
+    /// the collection reader.
     pub member: bool,
     /// The setting `showTransparencyGrid`. When it is on, a checkerboard of
     /// white and light grey squares is drawn behind a picture, and it can
@@ -152,8 +148,7 @@ enum Mode {
     Flash,
     /// A [`Document`]: a paged document, a text document, a font, or the
     /// view for a file that cannot be shown. Every media type that no other
-    /// mode shows gets this mode (in production these are the documents,
-    /// the fonts and the unsupported view of `DetailMediaRenderer`).
+    /// mode shows gets this mode.
     Document,
     /// Video or audio, which plays in the media player.
     Media,
@@ -228,7 +223,7 @@ pub struct MediaSurface {
     /// every 16 ms ([`motion::FLASH_FRAME`]).
     flash_task: Option<Task<()>>,
     /// The opacity of the Flash movie's controls, which fade in and out
-    /// over 300 ms (production's `useMediaControlsVisibility`).
+    /// over 300 ms.
     flash_controls: motion::Fade,
     /// The number of times the Flash movie's controls have been shown. Each
     /// time starts a timer that hides them 2,500 ms later. A timer hides
@@ -361,11 +356,10 @@ impl MediaSurface {
         }
     }
 
-    /// Makes the surface of a host that follows the preview settings
-    /// (production's `usePreviewPreferences`). [`super::options`] builds
-    /// the options from the settings and from the host's two own choices,
-    /// `navigator` and `follows_resize`. The options are built again each
-    /// time the saved settings change.
+    /// Makes the surface of a host that follows the preview settings.
+    /// [`super::options`] builds the options from the settings and from the
+    /// host's two own choices, `navigator` and `follows_resize`. The options
+    /// are built again each time the saved settings change.
     pub fn for_host(navigator: bool, follows_resize: bool, cx: &mut Context<Self>) -> Self {
         let mut surface = Self::new(super::options(cx, navigator, follows_resize), cx);
         surface._settings = Some(cx.subscribe(
@@ -686,8 +680,7 @@ impl MediaSurface {
     /// the zoom percentage and the buttons "Actual size" and "Fit to
     /// window". That is the case for a picture once its size is known, and
     /// for a PDF, whose viewer does the zooming itself. The detail window
-    /// uses it (production's `supportsZoom` and `usesRendererZoom` in
-    /// `DetailWindow.tsx`).
+    /// uses it.
     pub fn shows_zoom(&self) -> bool {
         match self.mode {
             Mode::Image => self.has_image(),
@@ -734,10 +727,9 @@ impl MediaSurface {
     }
 
     /// Runs `control` on the open Flash movie, for example to pause it, to
-    /// stop it or to mute it, and shows the movie's controls again
-    /// (production's `revealControls`). The buttons of the movie's controls
-    /// and the Flash rows of the context menu call it. When no Flash movie
-    /// is open, it does nothing.
+    /// stop it or to mute it, and shows the movie's controls again. The
+    /// buttons of the movie's controls and the Flash rows of the context
+    /// menu call it. When no Flash movie is open, it does nothing.
     pub fn control_flash(
         &mut self,
         control: Box<dyn Fn(&mut super::flash::Flash)>,
@@ -847,8 +839,7 @@ impl MediaSurface {
     /// Windows and Linux. It applies to a picture, a paged document and a
     /// font preview. When this returns false, the surface does not handle
     /// the key, and the key goes on to the window, where it resets the
-    /// zoom of the interface. Production's `MediaView` does the same: it
-    /// leaves the key to `AppShell` when the open item has no zoom.
+    /// zoom of the interface.
     pub fn has_actual_size(&self) -> bool {
         match self.mode {
             Mode::Image => true,
@@ -865,9 +856,8 @@ impl MediaSurface {
     /// keys are Cmd+= and Cmd++ for larger and Cmd+− for smaller, with
     /// Ctrl in place of Cmd on Windows and Linux. On macOS the same keys
     /// with Ctrl also work, and Ctrl+0 sets the preview back to its own
-    /// size. Production's `FontViewer.tsx` handles these keys itself. When
-    /// this returns false, the surface does not handle the keys, and they
-    /// go on to the window, where they zoom the interface.
+    /// size. When this returns false, the surface does not handle the keys,
+    /// and they go on to the window, where they zoom the interface.
     pub fn has_preview_size(&self) -> bool {
         matches!(self.document(), Some(Document::Font(_)))
     }
@@ -943,11 +933,11 @@ impl MediaSurface {
         self.navigator_drag = None;
     }
 
-    /// Fits the open item to the pane (production's `fitToWindow`). A paged
-    /// document fits its page to its view, and any other document does
-    /// nothing. Otherwise, when the size of the picture on screen is known,
-    /// the camera is set so that the whole picture is shown, centred in the
-    /// pane, and the zoom animation in progress ends.
+    /// Fits the open item to the pane. A paged document fits its page to
+    /// its view, and any other document does nothing. Otherwise, when the
+    /// size of the picture on screen is known, the camera is set so that
+    /// the whole picture is shown, centred in the pane, and the zoom
+    /// animation in progress ends.
     pub fn fit(&mut self, cx: &mut Context<Self>) {
         if let Some(document) = self.document() {
             document.fit(cx);
@@ -960,12 +950,12 @@ impl MediaSurface {
         }
     }
 
-    /// Shows the open item at its actual size (production's `fitActual`). A
-    /// paged document shows its pages at 100%, a font preview goes back to
-    /// its own size, and any other document does nothing. Otherwise the
-    /// camera is set to 100%, at which one image pixel takes one pixel of
-    /// the layout, with the picture centred in the pane, and the zoom
-    /// animation in progress ends.
+    /// Shows the open item at its actual size. A paged document shows its
+    /// pages at 100%, a font preview goes back to its own size, and any
+    /// other document does nothing. Otherwise the camera is set to 100%, at
+    /// which one image pixel takes one pixel of the layout, with the
+    /// picture centred in the pane, and the zoom animation in progress
+    /// ends.
     pub fn actual_size(&mut self, cx: &mut Context<Self>) {
         if let Some(document) = self.document() {
             document.actual_size(cx);
@@ -1064,12 +1054,12 @@ impl MediaSurface {
             cx.stop_propagation();
             return;
         }
-        // `delta` is given the sign of a browser's `deltaY`, which
-        // production reads: positive when the user scrolls down. GPUI's
-        // delta is negative then, so its sign is reversed. A distance in
-        // lines counts as a notch of a mouse wheel. A distance in pixels
-        // counts as a notch when it is at least 40 px (`camera::NOTCH`),
-        // and as a scroll of the trackpad when it is smaller.
+        // `delta` is made positive when the user scrolls down, which is the
+        // sign that `camera::wheel_factor` takes. GPUI's delta is negative
+        // then, so its sign is reversed. A distance in lines counts as a
+        // notch of a mouse wheel. A distance in pixels counts as a notch
+        // when it is at least 40 px (`camera::NOTCH`), and as a scroll of
+        // the trackpad when it is smaller.
         let (notch, delta) = match event.delta {
             ScrollDelta::Lines(lines) => (true, -lines.y),
             ScrollDelta::Pixels(pixels) => {
@@ -1112,12 +1102,11 @@ impl MediaSurface {
     /// Handles a pinch on the trackpad over a picture. It zooms the
     /// picture, and the point of the picture at the centre of the pinch
     /// stays where it is. `event.delta` is the change of zoom that the
-    /// event reports, for example 0.1 for 10% larger. Production receives a
-    /// pinch from Chromium as a wheel event whose `deltaY` is
-    /// −100 × ln(1 + delta). The same `deltaY` is computed here and is
-    /// handled as a scroll of the trackpad is, so the scale is multiplied
-    /// by (1 + delta) to the power 0.4. When the open item is not a
-    /// picture, or the picture's size is not known, it does nothing.
+    /// event reports, for example 0.1 for 10% larger. The pinch is handled
+    /// as a scroll of the trackpad by −100 × ln(1 + delta) pixels is, so
+    /// the scale is multiplied by (1 + delta) to the power 0.4. When the
+    /// open item is not a picture, or the picture's size is not known, it
+    /// does nothing.
     fn pinch(&mut self, event: &PinchEvent, cx: &mut Context<Self>) {
         if self.mode != Mode::Image || self.image_size().is_none() {
             return;
@@ -1261,15 +1250,15 @@ impl MediaSurface {
         layers
     }
 
-    /// Builds the navigator (production's `.navigator`): a square of
-    /// 120 px, 12 px from the pane's right and bottom edges, with a 1 px
-    /// border and corners rounded by 6 px. It shows the item's thumbnail,
-    /// or the original when there is no thumbnail, fitted into the square.
-    /// A frame with a 1 px border marks the part of the picture that is
-    /// visible in the pane, and the rest of the square is darkened. A
-    /// press of the left button in the navigator moves the camera so that
-    /// the point of the picture that was pressed is at the centre of the
-    /// pane, and starts a drag in the navigator.
+    /// Builds the navigator: a square of 120 px, 12 px from the pane's
+    /// right and bottom edges, with a 1 px border and corners rounded by
+    /// 6 px. It shows the item's thumbnail, or the original when there is
+    /// no thumbnail, fitted into the square. A frame with a 1 px border
+    /// marks the part of the picture that is visible in the pane, and the
+    /// rest of the square is darkened. A press of the left button in the
+    /// navigator moves the camera so that the point of the picture that
+    /// was pressed is at the centre of the pane, and starts a drag in the
+    /// navigator.
     ///
     /// `part` is the visible part of the picture as its left edge, top
     /// edge, width and height, in fractions of the picture's width and
@@ -1290,13 +1279,13 @@ impl MediaSurface {
             part.2 * shown_width,
             part.3 * shown_height,
         );
-        // Production darkens everything around the frame with one shadow
-        // (`box-shadow: 0 0 0 999px`). Here the dark area is drawn as four
-        // rectangles: one above the frame, one below it, one to its left
-        // and one to its right. The area inside the navigator's border is
-        // 118 px wide and high (`inner`). A rectangle that reaches a
-        // corner of that area has that corner rounded by 5 px, which is
-        // the navigator's radius of 6 px less the 1 px border.
+        // Everything in the navigator around the frame is darkened. The
+        // dark area is drawn as four rectangles: one above the frame, one
+        // below it, one to its left and one to its right. The area inside
+        // the navigator's border is 118 px wide and high (`inner`). A
+        // rectangle that reaches a corner of that area has that corner
+        // rounded by 5 px, which is the navigator's radius of 6 px less the
+        // 1 px border.
         let inner = NAVIGATOR - 2.;
         let (left, top) = (frame.0.max(0.), frame.1.max(0.));
         let (right, bottom) = (
@@ -1611,8 +1600,7 @@ impl MediaSurface {
             .on_pinch(cx.listener(|this, event: &PinchEvent, _, cx| this.pinch(event, cx)));
         if image_mode {
             // Over a picture the cursor is an open hand, and a closed hand
-            // while the picture is being panned (the cursors `grab` and
-            // `grabbing` of production's `.zoomContainer`).
+            // while the picture is being panned.
             surface = surface.cursor(if self.drag.is_some() {
                 CursorStyle::ClosedHand
             } else {
@@ -1764,7 +1752,7 @@ impl MediaSurface {
                 &flash.playback,
                 // The buttons are disabled until the movie's first frame
                 // has arrived, because there is nothing to control before
-                // that (production's `disabled={!controller}`).
+                // that.
                 self.full.is_some() && self.full_key == self.key,
                 self.flash_controls.value_with(motion::EASE),
                 self.flash_controls.on(),
@@ -1895,14 +1883,14 @@ impl MediaSurface {
     }
 }
 
-/// Paints the checkerboard that is drawn behind a picture (production's
-/// `.transparencyGrid`). `bounds` is the picture's rectangle in window
-/// coordinates and `scale` is the camera's scale. White and light grey
-/// squares alternate. Each square is 8 image pixels wide, which is
-/// 8 × `scale` px on screen. Only the part of `bounds` that is inside the
-/// area the window is drawing is painted. When that part would hold more
-/// than 40,000 squares, no squares are painted, and the part is filled
-/// with the one colour that is halfway between the white and the grey.
+/// Paints the checkerboard that is drawn behind a picture. `bounds` is the
+/// picture's rectangle in window coordinates and `scale` is the camera's
+/// scale. White and light grey squares alternate. Each square is 8 image
+/// pixels wide, which is 8 × `scale` px on screen. Only the part of
+/// `bounds` that is inside the area the window is drawing is painted. When
+/// that part would hold more than 40,000 squares, no squares are painted,
+/// and the part is filled with the one colour that is halfway between the
+/// white and the grey.
 fn paint_checkerboard(bounds: Bounds<Pixels>, scale: f32, window: &mut Window) {
     let visible = window.content_mask().bounds.intersect(&bounds);
     if visible.size.width <= px(0.) || visible.size.height <= px(0.) {

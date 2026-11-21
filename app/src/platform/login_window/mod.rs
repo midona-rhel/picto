@@ -1,25 +1,27 @@
-//! The sign-in window (production's `BrowserWindow` in
-//! `electron/windows/authSessions.mjs`): the service's own login page in
-//! the system's web view, in a window of its own, from which the login's
-//! cookies are read for that service only.
+//! The sign-in window. It is a window of its own that shows a service's
+//! login page in the web view of the operating system. The app reads the
+//! cookies of the login from this web view, and only for the addresses of
+//! that service.
 //!
-//! One interface for every platform; each places the web view where it can
-//! live beside GPUI's windows:
+//! [`LoginWindow`] is the same on every platform. The web view is placed
+//! differently on each one:
 //!
-//! - macOS: a WKWebView inside a GPUI window of its own (`hosted.rs`), its
-//!   cookies from the view's `WKHTTPCookieStore` (`macos.rs`);
-//! - Windows: a WebView2 inside a GPUI window of its own (`hosted.rs`), its
-//!   cookies from `ICoreWebView2CookieManager` (`windows.rs`); it needs the
-//!   WebView2 Runtime;
-//! - Linux (X11 and Wayland): a GTK window holding WebKitGTK (`linux.rs`),
-//!   as GPUI's Linux windows are not GTK's; GTK runs on the main thread,
-//!   advanced by the app while a sign-in window is open; it needs
-//!   WebKitGTK 4.1.
+//! - On macOS it is a WKWebView inside a GPUI window (`hosted.rs`). Its
+//!   cookies are read from the view's `WKHTTPCookieStore` (`macos.rs`).
+//! - On Windows it is a WebView2 inside a GPUI window (`hosted.rs`). Its
+//!   cookies are read from `ICoreWebView2CookieManager` (`windows.rs`). The
+//!   WebView2 Runtime must be installed.
+//! - On Linux, with X11 and with Wayland, it is a WebKitGTK view in a GTK
+//!   window (`linux.rs`), because a GPUI window on Linux is not a GTK
+//!   window and cannot hold one. GTK runs on the main thread, and the app
+//!   processes GTK's events while a sign-in window is open. WebKitGTK 4.1
+//!   must be installed.
 //!
-//! Every web view starts with storage of its own that nothing else shares
-//! and that goes when it closes (a private data store), which is what
-//! production's partition, cleared when a login starts and when it is
-//! saved, comes to. Nothing here reads another browser's cookies.
+//! Every web view is made with a private data store: its storage starts
+//! empty, no other window shares it, and it is deleted when the window
+//! closes. A login therefore never starts with the cookies of an earlier
+//! login. Nothing here reads the cookies of a browser that is installed on
+//! the computer.
 use crate::logins::cookies::Cookie;
 use futures::channel::{mpsc, oneshot};
 use gpui::App;
@@ -35,51 +37,59 @@ mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
-/// What the window reports to the login driving it.
+/// An event that the sign-in window reports to the code that opened it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
-    /// A page started loading (`did-navigate`).
+    /// The page at this address started to load.
     Started(String),
-    /// A page finished loading (`did-finish-load`).
+    /// The page at this address finished loading.
     Loaded(String),
-    /// The page's title changed.
+    /// The title of the page changed to this text.
     Title(String),
-    /// The window was about to go to the login's callback, which it did
-    /// not load (`will-navigate`, `will-redirect`).
+    /// The window was about to load this address, which is the callback of
+    /// the login (`Options::intercept`). The window did not load it.
     Callback(String),
-    /// A page asked for a new window; it opens in this one instead.
+    /// A page asked to open this address in a new window. No new window is
+    /// opened; the code that receives the event loads the address in this
+    /// window.
     OpenHere(String),
-    /// The window's own page could not be loaded (`did-fail-load` for the
-    /// main frame): the address and the system's description of why. A
-    /// load stopped by a newer one, or refused by the window, is not one.
+    /// The page of the window's main frame could not be loaded. The event
+    /// holds the address and the system's description of the reason. A
+    /// load that a newer load stopped, or that the window itself refused,
+    /// is not reported.
     Failed { url: String, description: String },
-    /// The web view could not be made after its window opened (no
-    /// WebView2 Runtime); the window is of no use and is closed. On Linux
-    /// the web view is made with its window, and `open` says so instead.
+    /// The web view could not be made after its window had opened, for
+    /// example because the WebView2 Runtime is not installed. The code that
+    /// receives the event closes the window. On Linux the web view is made
+    /// together with its window, so there `open` returns the error and
+    /// this event is not sent.
     #[cfg_attr(target_os = "linux", allow(dead_code))]
     Unavailable(String),
     /// The user closed the window.
     Closed,
 }
 
-/// What a sign-in window opens with.
+/// The values that a sign-in window is opened with.
 pub struct Options {
     pub title: String,
     pub width: f32,
     pub height: f32,
     pub min_width: f32,
     pub min_height: f32,
-    /// Whether an address is the login's callback, which is handed back as
-    /// [`Event::Callback`] instead of loading.
+    /// Returns whether an address is the callback of the login. The window
+    /// does not load such an address and sends [`Event::Callback`] with it
+    /// instead.
     pub intercept: Rc<dyn Fn(&str) -> bool>,
     pub events: mpsc::UnboundedSender<Event>,
-    /// A check's loopback origin, outside which the window loads nothing
-    /// (`PICTO_GPUI_LOGIN_ORIGIN` for a sign-in, `PICTO_GPUI_NET_ORIGIN`
-    /// for Search by Image); `None` in a real run.
+    /// The loopback origin of a check in a debug build:
+    /// `PICTO_GPUI_LOGIN_ORIGIN` for a sign-in, `PICTO_GPUI_NET_ORIGIN` for
+    /// Search by Image. When it is set, the window loads no address outside
+    /// that origin. It is `None` when the app runs normally.
     pub local_origin: Option<String>,
 }
 
-/// An open sign-in window, hidden until it is shown.
+/// An open sign-in window. It is hidden until [`LoginWindow::show`] is
+/// called.
 pub struct LoginWindow {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     inner: hosted::Hosted,
@@ -88,7 +98,8 @@ pub struct LoginWindow {
 }
 
 impl LoginWindow {
-    /// Opens the window, hidden, or says why the system could not.
+    /// Opens the window without showing it. Returns an error if the system
+    /// could not open it.
     pub fn open(options: Options, cx: &mut App) -> Result<Self, String> {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         return hosted::Hosted::open(options, cx).map(|inner| Self { inner });
@@ -105,29 +116,31 @@ impl LoginWindow {
         self.inner.load(url);
     }
 
-    /// The page's address now.
+    /// Returns the address of the page that the window shows.
     pub fn current_url(&self) -> String {
         self.inner
             .with_view(|view| view.url().unwrap_or_default())
             .unwrap_or_default()
     }
 
-    /// The cookies a request to `url` carries, from the window's own store.
+    /// Returns the cookies that the web view would send with a request to
+    /// `url`. They come from the web view's own cookie store.
     pub fn cookies(&self, url: &str) -> oneshot::Receiver<Vec<Cookie>> {
         let (sender, receiver) = oneshot::channel();
         self.inner.with_view(|view| cookies_for(view, url, sender));
         receiver
     }
 
-    /// Runs `script`, an expression whose value is a JSON string, and
-    /// hands back that JSON.
+    /// Runs `script` in the page. `script` is a JavaScript expression whose
+    /// value is a JSON string. Returns the parsed JSON, or `None` if the
+    /// result is not a JSON string.
     pub fn eval(&self, script: &str) -> oneshot::Receiver<Option<Value>> {
         let (sender, receiver) = oneshot::channel();
         let sender = std::sync::Mutex::new(Some(sender));
         self.inner.with_view(|view| {
             let result = view.evaluate_script_with_callback(script, move |json| {
-                // The script's value is a JSON string, handed back as the
-                // JSON of that string.
+                // The web view returns the script's value encoded as JSON.
+                // The value is itself a JSON string, so it is decoded twice.
                 let value =
                     serde_json::from_str::<Value>(&json)
                         .ok()
@@ -154,47 +167,50 @@ impl LoginWindow {
         self.inner.set_shown(false, cx);
     }
 
-    /// Brings the window forward with the keyboard (`focus()`), unless
-    /// `PICTO_GPUI_BACKGROUND` keeps every window of the app behind.
+    /// Brings the window to the front and gives it the keyboard focus,
+    /// unless `PICTO_GPUI_BACKGROUND` keeps every window of the app behind
+    /// the windows of other programs.
     pub fn focus(&self, cx: &mut App) {
         self.inner.focus(cx);
     }
 
-    /// Closes the window; its web view's storage goes with it.
+    /// Closes the window. The storage of its web view is deleted with it.
     pub fn close(self, cx: &mut App) {
         self.inner.close(cx);
     }
 
-    /// Asks the window to close as its close button does, for the checks
-    /// (`logins::check`).
+    /// Closes the window the way its close button does. Only the check in
+    /// `logins::check` uses it.
     #[cfg(debug_assertions)]
     pub fn close_as_user(&self, cx: &mut App) {
         self.inner.close_as_user(cx);
     }
 
-    /// Saves a PNG picture of the window as it is on the screen, for the
-    /// checks.
+    /// Saves a picture of the window, as it is on the screen, as a PNG file
+    /// at `path`. Only the checks use it.
     #[cfg(debug_assertions)]
     pub fn capture(&self, path: &std::path::Path, cx: &mut App) -> Result<(), String> {
         self.inner.capture(path, cx)
     }
 
-    /// How many sign-in windows the system has open now, for the checks.
+    /// Returns the number of sign-in windows that are open. Only the
+    /// checks use it.
     #[cfg(debug_assertions)]
     pub fn open_count() -> usize {
         OPEN.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
-/// The sign-in windows the system has open.
+/// The number of sign-in windows that are open.
 static OPEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// A platform window was made.
+/// Adds one to [`OPEN`]. Each platform calls it when it has made a window.
 fn opened() {
     OPEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// A platform window went.
+/// Takes one from [`OPEN`]. Each platform calls it when a window has been
+/// destroyed.
 fn closed() {
     let _ = OPEN.fetch_update(
         std::sync::atomic::Ordering::SeqCst,
@@ -209,8 +225,9 @@ fn load_into(view: &wry::WebView, url: &str) {
     }
 }
 
-/// The web view every platform opens: the login page, nothing allowed
-/// that a login does not need, and its storage its own.
+/// Sets up the web view the same way on every platform: a private data
+/// store, the handlers that send the [`Event`]s, no access to the clipboard
+/// for page scripts, no new windows, and every permission request denied.
 fn configure<'a>(builder: wry::WebViewBuilder<'a>, options: &Options) -> wry::WebViewBuilder<'a> {
     let intercept = options.intercept.clone();
     let local = options.local_origin.clone();
@@ -223,9 +240,10 @@ fn configure<'a>(builder: wry::WebViewBuilder<'a>, options: &Options) -> wry::We
         .with_incognito(true)
         .with_visible(true)
         .with_background_color((255, 255, 255, 255))
-        // No page script reads or writes the clipboard (WebKitGTK's
-        // `javascript-can-access-clipboard`); the user's own copy and
-        // paste in the page's fields are the web view's editing.
+        // A script of the page cannot read or write the clipboard (on
+        // WebKitGTK this is the setting `javascript-can-access-clipboard`).
+        // The user can still copy and paste in the fields of the page,
+        // because the web view does that itself.
         .with_clipboard(false)
         .with_navigation_handler(move |url| {
             if intercept(&url) {
@@ -243,8 +261,9 @@ fn configure<'a>(builder: wry::WebViewBuilder<'a>, options: &Options) -> wry::We
         .with_document_title_changed_handler(move |title| {
             let _ = titled.unbounded_send(Event::Title(title));
         })
-        // `setWindowOpenHandler`: a page's new window opens in this one
-        // when it is HTTPS, and never as a window of its own.
+        // A page never gets a new window. When it asks for one with an
+        // HTTPS address, or with an address of the check's local origin,
+        // the address is loaded in this window instead.
         .with_new_window_req_handler(move |url, _| {
             if url.to_ascii_lowercase().starts_with("https://")
                 || under_local_origin(&url, local_for_windows.as_deref())
@@ -253,15 +272,16 @@ fn configure<'a>(builder: wry::WebViewBuilder<'a>, options: &Options) -> wry::We
             }
             wry::NewWindowResponse::Deny
         })
-        // Production allows only the storage access a login's own frames
-        // ask for; the web views here have no such request to answer, and
-        // nothing else (camera, microphone, location, notifications).
+        // Every permission request of a page is denied: camera,
+        // microphone, location, notifications and all others. A login needs
+        // none of them.
         .with_permission_handler(|_| wry::PermissionResponse::Deny)
 }
 
-/// Whether the window may load `url`. With a check's local origin (a
-/// debug build's local login or local search engines), nothing outside it
-/// loads, so a check never reaches a real site.
+/// Returns whether the window may load `url`. When `local` holds the
+/// loopback origin of a check (a debug build's local login or local search
+/// engines), only `about:blank` and addresses of that origin may be loaded,
+/// so a check never reaches a real site.
 fn allowed(url: &str, local: Option<&str>) -> bool {
     match local {
         Some(_) if url == "about:blank" => true,
@@ -282,9 +302,9 @@ fn under_local_origin(url: &str, local: Option<&str>) -> bool {
     })
 }
 
-/// Shows a hosted window without taking the keyboard, or takes it off the
-/// screen. With `PICTO_GPUI_BACKGROUND` it is shown behind every other
-/// window.
+/// Shows the GPUI window that holds the web view without giving it the
+/// keyboard focus, or hides it. With `PICTO_GPUI_BACKGROUND` the window is
+/// shown behind every other window.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn show_hosted(window: &gpui::Window, shown: bool) {
     #[cfg(target_os = "macos")]
@@ -301,8 +321,9 @@ fn show_hosted(window: &gpui::Window, shown: bool) {
     crate::platform::windows::show_without_activating(window, shown);
 }
 
-/// The window's cookies for `url`, read without blocking: the store
-/// answers on the main thread later.
+/// Reads the cookies that the web view would send with a request to `url`
+/// and sends them through `sender`. It does not wait: the cookie store
+/// calls back on the main thread later.
 fn cookies_for(view: &wry::WebView, url: &str, sender: oneshot::Sender<Vec<Cookie>>) {
     #[cfg(target_os = "macos")]
     macos::cookies_for(view, url, sender);

@@ -1,11 +1,12 @@
-//! The commands the Subscriptions screen sends to the application, with the
-//! arguments of `core/src/ipc.rs` that `subscriptionApi.ts` builds, and the
-//! one place they leave from ([`Outbox`]).
+//! The commands that the Subscriptions screen sends to the application.
+//! Each function here builds one command with the arguments that
+//! `core/src/ipc.rs` reads for it. [`Outbox`] is the one place that the
+//! commands are sent from.
 use futures::channel::oneshot;
 use serde_json::{Value, json};
 use std::{cell::RefCell, rc::Rc};
 
-/// One command and its arguments.
+/// One command: the name the application knows it by, and its arguments.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Request {
     pub name: &'static str,
@@ -16,8 +17,10 @@ fn request(name: &'static str, args: Value) -> Request {
     Request { name, args }
 }
 
-/// `createSubscription`: a subscription with no sources, on the schedule
-/// and run limits Settings gives new ones.
+/// Builds the command that creates a subscription named `name` without
+/// sources (`subscriptions.create`). `schedule` is its schedule, and
+/// `posts_per_run` is its limit of posts for its first run and for every
+/// later run.
 pub fn create(name: &str, schedule: &str, posts_per_run: i64) -> Request {
     request(
         "subscriptions.create",
@@ -38,7 +41,8 @@ pub fn delete(subscription: i64) -> Request {
     )
 }
 
-/// Clears the handled-file history, so the next run reads every source from
+/// Builds the command that clears a subscription's history of handled files
+/// (`subscriptions.reset`), so that the next run reads every source from
 /// the beginning.
 pub fn reset(subscription: i64) -> Request {
     request(
@@ -54,7 +58,9 @@ pub fn rename(subscription: i64, name: &str) -> Request {
     )
 }
 
-/// Where downloaded files go: the folders and the tags each receives.
+/// Builds the command that saves a subscription's destination
+/// (`subscriptions.destination`): the folders that downloaded files are
+/// added to and the tags that they are given.
 pub fn destination(subscription: i64, folders: &[i64], tags: &[String]) -> Request {
     request(
         "subscriptions.destination",
@@ -65,7 +71,10 @@ pub fn destination(subscription: i64, folders: &[i64], tags: &[String]) -> Reque
     )
 }
 
-/// A page of the media the subscription has added, 200 at a time.
+/// Builds the command that reads one page of the media that a subscription
+/// has added (`subscriptions.cover.candidates`). A page holds up to 200
+/// media. `cursor` says where the page before ended, and `None` asks for
+/// the first page.
 pub fn cover_candidates(subscription: i64, cursor: Option<Value>) -> Request {
     request(
         "subscriptions.cover.candidates",
@@ -73,7 +82,9 @@ pub fn cover_candidates(subscription: i64, cursor: Option<Value>) -> Request {
     )
 }
 
-/// The chosen image and the square framed of it.
+/// Builds the command that sets a subscription's cover
+/// (`subscriptions.cover.set`) to the media item `media_item`, with the
+/// square part of the picture that `crop` describes.
 pub fn set_cover(subscription: i64, media_item: i64, crop: crate::cover::Crop) -> Request {
     request(
         "subscriptions.cover.set",
@@ -89,7 +100,9 @@ pub fn set_cover(subscription: i64, media_item: i64, crop: crate::cover::Crop) -
     )
 }
 
-/// What a source reads: its site, its query, and how it is shown.
+/// The properties of a source that the screen sets: its site, its query,
+/// the name that is shown in place of the query, its notes, and whether the
+/// media of one post become one group.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Source {
     pub site: String,
@@ -131,12 +144,15 @@ pub fn delete_query(query: i64) -> Request {
     request("subscriptions.queries.delete", json!({ "query_id": query }))
 }
 
-/// Runs one source now. It downloads.
+/// Builds the command that starts a run of one source alone
+/// (`subscriptions.queries.run`). The run downloads files.
 pub fn run_query(query: i64) -> Request {
     request("subscriptions.queries.run", json!({ "query_id": query }))
 }
 
-/// Holds a source out of future runs, or lets it run again.
+/// Builds the command that puts a source on hold, so that future runs of
+/// its subscription leave it out, or lets the source run again
+/// (`subscriptions.queries.pause`).
 pub fn pause_query(query: i64, paused: bool) -> Request {
     request(
         "subscriptions.queries.pause",
@@ -144,7 +160,9 @@ pub fn pause_query(query: i64, paused: bool) -> Request {
     )
 }
 
-/// Whether a post's media become one group in the library.
+/// Builds the command that sets whether the media of one post from a
+/// source become one group in the library
+/// (`subscriptions.queries.grouping`).
 pub fn group_query(query: i64, group_posts: bool) -> Request {
     request(
         "subscriptions.queries.grouping",
@@ -152,14 +170,17 @@ pub fn group_query(query: i64, group_posts: bool) -> Request {
     )
 }
 
-/// Downloads a gallery as a subscription of its own, which is removed again
-/// once its run settles. It downloads.
+/// Builds the command that downloads the gallery at `url`
+/// (`subscriptions.gallery.start`). The gallery is downloaded as a
+/// subscription of its own, which is removed again when its run has ended.
+/// The command downloads files.
 pub fn start_gallery(url: &str) -> Request {
     request("subscriptions.gallery.start", json!({ "url": url }))
 }
 
-/// Removes a gallery download whose run has settled, answering with the
-/// gallery's title and whether it was already in the library.
+/// Builds the command that removes a gallery download whose run has ended
+/// (`subscriptions.gallery.cleanup`). The answer holds the gallery's title
+/// and whether the gallery was already in the library.
 pub fn clean_up_gallery(subscription: i64) -> Request {
     request(
         "subscriptions.gallery.cleanup",
@@ -167,7 +188,8 @@ pub fn clean_up_gallery(subscription: i64) -> Request {
     )
 }
 
-/// The latest runs, newest first (`listRuns`).
+/// Builds the command that reads a subscription's 20 latest runs, newest
+/// first (`subscriptions.runs.list`).
 pub fn runs(subscription: i64) -> Request {
     request(
         "subscriptions.runs.list",
@@ -175,7 +197,10 @@ pub fn runs(subscription: i64) -> Request {
     )
 }
 
-/// The run in progress, with the gallery's size once the site reports it.
+/// Builds the command that reads the progress of a subscription's run in
+/// progress (`subscriptions.progress.get`). For a gallery download the
+/// answer holds the number of images in the gallery, once the site has
+/// reported it.
 pub fn progress(subscription: i64) -> Request {
     request(
         "subscriptions.progress.get",
@@ -191,8 +216,9 @@ pub fn credential_health() -> Request {
     request("auth.health.list", json!({}))
 }
 
-/// Whether a command starts work on the network: a run, a source's run, a
-/// run resumed, or a gallery download.
+/// Returns whether the command named `name` starts work on the network.
+/// Four commands do: the ones that start a run, start a run of one source,
+/// resume a run, and start a gallery download.
 pub fn starts_network(name: &str) -> bool {
     matches!(
         name,
@@ -203,10 +229,13 @@ pub fn starts_network(name: &str) -> bool {
     )
 }
 
-/// Where the screen's commands go. Live, they go to the application. Held
-/// (`PICTO_GPUI_HOLD_RUNS` set), each is written down, and those that would
-/// start work on the network are answered at once instead of sent, so a
-/// script can press Run and check what would have been asked for.
+/// Where the screen's commands are sent. With `Live`, every command goes to
+/// the application. `Held` is used when the environment variable
+/// `PICTO_GPUI_HOLD_RUNS` is set. Every command is then printed and added
+/// to the list that `Held` holds. A command that would start work on the
+/// network is answered at once with `{"held": true}` and is not sent, and
+/// every other command still goes to the application. A script can
+/// therefore press Run and check which command would have been sent.
 #[derive(Clone)]
 pub enum Outbox {
     Live,
@@ -222,8 +251,9 @@ impl Outbox {
         }
     }
 
-    /// Sends `request` through `dispatch` unless it is held, and hands back
-    /// the answer.
+    /// Sends `request` with `dispatch` and returns the receiver of the
+    /// answer. A held outbox does not send a command that would start work
+    /// on the network; it answers that command itself, at once.
     pub fn send(
         &self,
         request: Request,
@@ -254,7 +284,8 @@ mod tests {
     use super::*;
     use picto_core::ipc;
 
-    /// Each request's arguments read as the application's own input type.
+    /// Fails the test unless the arguments of the request can be read as
+    /// the input type that the application reads for that command.
     macro_rules! reads_as {
         ($input:ty, $request:expr) => {{
             let request: Request = $request;
@@ -324,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn requests_carry_what_the_electron_screen_sends() {
+    fn requests_carry_what_the_earlier_versions_screen_sent() {
         assert_eq!(
             create("Artists", "daily", 250),
             Request {

@@ -1,10 +1,9 @@
-//! The rails' resize edges (`.sidebarResizeHandle`,
-//! `.inspectorResizeHandle` in `AppShell.module.css`) and the drag of one.
-//! Both edges are one element: a 5px strip over the rail's inner side whose
-//! 1px border is the rail's divider. Under the pointer or while dragging the
-//! border grows to 2px in the text colour over 200 ms (production's
-//! `--color-primary-70` is undefined there, so the border takes
-//! `currentColor`), and goes back 100 ms after the pointer leaves.
+//! The resize edges of the sidebar and the inspector, and the drag of one.
+//! One function builds both edges. An edge is a 5px wide strip over the
+//! rail's inner side, and its 1px border is the line between the rail and
+//! the centre of the window. While the pointer is over the edge, or the edge
+//! is being dragged, the border grows to 2px and takes the text colour, over
+//! 200 ms. It starts to change back 100 ms after the pointer has left.
 use crate::{motion, state, theme};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -15,8 +14,8 @@ pub enum Rail {
     Inspector,
 }
 
-/// A drag of a rail's edge: which rail, where the pointer went down, and the
-/// rail's width then.
+/// A drag of a rail's edge: which rail, the horizontal position at which the
+/// pointer was pressed, and the rail's width at that moment.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Resize {
     pub rail: Rail,
@@ -25,9 +24,12 @@ pub struct Resize {
 }
 
 impl Resize {
-    /// The rail's width with the pointer at `x`, rounded and kept within the
-    /// rail's limits (`setSidebarWidthAtom`, `setInspectorWidthAtom`). The
-    /// sidebar's edge is its right side, the inspector's its left.
+    /// Returns the rail's width when the pointer is at the horizontal
+    /// position `x`, rounded and kept within the rail's limits
+    /// (`state::sidebar_width`, `state::inspector_width`). The sidebar's
+    /// edge is at its right side, so the sidebar gets wider as the pointer
+    /// moves right. The inspector's edge is at its left side, so the
+    /// inspector gets wider as the pointer moves left.
     pub fn width_at(&self, x: f32) -> f32 {
         match self.rail {
             Rail::Sidebar => state::sidebar_width(self.width + (x - self.from)),
@@ -36,7 +38,9 @@ impl Resize {
     }
 }
 
-/// The edge of `rail`, without its press handler. `dragging` keeps it lit.
+/// Builds the resize edge of `rail`. The caller adds the listener for the
+/// press that starts a drag. While `dragging` is true, the edge is drawn with
+/// its 2px border in the text colour.
 pub fn edge(rail: Rail, dragging: bool, window: &mut Window, cx: &mut App) -> Stateful<Div> {
     let theme = theme::theme(cx);
     let (id, key) = match rail {

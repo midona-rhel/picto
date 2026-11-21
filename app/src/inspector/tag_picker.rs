@@ -1,9 +1,10 @@
-//! The tag picker that the inspector opens (`TagSelectPanel.tsx` in its
-//! `OverlayShell`). It has a search field over the library's tags, a rail with
-//! All, each tag group, Selected and Starred, and a list of tags. A click on a
-//! tag in the list puts the tag on the selected items or takes it off, at
-//! once. When the search text names a tag that does not exist, the list offers
-//! to create it.
+//! Holds the state of the tag picker, the panel that the inspector opens to
+//! change the tags of the items. It has a search field over the library's
+//! tags, a rail with All, each tag group, Selected and Starred, and a list of
+//! tags. A click on a tag in the list puts the tag on the selected items or
+//! takes it off, at once. When the search text names a tag that does not
+//! exist, the list offers to create it. The filter bar opens the same panel
+//! to choose the tags of a filter.
 use super::membership;
 use crate::i18n::t;
 use crate::motion;
@@ -27,16 +28,19 @@ mod view;
 
 use model::{Sources, create_candidate, display_tags, step};
 
-/// `PAGE_SIZE`: how many tags are loaded at a time.
+/// How many tags are loaded at a time.
 const PAGE: usize = 100;
-/// The picker is 540 × 480 with the rail of groups and 340 × 480 without it.
+/// The width of the picker when it shows the rail of groups. Without the rail
+/// its width is `NARROW`. Its height is `HEIGHT`, the rail is `RAIL` wide and
+/// a row of the list takes `ROW` pixels of height.
 const WIDE: f32 = 540.;
 const NARROW: f32 = 340.;
 const HEIGHT: f32 = 480.;
 const RAIL: f32 = 200.;
 const ROW: f32 = 25.;
-/// The space in pixels between the fills of two rows, one above the other.
-/// A row's line stays `ROW` tall; the row's own box is this much shorter.
+/// The space in pixels between the backgrounds of two rows, one above the
+/// other. Each row takes `ROW` pixels of the list's height, and its
+/// background is this much shorter.
 const ROW_GAP: f32 = 2.;
 /// The space in pixels between two columns of rows.
 const COLUMN_GAP: f32 = 4.;
@@ -47,29 +51,32 @@ const SEARCH_DELAY: Duration = Duration::from_millis(150);
 /// this many pixels of its end.
 const LOAD_AHEAD: f32 = 200.;
 
-/// `TagLayout`: whether the list has two columns or one.
+/// Says whether the list has two columns (`Grid`) or one (`List`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layout {
     Grid,
     List,
 }
 
-/// What the picker asks its owner to do.
+/// The events the picker emits for its owner to act on.
 pub enum Event {
-    /// Put the tag on the items (`add` is true) or take it off. `created` is
-    /// true when the tag does not exist yet.
+    /// The owner is to put the tag on the items when `add` is true, and to
+    /// take it off them otherwise. `created` is true when the tag does not
+    /// exist yet.
     Toggle {
         name: String,
         add: bool,
         created: bool,
     },
-    /// Show the items that have this tag (the menu row "Filter Items with This
-    /// Tag").
+    /// The owner is to show the items that have this tag. The menu row
+    /// "Filter Items with This Tag" emits it.
     Filter(TagId),
-    /// A tag was renamed, so its name as shown elsewhere is out of date.
+    /// A tag was renamed, so the name that the owner shows for it is out of
+    /// date.
     Renamed,
-    /// In the filter mode: the tags that are included and the tags that are
-    /// excluded, each by id and name, and the match rule (`onApplyTagFilter`).
+    /// The choice of tags changed while the picker is in the filter mode. It
+    /// holds the tags that are included and the tags that are excluded, each
+    /// by id and name, and the match rule.
     FilterChanged {
         include: Vec<(TagId, String)>,
         exclude: Vec<(TagId, String)>,
@@ -77,9 +84,9 @@ pub enum Event {
     },
 }
 
-/// The picker as the filter bar opens it (`onApplyTagFilter`). A click
-/// includes a tag and a right-click excludes it, under a match rule. The list
-/// has one column and no tag can be created.
+/// Holds what the picker needs when the filter bar has opened it. In this
+/// mode a click includes a tag and a right-click excludes it, under a match
+/// rule. The list has one column and no tag can be created.
 struct FilterMode {
     excluded: BTreeSet<String>,
     mode: SetMatchMode,
@@ -97,7 +104,8 @@ pub struct TagPicker {
     geometry: Geometry,
     pinned: bool,
     sidebar: bool,
-    /// The rail's width while it opens or closes over 200 ms, and its fade.
+    /// The width of the rail while it opens or closes, which takes 200 ms.
+    /// `rail_shown` is the opacity of the rail during that time.
     rail_width: motion::Fade,
     rail_shown: motion::Fade,
     layout: Layout,
@@ -184,9 +192,8 @@ impl TagPicker {
     }
 
     /// Reads the layout and the counts setting that were last chosen in any
-    /// picker. Each `TagSelectPanel` in the Electron app reads
-    /// `picto-tag-picker-layout` and `picto-tag-picker-counts` in the same way
-    /// when it opens.
+    /// tag picker. They are kept in `crate::state`, so a choice made in one
+    /// picker applies to every picker that opens afterwards.
     fn read_layout(&mut self, cx: &App) {
         let kept = crate::state::get(cx);
         self.layout = if kept.tag_picker_list {
@@ -227,8 +234,7 @@ impl TagPicker {
     }
 
     /// Opens the picker over a dialog, with its bottom edge just above the
-    /// dialog's button at `anchor` (`anchorPlacement: 'above'`), showing the
-    /// tags that `entity` names.
+    /// dialog's button at `anchor`, showing the tags that `entity` names.
     pub fn open_above(
         &mut self,
         anchor: Point<f32>,
@@ -340,7 +346,7 @@ impl TagPicker {
         cx.notify();
     }
 
-    // ── Loading ─────────────────────────────────────────────────
+    // The functions below load the tag groups and the pages of tags.
 
     fn load_groups(&mut self, cx: &mut Context<Self>) {
         crate::tags::read_groups(&self.session, cx, |this, namespaces, cx| {
@@ -436,7 +442,8 @@ impl TagPicker {
         .detach();
     }
 
-    // ── Choosing ────────────────────────────────────────────────
+    // The functions below build the rows of the list and handle clicks and
+    // keys on them.
 
     fn sources_rows(&self, starred: &[String]) -> (Option<TagRecord>, Vec<TagRecord>) {
         let (settled, settled_group) = self
@@ -493,9 +500,8 @@ impl TagPicker {
         (create, rows)
     }
 
-    /// `toggleTag`: puts the tag on the items or takes it off, at once. In the
-    /// filter mode it includes the tag or stops including it, and never
-    /// excludes it.
+    /// Puts the tag on the items or takes it off, at once. In the filter mode
+    /// it includes the tag or stops including it, and never excludes it.
     fn toggle(&mut self, tag: &TagRecord, cx: &mut Context<Self>) {
         let tag_name = name(tag);
         if let Some(filter) = &mut self.filter {
@@ -520,8 +526,8 @@ impl TagPicker {
         cx.notify();
     }
 
-    /// `toggleExcludedTag`: in the filter mode, a right-click excludes the tag
-    /// or stops excluding it.
+    /// Excludes the tag from the filter, or stops excluding it. A right-click
+    /// on a row calls this. It does nothing outside the filter mode.
     fn exclude(&mut self, tag: &TagRecord, cx: &mut Context<Self>) {
         let Some(filter) = &mut self.filter else {
             return;
@@ -620,8 +626,7 @@ impl TagPicker {
         }
     }
 
-    /// Scrolls the list just far enough to show the focused row
-    /// (`scrollIntoView` with `nearest`).
+    /// Scrolls the list just far enough to show the focused row.
     fn reveal_focus(&mut self) {
         let Some(at) = self.focus_index else { return };
         let row = (at / self.columns()) as f32;
@@ -648,9 +653,10 @@ impl TagPicker {
             .collect()
     }
 
-    // ── The row menu ────────────────────────────────────────────
+    // The functions below open the context menu of a row and run its rows.
 
-    /// `buildCommonTagContextEntries`: the context menu of a row of the list.
+    /// Opens the context menu of a row of the list at `position`. Its rows
+    /// are the ones that every tag menu has (`crate::tags::common_menu`).
     fn open_menu(
         &mut self,
         tag: TagRecord,

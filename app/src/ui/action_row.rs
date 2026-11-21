@@ -2,9 +2,9 @@ use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::*;
 
-/// A full-width inspector action (`.flowActionBtn`, `.emptySectionActionBtn`):
-/// a glyph and a label on the hover surface, which deepens to the active
-/// surface under the pointer over 150 ms.
+/// An action of the inspector that is as wide as the inspector: a glyph and a
+/// label on the hover surface colour. Under the pointer the background changes
+/// to the active surface colour over 150 ms.
 #[derive(IntoElement)]
 pub struct ActionRow {
     id: ElementId,
@@ -41,7 +41,7 @@ impl ActionRow {
         self.height = height;
         self
     }
-    /// What a click does.
+    /// Sets what a click does.
     pub fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -49,7 +49,8 @@ impl ActionRow {
         self.on_click = Some(Box::new(handler));
         self
     }
-    /// `:disabled`: no surface, a quarter strength, and no hover.
+    /// Disables the row: it has no background, is drawn at a quarter strength,
+    /// and does not change under the pointer.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
@@ -66,9 +67,9 @@ impl RenderOnce for ActionRow {
             window,
             cx,
         );
-        // A button named by its label; one drawn inside a control that
-        // takes the click itself (with no click of its own) is that
-        // control's look, and the control carries the role.
+        // The row is a button named by its label. A row without a click
+        // handler of its own is drawn inside a control that handles the click
+        // itself. That control has the role, and the row has none.
         let mut row = div().id(self.id);
         if self.on_click.is_some() || self.disabled {
             row = row

@@ -1,8 +1,7 @@
 //! The calculations of the Duplicates screen that need no window: which
 //! pair to show after the queue was read again, how the similarity and the
 //! dimensions are written, and where each of the two pictures is drawn for
-//! the current zoom. The zoom is a port of the Electron app's
-//! `useLinkedComparisonZoom.ts`.
+//! the current zoom.
 use crate::i18n::t;
 use picto_library::FileId;
 
@@ -19,8 +18,7 @@ pub fn pair_key(a: FileId, b: FileId) -> PairKey {
 /// new queue. The result is `active` if it is still in the new queue.
 /// Otherwise it is the first pair after `active` in the old queue that is
 /// also in the new queue, or else the last such pair before `active`, or
-/// else the first pair of the new queue. The Electron app's
-/// `selectStablePairKey` works the same way.
+/// else the first pair of the new queue.
 pub fn select_stable(
     previous: &[PairKey],
     active: Option<PairKey>,
@@ -43,16 +41,16 @@ pub fn select_stable(
     Some(first)
 }
 
-/// Writes the similarity of a pair, for example "98.8% similar", as the
-/// Electron app's `similarityLabel` does. `distance` is the difference
-/// between the two files in hundredths of a percent. The Electron app
-/// rounds with JavaScript's `toFixed`, which rounds a half up. To get the
-/// same digits, this function calculates with whole hundredths and not with
-/// floating-point numbers.
+/// Writes the similarity of a pair, for example "98.8% similar". `distance`
+/// is the difference between the two files in hundredths of a percent. A
+/// difference below a tenth of a percent is written with two decimals. Every
+/// other difference is written with one decimal, and a value exactly between
+/// two decimals is rounded up. So that this rounding is exact, the function
+/// calculates with whole hundredths and not with floating-point numbers.
 pub fn similarity_label(distance: u32) -> String {
     if distance == 0 {
-        // Production does not translate this text, so it is not passed
-        // through `t` here either.
+        // The locale files have no key for this text, so it is shown in
+        // English in every language.
         return crate::i18n::en("100% similar").into();
     }
     let hundredths = 10_000u32.saturating_sub(distance);
@@ -83,7 +81,8 @@ pub fn dimensions(width: Option<u32>, height: Option<u32>) -> String {
 const MIN_ZOOM: f32 = 0.1;
 const MAX_ZOOM: f32 = 8.;
 /// How much one unit of wheel movement changes the zoom. The zoom is
-/// multiplied by `exp(-deltaY × 0.003)`.
+/// multiplied by `exp(-delta_y × 0.003)`, where `delta_y` is the argument of
+/// [`LinkedZoom::wheel`].
 const WHEEL_RATE: f32 = 0.003;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -206,8 +205,8 @@ impl LinkedZoom {
     /// Changes the zoom for a turn of the mouse wheel. `offset` is the
     /// position of the pointer relative to the centre of the pane. The point
     /// of the picture that is under the pointer stays under the pointer.
-    /// `delta_y` has the sign of the DOM's `deltaY`: it is positive when the
-    /// wheel is turned toward the user, and that zooms out.
+    /// `delta_y` is positive when the wheel is turned toward the user, and
+    /// that zooms out.
     pub fn wheel(
         &mut self,
         pane: Extent,
@@ -319,18 +318,17 @@ mod tests {
     }
 
     #[test]
-    fn similarity_reads_as_the_electron_label() {
+    fn similarity_reads_as_the_earlier_versions_label() {
         assert_eq!(similarity_label(0), "100% similar");
         assert_eq!(similarity_label(5), "99.95% similar");
         assert_eq!(similarity_label(120), "98.8% similar");
-        // 99.25 is exactly between 99.2 and 99.3. It is rounded up, as
-        // `toFixed` rounds it.
+        // 99.25 is exactly between 99.2 and 99.3. It is rounded up.
         assert_eq!(similarity_label(75), "99.3% similar");
         assert_eq!(similarity_label(20_000), "0.0% similar");
     }
 
     #[test]
-    fn sizes_and_dimensions_read_as_the_electron_rows() {
+    fn sizes_and_dimensions_read_as_the_earlier_versions_rows() {
         assert_eq!(dimensions(Some(640), Some(480)), "640 × 480");
         assert_eq!(dimensions(None, Some(480)), "Unknown");
     }

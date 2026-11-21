@@ -3,8 +3,7 @@
 //!
 //! Some contents can only be built when their size is known. A picture is
 //! placed according to the width and height of its pane. A row of buttons
-//! shows labels only when the row is wide enough. CSS does this with a
-//! container query.
+//! shows labels only when the row is wide enough.
 //!
 //! A view could measure the size while one frame is drawn and build the
 //! contents from that size in the next frame. The contents would then be

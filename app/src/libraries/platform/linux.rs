@@ -52,14 +52,14 @@ pub fn picto_process() -> Result<Option<String>, String> {
     Ok(None)
 }
 
-/// Returns whether a process is a Picto: the Electron app, or a packaged
-/// release build of this app, which is the Electron app's next version and
-/// has its names. It is one when its executable is named `picto`, when the
-/// process is named `picto`, or when it was started from a file whose name
-/// starts with `Picto` and ends with `.AppImage`. A debug build is named
-/// `picto-gpui-spike` (the kernel shortens the process name to
-/// `picto-gpui-spik`) and is not a Picto here, so several debug builds can
-/// run at once.
+/// Returns whether a process is a Picto: a packaged release build of this
+/// app, or an Electron-based Picto (version 0.6.19 or earlier), which has
+/// the same names. A process is a Picto when its executable is named
+/// `picto`, when the process is named `picto`, or when it was started from
+/// a file whose name starts with `Picto` and ends with `.AppImage`. A debug
+/// build is named `picto-gpui-spike` (the kernel shortens the process name
+/// to `picto-gpui-spik`) and is not a Picto here, so several debug builds
+/// can run at once.
 pub fn is_picto(executable: &str, comm: &str, first_argument: &str) -> bool {
     let base = |path: &str| {
         Path::new(path)
@@ -94,7 +94,7 @@ mod tests {
             "/tmp/.mount_PictoX/picto"
         ));
         assert!(is_picto("/opt/Picto/picto", "picto", "/opt/Picto/picto"));
-        // The packaged app inside its mounted AppImage.
+        // The packaged app runs from inside its mounted AppImage.
         assert!(is_picto(
             "/tmp/.mount_PictoY/usr/bin/picto",
             "picto",

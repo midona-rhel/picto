@@ -1,7 +1,6 @@
 //! Shows the members of a collection in one scrolling column, each as wide
 //! as the column, one under the other. The media view, Quick Look and the
-//! detail window use this when the item they show is a collection. The
-//! Electron app does the same in `GroupSurface.tsx`, in its reader mode.
+//! detail window use this when the item they show is a collection.
 //!
 //! A member is first drawn from its thumbnail. After it has been visible
 //! for 200 ms, its full media is loaded. For an image, the original file is
@@ -31,16 +30,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// The padding around the column and the gap between two members, in
-/// points. The Electron CSS uses `--space-4` for both.
+/// points.
 const SPACE: f32 = 16.;
 /// The smallest height a member is given, in points, however flat its
-/// picture is (`min-height: 180px` in the Electron CSS).
+/// picture is.
 const MIN_HEIGHT: f32 = 180.;
-/// How long a member must stay visible before its full media is loaded
-/// (`FULL_MEDIA_VISIBILITY_DELAY_MS` in the Electron app).
+/// How long a member must stay visible before its full media is loaded.
 const VISIBILITY_DELAY: Duration = Duration::from_millis(200);
-/// How many members may have their full media loaded at the same time
-/// (`MAX_WARM_GROUP_MEDIA` in the Electron app).
+/// How many members may have their full media loaded at the same time.
 const WARM_LIMIT: usize = 100;
 
 /// Sent when a member is right-clicked. `position` is where the pointer was,
@@ -540,9 +537,8 @@ impl GroupReader {
             let surface = cx.new(|cx| {
                 let mut options = super::options(cx, false, true);
                 options.member = true;
-                // Members ignore the two preview settings, as they do in the
-                // Electron app: no checkerboard behind transparent images,
-                // and smooth scaling.
+                // Members ignore the two preview settings: no checkerboard is
+                // drawn behind transparent images, and scaling is smooth.
                 options.transparency_grid = false;
                 options.pixelated = false;
                 let mut surface = MediaSurface::new(options, cx);
@@ -672,9 +668,8 @@ impl GroupReader {
                 });
             }),
         )
-        // Screen readers treat the member as a picture, not as a button, as
-        // they do in the Electron app. A double-click asks the host to show
-        // the member on its own.
+        // Screen readers treat the member as a picture, not as a button. A
+        // double-click asks the host to show the member on its own.
         .a11y_presentational()
         .on_click(cx.listener(move |_, event: &ClickEvent, _, cx| {
             if event.click_count() == 2 {

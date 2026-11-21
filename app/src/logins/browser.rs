@@ -1,16 +1,19 @@
-//! OnlyFans' login in a browser of the user's, outside the app
-//! (`electron/windows/externalOnlyFansAuth.mjs`): Chrome, Edge, Brave or
-//! Chromium started on a new, empty profile in a temporary folder (never
-//! the user's own profile, whose cookies are not read), with its DevTools
-//! protocol on the loopback. The login is complete when a request of
-//! OnlyFans' API has carried its `x-bc` signature and the profile holds the
-//! `sess` and `auth_id` cookies; the browser is then closed and its profile
-//! removed. It gives up after 15 minutes. Cancelling the login (which the
-//! app does when it quits) closes the browser and removes the profile at
-//! once.
+//! The OnlyFans login in a browser that is installed on the computer,
+//! outside the app. The app starts Chrome, Edge, Brave or Chromium with a
+//! new, empty profile in a temporary folder and with the DevTools protocol
+//! listening on the loopback address. The user's own browser profile is not
+//! used and its cookies are not read.
 //!
-//! The DevTools protocol is spoken over a WebSocket of the loopback, with
-//! the little of RFC 6455 a client needs (`websocket` below).
+//! The login is complete when a request to OnlyFans' API has carried the
+//! `x-bc` header and the profile holds the cookies `sess` and `auth_id`.
+//! The browser is then closed and the profile folder is removed. The login
+//! ends with an error after 15 minutes. Cancelling the login, which the app
+//! also does when it quits, closes the browser and removes the profile
+//! folder immediately.
+//!
+//! The app talks to the DevTools protocol over a WebSocket on the loopback
+//! address. The module `websocket` below implements the part of RFC 6455
+//! that this needs.
 use super::Credential;
 use futures::channel::oneshot;
 use serde_json::{Value, json};
@@ -23,19 +26,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// `AUTH_TIMEOUT_MS`.
+/// The time after which a login that has not completed ends with an error.
 const TIMEOUT: Duration = Duration::from_secs(15 * 60);
-/// `TARGET_POLL_MS`.
+/// The time between two readings of the browser's list of pages.
 const TARGET_POLL: Duration = Duration::from_millis(500);
 const COOKIE_NAMES: [&str; 3] = ["sess", "auth_id", "auth_uid"];
 
-/// The outside browser's login, closed when dropped.
+/// A login that is under way in the browser outside the app. Dropping it
+/// closes the browser and removes the profile folder.
 pub struct ExternalLogin {
     shared: Arc<Shared>,
 }
 
-/// The browser and its profile, which whoever ends the login first (the
-/// watch, or a cancel) closes and removes.
+/// The browser's process and its profile folder. The thread that watches
+/// the browser and the [`ExternalLogin`] share them, and whichever of the
+/// two ends the login first closes the browser and removes the folder.
 struct Shared {
     closed: AtomicBool,
     child: Mutex<Option<Child>>,
@@ -43,7 +48,8 @@ struct Shared {
 }
 
 impl Shared {
-    /// Closes the browser and removes its profile, once.
+    /// Closes the browser and removes its profile folder. A second call
+    /// does nothing.
     fn end(&self) {
         self.closed.store(true, Ordering::SeqCst);
         if let Some(mut child) = self.child.lock().ok().and_then(|mut slot| slot.take()) {
@@ -57,7 +63,7 @@ impl Shared {
 }
 
 impl ExternalLogin {
-    /// Ends the login: the browser is closed and its profile removed now.
+    /// Ends the login: closes the browser and removes its profile folder.
     pub fn close(self) {
         self.shared.end();
     }
@@ -71,8 +77,11 @@ impl Drop for ExternalLogin {
 
 type Finished = oneshot::Receiver<Result<Credential, String>>;
 
-/// `launchExternalOnlyFansAuth`: opens the browser, or says why it could
-/// not, and hands back what its login captures.
+/// Starts the browser. The first value is the login under way, or the
+/// reason why the browser could not be started. The second value receives
+/// the credential when the login completes, or the reason why it ended
+/// without one. If the login was cancelled, nothing is sent and the
+/// channel is closed.
 pub fn launch() -> (Result<ExternalLogin, String>, Finished) {
     let (sender, finished) = oneshot::channel();
     let launched = (|| {
@@ -129,7 +138,9 @@ pub fn launch() -> (Result<ExternalLogin, String>, Finished) {
     }
 }
 
-/// Where each system keeps the browsers production looks for.
+/// Returns the paths at which Chrome, Edge, Brave and Chromium are
+/// installed on this operating system, in the order in which they are
+/// tried.
 fn candidates() -> Vec<PathBuf> {
     // i18n: file paths
     if cfg!(target_os = "macos") {
@@ -188,13 +199,15 @@ fn candidates() -> Vec<PathBuf> {
     }
 }
 
-/// `findExternalChromium`: the first browser that is there.
+/// Returns the first of `candidates` that is a file.
 fn find_chromium(candidates: &[PathBuf]) -> Option<PathBuf> {
     candidates.iter().find(|path| path.is_file()).cloned()
 }
 
-/// Watches the browser until its login is captured, it is closed, the login
-/// is cancelled or the time is up; then closes it.
+/// Reads the browser's list of pages every 500 ms and follows every new
+/// page. Returns the credential once a page has captured it. Returns an
+/// error if the login was cancelled, the user closed the browser, or 15
+/// minutes have passed. The caller then closes the browser.
 fn watch(port: u16, shared: &Shared) -> Result<Credential, String> {
     let started = Instant::now();
     let captured: Arc<Mutex<Option<Credential>>> = Arc::default();
@@ -232,7 +245,8 @@ fn watch(port: u16, shared: &Shared) -> Result<Credential, String> {
     result
 }
 
-/// The pages' DevTools addresses (`/json/list`).
+/// Returns the DevTools WebSocket addresses of the browser's pages, read
+/// from `/json/list` on the DevTools port.
 fn read_targets(port: u16) -> Vec<String> {
     let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
         return Vec::new();
@@ -252,7 +266,8 @@ fn read_targets(port: u16) -> Vec<String> {
     page_targets(body)
 }
 
-/// The `webSocketDebuggerUrl` of every page in a `/json/list` answer.
+/// Returns the `webSocketDebuggerUrl` of every entry of the type `page`
+/// in the body of a `/json/list` response.
 pub fn page_targets(body: &str) -> Vec<String> {
     let start = body.find('[').unwrap_or(0);
     let Ok(Value::Array(targets)) = serde_json::from_str::<Value>(&body[start..]) else {
@@ -265,8 +280,11 @@ pub fn page_targets(body: &str) -> Vec<String> {
         .collect()
 }
 
-/// Follows one page: its requests for OnlyFans' API signature, and its
-/// cookies after each.
+/// Follows one page over its DevTools WebSocket. It reads the `x-bc` and
+/// `user-agent` headers from the page's requests to OnlyFans' API, and
+/// after each such request it reads the browser's cookies. When both the
+/// headers and the session cookies are there, it stores the credential in
+/// `captured` and returns.
 fn follow_target(
     url: &str,
     headers: &Mutex<Option<BTreeMap<String, String>>>,
@@ -309,7 +327,8 @@ fn follow_target(
     }
 }
 
-/// OnlyFans' session cookies in a `Network.getAllCookies` answer.
+/// Returns OnlyFans' session cookies from the response to
+/// `Network.getAllCookies`, or `None` if `message` is not such a response.
 pub fn cookies_answer(message: &Value) -> Option<BTreeMap<String, String>> {
     let cookies = message["result"]["cookies"].as_array()?;
     let local = crate::seams::login_origin()
@@ -322,7 +341,8 @@ pub fn cookies_answer(message: &Value) -> Option<BTreeMap<String, String>> {
                 let domain = cookie["domain"].as_str().unwrap_or_default().to_lowercase();
                 let domain = domain.trim_start_matches('.');
                 match local.as_deref() {
-                    // Logins kept on local pages: only the local origin's.
+                    // While logins are kept on local pages, only the
+                    // cookies of the local origin's host are read.
                     Some(local) => local == domain,
                     None => domain == "onlyfans.com" || domain.ends_with(".onlyfans.com"),
                 }
@@ -338,9 +358,12 @@ pub fn cookies_answer(message: &Value) -> Option<BTreeMap<String, String>> {
     )
 }
 
-/// The `x-bc` and `user-agent` an OnlyFans API request carried
-/// (`Network.requestWillBeSent`, or its `ExtraInfo` with the headers the
-/// browser added).
+/// Returns the `x-bc` and `user-agent` headers of a request to OnlyFans'
+/// API, if `message` is the event `Network.requestWillBeSent` of such a
+/// request or the event `Network.requestWillBeSentExtraInfo` of one, which
+/// carries the headers that the browser added. `onlyfans_requests` holds
+/// the ids of the API requests seen so far, by which the second event is
+/// matched to its request.
 pub fn api_signature(
     message: &Value,
     onlyfans_requests: &mut HashSet<String>,
@@ -380,8 +403,9 @@ pub fn api_signature(
     ]))
 }
 
-/// A WebSocket client of the loopback: the handshake, masked text frames
-/// out, and frames in (fragments joined, pings answered).
+/// A WebSocket client that connects only to the loopback address. It
+/// performs the opening handshake, sends masked text frames, and reads
+/// frames: it joins the fragments of a message and answers pings.
 pub mod websocket {
     use super::*;
 
@@ -391,7 +415,9 @@ pub mod websocket {
     }
 
     impl Client {
-        /// Connects to a `ws://127.0.0.1:<port>/…` address.
+        /// Connects to an address of the form `ws://127.0.0.1:<port>/…` and
+        /// performs the opening handshake. Returns an error if the address
+        /// is not a `ws` address on the loopback or the handshake fails.
         pub fn connect(address: &str) -> Result<Self, String> {
             let url = url::Url::parse(address).map_err(|error| error.to_string())?;
             let host = url.host_str().unwrap_or_default();
@@ -448,7 +474,7 @@ pub mod websocket {
                 .map_err(|error| error.to_string())
         }
 
-        /// The next text message.
+        /// Waits for the next complete message and returns it as text.
         pub fn receive(&mut self) -> Result<String, String> {
             let mut message = Vec::new();
             loop {
@@ -473,7 +499,8 @@ pub mod websocket {
         }
     }
 
-    /// One frame from the client: final, masked.
+    /// Returns the bytes of one frame as a client sends it: a final frame
+    /// whose payload is masked with `mask`.
     pub fn encode(opcode: u8, payload: &[u8], mask: [u8; 4]) -> Vec<u8> {
         let mut frame = vec![0x80 | opcode];
         let length = payload.len();
@@ -496,8 +523,8 @@ pub mod websocket {
         frame
     }
 
-    /// One frame: whether it is final, its opcode and its (unmasked)
-    /// payload.
+    /// Reads one frame and returns whether it is the final frame of its
+    /// message, its opcode and its payload with the mask removed.
     pub fn read_frame(reader: &mut impl Read) -> Result<(bool, u8, Vec<u8>), String> {
         let mut head = [0u8; 2];
         reader
@@ -520,8 +547,9 @@ pub mod websocket {
                 .map_err(|error| error.to_string())?;
             length = u64::from_be_bytes(extended);
         }
-        // No DevTools message comes near this; a larger length is a broken
-        // stream.
+        // No DevTools message is as long as 256 MiB. A longer length means
+        // that the bytes read are not a frame header, so the connection is
+        // given up.
         if length > 256 * 1024 * 1024 {
             return Err("Browser inspection closed.".into());
         }

@@ -1,11 +1,12 @@
-//! Each service's own icon (`siteIconService.mjs` and `SiteIcon.tsx`):
-//! fetched from the service's site, its touch icon first and its favicon
-//! next, kept in `site-icons/` in this app's folder so it is fetched once,
-//! and the globe wherever there is none.
+//! Gets the icon of each service. An icon is requested from the site of the
+//! service: first its touch icon (`/apple-touch-icon.png`), then its favicon
+//! (`/favicon.ico`). The icon is kept in `site-icons/` in this app's folder,
+//! so that it is requested only once. A service without an icon is drawn with
+//! the globe icon.
 //!
-//! Fetching happens off the main thread, one request per service at a time;
-//! a service with no icon is asked again after 30 s while something still
-//! shows it, as production's component retries.
+//! The requests are made off the main thread, and only one request per
+//! service runs at a time. A service for which no icon was found is asked
+//! again after 30 seconds, as long as a view still shows it.
 use base64::Engine as _;
 use gpui::{App, AppContext as _, Context, Entity, Global, Image, ImageFormat};
 use sha2::{Digest as _, Sha256};
@@ -14,13 +15,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// `MAX_ICON_BYTES`
+/// The largest icon that is accepted, in bytes (512 KB).
 const MAX_ICON_BYTES: usize = 512 * 1024;
-/// `ICON_PATHS`
+/// The paths that are requested on the site of a service, in this order.
 const ICON_PATHS: [&str; 2] = ["/apple-touch-icon.png", "/favicon.ico"];
-/// `AbortSignal.timeout(7000)`
+/// The time after which one request is given up.
 const TIMEOUT: Duration = Duration::from_secs(7);
-/// `RETRY_DELAY_MS`
+/// The time after which a service without an icon is asked again.
 const RETRY: Duration = Duration::from_secs(30);
 const ACCEPT: &str =
     "image/png,image/vnd.microsoft.icon,image/x-icon,image/webp,image/jpeg,image/gif";
@@ -31,8 +32,8 @@ enum Slot {
     Missing(Instant),
 }
 
-/// The icons known in this run, by domain. Views that show icons observe
-/// it and draw again when one arrives.
+/// Holds the icons known in this run, by domain. A view that shows icons
+/// observes this entity and is drawn again when an icon arrives.
 pub struct SiteIcons {
     slots: HashMap<String, Slot>,
     cache: Option<PathBuf>,
@@ -42,7 +43,7 @@ struct Shared(Entity<SiteIcons>);
 
 impl Global for Shared {}
 
-/// The app's icons, made on first use.
+/// Returns the entity that holds the app's icons. It is created on first use.
 pub fn entity(cx: &mut App) -> Entity<SiteIcons> {
     if let Some(shared) = cx.try_global::<Shared>() {
         return shared.0.clone();
@@ -56,9 +57,10 @@ pub fn entity(cx: &mut App) -> Entity<SiteIcons> {
     icons
 }
 
-/// The service's icon if it is here; otherwise starts fetching it (unless
-/// that is under way or failed less than 30 s ago) and answers `None`, for
-/// the globe.
+/// Returns the icon of the service when it is known. Otherwise it returns
+/// `None`, for which the caller draws the globe icon, and it starts
+/// requesting the icon, unless a request is under way or one failed less than
+/// 30 seconds ago.
 pub fn get(domain: &str, cx: &mut App) -> Option<Arc<Image>> {
     let domain = normalize(domain)?;
     let icons = entity(cx);
@@ -75,8 +77,9 @@ pub fn get(domain: &str, cx: &mut App) -> Option<Arc<Image>> {
     })
 }
 
-/// Whether the service's icon was found (`Some(true)`), was not
-/// (`Some(false)`), or is still being asked for; for the network check.
+/// Returns `Some(true)` when the icon of the service was found, `Some(false)`
+/// when it was not found, and `None` while it is still being requested. The
+/// network check uses this.
 #[cfg(debug_assertions)]
 pub fn settled(domain: &str, cx: &mut App) -> Option<bool> {
     let domain = normalize(domain)?;
@@ -87,7 +90,8 @@ pub fn settled(domain: &str, cx: &mut App) -> Option<bool> {
     }
 }
 
-/// Where icons are kept, for the network check.
+/// Returns the file in which the icon of `domain` is kept. The network check
+/// uses this.
 #[cfg(debug_assertions)]
 pub fn cache_file(domain: &str, cx: &mut App) -> Option<PathBuf> {
     let folder = entity(cx).read(cx).cache.clone()?;
@@ -115,7 +119,8 @@ impl SiteIcons {
                 cx.notify();
             });
             if missing {
-                // Whatever still shows the globe asks again then.
+                // A view that still shows the globe icon is drawn again after
+                // the delay, and then asks for the icon again.
                 cx.background_executor().timer(RETRY).await;
                 let _ = this.update(cx, |_, cx| cx.notify());
             }
@@ -124,7 +129,8 @@ impl SiteIcons {
     }
 }
 
-/// `normalizeDomain`: a host name and nothing else, in lower case.
+/// Returns `value` trimmed and in lower case when it is a host name and
+/// nothing else, and `None` otherwise.
 fn normalize(value: &str) -> Option<String> {
     let domain = value.trim().to_ascii_lowercase();
     let valid = !domain.is_empty()
@@ -136,7 +142,8 @@ fn normalize(value: &str) -> Option<String> {
     valid.then_some(domain)
 }
 
-/// `cacheName`: the hex SHA-256 of the domain.
+/// Returns the name of the file that keeps the icon of `domain`: the SHA-256
+/// of the domain, in hexadecimal.
 fn cache_name(domain: &str) -> String {
     Sha256::digest(domain.as_bytes())
         .iter()
@@ -144,8 +151,9 @@ fn cache_name(domain: &str) -> String {
         .collect()
 }
 
-/// `fetchAndCache`: the kept icon, else the first of the site's two that
-/// is a picture under 512 KB, kept for next time.
+/// Returns the icon of `domain`: the kept one if there is one, and otherwise
+/// the first of the two on the site that is a picture of at most 512 KB. An
+/// icon taken from the site is kept for next time.
 fn cached_or_fetched(domain: &str, cache: Option<&Path>) -> Option<(ImageFormat, Vec<u8>)> {
     if let Some(found) = cache.and_then(|cache| read_cached(cache, domain)) {
         return Some(found);
@@ -153,7 +161,8 @@ fn cached_or_fetched(domain: &str, cache: Option<&Path>) -> Option<(ImageFormat,
     let client = crate::net::client().ok()?;
     for path in ICON_PATHS {
         let Some(url) = crate::net::address(&format!("https://{domain}{path}")) else {
-            // A check without local fixtures fetches nothing.
+            // A run that sends no requests (`net::reach`) has no icon to
+            // show.
             return None;
         };
         let fetched = crate::net::block_on(async {
@@ -210,8 +219,10 @@ fn read_cached(cache: &Path, domain: &str) -> Option<(ImageFormat, Vec<u8>)> {
     Some((format(mime), bytes))
 }
 
-/// The record production writes (`{ mime, data }`), through a temporary
-/// file so a reader never sees half of one (`state::write_file`).
+/// Writes the icon as a JSON record with the fields `mime` and `data`, where
+/// `data` holds the bytes in Base64. The record is written through a
+/// temporary file, so that a reader never sees half of it
+/// (`state::write_file`).
 fn write_cached(cache: &Path, domain: &str, mime: &str, bytes: &[u8]) {
     let record = serde_json::json!({
         "mime": mime,
@@ -232,8 +243,9 @@ const MIMES: [&str; 5] = [
     "image/webp",
 ];
 
-/// `detectMime`: the picture's type from its first bytes, or an icon by its
-/// declared type; anything else (a page, say) is no icon.
+/// Returns the type of the picture, found from its first bytes, or
+/// `image/x-icon` when the declared content type says that it is an icon.
+/// Anything else, such as a page, is not an icon and gives `None`.
 fn detect_mime(bytes: &[u8], content_type: Option<&str>) -> Option<&'static str> {
     if bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) {
         return Some("image/png");

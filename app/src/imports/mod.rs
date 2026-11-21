@@ -1,11 +1,12 @@
-//! Importing, as `filesController.ts` and the task runtime do it: files and
-//! folders dropped on the window, chosen in the system's dialogs or pasted,
-//! sent to the application's import queue (`imports.enqueue`), and the
-//! foreground task that follows each import (`TaskDialog.tsx`, `TaskBar`)
-//! with its progress, Pause, Stop and the task bar it can be sent to.
+//! Imports files into the library. Files and folders that the user drops
+//! on the window, chooses in the system's dialogs or pastes are sent to the
+//! application's import queue (the command `imports.enqueue`). Each import
+//! is a foreground task. This module shows the task in a dialog with its
+//! progress and its Pause and Stop buttons, and in the task bar when the
+//! user minimizes the dialog.
 //!
-//! One `Imports` view serves the window; the shell draws it over everything
-//! and anything else reaches it through [`get`].
+//! The window has one `Imports` view. The shell draws it over everything
+//! else, and other code reaches it through [`get`].
 pub mod drop;
 pub mod plan;
 pub mod task;
@@ -19,18 +20,21 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use task::{Failure, Presentation, StopChoice, Task};
 
-/// `taskSettle.ts`: a working task is read again this often.
+/// How often the task list is read again while a task is working.
 const WORKING_POLL: Duration = Duration::from_millis(1000);
-/// Bursts of `tasks` changes are read once, after this long.
+/// How long the view waits after a change to `tasks` before it reads the
+/// task list, so that several changes in a short time cause one read.
 const REFRESH_COALESCE: Duration = Duration::from_millis(150);
-/// The action an import task blocks (`IMPORT_ACTION`).
+/// The name of the action that an import task blocks, as it is written in
+/// a task's `blocks` list.
 const IMPORT: &str = "import";
 
-/// The dialogs an import may ask in.
+/// A dialog that asks a question before an import starts.
 enum Dialog {
-    /// `FolderImportModal`: how a folder is imported.
+    /// The folder dialog, which asks how a folder is imported.
     Folder(FolderDialog),
-    /// "Import as Collection?" for several files under the `ask` setting.
+    /// The "Import as Collection?" question, which is asked for several
+    /// files when the multi-file import setting is `ask`.
     Collection { paths: Vec<PathBuf>, params: Params },
 }
 
@@ -41,33 +45,38 @@ struct FolderDialog {
     include_subfolders: bool,
     include_folders_without_media: bool,
     watch: bool,
-    /// What `imports.folder.analyze` said of the folder's depth.
+    /// What the command `imports.folder.analyze` reported about the depth of
+    /// the folder.
     analysis: Analysis,
-    /// Counts the analyses asked for, so an old answer is ignored.
+    /// The number of analyses that were asked for. An answer is ignored when
+    /// another analysis was asked for after it.
     generation: u64,
 }
 
 enum Analysis {
-    /// Not asked: structure is not preserved.
+    /// No analysis was asked for, because the folder structure is not
+    /// preserved.
     None,
     Checking,
     Done(serde_json::Value),
     Failed,
 }
 
-/// What the foreground dialog shows of its task beyond the task itself.
+/// The state of the task dialog that is not part of the task itself.
 #[derive(Default)]
 struct TaskView {
     task: Option<i64>,
-    /// Stopping: the question is shown; `true` when the import was running
-    /// and resumes if the user keeps importing.
+    /// Present while the dialog asks what a stopped import does with the
+    /// items it added. The value is `true` when the import was running before
+    /// the question; it is then resumed if the user chooses to keep importing.
     stopping: Option<bool>,
     choice: Option<StopChoice>,
     show_failures: bool,
     failures: Option<Vec<Failure>>,
-    /// When the dialog came in, for `dialogIn`.
+    /// The time at which the dialog appeared, from which its fade-in is
+    /// timed.
     shown: Option<Instant>,
-    /// The dialog has taken the keyboard.
+    /// True once the dialog has taken the keyboard focus.
     focused: bool,
 }
 
@@ -75,18 +84,20 @@ pub struct Imports {
     session: Entity<Session>,
     tasks: Vec<Task>,
     presentation: Presentation,
-    /// The list is being read; `true` inside when it should be read again.
+    /// Present while the task list is being read. The value is `true` when
+    /// the list must be read again after that read.
     reading: Option<bool>,
     coalesce: Option<gpui::Task<()>>,
     poll: Option<gpui::Task<()>>,
     view: TaskView,
     dialog: ui::modal::Host<Dialog>,
-    /// Holds the keyboard while the task dialog shows, so that the window's
-    /// shortcuts are held back (`useShortcutSuspension`) and Escape reaches it.
+    /// Has the keyboard focus while the task dialog shows, so that the
+    /// window's shortcuts do not run and Escape reaches the dialog.
     focus: FocusHandle,
-    /// Where the keyboard goes back to.
+    /// The element that gets the keyboard focus when a dialog closes.
     back: FocusHandle,
-    /// The rails' widths, which the task bar keeps clear of.
+    /// The widths of the left and right rails. The task bar is drawn between
+    /// the rails.
     pub(crate) rails: (f32, f32),
     _subscriptions: Vec<Subscription>,
 }
@@ -95,8 +106,8 @@ struct ImportsGlobal(WeakEntity<Imports>);
 
 impl Global for ImportsGlobal {}
 
-/// Import Folder's key, which production's application menu fixes
-/// (`Shift+CmdOrCtrl+I`) rather than the shortcut registry.
+/// Binds Mod+Shift+I to Import Folder. This key is not in the shortcut
+/// registry, so it is bound here.
 pub fn bind(cx: &mut App) {
     let context = crate::keymap::Scope::App.predicate();
     crate::keymap::bind_written(
@@ -107,13 +118,13 @@ pub fn bind(cx: &mut App) {
     );
 }
 
-/// The window's imports, for the views that start one.
+/// Returns the window's `Imports` view, for the views that start an import.
 pub fn get(cx: &App) -> Option<Entity<Imports>> {
     cx.try_global::<ImportsGlobal>()?.0.upgrade()
 }
 
-/// Why an import cannot start now (`taskGate('import').reason`), for a
-/// disabled row's tooltip; `None` when one can.
+/// Returns the reason why an import cannot start now, for the tooltip of a
+/// disabled menu row. Returns `None` when an import can start.
 pub fn blocked(cx: &App) -> Option<String> {
     let imports = get(cx)?;
     task::gate(&imports.read(cx).tasks, IMPORT).map(|(_, reason)| reason)
@@ -146,18 +157,19 @@ impl Imports {
             rails: (0., 0.),
             _subscriptions: subscriptions,
         };
-        // A task left open when the app last closed takes the foreground.
+        // Read the task list now, so that a task that was open when the app
+        // last closed is shown.
         imports.refresh(cx);
-        // Files a drop promises are written into the session's own scratch
-        // folder, which goes with the session.
+        // The files that a drop promises are written into `drops` in the
+        // session's scratch folder.
         let promised = imports.session.read(cx).scratch().join("drops");
         gpui::set_promised_files_directory(promised);
         imports
     }
 
-    // ── Starting an import ──────────────────────────────────────
+    // The functions below start an import.
 
-    /// Files or folders dropped on the window (`onDragDropEvent`'s drop).
+    /// Imports files or folders that were dropped on the window.
     pub fn drop_paths(
         &mut self,
         paths: Vec<PathBuf>,
@@ -177,7 +189,7 @@ impl Imports {
                 );
             }
             Dropped::Pack(path) => {
-                // `openPictoPackImport`: what the pack holds, in its dialog.
+                // Read what the pack holds and show it in the pack dialog.
                 if self.allow(cx)
                     && let Some(exports) = crate::export::get(cx)
                 {
@@ -193,12 +205,12 @@ impl Imports {
         }
     }
 
-    /// A drop that also carried what is not a file on disk (what a web
-    /// browser drags): `data` is what the platform read from it. Its
-    /// in-memory images are written to the session's scratch folder and
-    /// imported apart from its files, deleted once imported, with the
-    /// drop's web addresses as their sources; a drop with no file at all is
-    /// refused (`onDragDropEvent`'s drop with `temporaryPaths`).
+    /// Handles a drop that carried more than files on disk, which is what a
+    /// web browser drags. `data` is what the platform read from the drop. The
+    /// in-memory images of the drop are written to the session's scratch
+    /// folder and imported separately from the drop's files. They are deleted
+    /// once imported, and the web addresses of the drop are recorded as their
+    /// sources. A drop that holds no file at all is refused.
     pub fn drop_with_data(
         &mut self,
         paths: Vec<PathBuf>,
@@ -215,8 +227,8 @@ impl Imports {
             self.drop_paths(paths, destination, window, cx);
             return;
         }
-        // Asked before anything is written: production writes the data
-        // first and leaves it behind when the import is refused.
+        // Ask whether an import may start before anything is written, so that
+        // no file is left behind when the import is refused.
         if (!paths.is_empty() || data.as_ref().is_some_and(|data| !data.files.is_empty()))
             && !self.allow(cx)
         {
@@ -237,8 +249,8 @@ impl Imports {
                 staged,
                 sources,
             } => {
-                // `pictoPackPathFromDrop` over every path: a pack with
-                // anything else is refused.
+                // A Picto Pack that is dropped together with anything else is
+                // refused.
                 if paths.iter().any(|path| plan::is_pack(path)) {
                     for path in &staged {
                         let _ = std::fs::remove_file(path);
@@ -265,13 +277,14 @@ impl Imports {
         }
     }
 
-    /// A drop of files their source promised (macOS's file promises, from
-    /// Photos, Mail, Safari, Messages): once the source has written them
-    /// into the drop's own folder, the files written whole are imported as
-    /// dropped files are and deleted once imported (the folder with the
-    /// last of them); a file that failed is removed, never imported. When
-    /// none arrives, the drop's in-memory images are imported instead if it
-    /// carried any, else the drop is refused with the reason.
+    /// Handles a drop of files that their source promised to write (macOS's
+    /// file promises, which Photos, Mail, Safari and Messages use). Once the
+    /// source has written the files into the drop's own folder, the files
+    /// that were written completely are imported as dropped files are. Each
+    /// is deleted once imported, and the folder is deleted with the last of
+    /// them. A file that failed is removed and not imported. When no file
+    /// arrives, the in-memory images of the drop are imported instead if it
+    /// carried any; otherwise the drop is refused and the reason is shown.
     fn drop_promised(
         &mut self,
         promised: gpui::PromisedFiles,
@@ -308,7 +321,8 @@ impl Imports {
                 return;
             }
             let _ = this.update_in(cx, |this, window, cx| match settled {
-                // An import started while the files were arriving.
+                // Another import started while the files were arriving, so the
+                // files are discarded.
                 Ok(_) if !this.allow(cx) => drop::discard_promised(&folder),
                 Ok(arrived) => {
                     let params = Params {
@@ -336,8 +350,8 @@ impl Imports {
         .detach();
     }
 
-    /// `chooseAndImportFiles`: the system's file chooser, then the files as
-    /// a drop of them would import.
+    /// Opens the system's file chooser and imports the chosen files as a drop
+    /// of them would be imported.
     pub fn choose_files(
         &mut self,
         destination: Destination,
@@ -347,8 +361,8 @@ impl Imports {
         if !self.allow(cx) {
             return;
         }
-        // TODO: limit the chooser to the media types (`MEDIA_IMPORT_FILTERS`);
-        // GPUI's path prompt takes no file types.
+        // TODO: limit the chooser to the media types. GPUI's path prompt takes
+        // no file types.
         let chosen = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -366,8 +380,8 @@ impl Imports {
         .detach();
     }
 
-    /// `chooseAndImportFolder`: the system's folder chooser, then the folder
-    /// dialog.
+    /// Opens the system's folder chooser and then the folder dialog for the
+    /// chosen folder.
     pub fn choose_folder(
         &mut self,
         destination: Destination,
@@ -397,8 +411,9 @@ impl Imports {
         .detach();
     }
 
-    /// `pasteImport`: files copied in Finder, or a copied picture written
-    /// to a temporary file that the import deletes once it has it.
+    /// Imports what the clipboard holds: copied files, or a copied picture.
+    /// A picture is written to a temporary file, which the import deletes
+    /// once it has read it.
     pub fn paste(&mut self, destination: Destination, window: &mut Window, cx: &mut Context<Self>) {
         if !self.allow(cx) {
             return;
@@ -437,8 +452,9 @@ impl Imports {
         }
     }
 
-    /// `allowTaskAction('import')`: while an import is open another cannot
-    /// start; the one in the way comes forward, and the reason is given.
+    /// Returns whether an import may start. While an import task is open
+    /// another cannot start: the open task is brought to the task dialog and a
+    /// notification gives the reason.
     pub(crate) fn allow(&mut self, cx: &mut Context<Self>) -> bool {
         let Some((blocking, _)) = task::gate(&self.tasks, IMPORT) else {
             return true;
@@ -456,7 +472,9 @@ impl Imports {
         false
     }
 
-    /// `requestMediaImport`: one batch, through the multi-file setting.
+    /// Imports one batch of files. For several files the multi-file import
+    /// setting decides whether they are grouped into a collection; when the
+    /// setting is `ask`, the "Import as Collection?" question is shown.
     fn request(
         &mut self,
         paths: Vec<PathBuf>,
@@ -480,13 +498,14 @@ impl Imports {
         }
     }
 
-    /// `addMedia`: starts the import; its task takes the foreground.
+    /// Starts the import. Its task is shown in the task dialog.
     fn enqueue(&mut self, paths: Vec<PathBuf>, params: Params, cx: &mut Context<Self>) {
         self.enqueue_as(crate::i18n::t("Could not import media"), paths, params, cx);
     }
 
-    /// [`Imports::enqueue`], a failure titled `failure` ("Could not import
-    /// folder" for the folder dialog).
+    /// Does what [`Imports::enqueue`] does, with `failure` as the title of the
+    /// notification when the import cannot start. The folder dialog passes
+    /// "Could not import folder".
     fn enqueue_as(
         &mut self,
         failure: &'static str,
@@ -517,12 +536,12 @@ impl Imports {
         .detach();
     }
 
-    /// Errors production shows as a notification (`showErrorNotification`).
+    /// Shows an error as a notification.
     fn report(&self, title: &str, message: &str, cx: &mut App) {
         crate::ui::notify::error(title.to_owned(), message.to_owned(), cx);
     }
 
-    // ── The folder dialog ───────────────────────────────────────
+    // The functions below serve the folder dialog.
 
     fn open_folder_dialog(
         &mut self,
@@ -548,7 +567,9 @@ impl Imports {
         self.analyze(cx);
     }
 
-    /// `analyzeFolderTree`, again whenever structure or subfolders change.
+    /// Asks the application how deep the folder is. This runs when the folder
+    /// dialog opens and whenever "Preserve folder structure" or "Include
+    /// subfolders" changes.
     fn analyze(&mut self, cx: &mut Context<Self>) {
         let Some(Dialog::Folder(folder)) = self.dialog.content_mut() else {
             return;
@@ -589,7 +610,8 @@ impl Imports {
         .detach();
     }
 
-    /// A switch in the folder dialog. Watching needs the structure kept.
+    /// Flips a switch of the folder dialog. Turning on "Watch this folder"
+    /// also turns on "Preserve folder structure", which watching needs.
     fn toggle_folder_option(&mut self, option: FolderOption, cx: &mut Context<Self>) {
         let Some(Dialog::Folder(folder)) = self.dialog.content_mut() else {
             return;
@@ -623,7 +645,7 @@ impl Imports {
         cx.notify();
     }
 
-    /// The folder dialog's Import.
+    /// Starts the import of the folder, for the folder dialog's Import button.
     fn import_folder(&mut self, cx: &mut Context<Self>) {
         let Some(Dialog::Folder(folder)) = self.dialog.content() else {
             return;
@@ -647,7 +669,9 @@ impl Imports {
         }
     }
 
-    /// "Import as Collection?": Yes groups the files, No imports them apart.
+    /// Answers the "Import as Collection?" question. Yes (`group` is true)
+    /// imports the files as one collection, and No imports them as separate
+    /// items.
     fn answer_collection(&mut self, group: bool, cx: &mut Context<Self>) {
         let Some(Dialog::Collection { paths, params }) = self.dialog.content() else {
             return;
@@ -665,15 +689,16 @@ impl Imports {
         }
     }
 
-    // ── Tasks ───────────────────────────────────────────────────
+    // The functions below read and control tasks.
 
-    /// `showTask`
+    /// Brings a task to the task dialog.
     fn show(&mut self, task: i64, cx: &mut Context<Self>) {
         self.presentation.show(task);
         cx.notify();
     }
 
-    /// Reads the list once a burst of changes has passed.
+    /// Reads the task list after [`REFRESH_COALESCE`], unless such a read is
+    /// already waiting.
     fn refresh_soon(&mut self, cx: &mut Context<Self>) {
         if self.coalesce.is_some() {
             return;
@@ -687,7 +712,8 @@ impl Imports {
         }));
     }
 
-    /// `tasks.list`, and every second while a task works.
+    /// Reads the task list with the command `tasks.list`. While a task is
+    /// working, [`Imports::apply`] starts the next read a second later.
     fn refresh(&mut self, cx: &mut Context<Self>) {
         if let Some(again) = &mut self.reading {
             *again = true;
@@ -715,7 +741,7 @@ impl Imports {
         .detach();
     }
 
-    /// `applyTasks`: the list from a read or a control's answer.
+    /// Takes a task list that a read or a task control answered with.
     fn apply(&mut self, list: serde_json::Value, cx: &mut Context<Self>) {
         let Some(tasks) = Task::read_list(&list) else {
             eprintln!("picto: unreadable task list: {list}");
@@ -726,7 +752,7 @@ impl Imports {
             self.tasks = tasks;
             cx.notify();
         }
-        // Production's dialog drops the Stop question once the task is over.
+        // The question about stopping is closed once the task is over.
         if let Some(task) = self.focused()
             && !task.open()
         {
@@ -747,8 +773,8 @@ impl Imports {
         self.tasks.iter().find(|task| task.task_id == id)
     }
 
-    /// Sends a task control (`tasks.pause`, `tasks.resume`, `tasks.stop`,
-    /// `tasks.dismiss`) and takes the list it answers with.
+    /// Sends a task control (`tasks.pause`, `tasks.resume`, `tasks.stop` or
+    /// `tasks.dismiss`) and takes the task list that it answers with.
     fn control(
         &mut self,
         command: &'static str,
@@ -795,14 +821,16 @@ impl Imports {
         );
     }
 
-    /// `minimizeTask`: the task goes on in the task bar.
+    /// Moves the task from the task dialog to the task bar. The task keeps
+    /// running.
     fn minimize(&mut self, task: i64, cx: &mut Context<Self>) {
         self.presentation.minimize(task);
         cx.notify();
     }
 
-    /// Close or Stop… on an open task: asks what becomes of what it
-    /// imported, pausing it meanwhile.
+    /// Asks what a stopped import does with the items it has added, for Close
+    /// and "Stop…" on an open task. A running import is paused while the
+    /// question shows.
     fn ask_to_stop(&mut self, cx: &mut Context<Self>) {
         let Some(task) = self.focused() else {
             return;
@@ -819,7 +847,8 @@ impl Imports {
         cx.notify();
     }
 
-    /// Keep importing: back to the progress, resumed if it was running.
+    /// Returns from the question to the progress, for "Keep importing". The
+    /// import is resumed if it was running before the question.
     fn keep_importing(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.presentation.focused else {
             return;
@@ -845,7 +874,8 @@ impl Imports {
         cx.notify();
     }
 
-    /// Show N failed / Hide failed, reading the failures once.
+    /// Shows or hides the list of failed files. The failures are read from
+    /// the application the first time they are shown.
     fn toggle_failures(&mut self, cx: &mut Context<Self>) {
         self.view.show_failures = !self.view.show_failures;
         cx.notify();
@@ -883,14 +913,14 @@ enum FolderOption {
     Watch,
 }
 
-/// What the clipboard offers to import.
+/// What the clipboard holds that can be imported.
 enum Pasted {
     Paths(Vec<PathBuf>),
     Picture(Image),
 }
 
-/// `clipboardFilePaths` and `readImage`: files copied in Finder (or paths
-/// copied as text that exist), else a copied picture.
+/// Returns the files on the clipboard: copied files, and paths copied as
+/// text that exist. When there are none, returns a copied picture.
 fn clipboard_import(cx: &App) -> Option<Pasted> {
     let item = cx.read_from_clipboard()?;
     let mut paths = Vec::new();
@@ -916,7 +946,8 @@ fn clipboard_import(cx: &App) -> Option<Pasted> {
     picture.map(Pasted::Picture)
 }
 
-/// An absolute path or a `file:` address on a line of copied text.
+/// Returns the absolute path or the path of the `file:` address on a line
+/// of copied text, if the line holds one.
 fn path_from_text(line: &str) -> Option<PathBuf> {
     if line.is_empty() || line.starts_with('#') {
         return None;
@@ -924,8 +955,8 @@ fn path_from_text(line: &str) -> Option<PathBuf> {
     let path = match line.strip_prefix("file://") {
         Some(rest) => {
             let decoded = percent_decode(rest);
-            // `file:///C:/…`: on Windows the slash before the drive letter
-            // is the address's, not the path's.
+            // In `file:///C:/…` on Windows, the slash before the drive letter
+            // belongs to the address and not to the path.
             let local = decoded
                 .strip_prefix('/')
                 .filter(|rest| cfg!(windows) && rest.as_bytes().get(1) == Some(&b':'))
@@ -957,14 +988,15 @@ fn percent_decode(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Whether the clipboard holds something Paste Import can take
-/// (`hasClipboardImport`).
+/// Returns whether the clipboard holds something that Paste Import can
+/// import.
 pub fn has_clipboard_import(cx: &App) -> bool {
     clipboard_import(cx).is_some()
 }
 
-/// Writes a copied picture where production writes it
-/// (`<temp>/picto-clipboard-imports/`), in its own format.
+/// Writes a copied picture, in its own format, into
+/// `picto-clipboard-imports` in the system's temporary folder, and returns
+/// the file's path.
 fn write_picture(image: &Image) -> std::io::Result<PathBuf> {
     let directory = std::env::temp_dir().join("picto-clipboard-imports");
     std::fs::create_dir_all(&directory)?;
@@ -983,7 +1015,7 @@ fn write_picture(image: &Image) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
-/// The folder an import of `path` is named after, as the dialog shows it.
+/// Returns the name of the folder at `path`, which the folder dialog shows.
 fn folder_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())

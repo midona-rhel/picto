@@ -20,11 +20,11 @@ use std::{
 
 impl Session {
     /// Called when background work (an import, a subscription run) changed the
-    /// library (`requestReconcile`). The shown results are read again in place
-    /// after a short delay, and changes that arrive during the delay are
-    /// covered by the same read. The read does not start while the pointer is
-    /// pressed or dragging in the grid, while results are loading, or while
-    /// the fade between destinations is running.
+    /// library. The shown results are read again in place after a short
+    /// delay, and changes that arrive during the delay are covered by the
+    /// same read. The read does not start while the pointer is pressed or
+    /// dragging in the grid, while results are loading, or while the fade
+    /// between destinations is running.
     pub(super) fn request_refresh(&mut self, cx: &mut Context<Self>) {
         self.refresh_wanted = true;
         self.schedule_refresh(REFRESH_MIN, cx);
@@ -73,11 +73,10 @@ impl Session {
     /// Reads the open destination's results again in place, after an edit or a
     /// background change that may have changed which items it holds. The same
     /// items stay selected, found by their ids, and the grid stays at its
-    /// scroll position, as when the Electron grid refreshes in place. Does
-    /// nothing when the destination is a screen. When no results have been
-    /// read yet, it reads the destination from its first page instead. The
-    /// saved grids of other destinations are discarded, because they may be
-    /// out of date too.
+    /// scroll position. Does nothing when the destination is a screen. When
+    /// no results have been read yet, it reads the destination from its first
+    /// page instead. The saved grids of other destinations are discarded,
+    /// because they may be out of date too.
     pub fn refresh_results(&mut self, cx: &mut Context<Self>) {
         if self
             .nav
@@ -109,7 +108,7 @@ impl Session {
         tracked.dedup();
         // Ask for the window at the same start with as many items as it holds
         // now, but at least 500 (`window::PAGE`) and at most 1,500
-        // (`window::WINDOW`), as `reconcileSnapshot` does.
+        // (`window::WINDOW`).
         let limit = self.items.len().clamp(window::PAGE, window::WINDOW);
         let _ = self.sender.send(Request::Window(
             self.generation,
@@ -120,12 +119,14 @@ impl Session {
         cx.emit(Change::Results);
     }
 
-    // ── Results ─────────────────────────────────────────────────
+    // The methods below read the results from the beginning, request other
+    // windows of them, and change the search, the filters, the view
+    // preferences and the zoom.
 
-    /// Reads the open destination's results from the beginning
-    /// (`loadFirstPage`): sends a query for the first 500 items with the
-    /// current search text and filters. Requests for other windows that are
-    /// not answered yet, and items waiting to be selected, are dropped.
+    /// Reads the open destination's results from the beginning: sends a
+    /// query for the first 500 items with the current search text and
+    /// filters. Requests for other windows that are not answered yet, and
+    /// items waiting to be selected, are dropped.
     pub(super) fn query(&mut self, cx: &mut Context<Self>) {
         self.refreshing = false;
         let Some(entry) = self.nav.get(self.scope) else {
@@ -154,11 +155,11 @@ impl Session {
         cx.emit(Change::Results);
     }
 
-    /// Requests the window of results that contains `ordinal`
-    /// (`requestWindowAt`), unless the session already holds that window or
-    /// has already requested it. Only one request is sent to the library's
-    /// thread at a time. A request made while one is not answered yet waits in
-    /// `window_queued`, and replaces a request that was waiting there.
+    /// Requests the window of results that contains `ordinal`, unless the
+    /// session already holds that window or has already requested it. Only
+    /// one request is sent to the library's thread at a time. A request made
+    /// while one is not answered yet waits in `window_queued`, and replaces
+    /// a request that was waiting there.
     pub fn request_window_at(&mut self, ordinal: usize, cx: &mut Context<Self>) {
         let total = self.total as usize;
         if self.loading || total == 0 || self.ran.is_none() {
@@ -231,11 +232,10 @@ impl Session {
         self.query(cx);
     }
 
-    /// Replaces the filter bar's filters and reads the results with them
-    /// (`navigateWithGridFilters`). The change adds a Back and Forward history
-    /// entry. The grid as it was with the previous filters is saved first, so
-    /// Back shows it again at its scroll position. The grid with the new
-    /// filters starts at the top.
+    /// Replaces the filter bar's filters and reads the results with them.
+    /// The change adds a Back and Forward history entry. The grid as it was
+    /// with the previous filters is saved first, so Back shows it again at
+    /// its scroll position. The grid with the new filters starts at the top.
     pub fn set_filters(&mut self, filters: Filters, cx: &mut Context<Self>) {
         if filters == self.filters {
             return;
@@ -298,9 +298,8 @@ impl Session {
     }
 
     /// Opens the destination at `index` with `filters` as the filter bar's
-    /// filters, and adds a Back and Forward history entry
-    /// (`navigateWithGridFilters`). When that destination is already open,
-    /// only the filters change.
+    /// filters, and adds a Back and Forward history entry. When that
+    /// destination is already open, only the filters change.
     pub fn navigate_with_filters(
         &mut self,
         index: usize,
@@ -322,12 +321,11 @@ impl Session {
     }
 
     /// Changes the open destination's view preferences with the fields in
-    /// `patch` (`gridController.updateView`). The grid shows the change at
-    /// once, and the fields are saved to the destination's `view_pref` row
-    /// (`saveViewPref`). Like the `settings.view.patch` command, the save is
-    /// not recorded in the undo history. With `refetch` set, the results are
-    /// also read again from the beginning, and the grid fades out and in while
-    /// they load. A change of sort needs this.
+    /// `patch`. The grid shows the change at once, and the fields are saved
+    /// to the destination's `view_pref` row. Like the `settings.view.patch`
+    /// command, the save is not recorded in the undo history. With `refetch`
+    /// set, the results are also read again from the beginning, and the grid
+    /// fades out and in while they load. A change of sort needs this.
     pub fn update_view(&mut self, patch: serde_json::Value, refetch: bool, cx: &mut Context<Self>) {
         let Some(entry) = self.nav.get(self.scope) else {
             return;
@@ -460,10 +458,10 @@ impl Session {
     }
 
     /// Sets the zoom's tile size and shows it in the grid at once. The size
-    /// is saved to the destination's view preferences
-    /// (`saveViewPref({ target_size })`) 500 ms after the last change
-    /// (`VIEW_PREFS_SAVE_DEBOUNCE_MS`), so dragging the zoom control writes
-    /// to the library once and not for every position on the way.
+    /// is saved to the destination's view preferences, as the field
+    /// `target_size`, 500 ms after the last change (`VIEW_SAVE_DELAY`), so
+    /// dragging the zoom control writes to the library once and not for
+    /// every position on the way.
     fn set_tile(&mut self, tile: f32, cx: &mut Context<Self>) {
         self.tile = tile;
         let scope = self

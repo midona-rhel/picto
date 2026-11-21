@@ -1,6 +1,6 @@
-//! The main window's content: the gate, or the library's shell, with the
-//! consent question, the missing library's question and the blocking
-//! notice over it.
+//! Draws the main window's content: the gate or the library's shell, and
+//! over it the consent question, the "Library Not Found" question and the
+//! notice that blocks the window while another Picto is running.
 use super::*;
 
 impl Main {
@@ -33,12 +33,13 @@ impl Main {
             .children(ui::window_chrome::caption_buttons("library-gate", window));
         let content = match &self.gate {
             Gate::Closed => {
-                // `LibraryGate` opens the Library Manager once by itself,
-                // after the question about a missing library (production
-                // asks it before the window opens).
-                // Only once the launch has had its say and nothing is
-                // opening or being asked about: a library given at launch
-                // leaves the gate closed for a frame or two first.
+                // The gate opens the Library Manager by itself, once. It
+                // waits until the launch has asked for its library
+                // (`launched`), until neither the consent question nor the
+                // "Library Not Found" question is open, and until no library
+                // is being opened. The window draws one or two frames with
+                // the gate in this state before a library named at launch
+                // starts to open, and the Library Manager must not open then.
                 let waiting = !self.launched || self.asking.is_open() || host(cx).read(cx).busy;
                 if !self.offered && !self.missing.is_open() && !waiting {
                     self.offered = true;
@@ -151,8 +152,8 @@ impl Main {
         )
     }
 
-    /// `handleMissingLibrary`'s message box: Locate…, Remove from List,
-    /// Cancel.
+    /// Draws the "Library Not Found" question, with the buttons Locate…,
+    /// Remove from List and Cancel.
     fn missing(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let dialog = self.missing.layer(window, cx)?;
         let (path, presence, focus) = (
@@ -187,7 +188,8 @@ impl Main {
             });
             cx.defer(crate::set_app_menus);
         });
-        // Production's main process writes these in English, without keys.
+        // The locale files have no key for this message, so it is shown in
+        // English in every language.
         let message = format!(
             "Library \"{name}\" could not be found.\n\nPath: {}",
             path.display()
@@ -247,7 +249,8 @@ impl Main {
             .cancel_label(en("Close Library"))
             .layer(ui::layer::OVER_DIALOG)
             .focus(&focus)
-            // It stays until Picto has quit or the library is closed.
+            // The notice cannot be dismissed. It stays until the other Picto
+            // has quit or the library is closed.
             .on_close(|_, _| {})
             .on_cancel(|_, cx| cx.defer(close))
             .on_confirm(|_, cx| cx.defer(check_picto))
@@ -271,7 +274,8 @@ impl Render for Main {
             .children(self.missing(window, cx))
             .children(self.consent(window, cx))
             .children(self.notice(window, cx));
-        // The shell draws its own notifications; the gate needs these.
+        // The shell draws its own notifications. While the gate is shown,
+        // this view draws the notifications.
         if self.shell.is_none() {
             root = root
                 .child(self.notifications.clone())

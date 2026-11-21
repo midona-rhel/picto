@@ -1,8 +1,9 @@
-//! `TagTokenInput.tsx`: tags as chips in a field, followed by a search for
-//! more. Typing searches the library's tags after 120 ms and lists up to
-//! eight that are not chosen yet below the field; the arrow keys move
-//! through them, Enter or Tab adds the highlighted one, Enter with no list
-//! adds what was typed, Backspace in the empty search removes the last tag.
+//! A field that shows the chosen tags as chips, followed by a search field for
+//! adding more. 120 ms after the user stops typing, the library's tags are
+//! searched, and up to eight tags that are not chosen yet are listed below the
+//! field. The arrow keys move through the list. Enter or Tab adds the
+//! highlighted tag. Enter adds the typed text when no list is shown. Backspace
+//! in the empty search field removes the last tag.
 use super::popover::{Placement, Side, floating, place};
 use super::text_input::{EmptyBackspace, Submitted, TextInput};
 use crate::i18n::t;
@@ -24,7 +25,7 @@ pub fn bind(cx: &mut App) {
     ]);
 }
 
-/// A tag as the search finds it.
+/// A tag that the search found.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Found {
     pub namespace: String,
@@ -32,21 +33,22 @@ pub struct Found {
 }
 
 impl Found {
-    /// `formatTag`: the subname alone in General.
+    /// Returns the tag's full name: `namespace:subname`, or the subname alone
+    /// for a tag in General.
     pub fn name(&self) -> String {
         crate::tags::name(&self.namespace, &self.subname)
     }
 }
 
-/// Searches the library's tags for a query.
+/// The function that searches the library's tags for a query.
 pub type Search = Rc<dyn Fn(String, &mut App) -> oneshot::Receiver<Vec<Found>>>;
 
-/// The values changed.
+/// The event that is emitted when the list of chosen tags has changed.
 pub struct Changed;
 
 const SEARCH_DELAY: Duration = Duration::from_millis(120);
 const RESULTS: usize = 8;
-/// `.results`' `max-height`.
+/// The largest height of the list of found tags.
 const RESULTS_HEIGHT: f32 = 200.;
 
 pub struct TagTokenInput {
@@ -57,9 +59,11 @@ pub struct TagTokenInput {
     results: Vec<Found>,
     open: bool,
     selected: usize,
-    /// The search after the typing pause, replaced by the next keystroke.
+    /// The task that runs the search after the user has stopped typing. The
+    /// next keystroke replaces it.
     pending: Option<Task<()>>,
-    /// The field's surface, which the list opens under.
+    /// The bounds of the field's surface. The list of found tags opens below
+    /// them.
     bounds: Rc<Cell<Bounds<Pixels>>>,
     compact: bool,
     _subscriptions: Vec<Subscription>,
@@ -106,7 +110,7 @@ impl TagTokenInput {
         }
     }
 
-    /// `.compact`: a 32px field with less padding.
+    /// Makes the field 32px high with less padding.
     pub fn compact(mut self) -> Self {
         self.compact = true;
         self
@@ -145,7 +149,8 @@ impl TagTokenInput {
         }));
     }
 
-    /// `addTag`: a tag not chosen yet joins the values; the search empties.
+    /// Adds `tag` to the chosen tags unless it is empty or already chosen, and
+    /// empties the search field.
     fn add(&mut self, tag: String, cx: &mut Context<Self>) {
         let tag = tag.trim().to_owned();
         if !tag.is_empty() && !self.values.contains(&tag) {
@@ -166,7 +171,8 @@ impl TagTokenInput {
         cx.notify();
     }
 
-    /// Enter: the highlighted result, or what was typed.
+    /// Handles Enter: adds the highlighted tag of the list, or the typed text
+    /// when no list is shown.
     fn submit(&mut self, cx: &mut Context<Self>) {
         if self.open
             && let Some(found) = self.results.get(self.selected)
@@ -184,7 +190,7 @@ impl Render for TagTokenInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
         let focused = self.input.focus_handle(cx).contains_focused(window, cx);
-        // The search offers its placeholder only while no tag is chosen.
+        // The search field shows its placeholder only while no tag is chosen.
         let placeholder = if self.values.is_empty() {
             t("Search tags...")
         } else {
@@ -218,7 +224,7 @@ impl Render for TagTokenInput {
                 window.focus(&this.input.focus_handle(cx), cx);
             }));
         for (position, tag) in self.values.iter().enumerate() {
-            // `splitTag`: General when the tag has no namespace.
+            // A tag without a namespace is in General.
             let (namespace, subtag) = crate::tags::split(tag);
             let namespace = namespace.unwrap_or("general");
             let removed = tag.clone();
@@ -318,7 +324,8 @@ impl Render for TagTokenInput {
                         .cursor_pointer()
                         .when(index == self.selected, |row| row.bg(theme.surface_hover()))
                         .hover(move |style| style.bg(theme.surface_hover()))
-                        // A press adds the tag before the field loses focus.
+                        // The tag is added on the press, because the field
+                        // loses the keyboard focus before a click is complete.
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _, _, cx| {
@@ -340,8 +347,9 @@ impl Render for TagTokenInput {
                         ),
                 );
             }
-            // `.results`: 2px under the field, as wide, where it falls; a
-            // dialog's suggestions show over it.
+            // The list is as wide as the field and opens 2px below it, also
+            // when it then reaches beyond the window. It is on the layer
+            // `OVER_DIALOG`, so that in a dialog it is drawn above the dialog.
             let corner = place(
                 area,
                 size(f32::from(area.size.width), RESULTS_HEIGHT),
@@ -363,7 +371,7 @@ mod tests {
     use super::Found;
 
     #[test]
-    fn tags_are_written_as_the_electron_input_does() {
+    fn tags_are_written_as_the_earlier_versions_input_wrote_them() {
         let general = Found {
             namespace: String::new(),
             subname: "cat".into(),

@@ -1,16 +1,17 @@
-//! The Library Manager (`LibraryManager.tsx`, `library-manager.html`): a
-//! window of its own, 700 by 550 points and not resizable, with the
-//! libraries on this device at the left and the chosen one at the right
-//! (its cover, name and folder, Open Library and its actions, whether it is
-//! open, pinned or missing, its appearance and its statistics), or the form
-//! for a new library; New Library… and Open Existing… at the foot.
+//! The Library Manager. It is a window of its own, 700 by 550 points and
+//! not resizable. Its left side lists the libraries on this device. Its
+//! right side shows the library chosen in the list: its cover, name and
+//! folder, the Open Library button and the actions menu, whether it is
+//! open, pinned or missing, its appearance, its statistics and its cloud
+//! sync. When the user asks for it, the right side shows the form for a new
+//! library or the Open from Cloud… pane instead. The footer holds New
+//! Library…, Open Existing… and Open from Cloud….
 //!
-//! The list is this app's own (`state.json`), and only the libraries this
-//! process may open are listed (`libraries::listed`): a process that cannot
-//! open a library the user keeps reads nothing of one. Listing reads each
-//! listed library's folder and cover and nothing else; statistics are read
-//! for the open library only, through its application, as production reads
-//! them.
+//! The list is this app's own (`state.json`). Only the libraries that this
+//! process may open are listed (`libraries::listed`), so a process that may
+//! not open a library the user keeps reads nothing about one. Listing reads
+//! the folder and the cover of each listed library and nothing else. The
+//! statistics are read for the open library only, through its application.
 use super::admission::Origin;
 use super::{Kind, history, host};
 use crate::i18n::{en, t};
@@ -28,14 +29,15 @@ mod panes;
 
 const WIDTH: f32 = 700.;
 const HEIGHT: f32 = 550.;
-/// `.sidebar`'s width, `.libraryRow`'s height, the header's and the
-/// footer's.
+/// The width of the list of libraries (`SIDEBAR`), the height of one of its
+/// rows (`ROW`), the height of the header (`HEADER`) and the height of the
+/// footer (`FOOTER`), in points.
 const SIDEBAR: f32 = 238.;
 const ROW: f32 = 44.;
 const HEADER: f32 = 58.;
 const FOOTER: f32 = 44.;
 
-/// A library in the list.
+/// One library in the Library Manager's list.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
     pub path: String,
@@ -46,14 +48,15 @@ pub struct Row {
     pub missing: bool,
     pub kind: Kind,
     pub cover: Option<PathBuf>,
-    /// Its colour and icon (`libraryMeta`).
+    /// The library's colour and icon (`libraryMeta` in the state file).
     pub look: crate::state::LibraryLook,
 }
 
-/// The rows in production's order (`orderedLibraryPaths`): pinned first,
-/// then the history without them; the open library first when the list
-/// does not hold it (a disposable copy is never listed otherwise). Only
-/// paths `listed` allows are read at all.
+/// Returns the rows of the list: the pinned libraries first, then the
+/// libraries of the history that are not pinned. When the open library is
+/// not among them, a row for it is put first. A disposable copy gets a row
+/// only in this way. A path is read (`exists`) only when `listed` allows
+/// it.
 pub fn rows(
     history: &[String],
     pinned: &[String],
@@ -108,11 +111,10 @@ pub fn rows(
     rows
 }
 
-/// What the actions menu does to a library that is not open, each only
-/// once `host::permit` lets it (asking the user's consent first, as opening
-/// does, for a library not yet agreed to): rename and Show in File Manager
-/// act on a library the user has not opened here, so they are asked about
-/// as opening is.
+/// An action of the actions menu that changes or reveals a library on disk.
+/// Each runs only after `host::permit` has allowed it. For a library that
+/// the user has not yet agreed to, the user is asked for consent first, as
+/// when the library is opened.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Act {
     Rename,
@@ -121,12 +123,12 @@ enum Act {
     Delete,
 }
 
-/// What the right side shows.
+/// What the right side of the window shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Pane {
     Library,
     Create,
-    /// Open from Cloud… (`showCloudOpen`).
+    /// The Open from Cloud… pane.
     Cloud,
 }
 
@@ -134,13 +136,14 @@ struct ManagerGlobal(WindowHandle<Manager>);
 
 impl Global for ManagerGlobal {}
 
-/// The open Library Manager's window, if any.
+/// Returns the Library Manager's window, or `None` when it is not open.
 pub fn window(cx: &App) -> Option<AnyWindowHandle> {
     cx.try_global::<ManagerGlobal>()
         .map(|global| global.0.into())
 }
 
-/// `open_library_manager`: opens the window, or brings it forward.
+/// Opens the Library Manager's window, or brings it forward when it is
+/// already open.
 pub fn open(cx: &mut App) {
     let create = false;
     let existing = cx.try_global::<ManagerGlobal>().map(|global| global.0);
@@ -165,7 +168,7 @@ pub fn open(cx: &mut App) {
             window_min_size: Some(size(px(WIDTH), px(HEIGHT))),
             is_resizable: false,
             is_minimizable: false,
-            // i18n: the window's title, English as library-manager.html's <title>
+            // i18n: the window's title, English in every language
             ..ui::window_chrome::frameless("Library Manager", None)
         },
         move |window, cx| cx.new(|cx| Manager::new(create, window, cx)),
@@ -185,49 +188,65 @@ pub struct Manager {
     pane: Pane,
     name: Entity<TextInput>,
     renaming: Option<Entity<TextInput>>,
-    /// Hears Enter in the rename field.
+    /// The subscription that saves the new name when the user presses Enter
+    /// in the rename field.
     renamed: Option<Subscription>,
-    /// The open library's statistics (`library.stats`), and whether they
-    /// are being read.
+    /// The open library's statistics (the answer of `library.stats`).
+    /// `reading` is whether they are being read now.
     stats: Option<serde_json::Value>,
     reading: bool,
     message: Option<String>,
     error: Option<String>,
-    /// The detail pane's scrolling, and the error it has yet to bring into
-    /// view (the error is drawn at the pane's end, as production draws it).
+    /// The scroll position of the right side. `error_shown` is the error
+    /// that the right side was last scrolled to. The error is drawn at the
+    /// end of the right side, so the right side is scrolled to its end when
+    /// a new error appears.
     detail_scroll: ScrollHandle,
     error_shown: Option<String>,
-    /// A library to take off the list, once the user confirms.
+    /// The Remove from List question. Its content is the path of the library
+    /// that is taken off the list when the user confirms.
     removing: ui::modal::Host<String>,
-    /// A library about to be deleted, once the user confirms (`deleteLibrary`).
+    /// The Delete… question. Its content is the path of the library that is
+    /// deleted when the user confirms.
     deleting: ui::modal::Host<String>,
-    /// A library the user is asked about before `Act` (its consent).
+    /// The consent question that is asked before an `Act`. Its content is
+    /// the library's identity, its folder, and the action that runs when
+    /// the user agrees.
     asking: ui::modal::Host<(super::Identity, PathBuf, Act)>,
-    /// The icon picker, while Change… has it open.
+    /// The icon picker. It is `Some` while the user has it open with
+    /// Change….
     icons: Option<Entity<ui::icon_picker::IconPicker>>,
     menu: menu::Host,
     busy: bool,
-    /// The open library when the list was last read.
+    /// The path of the library that was open when the list was last read.
     shown_current: Option<String>,
     focus: FocusHandle,
-    /// Where the other libraries' covers are cropped to.
+    /// The temporary folder that holds the cropped covers of the listed
+    /// libraries.
     scratch: Option<tempfile::TempDir>,
-    /// The open library's cloud sync state, followed while it is open.
+    /// The open library's cloud sync state, and the subscription that
+    /// redraws this window when the state changes.
     cloud: Option<(Entity<crate::cloud::Cloud>, Subscription)>,
-    /// The provider folders on this device and those the user chose, and
-    /// the Picto libraries found in them (`refreshCloud`).
+    /// The cloud providers' folders that were detected on this device or
+    /// chosen by the user. `choices` holds the Picto libraries found in
+    /// those folders.
     roots: Vec<crate::cloud::Root>,
     choices: Vec<crate::cloud::Choice>,
-    /// The cloud library chosen in Open from Cloud…, and its local name.
+    /// The index in `choices` of the cloud library chosen in the Open from
+    /// Cloud… pane. `cloud_name` is the field for the name that the library
+    /// gets on this device.
     chosen: Option<usize>,
     cloud_name: Entity<TextInput>,
-    /// A cloud operation under way (production's `busy` key).
+    /// The name of the cloud operation that is running, or `None` when none
+    /// is running.
     working: Option<&'static str>,
-    /// How fast the sync's remaining work falls, and the estimate.
+    /// The measurements from which the remaining time of the sync is
+    /// estimated (`cloud::track`). `work_key` identifies the work that is
+    /// measured, and `eta` is the estimate in seconds.
     samples: Vec<crate::cloud::Sample>,
     work_key: Option<String>,
     eta: Option<u64>,
-    /// Stop Syncing's question.
+    /// The Stop Syncing question.
     stopping: ui::modal::Host<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -248,12 +267,15 @@ impl Manager {
                 &cloud_name,
                 |this, _, _: &crate::ui::text_input::Submitted, cx| this.join(cx),
             ),
-            // Enter in the name chooses the location, as the button does.
+            // Enter in the name field does what the Choose Location… button
+            // does.
             cx.subscribe(
                 &name,
                 |this, _, _: &crate::ui::text_input::Submitted, cx| this.create(cx),
             ),
-            // An open, a switch, a failure: read the list again.
+            // The list is read again whenever the host changes: when a
+            // library has opened, when the app has switched to another
+            // library, and when a library has failed to open.
             cx.observe(&host, |this, host, cx| {
                 if let Some((_, message)) = host.read(cx).failure.clone() {
                     this.error = Some(message);
@@ -308,15 +330,16 @@ impl Manager {
         this
     }
 
-    /// Reads the list again, and the open library's statistics.
+    /// Reads the list of libraries again, and the open library's
+    /// statistics.
     fn read(&mut self, cx: &mut Context<Self>) {
         let facts = super::facts();
         let current = host::current(cx);
         let current_text = current
             .as_ref()
             .map(|(root, kind)| (root.to_string_lossy().into_owned(), *kind));
-        // A library opened or switched to is chosen, as production's
-        // manager follows `library-switched`.
+        // When another library has been opened, that library is chosen in
+        // the list and its pane is shown.
         let opened = current_text.as_ref().map(|(path, _)| path.clone());
         if opened != self.shown_current {
             self.shown_current = opened.clone();
@@ -358,7 +381,8 @@ impl Manager {
                 crate::cover::prepare_into(Path::new(&row.path), &target)
             });
         }
-        // The open library is chosen when nothing else is.
+        // When the chosen library is no longer in the list, the open library
+        // is chosen, or the first row when no library is open.
         let keep = self
             .selected
             .as_ref()
@@ -408,8 +432,9 @@ impl Manager {
         cx.notify();
     }
 
-    /// Runs `act` on the library at `path` if `host::permit` lets it now,
-    /// asking the user's consent first where opening would.
+    /// Runs `act` on the library at `path` if `host::permit` allows it now.
+    /// When the user has not yet agreed to the library, the consent question
+    /// is shown first.
     fn guarded(&mut self, path: String, act: Act, window: &mut Window, cx: &mut Context<Self>) {
         self.error = None;
         self.message = None;
@@ -419,8 +444,10 @@ impl Manager {
         }
     }
 
-    /// What the host refused: the consent asked for (then `act` run), or
-    /// its words shown. A copy that is not open is never listed.
+    /// Handles a refusal of the host. For `Denied::Ask` it shows the consent
+    /// question, and `act` runs when the user agrees. For `Denied::Error` it
+    /// shows the message. For `Denied::Copy` it does nothing, because a copy
+    /// that is not open is never listed.
     fn denied(&mut self, denied: host::Denied, act: Option<Act>, cx: &mut Context<Self>) {
         match denied {
             host::Denied::Ask { root, identity } => {
@@ -446,8 +473,8 @@ impl Manager {
         }
     }
 
-    /// Move… (`relocateLibrary` for a library on disk): the folder it goes
-    /// into, chosen in the system's dialog, then moved there.
+    /// Does Move…: the user chooses a folder in the system's dialog, and the
+    /// library is moved into that folder.
     fn move_library(&mut self, path: String, cx: &mut Context<Self>) {
         let from = PathBuf::from(&path);
         let basename = from
@@ -455,7 +482,8 @@ impl Manager {
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        // Production's dialog says this as its message.
+        // The system's folder dialog shows this text as the prompt of its
+        // button.
         let chosen = crate::prompt::folder(
             &format!("{basename} will be placed in the selected folder"),
             cx,
@@ -486,8 +514,9 @@ impl Manager {
         .detach();
     }
 
-    /// A rename or move the host finished: on failure the library keeps
-    /// its row selected under its old path, and the reason is shown.
+    /// Called when the host has finished a rename or a move. After a failure
+    /// the library's row stays chosen under its old path, and the reason is
+    /// shown.
     fn relocated(&mut self, from: PathBuf, result: Result<(), host::Denied>, cx: &mut Context<Self>) {
         if let Err(denied) = result {
             self.selected = Some(from.to_string_lossy().into_owned());
@@ -496,9 +525,10 @@ impl Manager {
         self.read(cx);
     }
 
-    /// The user confirmed Delete…: the host checks it again, as the moment
-    /// may have changed, then removes it. A consent withdrawn meanwhile
-    /// leaves it as it is.
+    /// Called when the user has confirmed Delete…. The host checks the
+    /// library again and then removes it (`host::delete`). If the host
+    /// refuses, for example because the consent was withdrawn in the
+    /// meantime, the library is left as it is.
     fn delete(&mut self, path: String, cx: &mut Context<Self>) {
         self.deleting.dismiss(cx);
         let manager = cx.entity().downgrade();
@@ -516,8 +546,9 @@ impl Manager {
         });
     }
 
-    /// The library's colour or icon (`setLibraryMeta`), kept in this app's
-    /// state.
+    /// Changes the colour or the icon of the library at `path` with `change`
+    /// and stores the result in this app's state. An entry that holds only
+    /// default values is removed.
     fn set_look(
         &mut self,
         path: String,
@@ -536,7 +567,8 @@ impl Manager {
         self.read(cx);
     }
 
-    /// Change… / Done: the icon picker under the appearance card.
+    /// Does Change… and Done: opens the icon picker in the Appearance card,
+    /// or closes it when it is open.
     fn toggle_icons(&mut self, path: String, current: Option<String>, cx: &mut Context<Self>) {
         if self.icons.take().is_some() {
             cx.notify();
@@ -555,15 +587,17 @@ impl Manager {
         cx.notify();
     }
 
-    /// Open Library, or a double click on a row.
+    /// Opens the library at `path`. The Open Library button and a double
+    /// click on a row call this.
     fn open_row(&mut self, path: String, cx: &mut Context<Self>) {
         self.error = None;
         self.message = None;
         cx.defer(move |cx| host::request(Path::new(&path), Origin::Manager, cx));
     }
 
-    /// Choose Location…: where the new library goes, then it is made and
-    /// opened (`createLibrary`).
+    /// Does Choose Location… of the New Library form: the user chooses the
+    /// folder that the new library goes into, and the library is then
+    /// created and opened (`host::create`).
     fn create(&mut self, cx: &mut Context<Self>) {
         let name = self.name.read(cx).value();
         if name.trim().is_empty() {
@@ -608,7 +642,7 @@ impl Manager {
             field.set_text(name, cx);
             field
         });
-        // Enter saves (`onKeyDown` Enter).
+        // Enter in the rename field saves the new name.
         self.renamed = Some(cx.subscribe(
             &field,
             |this, _, _: &crate::ui::text_input::Submitted, cx| this.save_rename(cx),
@@ -672,7 +706,7 @@ impl Manager {
                 .icon("menu-folder-open")
                 .disabled(row.missing)
                 .into(),
-            // A missing library is located instead of moved.
+            // For a missing library this row is Locate… and not Move….
             menu::item(
                 "move",
                 if row.missing {
@@ -697,7 +731,8 @@ impl Manager {
                 .danger(true)
                 .disabled(row.current || !real)
                 .into(),
-            // Production asks for confirmation and refuses the open library.
+            // Delete… is disabled for the open library. For any other
+            // library the user is asked to confirm it first.
             menu::item("delete", t("Delete…"))
                 .icon("menu-trash")
                 .danger(true)
@@ -760,12 +795,14 @@ impl Manager {
     }
 }
 
-/// A library's colour (`#RRGGBB`), to draw.
+/// Returns the library's colour as a colour to draw with, or `None` when the
+/// library has none. The colour is stored as text of the form `#RRGGBB`.
 fn look_color(look: &crate::state::LibraryLook) -> Option<Rgba> {
     look.color.as_deref().and_then(theme::parse_hex).map(rgb)
 }
 
-/// Cover › Choose… for the open library: the main window's cover dialog.
+/// Does Choose… in the Cover row for the open library: brings the main
+/// window forward and opens its cover dialog.
 fn choose_cover(cx: &mut App) {
     if let Some(shell) = host::shell(cx) {
         crate::app_menu::bring_forward(cx);
@@ -807,8 +844,9 @@ impl Render for Manager {
                 )
                 .into_any_element(),
         };
-        // A new error is scrolled to once it has been laid out: at the
-        // window's usual size it lies below what the pane shows.
+        // A new error is drawn at the end of the right side, which is
+        // usually below the visible part. So the right side is scrolled to
+        // its end on the next frame, when the error has been laid out.
         if self.error != self.error_shown {
             self.error_shown = self.error.clone();
             if self.error.is_some() {
@@ -836,7 +874,8 @@ impl Render for Manager {
             .size_full()
             .flex()
             .flex_col()
-            // `--manager-shell-bg`: 3% of the contrast colour.
+            // The window's background is the rail colour: the contrast
+            // colour mixed 3% into the background colour.
             .bg(theme.rail())
             .text_color(theme.text())
             .text(theme::TEXT_MD)

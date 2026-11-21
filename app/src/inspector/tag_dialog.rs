@@ -1,11 +1,11 @@
-//! The Add Tags dialog (`TagSelectModal.tsx`). The T key and Add Tags in the
-//! grid's menu open it. It is a dialog in the middle of the window with a
+//! Draws the Add Tags dialog and holds its state. The T key and Add Tags in
+//! the grid's menu open it. It is a dialog in the middle of the window with a
 //! search field, a rail with Recent, Selected, All and each tag group, and a
 //! list of the library's tags with check boxes. A click only marks a tag to be
-//! added or removed. Apply puts the marked tags on the selected items and
-//! takes the others off. Cancel and Escape discard the marks. The tags that
-//! are ticked when the dialog opens are those of the item the inspector shows
-//! or last showed.
+//! added or removed. Apply puts the tags marked to be added on the selected
+//! items and takes the tags marked to be removed off them. Cancel and Escape
+//! discard the marks. The tags that are ticked when the dialog opens are those
+//! of the item the inspector shows or last showed.
 use crate::i18n::format;
 use crate::i18n::t;
 use crate::session::Session;
@@ -27,12 +27,13 @@ use picto_library::{TagNamespaceRecord, TagRecord};
 use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
-/// `PAGE_SIZE`: how many tags are loaded at a time.
+/// How many tags are loaded at a time.
 const PAGE: usize = 100;
-/// The height of `.panelBody`.
+/// The height of the dialog's body, which holds the search field, the rail
+/// and the list of tags.
 const BODY: f32 = 520.;
-/// The width of `.sidebar`, and the largest width of a name in it
-/// (`.sidebarName`).
+/// The width of the rail at the left of the dialog's body. `NAME` is the
+/// largest width of a name in the rail.
 const RAIL: f32 = 220.;
 const NAME: f32 = 140.;
 /// How long the search waits after the last change of its text before it asks
@@ -41,14 +42,14 @@ const SEARCH_DELAY: Duration = Duration::from_millis(150);
 /// The next page of tags is loaded when the rows in view come within this many
 /// pixels of the last loaded row.
 const LOAD_AHEAD: f32 = 200.;
-/// How many rows are drawn above and below the visible ones (`overscan`).
+/// How many rows are drawn above and below the visible ones.
 const OVERSCAN: usize = 15;
 /// The Recent view shows at most this many tags.
 const RECENT_SHOWN: usize = 30;
 
 pub enum Event {
-    /// Apply: the tags to put on the selected items and the tags to take off
-    /// them.
+    /// The user pressed Apply. `add` holds the tags to put on the selected
+    /// items, and `remove` the tags to take off them.
     Apply {
         add: Vec<String>,
         remove: Vec<String>,
@@ -57,9 +58,9 @@ pub enum Event {
 
 impl EventEmitter<Event> for TagDialog {}
 
-/// `displayTags`: the rows for a view. Selected gives the items' tags, ordered
-/// by group and then by name. Recent gives the recently used tags that are
-/// among the loaded ones. Every other view gives the loaded page.
+/// Returns the rows for a view. Selected gives the items' tags, ordered by
+/// group and then by name. Recent gives the recently used tags that are among
+/// the loaded ones. Every other view gives the loaded page.
 pub fn display_tags(
     view: &View,
     tags: &[TagRecord],
@@ -77,9 +78,9 @@ pub fn display_tags(
     }
 }
 
-/// `estimatedTotal`: how many rows the list will have when every page is
-/// loaded, as far as that is known. The list is given that height while more
-/// pages remain, so that its scrollbar has the size of the whole list.
+/// Returns how many rows the list will have when every page is loaded, as far
+/// as that is known. The list is given that height while more pages remain,
+/// so that its scrollbar has the size of the whole list.
 fn estimated_total(
     view: &View,
     query: &str,
@@ -107,15 +108,15 @@ pub struct TagDialog {
     query: String,
     pager: TagPager,
     namespaces: Vec<TagNamespaceRecord>,
-    /// `entityTagKeys`: the tags of the item the inspector shows.
+    /// The names of the tags of the item the inspector shows.
     entity: BTreeSet<String>,
     /// How many items have each tag that the Selected view can list: the
     /// tags of the item the inspector shows and the tags clicked in this
     /// dialog. The Selected view builds its rows from tag names alone, and
     /// takes each row's count from here.
     counts: HashMap<String, u64>,
-    /// `checked` and `unchecked`: the tags ticked and the tags unticked in
-    /// this dialog, in the order they were clicked.
+    /// The tags ticked in this dialog, in the order they were clicked.
+    /// `remove` holds the tags unticked in this dialog, in the same order.
     add: Vec<String>,
     remove: Vec<String>,
     view: View,
@@ -189,7 +190,7 @@ impl TagDialog {
         self.host.close(cx);
     }
 
-    // ── Loading ─────────────────────────────────────────────────
+    // The functions below load the tag groups and the pages of tags.
 
     fn load_groups(&mut self, cx: &mut Context<Self>) {
         crate::tags::read_groups(&self.session, cx, |this, namespaces, cx| {
@@ -241,13 +242,13 @@ impl TagDialog {
         .detach();
     }
 
-    // ── Choosing ────────────────────────────────────────────────
+    // The functions below handle clicks and keys in the dialog.
 
-    /// The rows of the list for the view that is shown. The Selected view
-    /// lists the tags the items have and the tags ticked in this dialog, so
-    /// that it shows everything that is ticked now. A tag that was unticked
-    /// here stays in that list with an empty box, so that it can be ticked
-    /// again.
+    /// Returns the rows of the list for the view that is shown. The Selected
+    /// view lists the tags the items have and the tags ticked in this dialog,
+    /// so that it shows everything that is ticked now. A tag that was
+    /// unticked here stays in that list with an empty box, so that it can be
+    /// ticked again.
     fn rows(&self, cx: &App) -> Vec<TagRecord> {
         let selected: BTreeSet<String>;
         let entity = if self.view == View::Selected && !self.add.is_empty() {
@@ -286,7 +287,8 @@ impl TagDialog {
         self.request(cx);
     }
 
-    /// `applyTags`: sends the marked tags to the owner and closes the dialog.
+    /// Emits `Event::Apply` with the marked tags and closes the dialog. It
+    /// does nothing when no tag is marked.
     fn apply(&mut self, cx: &mut Context<Self>) {
         if self.add.is_empty() && self.remove.is_empty() {
             return;
@@ -298,7 +300,10 @@ impl TagDialog {
         self.close(cx);
     }
 
-    /// The keys typed in the search (`handleKeyDown`).
+    /// Handles the keys that the search field reports. Down and Up move the
+    /// keyboard's row in the list. Enter ticks or unticks that row, or the
+    /// first row if the keyboard is on none. Tab shows the next view of the
+    /// rail. Escape closes the dialog and discards the marks.
     fn key(&mut self, key: Key, cx: &mut Context<Self>) {
         let rows = self.rows(cx);
         match key {
@@ -330,8 +335,7 @@ impl TagDialog {
         cx.notify();
     }
 
-    /// Scrolls the list just far enough to show the row the keyboard is on
-    /// (`scrollToIndex(focusIdx, { align: 'auto' })`).
+    /// Scrolls the list just far enough to show the row the keyboard is on.
     fn reveal_focus(&mut self) {
         let Some(at) = self.focus_index else { return };
         let top = at as f32 * ROW;
@@ -347,9 +351,8 @@ impl TagDialog {
         self.scroll.set_offset(point(px(0.), px(-next.max(0.))));
     }
 
-    /// A click on the rail or on the list takes the keyboard focus out of the
-    /// search field, as a click on something that cannot take the focus does
-    /// in a browser.
+    /// Moves the keyboard focus from the search field to the dialog. A click
+    /// on the rail or on the list calls this.
     fn leave_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(focus) = self.host.get_mut().map(|dialog| dialog.focus.clone()) {
             window.focus(&focus, cx);
@@ -357,7 +360,7 @@ impl TagDialog {
     }
 }
 
-// ── Drawing ─────────────────────────────────────────────────────
+// The functions below draw the dialog.
 
 impl TagDialog {
     fn rail(&self, cx: &mut Context<Self>) -> Div {
@@ -441,7 +444,7 @@ impl TagDialog {
         rail
     }
 
-    /// `.tagRow`: one tag's row in the list.
+    /// Draws the row of one tag in the list.
     fn row(
         &self,
         index: usize,
@@ -471,7 +474,7 @@ impl TagDialog {
             if checked { Mark::Checked } else { Mark::Empty },
             CheckSize::Compact,
         ))
-        // `.tagDot`: the dot in the colour of the tag's group.
+        // The dot is in the colour of the tag's group.
         .child(
             div()
                 .size(px(10.))
@@ -482,8 +485,7 @@ impl TagDialog {
                 .group_hover(group.clone(), |style| style.opacity(1.)),
         );
         if !namespace.is_empty() && namespace != "general" {
-            // `.tagNs`: the name of the tag's group, before the tag's own
-            // name.
+            // The name of the tag's group is drawn before the tag's own name.
             row = row.child(
                 div()
                     .flex_none()
@@ -601,8 +603,8 @@ impl TagDialog {
     }
 }
 
-/// `highlightMatch`: draws the first match of the search text in bold and in
-/// the primary colour.
+/// Returns `label` as text in which the first match of the search text is
+/// bold and in the primary colour.
 fn highlight(label: String, query: &str, cx: &App) -> StyledText {
     let theme = theme::theme(cx);
     let range = crate::text::match_range(&label, query);

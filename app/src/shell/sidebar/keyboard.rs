@@ -1,8 +1,8 @@
-//! Moving through the sidebar's rows with the keyboard, as the Electron
-//! rows' `tabIndex` and `onKeyDown` allow: from the tree filter, Down or Tab
-//! enters the rows; Up, Down, Tab and Shift-Tab move between them with the
-//! focus look; Enter or Space opens the row as a click does; Escape gives
-//! the keyboard back to the window.
+//! Moves through the sidebar's rows with the keyboard. From the tree filter,
+//! Down or Tab moves keyboard focus to the first row. Up, Down, Tab and
+//! Shift-Tab move from row to row, and the row that the keyboard is on is
+//! drawn as focused. Enter or Space does what a click on the row does.
+//! Escape moves keyboard focus out of the rows.
 use super::{Section, Sidebar};
 use gpui::*;
 
@@ -11,7 +11,8 @@ actions!(
     [FocusNext, FocusPrevious, OpenFocused, LeaveRows, EnterRows]
 );
 
-/// The rows, but not a rename field open in one: its keys are its own.
+/// The key context of the rows while no rename field in a row has keyboard
+/// focus. A rename field handles its own keys.
 const ROWS: &str = "SidebarRows && !TextInput";
 
 pub fn bind(cx: &mut App) {
@@ -28,7 +29,10 @@ pub fn bind(cx: &mut App) {
     ]);
 }
 
-/// The row after (or before) `current` among `rows`, staying at the ends.
+/// Returns the row after `current` in `rows` when `forward` is true, and the
+/// row before it otherwise. At the first or the last row it returns that
+/// row. When `current` is `None` or is not in `rows`, it returns the first
+/// row.
 pub fn step(rows: &[String], current: Option<&str>, forward: bool) -> Option<String> {
     let at = current.and_then(|current| rows.iter().position(|row| row == current));
     let next = match (at, forward) {
@@ -40,7 +44,8 @@ pub fn step(rows: &[String], current: Option<&str>, forward: bool) -> Option<Str
 }
 
 impl Sidebar {
-    /// The keyboard moves to the rows, at the first one.
+    /// Moves keyboard focus to the rows and makes the first row the focused
+    /// row.
     pub(super) fn enter_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.keyboard_row = self.shown_rows.first().cloned();
         window.focus(&self.rows_focus, cx);
@@ -60,7 +65,8 @@ impl Sidebar {
         cx.notify();
     }
 
-    /// Enter or Space: the row does what a plain click does.
+    /// Does on the focused row what a click without modifier keys does.
+    /// Enter and Space run this.
     pub(super) fn open_focused(&mut self, cx: &mut Context<Self>) {
         let Some(row) = self.keyboard_row.clone() else {
             return;
@@ -91,8 +97,9 @@ impl Sidebar {
         cx.notify();
     }
 
-    /// Scrolls the list so the focused row shows, from where it was last
-    /// drawn.
+    /// Scrolls the list so that the whole focused row is in the visible part
+    /// of the list. It uses the bounds at which the row and the list were
+    /// last drawn.
     fn scroll_to_focused(&self) {
         let Some((row, list)) = self
             .keyboard_row
@@ -133,7 +140,8 @@ mod tests {
             step(&rows, Some("system:active"), false).as_deref(),
             Some("system:active")
         );
-        // A row that is no longer shown starts again from the top.
+        // When the current row is no longer shown, the step goes to the
+        // first row.
         assert_eq!(
             step(&rows, Some("folder:9"), false).as_deref(),
             Some("system:active")

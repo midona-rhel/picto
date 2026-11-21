@@ -1,17 +1,19 @@
-//! The cases of `gridContextMenu.test.tsx`, and the full row order for the
-//! selections the grid, the viewer and the preview open the menu on.
+//! Tests of the rows of the item context menus, including the complete
+//! order of the rows for the selections on which the grid, the viewer and
+//! the inspector's preview open a menu.
 use super::{
     Action, Description, Engine, Handlers, ItemRow, Kind, OpenWith, Panel, Playback, Row,
     ScopeKind, Status, Surface, collection_menu, empty_menu, member_handlers, preview_menu,
     tile_menu, viewer_menu, with_remove_from_group,
 };
 
-/// The row that shows the file in the system's file manager.
+/// The label of the row that shows the file in the system's file manager.
 const REVEAL: &str = crate::app_menu::Platform::CURRENT.reveal_title();
 use crate::settings::registry::{self, display};
 use picto_library::ContentSortField;
 
-/// `shortcutHint` with the default bindings: none for a deferred shortcut.
+/// Returns the text of the shortcut with the id `id` under the default key
+/// bindings, or `None` for a shortcut that is marked as deferred.
 fn shortcut(id: &str) -> Option<String> {
     let def = registry::SHORTCUT_DEFS.iter().find(|def| def.id == id)?;
     (!def.deferred).then(|| registry::display(def.keys))
@@ -25,7 +27,9 @@ fn empty(d: &Description) -> Vec<Row> {
     empty_menu(d, &shortcut)
 }
 
-/// `cleanSeparators`, as the menu draws the rows.
+/// Returns the rows as the menu draws them: with no separator at the start
+/// or at the end, and with only one separator where several follow each
+/// other.
 fn clean(rows: &[Row]) -> Vec<Row> {
     let mut out: Vec<Row> = Vec::new();
     for row in rows {
@@ -44,7 +48,9 @@ fn clean(rows: &[Row]) -> Vec<Row> {
     out
 }
 
-/// The rows' labels, `-` for a separator, as the menu shows them.
+/// Returns the labels of the rows as the menu shows them. A separator is
+/// `-`, a submenu is its label followed by ` >`, and a panel is its name in
+/// square brackets.
 fn labels(rows: &[Row]) -> Vec<String> {
     clean(rows)
         .iter()
@@ -242,10 +248,10 @@ fn empty_space_offers_creation_and_import() {
             "Display >",
         ]
     );
-    // `buildContextMenuViewEntries`: the display switches are a panel of
-    // their own inside "Display".
+    // The display switches are a panel of their own inside the "Display"
+    // submenu.
     assert_eq!(labels(children(&rows, "Display")), ["[display panel]"]);
-    // Another import running blocks the three import rows.
+    // While another import is running, the three import rows are disabled.
     d.import_blocked = true;
     let rows = empty(&d);
     for label in ["Import Files...", "Import Folder...", "Paste Import"] {
@@ -288,8 +294,8 @@ fn empty_space_in_a_folder_sorts_its_contents() {
             "Notes"
         ]
     );
-    // The folder's own sort, then the view panel (which offers no sort of
-    // the view in a folder).
+    // The folder's "Sort by" submenu comes first and the view panel comes
+    // after it. In a folder the view panel offers no sort of the view.
     assert_eq!(
         labels(&rows),
         ["Sort by >", "-", "[view panel]", "-", "Display >"]
@@ -400,7 +406,7 @@ fn open_with_other_lists_the_applications_with_the_default_marked() {
     let safari = find(listed, "Safari").unwrap();
     assert_eq!(safari.action, Action::OpenWithApplication);
     assert_eq!(safari.value.as_deref(), Some("/Applications/Safari.app"));
-    // Without an icon of its own, a row shows the apps glyph.
+    // A row for an application that has no icon shows the `menu-apps` icon.
     assert_eq!(safari.icon, Some("menu-apps"));
 }
 
@@ -410,7 +416,8 @@ fn open_with_other_is_left_out_when_nothing_opens_the_file() {
     d.open_with = OpenWith::Applications(Vec::new());
     d.handlers.open_with_application = true;
     assert!(!labels(&tile(&d)).contains(&"Open With Other".to_owned()));
-    // The looked-up row that replaces the pending one is then none.
+    // When no application can open the file, `open_with_rows` returns no row
+    // to put in place of the "Loading applications..." row.
     assert!(super::open_with_rows(Vec::new()).is_empty());
     assert_eq!(
         super::open_with_rows(vec![application("Preview", true)]).len(),
@@ -427,7 +434,8 @@ fn open_with_other_through_the_system_chooser() {
     let entry = find(&rows, "Open With Other...").unwrap();
     assert_eq!(entry.action, Action::OpenWithOther);
     assert_eq!(entry.shortcut, None);
-    // The chooser is Windows' own; elsewhere the row stays disabled.
+    // The chooser is provided by Windows, so the row is disabled on the
+    // other systems.
     assert_eq!(entry.disabled, !cfg!(target_os = "windows"));
 }
 
@@ -507,14 +515,15 @@ fn tag_rows_use_the_bookmark_glyphs() {
         assert_eq!(entry.icon, Some(icon));
         assert!(!entry.disabled, "{label}");
     }
-    // Copying and pasting tags have deferred shortcuts, so none is shown.
+    // The shortcuts for copying and pasting tags are deferred, so the rows
+    // show none.
     assert_eq!(find(&rows, "Copy Tags").unwrap().shortcut, None);
     assert_eq!(find(&rows, "Paste Tags").unwrap().shortcut, None);
     assert_eq!(
         find(&rows, "Add Tags").unwrap().shortcut.as_deref(),
         Some("T")
     );
-    // Nothing copied yet: Paste Tags is shown disabled.
+    // While no tags have been copied, "Paste Tags" is shown disabled.
     d.clipboard_tags = false;
     assert!(find(&tile(&d), "Paste Tags").unwrap().disabled);
 }
@@ -528,7 +537,7 @@ fn adds_to_the_last_used_folder_by_name_without_a_shortcut() {
     let entry = find(&rows, "Add to \u{201c}References\u{201d}").unwrap();
     assert_eq!(entry.shortcut, None);
     assert_eq!(entry.action, Action::AddToLastFolder);
-    // Without a folder used before, the row is not there.
+    // Without the `add_to_last_folder` handler, the row is left out.
     d.handlers.add_to_last_folder = false;
     assert!(
         labels(&tile(&d))
@@ -607,7 +616,7 @@ fn ungroup_counts_collections_and_grouping_names_merging() {
             .iter()
             .all(|label| !label.starts_with("Ungroup"))
     );
-    // Still being counted.
+    // `None` means that the collections are still being counted.
     assert!(has(&labels_for(None), "Ungroup Collections..."));
     assert!(has(&labels_for(None), "Merge into One Group..."));
     assert!(has(&labels_for(Some(1234)), "Ungroup 1,234 Collections..."));
@@ -648,8 +657,8 @@ fn a_group_is_a_library_item_not_its_cover_file() {
     );
 }
 
-/// What the grid hands the builder for one picture in All, as the shell
-/// does: every row production builds, in production's order.
+/// Checks the complete list of rows, in order, for one picture in All, with
+/// the handlers that the shell has for it.
 #[test]
 fn one_picture_in_all_has_every_row_in_order() {
     let d = Description {
@@ -792,9 +801,9 @@ fn one_picture_in_all_has_every_row_in_order() {
     .map(display)
     .collect();
     assert_eq!(shortcuts, written);
-    // Paste Tags waits for something copied; Auto Tag for a feature this
-    // app does not have yet, and Open With Other for the system's chooser,
-    // which only Windows has.
+    // "Paste Tags" is disabled because no tags have been copied. "Open With
+    // Other..." opens the system's chooser, which only Windows has. "Auto
+    // Tag" is left out of this check. Every other row is enabled.
     assert!(find(&rows, "Paste Tags").unwrap().disabled);
     assert!(
         rows.iter()
@@ -828,7 +837,8 @@ fn trash_restores_and_deletes_several_items() {
         find(&rows, "Restore 3 Items").unwrap().shortcut,
         Some(display("Mod+Shift+Backspace").into())
     );
-    // Without the delete wired, the row stays and is disabled.
+    // Without the `permanent_delete` handler, the row is still shown and is
+    // disabled.
     d.handlers.permanent_delete = false;
     assert!(find(&tile(&d), "Delete 3 Permanently").unwrap().disabled);
 }
@@ -901,7 +911,9 @@ fn keys_are_unique_across_the_actions_a_menu_offers() {
     assert_eq!(keys.len(), total);
 }
 
-/// A collection member's menu, as `openMemberMenu` describes one member.
+/// Returns the description of the menu for `count` members of a collection,
+/// which have the type `mime`. `editor` says whether the menu is opened in
+/// the collection's editor or in the viewer.
 fn member(editor: bool, count: usize, mime: &str) -> Description {
     Description {
         surface: if editor {
@@ -924,7 +936,7 @@ fn member(editor: bool, count: usize, mime: &str) -> Description {
 }
 
 #[test]
-fn a_member_in_the_editor_has_production_rows_in_order() {
+fn a_member_in_the_editor_has_the_earlier_versions_rows_in_order() {
     let rows = with_remove_from_group(tile(&member(true, 1, "application/pdf")), 1);
     assert_eq!(
         labels(&rows),
@@ -961,7 +973,7 @@ fn a_member_in_the_editor_has_production_rows_in_order() {
             "Move to Trash",
         ]
     );
-    // A collection's contents sort by name or size only.
+    // A collection's contents can be sorted by name or by size only.
     assert_eq!(labels(children(&rows, "Sort by")), ["Name", "Size"]);
     assert_eq!(
         labels(children(&rows, "More")),
@@ -971,7 +983,7 @@ fn a_member_in_the_editor_has_production_rows_in_order() {
             "Regenerate Thumbnail"
         ]
     );
-    // Without its handler, Grayscale is drawn disabled.
+    // Without its handler, "Grayscale" is shown disabled.
     assert!(find(&rows, "Grayscale").unwrap().disabled);
 }
 
@@ -996,7 +1008,7 @@ fn several_members_are_removed_by_count() {
     let rows = with_remove_from_group(tile(&member(true, 3, "image/png")), 3);
     assert!(find(&rows, "Remove 3 from Group").is_some());
     assert!(find(&rows, "Move 3 to Trash").is_some());
-    // With no Trash row, it goes last.
+    // When there is no "Move to Trash" row, the row is put at the end.
     assert_eq!(
         labels(&with_remove_from_group(Vec::new(), 1)),
         ["Remove from Group"]

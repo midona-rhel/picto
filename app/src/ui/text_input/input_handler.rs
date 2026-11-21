@@ -1,6 +1,8 @@
 // Adapted from gpui 0.2.2 examples/input.rs (Apache-2.0).
-//! The platform's text input: what an input method composes (marked text)
-//! and asks about, in UTF-16 offsets.
+//! This file connects a text field to the system's text input. It takes the
+//! text that is typed and the text that an input method is composing (the
+//! marked text), and it answers the input method's questions about the text.
+//! The system gives and expects offsets in UTF-16 units.
 use std::ops::Range;
 
 use super::editing::{self, Typing};
@@ -44,7 +46,7 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        // A password field's text is not handed to the system.
+        // The text of a password field is not given to the system.
         if self.is_masked() {
             return None;
         }
@@ -91,8 +93,10 @@ impl EntityInputHandler for TextInput {
             .map(|range_utf16| self.range_from_utf16(range_utf16))
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
-        // Typed text continues the run of typing; text an input method was
-        // composing joins the step its composition began.
+        // Typed text continues the run of typing in the history. Text that
+        // an input method was composing belongs to the step that was
+        // recorded when the composition began, so nothing is recorded for
+        // it here.
         if self.marked_range.is_none() {
             self.history.record(self.snapshot(), Some(Typing::Insert));
         }
@@ -124,7 +128,8 @@ impl EntityInputHandler for TextInput {
         } else {
             self.marked_range = None;
         }
-        // The selection the input method gives is within the new text.
+        // The selection that the input method gives is measured from the
+        // start of the new text, in UTF-16 units.
         self.selected_range = new_selected_range_utf16
             .map(|selected| {
                 range.start + editing::utf8_offset(new_text, selected.start)
@@ -184,8 +189,9 @@ impl EntityInputHandler for TextInput {
             return Some(self.offset_to_utf16(index));
         }
         let last_layout = self.last_layout.as_ref()?;
-        // The line drawn may be the clipped or placeholder text, so only an
-        // index inside the content counts.
+        // The line that was drawn can be the placeholder or the text cut
+        // short with an ellipsis. Only an index that is inside the field's
+        // text is therefore used.
         let utf8_index = last_layout
             .index_for_x(point.x - bounds.left() + self.scroll)
             .filter(|index| *index <= self.drawn().len())

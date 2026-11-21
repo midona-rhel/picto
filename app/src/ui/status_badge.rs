@@ -14,15 +14,18 @@ pub enum Tone {
     Idle,
 }
 
-/// `subscriptionStatusPulse`: a syncing badge breathes between 58% and full
-/// strength and back, each half on `ease-in-out`.
+/// Returns the opacity of a badge with the tone `Running`, `elapsed` after the
+/// pulse began. The badge goes from 58% to full strength and back again, and
+/// repeats this.
 pub fn pulse(elapsed: Duration) -> f32 {
     0.58 + (1. - 0.58) * motion::pulse(elapsed)
 }
 
-/// The small status label of the subscription screens: caption text in
-/// sentence case on a 10% tint of its colour inside a 25% border, the text
-/// mixed 45% toward the colour. A syncing badge pulses.
+/// The small status label of the subscription screens. Its text is
+/// caption-sized and starts with a capital letter. The text's colour is 45% of
+/// the way from the text colour to the badge's colour. The background is the
+/// badge's colour at 10%, and the border is that colour at 25%. A badge with
+/// the tone `Running` pulses.
 #[derive(IntoElement)]
 pub struct StatusBadge {
     id: ElementId,
@@ -47,22 +50,24 @@ pub fn status_badge(
 }
 
 impl StatusBadge {
-    /// What the badge's `title` explains, shown as a tooltip.
+    /// Sets the tooltip that explains the badge.
     pub fn tip(mut self, tip: Option<Tip>) -> Self {
         self.tip = tip;
         self
     }
 
-    /// The Accounts dialog's account state: a control's height, the small
-    /// text size, at most 112px wide.
+    /// Makes this the larger badge that the Accounts dialog uses for an
+    /// account's state: as high as a small control, in the small text size,
+    /// and at most 112px wide.
     pub fn large(mut self) -> Self {
         self.large = true;
         self
     }
 }
 
-/// A label as the badge writes it: its first letter a capital, the rest as
-/// given, so a state the library names in lower case reads as a word.
+/// Returns `label` with its first letter as a capital and the rest unchanged,
+/// which is how the badge writes it. A state that the library names in lower
+/// case is then shown with a capital first letter.
 pub fn sentence(label: &str) -> String {
     let mut chars = label.chars();
     match chars.next() {

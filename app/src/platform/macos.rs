@@ -1,10 +1,12 @@
-//! The AppKit and Core Animation calls the app makes for what GPUI has no
-//! option for, through `objc2`, whose `msg_send!` checks each message's
-//! argument and return types against the method's own in debug builds.
+//! The AppKit and Core Animation calls that the app makes for things that
+//! GPUI has no option for. They are made through `objc2`. In a debug build
+//! its `msg_send!` checks the argument types and the return type of each
+//! message against those of the method.
 //!
-//! Every function takes the window's `NSWindow` from [`with_ns_window`]
-//! and runs on the main thread, where GPUI calls into the app; AppKit
-//! requires both.
+//! The functions that act on a window take the window's `NSWindow`, which
+//! [`with_ns_window`] provides. Every function runs on the main thread,
+//! which is the thread on which GPUI calls the app's code. AppKit requires
+//! both.
 use gpui::Window;
 use objc2::msg_send;
 use objc2::rc::Retained;
@@ -21,9 +23,9 @@ pub fn with_ns_window(window: &Window, work: impl FnOnce(&AnyObject)) {
     let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
         return;
     };
-    // SAFETY: `ns_view` is the live content view GPUI made for this window
-    // (the handle borrows the window, which owns it), and `window` is an
-    // NSView method that takes nothing and returns its NSWindow or nil.
+    // SAFETY: `ns_view` is the view that GPUI made for this open window
+    // (the handle borrows the window, which owns it). `window` is an NSView
+    // method that takes no arguments and returns the view's NSWindow or nil.
     let ns_window: Option<Retained<AnyObject>> = unsafe {
         let view = appkit.ns_view.cast::<AnyObject>().as_ref();
         msg_send![view, window]
@@ -35,8 +37,8 @@ pub fn with_ns_window(window: &Window, work: impl FnOnce(&AnyObject)) {
 
 /// Hides the close, minimise and zoom buttons (the traffic lights).
 pub fn hide_window_buttons(ns_window: &AnyObject) {
-    // `NSWindowCloseButton`, `NSWindowMiniaturizeButton`,
-    // `NSWindowZoomButton`.
+    // The values 0, 1 and 2 are `NSWindowCloseButton`,
+    // `NSWindowMiniaturizeButton` and `NSWindowZoomButton`.
     for kind in 0usize..3 {
         // SAFETY: `standardWindowButton:` is an NSWindow method taking an
         // `NSWindowButton` (an NSUInteger) and returning the button or nil;
@@ -61,8 +63,9 @@ pub fn lock_aspect_ratio(ns_window: &AnyObject, ratio: f64) {
     }
 }
 
-/// Floats the window over others (`NSFloatingWindowLevel`) or puts it back
-/// among them (`NSNormalWindowLevel`).
+/// Puts the window at the level above ordinary windows
+/// (`NSFloatingWindowLevel`), so that it stays in front of them, or back at
+/// the ordinary level (`NSNormalWindowLevel`).
 pub fn set_floating(ns_window: &AnyObject, floating: bool) {
     let level: isize = if floating { 3 } else { 0 };
     // SAFETY: `setLevel:` is an NSWindow method taking an `NSWindowLevel`
@@ -72,7 +75,7 @@ pub fn set_floating(ns_window: &AnyObject, floating: bool) {
     }
 }
 
-/// Takes the window off the screen without closing it (`orderOut:`).
+/// Hides the window without closing it (`orderOut:`).
 pub fn order_out(ns_window: &AnyObject) {
     // SAFETY: `orderOut:` is an NSWindow method taking its sender, an
     // object that may be nil.
@@ -81,8 +84,9 @@ pub fn order_out(ns_window: &AnyObject) {
     }
 }
 
-/// Puts the window in front of the app's others without making it key or
-/// bringing the app forward (`orderFront:`).
+/// Puts the window in front of the app's other windows (`orderFront:`).
+/// The window does not become the key window, and the app is not brought
+/// in front of other apps.
 pub fn order_front(ns_window: &AnyObject) {
     // SAFETY: `orderFront:` is an NSWindow method taking its sender, an
     // object that may be nil.
@@ -91,15 +95,18 @@ pub fn order_front(ns_window: &AnyObject) {
     }
 }
 
-/// Closes the window as its close button does (`performClose:`): the
-/// window is asked first, then closed. Sent from the run loop, as a click
-/// is, rather than now: GPUI asks the window's own handler only while the
-/// app is not borrowed.
+/// Closes the window the way its close button does (`performClose:`):
+/// AppKit first asks the window whether it may close, and then closes it.
+/// The message is not sent now. It is scheduled on the run loop, which is
+/// also where a click on the button is handled, because GPUI can call the
+/// window's close handler only while the app is not borrowed, and the
+/// caller of this function borrows it.
 #[cfg(debug_assertions)]
 pub fn perform_close(ns_window: &AnyObject) {
     // SAFETY: `performSelector:withObject:afterDelay:` is an NSObject
-    // method taking a selector, its argument (here nil, `performClose:`'s
-    // sender) and a delay; the window is retained until it is sent.
+    // method that takes a selector, the selector's argument (here nil, the
+    // sender of `performClose:`) and a delay. The window is retained until
+    // the message is sent.
     unsafe {
         let _: () = msg_send![
             ns_window,
@@ -110,8 +117,8 @@ pub fn perform_close(ns_window: &AnyObject) {
     }
 }
 
-/// The window server's number for the window (`windowNumber`), which
-/// `screencapture -l` takes.
+/// Returns the number that the window server gave the window
+/// (`windowNumber`). `screencapture -l` takes this number.
 #[cfg(debug_assertions)]
 pub fn window_number(ns_window: &AnyObject) -> isize {
     // SAFETY: `windowNumber` is an NSWindow method that takes nothing and
@@ -128,8 +135,8 @@ pub fn order_back(ns_window: &AnyObject) {
     }
 }
 
-/// Turns off the shadow and edge highlight the system traces round what a
-/// window draws.
+/// Turns off the shadow and the light line that the system draws around
+/// the edge of the window's content.
 pub fn without_shadow(ns_window: &AnyObject) {
     // SAFETY: `setHasShadow:` is an NSWindow method taking a BOOL.
     unsafe {
@@ -137,10 +144,11 @@ pub fn without_shadow(ns_window: &AnyObject) {
     }
 }
 
-/// Turns off the animation AppKit plays as a window appears (a panel zooms
-/// in), for windows that bring their own.
+/// Turns off the animation that AppKit plays when a window appears, in
+/// which a panel grows from a smaller size. It is used for windows that
+/// play an animation of their own.
 pub fn without_appear_animation(ns_window: &AnyObject) {
-    /// `NSWindowAnimationBehaviorNone`.
+    /// The value of `NSWindowAnimationBehaviorNone`.
     const NONE: isize = 2;
     // SAFETY: `setAnimationBehavior:` is an NSWindow method taking an
     // `NSWindowAnimationBehavior` (an NSInteger).
@@ -149,10 +157,11 @@ pub fn without_appear_animation(ns_window: &AnyObject) {
     }
 }
 
-/// Keeps AppKit from adding its own "Enter Full Screen" row to the View
-/// menu, which has the app's "Toggle Full Screen" already. A registered
-/// default, read when the menu bar is first shown: nothing is written to
-/// the user's preferences.
+/// Stops AppKit from adding its own row "Enter Full Screen" to the View
+/// menu, which already has the app's row "Toggle Full Screen". It does so
+/// by registering a default value for `NSFullScreenMenuItemEverywhere`,
+/// which AppKit reads when the menu bar is first shown. A registered
+/// default is not written to the user's preferences.
 pub fn one_full_screen_row() {
     let (Some(defaults), Some(dictionary)) = (
         AnyClass::get(c"NSUserDefaults"),
@@ -162,9 +171,9 @@ pub fn one_full_screen_row() {
     };
     let key = NSString::from_str("NSFullScreenMenuItemEverywhere");
     let no = NSNumber::new_bool(false);
-    // SAFETY: `standardUserDefaults` takes nothing and returns the shared
-    // object; `dictionaryWithObject:forKey:` takes two objects and returns
-    // a dictionary; `registerDefaults:` takes that dictionary.
+    // SAFETY: `standardUserDefaults` takes no arguments and returns the
+    // shared object. `dictionaryWithObject:forKey:` takes two objects and
+    // returns a dictionary. `registerDefaults:` takes that dictionary.
     unsafe {
         let defaults: Option<Retained<AnyObject>> = msg_send![defaults, standardUserDefaults];
         let values: Option<Retained<AnyObject>> =
@@ -175,15 +184,15 @@ pub fn one_full_screen_row() {
     }
 }
 
-/// `[NSApp arrangeInFront:nil]`: the app's windows in front of other apps',
-/// in their order.
+/// Brings all windows of the app in front of the windows of other apps and
+/// keeps their order among themselves (`[NSApp arrangeInFront:nil]`).
 pub fn arrange_in_front() {
     let Some(class) = AnyClass::get(c"NSApplication") else {
         return;
     };
-    // SAFETY: `sharedApplication` is an NSApplication class method taking
-    // nothing and returning the app; `arrangeInFront:` takes its sender, an
-    // object that may be nil.
+    // SAFETY: `sharedApplication` is an NSApplication class method that
+    // takes no arguments and returns the app. `arrangeInFront:` takes its
+    // sender, an object that may be nil.
     unsafe {
         let app: Option<Retained<AnyObject>> = msg_send![class, sharedApplication];
         if let Some(app) = app {
@@ -192,20 +201,23 @@ pub fn arrange_in_front() {
     }
 }
 
-/// Has the window report itself always fully visible, so that GPUI, which
-/// stops a window's frames once AppKit reports it covered, keeps drawing it
-/// behind other applications.
+/// Makes the window always report that it is visible. GPUI stops drawing a
+/// window's frames when AppKit reports that the window is covered. After
+/// this call GPUI keeps drawing the window while the windows of other
+/// applications cover it.
 pub fn keep_painting_while_covered(ns_window: &AnyObject) {
-    /// `NSWindowOcclusionStateVisible`, whatever covers the window.
+    /// Returns `NSWindowOcclusionStateVisible`, whether or not anything
+    /// covers the window.
     extern "C-unwind" fn visible(_: &AnyObject, _: Sel) -> usize {
         1 << 1
     }
     let implementation: extern "C-unwind" fn(&AnyObject, Sel) -> usize = visible;
-    // SAFETY: the class is the window's own (GPUI's window class, which is
-    // also its delegate); `occlusionState` takes nothing and returns an
-    // NSUInteger, which `visible` does, and "Q@:" encodes that signature.
-    // `windowDidChangeOcclusionState:` is the delegate method GPUI's class
-    // implements, taking a notification (nil here) and returning nothing.
+    // SAFETY: the class is the class of this window, which is GPUI's
+    // window class and also the window's delegate. `occlusionState` takes no
+    // arguments and returns an NSUInteger, as `visible` does, and "Q@:"
+    // encodes that signature. `windowDidChangeOcclusionState:` is the
+    // delegate method that GPUI's class implements; it takes a notification
+    // (here nil) and returns nothing.
     unsafe {
         let class = ns_window.class() as *const AnyClass as *mut AnyClass;
         objc2::ffi::class_replaceMethod(
@@ -217,16 +229,19 @@ pub fn keep_painting_while_covered(ns_window: &AnyObject) {
             >(implementation),
             c"Q@:".as_ptr(),
         );
-        // Have the window look at its (new) state and start its frames.
+        // The window is told that its occlusion state changed, so that
+        // GPUI reads the new state and starts drawing frames.
         let _: () = msg_send![ns_window, windowDidChangeOcclusionState: None::<&AnyObject>];
     }
 }
 
-/// Plays CSS's `transform: scale(from) → scale(1)` on everything the
-/// window draws, about the point `fixed` (in points from the content's
-/// centre, x to the right and y up), over `seconds` on the cubic bezier
-/// `curve`. Core Animation scales the window's layer, so the contents scale
-/// with their panel, which GPUI cannot do for an element.
+/// Animates the scale of everything the window draws from `from` to 1.
+/// The point `fixed` stays where it is during the animation; it is given in
+/// points from the centre of the content, with x to the right and y up. The
+/// animation lasts `seconds` and follows the cubic bezier `curve`. Core
+/// Animation scales the layer of the window's content view, so a panel and
+/// everything inside it are scaled together. GPUI cannot scale an element
+/// with its children.
 pub fn pop_in(
     ns_window: &AnyObject,
     fixed: (f32, f32),
@@ -240,14 +255,15 @@ pub fn pop_in(
     ) else {
         return;
     };
-    // SAFETY: `contentView` (NSWindow) and `layer` (NSView) take nothing and
-    // return an object or nil. `functionWithControlPoints::::` is a
-    // CAMediaTimingFunction class method taking four floats and returning
-    // the function; `animationWithKeyPath:` a CABasicAnimation class method
-    // taking a string. `setFromValue:`, `setToValue:` and
-    // `setTimingFunction:` take an object, `setDuration:` a
-    // `CFTimeInterval` (a double), and `addAnimation:forKey:` (CALayer) an
-    // animation and a string. Each receiver is checked for nil first.
+    // SAFETY: `contentView` (NSWindow) and `layer` (NSView) take no
+    // arguments and return an object or nil.
+    // `functionWithControlPoints::::` is a CAMediaTimingFunction class
+    // method that takes four floats and returns the function.
+    // `animationWithKeyPath:` is a CABasicAnimation class method that takes
+    // a string. `setFromValue:`, `setToValue:` and `setTimingFunction:`
+    // take an object, `setDuration:` takes a `CFTimeInterval` (a double),
+    // and `addAnimation:forKey:` (CALayer) takes an animation and a string.
+    // Each receiver is checked for nil before a message is sent to it.
     unsafe {
         let view: Option<Retained<AnyObject>> = msg_send![ns_window, contentView];
         let Some(view) = view else {
@@ -261,9 +277,10 @@ pub fn pop_in(
             sel!(functionWithControlPoints::::),
             (curve.0, curve.1, curve.2, curve.3),
         );
-        // A scale about a point other than the centre is the scale about the
-        // centre and a shift of (1 - scale) × that point; the three run
-        // together on one curve, so the point stays where it is.
+        // The layer scales about its centre. A scale about another point is
+        // the scale about the centre together with a shift of
+        // (1 - scale) × that point. The scale and the two shifts run for the
+        // same time on the same curve, so the point `fixed` does not move.
         for (path, start, end) in [
             ("transform.scale", from, 1.),
             ("transform.translation.x", (1. - from) * fixed.0, 0.),
@@ -288,28 +305,33 @@ pub fn pop_in(
     }
 }
 
-/// The system's blur of what is behind a transparent window, kept to one
-/// rounded panel of it. GPUI's `WindowBackgroundAppearance::Blurred` lays an
-/// `NSVisualEffectView` over the whole content view, beneath GPUI's own
-/// view, with the material's tint and saturation taken out, so what shows
-/// is the plain blur. Here that view is hidden until [`backdrop::place`]
-/// sets it to the panel's rectangle and shape. It lies inside the content
-/// view, so a Core Animation transform of the content view's layer
-/// ([`pop_in`]) moves it with the panel, and beneath GPUI's view, so it
-/// takes no pointer.
+/// Limits the system's blur of what is behind a transparent window to one
+/// rounded panel of the window.
+///
+/// With `WindowBackgroundAppearance::Blurred`, GPUI puts an
+/// `NSVisualEffectView` over the whole content view, below GPUI's own view,
+/// and removes the tint and the saturation of the material, so the view
+/// shows only the blur. This module hides that view until
+/// [`backdrop::place`] gives it the rectangle and the rounded corners of
+/// the panel. The view is inside the content view, so the animation of
+/// [`pop_in`], which transforms the layer of the content view, moves it
+/// together with the panel. The view is below GPUI's view, so it receives
+/// no pointer events.
 pub mod backdrop {
     use objc2::msg_send;
     use objc2::rc::Retained;
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     use objc2_foundation::{NSEdgeInsets, NSPoint, NSRect, NSSize};
 
-    /// GPUI's effect view in the content view of `ns_window`.
+    /// Returns the `NSVisualEffectView` that GPUI put in the content view
+    /// of `ns_window`.
     fn effect_view(ns_window: &AnyObject) -> Option<Retained<AnyObject>> {
         let effect = AnyClass::get(c"NSVisualEffectView")?;
-        // SAFETY: `contentView` (NSWindow) and `subviews` (NSView) take
-        // nothing and return an object or nil; `count` and `objectAtIndex:`
-        // are NSArray's, taking nothing and an NSUInteger; `isKindOfClass:`
-        // takes a class and returns a BOOL.
+        // SAFETY: `contentView` (NSWindow) and `subviews` (NSView) take no
+        // arguments and return an object or nil. `count` and
+        // `objectAtIndex:` are NSArray methods; the first takes no
+        // arguments and the second an NSUInteger. `isKindOfClass:` takes a
+        // class and returns a BOOL.
         unsafe {
             let content: Option<Retained<AnyObject>> = msg_send![ns_window, contentView];
             let subviews: Option<Retained<AnyObject>> = msg_send![&*content?, subviews];
@@ -324,24 +346,27 @@ pub mod backdrop {
         }
     }
 
-    /// Hides the effect view until a panel places it. Called as the window
-    /// opens, before it first shows.
+    /// Hides the effect view until [`place`] shows it. It is called when
+    /// the window opens, before the window is first shown.
     pub fn hide(ns_window: &AnyObject) {
         let Some(view) = effect_view(ns_window) else {
             return;
         };
         // SAFETY: `setHidden:` and `setAutoresizingMask:` are NSView methods
-        // taking a BOOL and an NSUInteger.
+        // that take a BOOL and an NSUInteger.
         unsafe {
             let _: () = msg_send![&*view, setHidden: true];
-            // It follows the panel, not the window's size.
+            // The view must not resize with the window, because `place`
+            // sets its frame to the rectangle of the panel.
             let _: () = msg_send![&*view, setAutoresizingMask: 0usize];
         }
     }
 
-    /// Sets the effect view to the panel at `(x, y, w, h)` (points from the
-    /// content's top left) with corners of `radius`, at `alpha`. `height` is
-    /// the content's height, as AppKit counts y upwards.
+    /// Shows the effect view at the rectangle `(x, y, w, h)` of the panel,
+    /// given in points from the top left of the content, with rounded
+    /// corners of `radius` and with the opacity `alpha`. `height` is the
+    /// height of the content; it is needed because AppKit counts y from
+    /// the bottom.
     pub fn place(
         ns_window: &AnyObject,
         (x, y, w, h): (f32, f32, f32, f32),
@@ -356,10 +381,10 @@ pub mod backdrop {
             NSPoint::new(x.into(), (height - y - h).into()),
             NSSize::new(w.into(), h.into()),
         );
-        // SAFETY: `setFrame:` takes an NSRect, `setAlphaValue:` a CGFloat
-        // (a double), `maskImage` returns an image or nil, `setMaskImage:`
-        // takes an image and `setHidden:` a BOOL: NSView and
-        // NSVisualEffectView methods.
+        // SAFETY: these are methods of NSView and NSVisualEffectView.
+        // `setFrame:` takes an NSRect, `setAlphaValue:` a CGFloat (a
+        // double), `maskImage` returns an image or nil, `setMaskImage:`
+        // takes an image, and `setHidden:` takes a BOOL.
         unsafe {
             let _: () = msg_send![&*view, setFrame: frame];
             let _: () = msg_send![&*view, setAlphaValue: f64::from(alpha)];
@@ -373,9 +398,10 @@ pub mod backdrop {
         }
     }
 
-    /// A rounded rectangle of `radius` that stretches to any size: its
-    /// corners are kept and its middle drawn out (`capInsets`), as
-    /// `NSVisualEffectView.maskImage` documents for rounded shapes.
+    /// Returns an image of a rounded rectangle with corners of `radius`
+    /// that can be stretched to any size: its cap insets keep the corners
+    /// as they are and stretch only the middle. The documentation of
+    /// `NSVisualEffectView.maskImage` describes this for rounded shapes.
     fn rounded_mask(radius: f64) -> Option<Retained<AnyObject>> {
         let (image, path, color) = (
             AnyClass::get(c"NSImage")?,
@@ -385,10 +411,10 @@ pub mod backdrop {
         let side = radius * 2. + 1.;
         let draw = block2::RcBlock::new(move |rect: NSRect| -> Bool {
             // SAFETY: `bezierPathWithRoundedRect:xRadius:yRadius:` takes an
-            // NSRect and two CGFloats and returns a path; `blackColor` takes
-            // nothing and returns a colour; `set` and `fill` take nothing.
-            // AppKit calls this block on the main thread while the image
-            // draws.
+            // NSRect and two CGFloats and returns a path. `blackColor` takes
+            // no arguments and returns a colour. `set` and `fill` take no
+            // arguments. AppKit calls this block on the main thread while
+            // it draws the image.
             unsafe {
                 let shape: Option<Retained<AnyObject>> = msg_send![
                     path,
@@ -405,9 +431,9 @@ pub mod backdrop {
             Bool::YES
         });
         // SAFETY: `imageWithSize:flipped:drawingHandler:` takes an NSSize, a
-        // BOOL and a block of this signature and returns an image;
-        // `setCapInsets:` takes an NSEdgeInsets and `setResizingMode:` an
-        // `NSImageResizingMode` (an NSInteger; stretch is 1).
+        // BOOL and a block of this signature and returns an image.
+        // `setCapInsets:` takes an NSEdgeInsets. `setResizingMode:` takes
+        // an `NSImageResizingMode`, an NSInteger whose value 1 is stretch.
         unsafe {
             let mask: Option<Retained<AnyObject>> = msg_send![
                 image,

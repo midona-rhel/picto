@@ -1,7 +1,6 @@
-//! The review panel's drawing (`AiTaggerPanel.module.css`): the rail of
-//! views and models with Run, the item reviewed with its preview and
-//! thumbnails, the list of suggested tags, and the footer's cutoff and
-//! Apply.
+//! Draws the review panel: the sidebar with the two views, the models and the
+//! Run button; the reviewed item with its preview and its thumbnails; the list
+//! of suggested tags; and the footer with the cutoff and the Apply button.
 use super::panel::{AiTagger, HEIGHT, ViewMode};
 use super::review::{self, Empty, EmptyState, ReviewTag};
 use crate::grid::format;
@@ -19,15 +18,16 @@ use crate::{motion, theme};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
-/// `.sidebar`, `.reviewPane`, `.content`.
+/// The width of the sidebar. `REVIEW` is the width of the column that shows
+/// the reviewed item, and `LIST` is the width of the list of tags.
 const RAIL: f32 = 190.;
 const REVIEW: f32 = 220.;
 const LIST: f32 = 370.;
-/// `.previewFrame`'s largest side.
+/// The largest width and the largest height of the preview.
 const PREVIEW: f32 = 200.;
 
 impl AiTagger {
-    /// `.sidebarItem`: a 24px rail row with a mark, a name and a badge.
+    /// Builds a row of the sidebar with a mark, a name and a badge.
     fn rail_item(
         &self,
         id: impl Into<ElementId>,
@@ -190,7 +190,8 @@ impl AiTagger {
         )
     }
 
-    /// `.navButton`: a 24px chevron that dims when there is nowhere to go.
+    /// Builds a button with a chevron that shows the item `delta` places away.
+    /// The button is disabled when there is no such item.
     fn nav_button(
         &self,
         id: &'static str,
@@ -208,7 +209,9 @@ impl AiTagger {
             .on_click(cx.listener(move |this, _, _, cx| this.move_active(delta, cx)))
     }
 
-    /// The item reviewed (`.reviewPane`).
+    /// Draws the column of the reviewed item: the Previous and Next buttons
+    /// with the counter between them, the preview, the item's name, the number
+    /// of predictions, and the row of thumbnails.
     fn review_pane(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
         let index = self.active_index();
@@ -256,8 +259,9 @@ impl AiTagger {
                 cx,
             ));
 
-        // `.preview` and `.previewFrame`: the cover fitted in 200px, on its
-        // first palette colour, with the glass edge over it.
+        // The preview is scaled down to fit in 200px by 200px and is never
+        // enlarged. Behind it is the first colour of the image's palette, and
+        // over it is a 1px border of 10% black.
         let mut frame = div()
             .relative()
             .rounded(px(theme::RADIUS_MD))
@@ -347,7 +351,7 @@ impl AiTagger {
             .child(div().relative().child(frame_shadow).child(frame));
 
         let name = root.as_ref().map_or_else(
-            // i18n: production writes it in English
+            // i18n: an item's fallback name, English in every language
             || format!("Item {}", number.max(1)),
             |root| root.label.clone(),
         );
@@ -431,7 +435,8 @@ impl AiTagger {
             .border_color(theme.border_secondary())
             .child(navigation)
             .child(preview)
-            // Mantine's body `line-height: 1.55`.
+            // The name and the line below it have a line height of 1.55 times
+            // their text size.
             .child(
                 div()
                     .text(theme::TEXT_MD)
@@ -450,8 +455,9 @@ impl AiTagger {
             .child(thumbnails)
     }
 
-    /// `.tagRow`: the check, the bookmark in the group's colour, the name,
-    /// the models that suggested it and its confidence.
+    /// Draws one row of the list: the check box, the bookmark icon in the
+    /// colour of the tag's namespace, the tag, the models that suggested it,
+    /// and its confidence.
     fn tag_row(
         &self,
         index: usize,
@@ -489,11 +495,12 @@ impl AiTagger {
         if tag.shows_namespace() {
             name = name.child(div().flex_none().child(format!("{}:", tag.namespace)));
         }
-        // `.tagName` is a flex box, so its overflow is clipped without an
-        // ellipsis.
+        // A tag that is too long for its place is cut off at the edge, without
+        // an ellipsis.
         name = name.child(div().flex_none().child(tag.subtag.clone()));
         let row_tag = tag.clone();
-        // A check box named by the tag and its confidence.
+        // For assistive technology the row is a check box whose name is the
+        // tag and its confidence.
         let mut row = div()
             .id(("ai-tag", index))
             .role(Role::CheckBox)
@@ -760,7 +767,8 @@ impl Render for AiTagger {
             .child(self.review_pane(window, cx))
             .child(self.list(&visible, empty, window, cx));
         if self.running {
-            // The hairline over the panes.
+            // While a run is going, a progress bar 2px high is drawn along the
+            // top of the three columns.
             body = body.child(div().absolute().top_0().left_0().right_0().child(
                 ui::progress_bar().height(2.).filled(
                     "ai-progress",
@@ -826,8 +834,8 @@ impl Render for AiTagger {
             this.pinned = !this.pinned;
             cx.notify();
         }));
-        // Opened as a dialog, it is closed as one: the dialogs' close button
-        // where the docked panel has its sidebar and pin buttons.
+        // The centred panel has the close button that dialogs have. The docked
+        // panel has the sidebar button and the pin button in that place.
         shell = if self.centred {
             shell.header(ui::window_chrome::close_button(
                 "ai-close",

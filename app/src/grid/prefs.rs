@@ -1,6 +1,6 @@
-//! View preferences for a scope, read from the library's `view_pref` rows with
-//! the same fallbacks as `gridController.ts`: the scope's own row, then
-//! `grid:defaults`, then the built-in defaults.
+//! The view preferences of a scope, read from the library's `view_pref`
+//! rows. Each field comes from the scope's own row, or else from the row
+//! `grid:defaults`, or else from the built-in defaults.
 use super::layout::ViewMode;
 use picto_library::predicate::{ItemSort, SortDirection, SortField};
 use picto_library::query::ItemScope;
@@ -14,16 +14,19 @@ pub struct ViewPrefs {
     pub show_name: bool,
     pub show_resolution: bool,
     pub show_extension_label: bool,
-    /// Names with their extension (`show_extension`).
+    /// Whether an item's name is shown with its file extension (the field
+    /// `show_extension`).
     pub show_extension: bool,
-    /// A folder shows its subfolders' items too (`show_subfolders`).
+    /// Whether the grid of a folder also shows the items of its subfolders
+    /// (the field `show_subfolders`).
     pub show_subfolders: bool,
     pub show_item_count: bool,
     pub fit_cover: bool,
     pub sort: ItemSort,
 }
 
-/// `LAYOUT_OPTIONS`: each layout, its `view_mode` value and its label.
+/// The layouts the user can choose, each with the value stored for it in
+/// the field `view_mode` and with its label.
 // i18n: translated where drawn (select choices)
 pub const LAYOUTS: [(ViewMode, &str, &str); 3] = [
     (ViewMode::Waterfall, "waterfall", "Waterfall"),
@@ -31,8 +34,8 @@ pub const LAYOUTS: [(ViewMode, &str, &str); 3] = [
     (ViewMode::Justified, "justified", "Justified"),
 ];
 
-/// `SORT_OPTIONS` of the view panel, in its order: each sort, its
-/// `sort_field` value and its label.
+/// The sorts the view panel offers, in the order it lists them, each with
+/// the value stored for it in the field `sort_field` and with its label.
 // i18n: translated where drawn (select choices)
 pub const SORTS: [(SortField, &str, &str); 6] = [
     (SortField::ImportedAt, "imported_at", "Date Added"),
@@ -43,7 +46,7 @@ pub const SORTS: [(SortField, &str, &str); 6] = [
     (SortField::Random, "random", "Random"),
 ];
 
-/// A layout's `view_mode` value.
+/// Returns the value stored in the field `view_mode` for a layout.
 pub fn mode_value(mode: ViewMode) -> &'static str {
     LAYOUTS
         .iter()
@@ -51,7 +54,9 @@ pub fn mode_value(mode: ViewMode) -> &'static str {
         .map_or("waterfall", |(_, value, _)| value)
 }
 
-/// A sort's `sort_field` value. A folder's own order is not offered.
+/// Returns the value stored in the field `sort_field` for a sort. A sort
+/// that is not in `SORTS` gives `folder_order`, the order of a folder's own
+/// items, which the view panel does not offer.
 pub fn sort_value(field: SortField) -> &'static str {
     SORTS
         .iter()
@@ -59,7 +64,7 @@ pub fn sort_value(field: SortField) -> &'static str {
         .map_or("folder_order", |(_, value, _)| value)
 }
 
-/// A sort's label in the view panel.
+/// Returns a sort's label in the view panel.
 pub fn sort_label(field: SortField) -> &'static str {
     SORTS
         .iter()
@@ -67,7 +72,7 @@ pub fn sort_label(field: SortField) -> &'static str {
         .map_or(crate::i18n::en("Folder Order"), |(_, _, label)| label)
 }
 
-/// A direction's `sort_order` value.
+/// Returns the value stored in the field `sort_order` for a direction.
 pub fn direction_value(direction: SortDirection) -> &'static str {
     match direction {
         SortDirection::Ascending => "ascending",
@@ -75,8 +80,9 @@ pub fn direction_value(direction: SortDirection) -> &'static str {
     }
 }
 
-/// `hasFixedOrder`: a folder or Recently Viewed keeps its own order, so its
-/// view offers no sort.
+/// Whether the items of a scope have an order of their own. Those of a
+/// folder and of Recently Viewed do, so the view panel offers no sort for
+/// them.
 pub fn fixed_order(scope: &ItemScope) -> bool {
     matches!(
         scope,
@@ -118,7 +124,7 @@ impl ViewPrefs {
         let text = |field: &str| value(field).and_then(Value::as_str);
         let inbox = matches!(scope, ItemScope::Inbox);
         let field = match text("sort_field") {
-            // Older builds saved the File Size choice as 'size'.
+            // Older versions of Picto saved the File Size sort as `size`.
             Some("size") => SortField::TotalSize,
             Some("folder_order") => SortField::FolderOrder,
             Some(value) => SORTS
@@ -161,8 +167,9 @@ impl ViewPrefs {
         }
     }
 
-    /// These preferences as the `view_pref` fields that give them back,
-    /// so a patch can be applied on top and resolved again.
+    /// Returns these preferences as the `view_pref` fields that `resolve`
+    /// reads them back from, so that a patch can be applied on top of them
+    /// and resolved again.
     pub fn to_json(&self) -> Value {
         serde_json::json!({
             "view_mode": mode_value(self.mode),
@@ -180,8 +187,9 @@ impl ViewPrefs {
         })
     }
 
-    /// These preferences with a `view_pref` patch applied, as the grid shows
-    /// them at once while the patch is saved.
+    /// Returns these preferences with the `view_pref` fields of `patch`
+    /// applied. The grid shows the result at once, while the patch is being
+    /// saved.
     pub fn patched(&self, scope: &ItemScope, patch: &Value) -> Self {
         let seed = self.sort.random_seed.clone().unwrap_or_default();
         Self::resolve(scope, &self.to_json(), patch, &seed)
@@ -243,7 +251,7 @@ mod tests {
         );
         let again = ViewPrefs::resolve(&ItemScope::All, &json!({}), &saved.to_json(), "7");
         assert_eq!(again, saved);
-        // A patch changes what it names and nothing else.
+        // A patch changes the fields it names and no others.
         let patched = saved.patched(
             &ItemScope::All,
             &json!({ "view_mode": "grid", "show_name": true, "spacing": "wide" }),

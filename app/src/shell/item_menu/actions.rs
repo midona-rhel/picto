@@ -1,5 +1,6 @@
-//! What a chosen item-menu row does: the dispatch of each action through
-//! the session and the library, and the edits behind them.
+//! Performs the row that the user chose in an item menu. `run_item_action`
+//! carries out each action through the session and the library, and the
+//! other functions here make the edits that the actions need.
 use super::{File, Target, media_link};
 use crate::grid::menu::Action;
 use crate::i18n::format::grouped;
@@ -25,7 +26,7 @@ impl Shell {
         let file = target.file.clone();
         let ids = target.ids();
         match action {
-            // ── Opening ──
+            // The actions from here to `LoadingApplications` open the file.
             Action::OpenDefault => {
                 if let Some(file) = file {
                     self.with_path(file, |path, cx| crate::desktop::open_default(&path, cx), cx);
@@ -37,7 +38,8 @@ impl Shell {
                 }
             }
             Action::OpenInNewWindow if target.member => {
-                // The member's file by itself (`openDetailWindow({ hash })`).
+                // In a member's menu the row opens the member's file by
+                // itself in a detail window, without its collection.
                 if let (Some(file), Some(item)) = (file, target.items.first()) {
                     let size = self
                         .session
@@ -62,8 +64,9 @@ impl Shell {
                 }
             }
             Action::OpenInNewWindow => {
-                // The item alone, as production's detail window opens it
-                // from a single selection, the viewer and the preview.
+                // The row opens the item alone in a detail window. This is
+                // the same for the menu of a single selected item, the
+                // viewer's menu and the preview's menu.
                 let ordinal = target
                     .items
                     .first()
@@ -86,8 +89,8 @@ impl Shell {
                     );
                 }
             }
-            // Windows' own application chooser on the file, the only
-            // system that offers this row.
+            // This row opens Windows' own application chooser for the file.
+            // The row is offered only on Windows.
             Action::OpenWithOther => {
                 if let Some(file) = file {
                     self.with_path(
@@ -102,7 +105,7 @@ impl Shell {
                 }
             }
             Action::LoadingApplications => {}
-            // ── Copying ──
+            // The actions from here to `CopySelection` copy to the clipboard.
             Action::CopyPath => {
                 if let Some(file) = file {
                     self.with_path(file, |path, cx| copy_paths(&[path], cx), cx);
@@ -118,8 +121,8 @@ impl Shell {
                     write_text(media_link(&file.hash, &file.mime), cx);
                 }
             }
-            // The members a member's menu acts on: their own names and
-            // files (`onCopySelection*` over `selected`).
+            // A member's menu copies the names, the paths or the links of
+            // the members that it acts on, and not those of the collection.
             Action::CopySelectionNames
             | Action::CopySelectionPaths
             | Action::CopySelectionLinks
@@ -148,8 +151,8 @@ impl Shell {
                     write_text(lines.join("\n"), cx);
                 }
             }
-            // Names come from the loaded items, so only when they are the
-            // whole selection (`Names are unavailable for this selection`).
+            // The names come from the loaded items. When the selection holds
+            // items that are not loaded, nothing is copied.
             Action::CopySelectionNames if !target.loaded() => {}
             Action::CopySelectionNames => {
                 let names = target
@@ -160,8 +163,9 @@ impl Shell {
                 write_text(names.join("\n"), cx);
             }
             Action::CopySelectionPaths | Action::CopySelectionLinks => {
-                // `resolveTargetFilePaths`: every file of the selection,
-                // loaded or not, collection members included, in order.
+                // The library returns every file of the selection in the
+                // selection's order, whether its item is loaded or not. A
+                // collection gives each of its members.
                 let links = action == Action::CopySelectionLinks;
                 self.with_files(target.selection(), cx, move |files, cx| {
                     if links {
@@ -181,7 +185,7 @@ impl Shell {
                 });
             }
             Action::CopyFile => {
-                // `copyFileForHash`: the one file the row is about.
+                // The row copies the one file that the menu was opened on.
                 if let Some(file) = file {
                     self.with_path(
                         file,
@@ -194,8 +198,8 @@ impl Shell {
                     );
                 }
             }
-            // A member's menu copies the members it acts on
-            // (`copyHashes(selected)`).
+            // A member's menu copies the files of the members that it acts
+            // on.
             Action::CopySelection if target.member => {
                 let paths: Vec<PathBuf> =
                     self.member_media(&target, cx, |media| PathBuf::from(&media.file_path));
@@ -204,12 +208,13 @@ impl Shell {
                 }
             }
             Action::CopySelection => self.copy_files(target.selection(), cx),
-            // ── Lifecycle ──
+            // The actions from here to `DeletePermanently` accept, restore,
+            // trash and delete items, and take members out of a collection.
             Action::Accept | Action::Restore => {
                 self.set_lifecycle(&target, Lifecycle::Active, window, cx)
             }
-            // A member leaves its collection into the Trash
-            // (`detachMembers(selected, 'trash')`).
+            // In a member's menu, "Move to Trash" takes the members out of
+            // their collection and moves them to the Trash.
             Action::MoveToTrash if target.member => self.detach_members(target, true, window, cx),
             Action::RemoveFromGroup => self.detach_members(target, false, window, cx),
             Action::MoveToTrash => self.set_lifecycle(&target, Lifecycle::Trash, window, cx),
@@ -223,7 +228,7 @@ impl Shell {
             Action::DeletePermanently => {
                 self.request_permanent_delete(target, false, window, cx);
             }
-            // ── Folders ──
+            // The actions from here to `SortContents` change folders.
             Action::AddToFolder => {
                 self.dispatch(Box::new(crate::keymap::AddToFolder), window, cx);
                 return;
@@ -249,7 +254,8 @@ impl Shell {
                         Reread::SELECTION,
                         move |library| library.add_to_folder(&selection, folder),
                         cx,
-                        // `settleSelectionAfterMutation`.
+                        // The selection is cleared when the items have been
+                        // added.
                         |this, added, cx| {
                             if added.is_ok() {
                                 this.session
@@ -326,20 +332,21 @@ impl Shell {
                     self.sort_folder(folder, field, cx);
                 }
             }
-            // ── Groups ──
+            // The actions from here to `EditGroup` make, remove and edit
+            // collections.
             Action::Group => self.group(target, cx),
             Action::Ungroup if target.group => self.confirm_ungroup_shown(target, cx),
             Action::Ungroup => self.confirm_ungroup(target, cx),
             Action::EditGroup => {
-                // `openGridItem(item, items, 'editor')`: the collection opens
-                // in the media view, in its editor.
+                // The collection opens in the media view, in its editor.
                 self.viewer
                     .update(cx, |viewer, cx| viewer.edit_collection(window, cx));
                 self.session
                     .update(cx, |session, cx| session.open_viewer(cx));
                 return;
             }
-            // ── Names and tags ──
+            // The actions from here to `Rate` change names, tags and
+            // ratings.
             Action::Rename => {
                 if self.inspector_collapsed {
                     self.toggle_rails(false, true, cx);
@@ -348,8 +355,8 @@ impl Shell {
                     .update(cx, |inspector, cx| inspector.edit_name(window, cx));
                 return;
             }
-            // The dialog names each item, so every one must be loaded
-            // (`Rename requires a loaded selection`).
+            // The dialog lists the name of each item, so it opens only when
+            // every selected item is loaded.
             Action::BatchRename if target.loaded() => self.batch_rename(target.items, cx),
             Action::BatchRename => {}
             Action::AddTags => {
@@ -357,17 +364,19 @@ impl Shell {
                 return;
             }
             Action::AutoTag => {
-                // The grid's selection is reviewed as it changes, as
-                // production's portal falls back to the live selection; the
-                // viewer's item and a collection's members are named.
+                // When the menu was opened in the viewer or in a collection's
+                // view, the Auto Tag review is given the items that the menu
+                // acts on. When it was opened on the grid, the review is
+                // given no items. It then reviews the grid's selection, also
+                // after the selection changes.
                 let session = self.session.read(cx);
                 let named = target.member || target.group || session.viewer;
                 let explicit = named.then(|| target.selection());
-                // Over the grid it opens centred over the window, as Add
-                // Tags and Add to Folder open their dialogs there (the
-                // owner's choice; production docks it beside the inspector
-                // from every menu). The viewer's menu docks it, as it docks
-                // its pickers.
+                // From a menu of the grid, the review opens in the centre of
+                // the window, where Add Tags and Add to Folder open their
+                // dialogs. While the viewer is open and the inspector is
+                // shown, the review is docked where the viewer's pickers are
+                // docked.
                 let docked = session.viewer && !self.inspector_collapsed;
                 self.inspector.update(cx, |inspector, cx| {
                     inspector.open_auto_tag(explicit, docked, window, cx)
@@ -401,9 +410,12 @@ impl Shell {
                     |_, _, _| {},
                 );
             }
-            // ── Exporting ──
+            // The export actions come next, and after them the actions that
+            // belong to none of the groups above.
             Action::ExportOriginals | Action::ExportAs | Action::ExportPictoPack => {
-                // The whole selection, loaded or not, when these are it.
+                // The export takes everything that the menu acts on. For the
+                // grid's selection that includes the selected items that are
+                // not loaded.
                 let selection = target.selection();
                 let count = target.count();
                 if let Some(exports) = crate::export::get(cx) {
@@ -419,7 +431,8 @@ impl Shell {
                     });
                 }
             }
-            // The user chose an engine: the original goes to it.
+            // The user chose a search engine in the submenu. The original
+            // file is given to the search with that engine.
             Action::SearchByImage(engine) => {
                 if let Some(file) = file {
                     let mime = file.mime.clone();
@@ -437,7 +450,8 @@ impl Shell {
                 }
             }
             Action::SetLibraryCover => {
-                // The shown file, framed at once (`initialCandidate`).
+                // The library cover dialog opens with the file that the menu
+                // was opened on as its candidate.
                 if let (Some(item), Some(file)) = (target.items.first(), file) {
                     let candidate = crate::ui::cover_dialog::Candidate {
                         media_item: i64::from(item.root_id.0),
@@ -457,8 +471,12 @@ impl Shell {
                 }
             }
             Action::RegenerateThumbnails => {
-                // The selection's own files, a collection's never (the row
-                // is not offered for one); the viewer's, the file shown.
+                // A member's menu that acts on several members regenerates
+                // the thumbnail of each of them. A menu for one member or
+                // one item regenerates the thumbnail of its one file, which
+                // in the viewer is the file shown. A menu for several items
+                // regenerates the thumbnail of each loaded item that has a
+                // content hash.
                 let files = match &file {
                     _ if target.member && target.members.len() > 1 => {
                         self.member_media(&target, cx, |media| {
@@ -478,7 +496,8 @@ impl Shell {
                 self.regenerate_thumbnails(files, cx);
             }
             Action::Grayscale => {
-                // The row stays open and follows the change.
+                // The menu stays open, and the row's check mark is set to
+                // the new state.
                 self.session
                     .update(cx, |session, cx| session.toggle_grayscale(cx));
                 let on = self.session.read(cx).grayscale;
@@ -524,7 +543,8 @@ impl Shell {
         }
     }
 
-    /// What a member's menu reads of each member it acts on.
+    /// Returns what `read` returns for the media record of each member that
+    /// a member's menu acts on.
     fn member_media<T>(
         &self,
         target: &Target,
@@ -540,8 +560,9 @@ impl Shell {
             .collect()
     }
 
-    /// `copyTarget`: the files of `selection`, collection members
-    /// included, on the clipboard, or a notification saying why not.
+    /// Puts the files of `selection` on the clipboard. A collection gives
+    /// each of its members. When the files cannot be copied, a notification
+    /// says why.
     pub(in crate::shell) fn copy_files(
         &mut self,
         selection: SelectionTarget,
@@ -560,8 +581,9 @@ impl Shell {
         });
     }
 
-    /// [`crate::session::Session::resolve_files`] for `selection`, then
-    /// `then` with the files; a failure goes to the console.
+    /// Asks the session for the content hash and the path of every file of
+    /// `selection` ([`crate::session::Session::resolve_files`]) and calls
+    /// `then` with them. A failure is printed to the console.
     fn with_files(
         &mut self,
         selection: SelectionTarget,
@@ -578,8 +600,9 @@ impl Shell {
         .detach();
     }
 
-    /// `media.regenerate_thumbnails` for these files (see
-    /// [`crate::grid::thumbnails::regenerate`]).
+    /// Makes the thumbnails of these files again (see
+    /// [`crate::grid::thumbnails::regenerate`]). Each file is given by its
+    /// content hash and its type.
     pub(in crate::shell) fn regenerate_thumbnails(
         &mut self,
         files: Vec<(String, String)>,
@@ -588,8 +611,8 @@ impl Shell {
         crate::grid::thumbnails::regenerate(&self.session, files, cx);
     }
 
-    /// `batchRenameModalAtom`: the dialog on these items, as the grid shows
-    /// them (an unnamed one as "Untitled").
+    /// Opens the batch rename dialog on these items, with the names that
+    /// the grid shows. An item without a name is listed as "Untitled".
     pub(in crate::shell) fn batch_rename(
         &mut self,
         items: Vec<picto_library::query::RootSummary>,
@@ -606,8 +629,9 @@ impl Shell {
             .update(cx, |dialog, cx| dialog.open(items, cx));
     }
 
-    /// `openCurrentLibraryCoverPicker`, framing `candidate` at once when
-    /// it is given.
+    /// Opens the dialog that sets the cover of the open library. When
+    /// `candidate` is given, the dialog opens with that picture as its
+    /// candidate.
     pub fn open_library_cover(
         &mut self,
         candidate: Option<crate::ui::cover_dialog::Candidate>,
@@ -617,20 +641,24 @@ impl Shell {
             .update(cx, |dialog, cx| dialog.open(candidate, cx));
     }
 
-    /// The update dialog (`menu:show-updates`, a notification's View).
+    /// Opens the update dialog. `updates` calls this when the user asks to
+    /// see the update, from the application menu or from the View button of
+    /// a notification.
     pub fn open_updates(&mut self, cx: &mut Context<Self>) {
         self.updates.update(cx, |dialog, cx| dialog.open(cx));
     }
 
-    /// Sends an action for another part of the app from the shell, which
-    /// has the keyboard once the menu has closed.
+    /// Sends an action that another part of the app handles. The keyboard
+    /// focus is given to the shell first, because the menu that had it has
+    /// closed, and the action is dispatched from there.
     fn dispatch(&mut self, action: Box<dyn gpui::Action>, window: &mut Window, cx: &mut App) {
         window.focus(&self.focus, cx);
         window.dispatch_action(action, cx);
     }
 
-    /// `resolveFilePath`: where the library keeps the file, from the item's
-    /// details, then `then` with it.
+    /// Reads the path at which the library keeps `file` from the details of
+    /// the file's item, and calls `then` with the path. `then` is not called
+    /// when the path cannot be read.
     fn with_path(
         &mut self,
         file: File,
@@ -651,16 +679,18 @@ impl Shell {
         );
     }
 
-    /// Moves the items the menu was opened for into or out of the Trash or
-    /// the Inbox (production's `setTargetLifecycle(target, …)`: the viewer's
-    /// rows move the item it shows, not the grid's selection), closing the
-    /// media view, and reads the grid again in place.
-    /// Moves the items to the Trash, back out of it, or out of the Inbox.
-    /// From the media view or Quick Look, which show one item, the view
-    /// stays open (`useViewerEntityContextMenu` only sets the lifecycle) on
-    /// the item that takes its place: the next one, or the one before at
-    /// the end; with no other item it closes. Should the edit fail, the
-    /// view goes back to the item.
+    /// Moves the items that the menu was opened for to the Trash, back out
+    /// of the Trash, or out of the Inbox. The viewer's rows move the item
+    /// that the viewer shows, and not the grid's selection.
+    ///
+    /// When the media view or Quick Look shows the one item that is moved,
+    /// the view stays open and shows the item that takes its place: the
+    /// next item, or the one before it when the moved item was the last.
+    /// When there is no other item, the view closes. If the edit fails, the
+    /// view goes back to the moved item.
+    ///
+    /// In every other case the media view is closed before the items are
+    /// moved.
     fn set_lifecycle(
         &mut self,
         target: &Target,
@@ -729,8 +759,9 @@ impl Shell {
         );
     }
 
-    /// `onCopyTags`: one item's tags, or the tags every selected item
-    /// shares, as JSON on the clipboard and kept for "Paste Tags".
+    /// Does "Copy Tags". It reads the tags of one item, or the tags that
+    /// every selected item has, writes their names to the clipboard as a
+    /// JSON list, and keeps them for "Paste Tags".
     fn copy_tags(&mut self, target: Target, cx: &mut Context<Self>) {
         let single = target.count() == 1 && target.items.len() == 1;
         let ids = target.ids();
@@ -762,8 +793,11 @@ impl Shell {
         );
     }
 
-    /// `organizeSelection`: one selected group and no notes to merge groups
-    /// at once; anything else needs the group organizer.
+    /// Does the group row. When the selection holds exactly one collection
+    /// and the library's draft of the collection's notes has no source
+    /// (`source_count` is 0), the selection is merged into that collection
+    /// at once. In every other case the group organizer opens, and the user
+    /// decides there.
     fn group(&mut self, target: Target, cx: &mut Context<Self>) {
         let Some(cover) = target.items.first().map(|item| item.root_id) else {
             return;
@@ -773,7 +807,8 @@ impl Shell {
             &self.session,
             Report::failure(t("Could not create group")).and_announce("collections.organize"),
             Reread::NOTHING,
-            // The merged group, or what the organizer is to ask.
+            // The work returns the merged group, or the request that the
+            // group organizer is opened with.
             move |library: &Library| -> picto_library::Result<
                 Result<picto_library::RootId, super::organizer::Request>,
             > {
@@ -792,7 +827,8 @@ impl Shell {
                         })?;
                     Ok(Ok(merged))
                 } else {
-                    // Anything else is the organizer's to decide.
+                    // In every other case the user decides in the group
+                    // organizer.
                     Ok(Err(super::organizer::Request {
                         target: selection,
                         cover,
@@ -805,8 +841,8 @@ impl Shell {
             cx,
             |this, decide, cx| match decide {
                 Ok(Ok(merged)) => {
-                    // `clearSelection`, then the merged group alone
-                    // (`replace_items`) once the results hold it.
+                    // The selection is cleared, and the merged group is
+                    // selected alone once the results list it.
                     this.session.update(cx, |session, cx| {
                         session.clear_selection(cx);
                         session.select_when_listed(merged, cx)
@@ -818,9 +854,11 @@ impl Shell {
         );
     }
 
-    /// A member's "Remove from Group" and "Move to Trash": the members the
-    /// menu acts on leave the collection the media view or Quick Look
-    /// shows, which closes once the collection is gone.
+    /// Does "Remove from Group" and "Move to Trash" of a member's menu. The
+    /// members that the menu acts on are taken out of the collection that
+    /// the media view or Quick Look shows. With `trash` set, they are also
+    /// moved to the Trash. Quick Look closes when at most one member is
+    /// left, because the collection then no longer exists.
     fn detach_members(
         &mut self,
         target: Target,
@@ -865,8 +903,9 @@ impl Shell {
         .detach();
     }
 
-    /// `confirmUngroup` in the collection's view: on Ungroup the members
-    /// return to the library and the view closes.
+    /// Asks the user to confirm Ungroup for the collection that the media
+    /// view or Quick Look shows. When the user confirms, the members return
+    /// to the library as separate items and the view closes.
     fn confirm_ungroup_shown(&mut self, target: Target, cx: &mut Context<Self>) {
         let Some(root) = target.items.first().map(|item| item.root_id) else {
             return;
@@ -902,8 +941,10 @@ impl Shell {
 
     fn confirm_ungroup(&mut self, target: Target, cx: &mut Context<Self>) {
         let selection = target.selection();
-        // The loaded items count the collections only when they are all the
-        // selection; past them, the library's count when it has given one.
+        // The number of collections is the library's count when the library
+        // has given one. Otherwise it is counted from the loaded items,
+        // which is possible only when they are the whole selection. In the
+        // remaining case the number is not known.
         let loaded = target.loaded();
         let collections = target.collections.or_else(|| {
             loaded.then(|| {
@@ -952,7 +993,8 @@ impl Shell {
     }
 }
 
-/// An item's name as the grid shows it: "Untitled" for none.
+/// Returns an item's name as the grid shows it, which is "Untitled" for an
+/// item without a name.
 fn display_name(name: &str) -> String {
     if name.is_empty() {
         "Untitled".to_owned()
@@ -965,15 +1007,18 @@ fn write_text(text: String, cx: &mut App) {
     cx.write_to_clipboard(ClipboardItem::new_string(text));
 }
 
-/// "Copy File Path": the files' paths as text, only if each is a file of
-/// the library copy.
+/// Does "Copy File Path": puts the paths of the files on the clipboard as
+/// text. `desktop::copy_paths` does this only if every path is a file
+/// inside the open library copy. Otherwise a notification shows its error.
 fn copy_paths(paths: &[PathBuf], cx: &mut App) {
     if let Err(error) = crate::desktop::copy_paths(paths, cx) {
         crate::ui::notify::error(en("Could not copy file path"), error, cx);
     }
 }
 
-/// `copyTargetLinks`: a file's link, with the extension its path has.
+/// Returns the `media://` link of the file whose content hash is `hash`.
+/// The link has the extension of the file's path, or `bin` when the path
+/// has none.
 fn link(hash: &str, path: &std::path::Path) -> String {
     let extension = path.extension().map_or("bin".into(), |extension| {
         extension.to_string_lossy().into_owned()

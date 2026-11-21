@@ -1,6 +1,6 @@
-//! How the tag picker is drawn: the rail of tag groups, a tag's row, the row
-//! that offers to create a tag, the list of rows, the settings panel, and the
-//! picker as a whole.
+//! Draws the tag picker: the rail of tag groups, the row of a tag, the row
+//! that offers to create a tag, the list of rows, the settings panel, and
+//! the picker as a whole.
 use super::model::display_name;
 use super::{
     COLUMN_GAP, HEIGHT, LOAD_AHEAD, Layout, NARROW, RAIL, ROW, ROW_GAP, TagPicker, View,
@@ -22,7 +22,7 @@ use picto_library::TagRecord;
 use picto_library::predicate::SetMatchMode;
 
 impl TagPicker {
-    /// `.sidebarItem`: one 24px row of the rail. Its count is drawn stronger
+    /// Draws one row of the rail, 24px high. Its count is drawn stronger
     /// while the pointer is on the row or the row is the chosen one. `mark` is
     /// called with the name of the row's hover group, so that the mark it
     /// returns can react to the pointer too.
@@ -160,7 +160,7 @@ impl TagPicker {
         ))
     }
 
-    /// `.tagRow`: one tag's row in the list.
+    /// Draws the row of one tag in the list.
     fn row(
         &self,
         index: usize,
@@ -177,8 +177,8 @@ impl TagPicker {
             .filter
             .as_ref()
             .is_some_and(|filter| filter.excluded.contains(&tag_name));
-        // `.tagRowExcluded`: the name, the mark and the count of a tag that a
-        // filter excludes are drawn at 45% strength.
+        // The name, the mark and the count of a tag that a filter excludes
+        // are drawn at 45% opacity.
         let dim = if excluded { 0.45 } else { 1. };
         let focused = self.focus_index == Some(index);
         let starred = preferences.is_starred(&tag_name);
@@ -314,7 +314,7 @@ impl TagPicker {
         )
     }
 
-    /// `.createTagRow`: the row that says Create "name", shown when the search
+    /// Draws the row that says Create "name". It is shown when the search
     /// text names a tag that does not exist.
     fn create_row(&self, tag: &TagRecord, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = theme::theme(cx);
@@ -484,8 +484,8 @@ impl TagPicker {
             )
     }
 
-    /// The settings panel (`.settingsPanel`): the choice between one and two
-    /// columns, and whether counts are shown.
+    /// Returns the two parts of the settings panel: the choice between one
+    /// and two columns, and the choice whether counts are shown.
     fn settings_panel(&self, cx: &mut Context<Self>) -> [AnyElement; 2] {
         let theme = theme::theme(cx);
         let layout = self.layout;

@@ -1,6 +1,8 @@
-//! The Tags screen (`TagManagerScreen.tsx`): a rail of tag groups beside the
-//! tags of the chosen group, in letter sections. A tag opens its editor;
-//! tags and groups have context menus; the titlebar holds the search.
+//! The Tags screen. On the left is a rail with one row for each tag group.
+//! On the right is the list of the tags of the chosen row, under a heading
+//! for each first letter of the tags' names. A click on a tag opens the
+//! tag's editor. Tags and groups have context menus. The titlebar holds the
+//! field that searches the tags.
 mod dialogs;
 mod menus;
 pub mod model;
@@ -25,25 +27,31 @@ use picto_library::query::ItemScope;
 use picto_library::{Library, TagId, TagNamespaceRecord, TagRecord};
 use std::time::{Duration, Instant};
 
-/// The least time between two reloads a change elsewhere asks for.
+/// The shortest time between two reads of the tags that changes to the
+/// library's tags cause.
 const INVALIDATION_SPACING: Duration = Duration::from_millis(500);
 
-/// Tags fetched at a time.
+/// The number of tags that the screen asks the library for at a time.
 const PAGE_SIZE: usize = 500;
-/// `.namespaceRail`
+/// The width in pixels of the rail of tag groups.
 const RAIL_WIDTH: f32 = 184.;
-/// `.titlebarSearch`
+/// The width in pixels of the search field in the titlebar.
 const SEARCH_WIDTH: f32 = 125.;
-/// A load near the end of what is loaded starts this many rows early.
+/// The next page of tags is asked for when the last row that the list builds
+/// is this many rows or fewer before the first row of tags that are not
+/// loaded yet.
 const LOAD_AHEAD: usize = 4;
 
-/// Changing what the list shows, as `handleNamespaceChange` stages it.
+/// The stage of the fade that the list of tags goes through when the user
+/// chooses another row of the rail.
 #[derive(Clone, Copy)]
 enum ViewFade {
     Idle,
-    /// The list fades out, then the new browse is applied.
+    /// The list has been fading out since this time. When the fade-out
+    /// ends, the tags of the chosen row are asked for.
     Leaving(Instant),
-    /// Gone, until the new tags arrive.
+    /// The list is not visible. It stays so until the first page of the
+    /// tags of the chosen row arrives.
     Hidden,
     Entering(Instant),
 }
@@ -62,21 +70,23 @@ impl ViewFade {
     }
 }
 
-/// Whose context menu is open.
+/// The tag or the group that the open context menu belongs to.
 enum MenuTarget {
     Tag(TagRecord),
     Group(TagNamespaceRecord),
 }
 
-/// The titlebar's part while the Tags screen shows: its search field.
+/// The view that the titlebar shows while the Tags screen is open. It holds
+/// the field that searches the tags.
 pub struct TagsToolbar {
     search: Entity<TextInput>,
     _observe: Subscription,
 }
 
 impl TagsToolbar {
-    /// The search field, which `nav.search` gives the keyboard to, as
-    /// `TagsToolbar`'s shortcut scope does.
+    /// Returns the focus handle of the search field. The shell gives it the
+    /// keyboard focus when the user presses the `nav.search` shortcut on the
+    /// Tags screen.
     pub fn search_focus(&self, cx: &App) -> FocusHandle {
         self.search.focus_handle(cx)
     }
@@ -86,34 +96,42 @@ pub struct TagsScreen {
     session: Entity<Session>,
     _thumbnails: Entity<Thumbnails>,
     focus: FocusHandle,
-    /// The titlebar's part while this screen shows.
+    /// The view that the titlebar shows while this screen is open.
     toolbar: Entity<TagsToolbar>,
     query: String,
 
-    // What the library holds.
+    // The fields from `namespaces` to `busy` hold what the screen has read
+    // from the library, and the state of its reads and edits.
     namespaces: Vec<TagNamespaceRecord>,
     unused: u64,
     preferences: Preferences,
-    /// What the list shows: every tag, one group (`""` is General), or the
-    /// starred tags, as loaded so far.
+    /// The tags of the list that are loaded so far. The list shows every
+    /// tag, the tags of one group (the group with the empty name is
+    /// General), or the starred tags.
     pager: TagPager,
     loading: bool,
     summary_generation: u64,
-    /// The browse and search the shown tags are for.
+    /// The row of the rail and the search text that tags were last asked
+    /// for.
     identity: Option<(Browse, String)>,
     error: Option<String>,
-    /// An edit is running; its controls wait.
+    /// True while an edit of the library is running. The controls that
+    /// start an edit are disabled during that time.
     busy: bool,
 
     browse: Browse,
-    /// The browse to apply once the list has faded out.
+    /// The row of the rail that the user chose. Its tags are asked for when
+    /// the list has faded out.
     pending_browse: Option<Browse>,
     fade: ViewFade,
-    /// When the rows were last replaced, for their own fade-in.
+    /// The time at which the first page of tags last arrived for another
+    /// row of the rail or another search text. The rows fade in from this
+    /// time.
     list_shown: Instant,
     rows: Rows,
     rows_key: Option<(u64, usize, usize, bool)>,
-    /// Counts replacements of `tags`, for `rows_key`.
+    /// A number that goes up every time the loaded tags change. It is part
+    /// of `rows_key`, so the rows are built again when it changes.
     tags_epoch: u64,
 
     scroll: ScrollHandle,
@@ -123,14 +141,17 @@ pub struct TagsScreen {
 
     menu: menu::Host,
     menu_target: Option<MenuTarget>,
-    /// Open dialogs, the topmost last.
+    /// The open dialogs. The last one is drawn over the others.
     layers: Vec<Layer>,
-    /// The keyboard should move to the topmost dialog, or back to the list.
+    /// True when the keyboard focus has to move in the next frame: to the
+    /// topmost dialog, or to the screen when no dialog is open.
     refocus: bool,
-    /// Whether the session shows this screen, so returning to it reloads.
+    /// True while the session shows this screen. When it becomes true, the
+    /// screen reads the tags again.
     showing: bool,
-    /// A reload asked for by a change to the library's tags, made here or
-    /// anywhere else, and when the last one ran (`scheduleInvalidationRefresh`).
+    /// The task that waits to read the tags again after a change to the
+    /// library's tags, made on this screen or anywhere else.
+    /// `invalidated_at` is the time at which the last such read started.
     invalidation: Option<Task<()>>,
     invalidated_at: Option<Instant>,
     _subscriptions: Vec<Subscription>,
@@ -157,7 +178,7 @@ impl TagsScreen {
                 let query = search.read(cx).value();
                 if query != this.query {
                     this.query = query;
-                    // `useEffect([query])`: a new search closes the editor.
+                    // A changed search text closes the tag editor.
                     this.close_editor(cx);
                     this.load(cx);
                 }
@@ -172,7 +193,8 @@ impl TagsScreen {
                 }
                 let showing = session.read(cx).screen() == Some(Screen::Tags);
                 if showing && !this.showing {
-                    // What other screens changed shows when Tags opens again.
+                    // The tags may have changed while this screen was not
+                    // shown, so they are read again.
                     this.refresh(cx);
                 }
                 this.showing = showing;
@@ -226,14 +248,15 @@ impl TagsScreen {
         screen
     }
 
-    /// The search field the titlebar shows while this screen is up.
+    /// Returns the view that the titlebar shows while this screen is open.
     pub fn toolbar(&self) -> Entity<TagsToolbar> {
         self.toolbar.clone()
     }
 
-    // ── Loading ─────────────────────────────────────────────────
+    // The functions below read the groups and the tags from the library.
 
-    /// The groups and their counts, and the unused count.
+    /// Reads the tag groups with the number of tags in each, and the number
+    /// of tags that are assigned to no item.
     fn load_summary(&mut self, cx: &mut Context<Self>) {
         self.summary_generation += 1;
         let generation = self.summary_generation;
@@ -253,7 +276,8 @@ impl TagsScreen {
                         let total = namespaces.iter().map(|ns| ns.tag_count).sum::<u64>();
                         this.namespaces = namespaces;
                         this.unused = unused;
-                        // The sidebar's Tags row counts every tag.
+                        // The Tags row of the sidebar shows the number of
+                        // all tags.
                         this.session.update(cx, |session, cx| {
                             if let Some(entry) = session
                                 .nav
@@ -274,8 +298,10 @@ impl TagsScreen {
         .detach();
     }
 
-    /// The first page of what the list shows. When that is a different
-    /// browse or search, the rows fade in once it arrives.
+    /// Asks for the first page of the tags of the chosen row of the rail
+    /// and the search text. When the row or the search text is not the one
+    /// that tags were last asked for, the rows fade in once the page
+    /// arrives.
     fn load(&mut self, cx: &mut Context<Self>) {
         let identity = (self.browse.clone(), self.query.clone());
         let changed = self.identity.as_ref() != Some(&identity);
@@ -314,7 +340,9 @@ impl TagsScreen {
         .detach();
     }
 
-    /// The first page of what the list shows has arrived.
+    /// Runs when the first page of tags arrives. `changed` is true when the
+    /// page is for another row of the rail or another search text than the
+    /// tags that were asked for before it.
     fn loaded(&mut self, page: Page, answer: Answer, changed: bool, cx: &mut Context<Self>) {
         if !self.pager.current(&page) {
             return;
@@ -327,8 +355,8 @@ impl TagsScreen {
             Err(error) => self.error = Some(error),
         }
         if changed {
-            // Shown even when the load failed, so the error is not left over
-            // a hidden list.
+            // The list fades in also when the load failed, so that the
+            // error message is not shown above a list that stays invisible.
             self.fade = ViewFade::Entering(Instant::now());
             self.list_shown = Instant::now();
         }
@@ -336,8 +364,8 @@ impl TagsScreen {
         cx.notify();
     }
 
-    /// The next page, once the list is scrolled near the end of what is
-    /// loaded.
+    /// Asks for the next page of tags. The list calls this when it is
+    /// scrolled near the end of the loaded tags.
     fn load_more(&mut self, cx: &mut Context<Self>) {
         let Some(page) = self.pager.next().filter(|_| !self.loading) else {
             return;
@@ -356,16 +384,17 @@ impl TagsScreen {
         .detach();
     }
 
-    /// Fetches everything again after an edit, keeping what shows until
-    /// the answers arrive.
+    /// Reads the tags and the groups again. What the screen shows stays
+    /// until the answers arrive.
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.load(cx);
         self.load_summary(cx);
     }
 
-    /// The library's tags changed (`libraryInvalidation.register('tags')`):
-    /// the screen reads them again while it shows, at most once each
-    /// `INVALIDATION_SPACING`. Hidden, it reads them when it opens again.
+    /// Runs when the library's tags changed. While the screen is shown, it
+    /// reads them again, at most once every `INVALIDATION_SPACING`. While
+    /// the screen is not shown, it does nothing, and the tags are read when
+    /// the screen is shown again.
     fn invalidated(&mut self, cx: &mut Context<Self>) {
         if !self.showing || self.invalidation.is_some() {
             return;
@@ -385,7 +414,9 @@ impl TagsScreen {
         }));
     }
 
-    /// How many tags the list will hold once loaded, for its placeholders.
+    /// Returns the number of tags that the list will hold when all of them
+    /// are loaded. The list draws placeholders for the tags that are not
+    /// loaded yet.
     fn expected(&self) -> usize {
         let total = |namespaces: &[TagNamespaceRecord]| {
             namespaces.iter().map(|ns| ns.tag_count).sum::<u64>() as usize
@@ -405,10 +436,11 @@ impl TagsScreen {
         }
     }
 
-    // ── Browsing ────────────────────────────────────────────────
+    // The functions below change which row of the rail the list shows.
 
-    /// `handleNamespaceChange` and `handleStarredChange`: the list fades out
-    /// for 100 ms, then shows `browse`.
+    /// Makes the list show the tags of another row of the rail. The list
+    /// first fades out for 100 ms (`motion::TAG_VIEW_LEAVE`), and then the
+    /// tags of `browse` are asked for.
     fn show(&mut self, browse: Browse, cx: &mut Context<Self>) {
         if browse == self.browse && self.pending_browse.is_none() {
             return;
@@ -420,13 +452,17 @@ impl TagsScreen {
         cx.notify();
     }
 
-    /// Applies the browse waiting on the fade-out, once it has run.
+    /// Moves the fade of the list to its next stage when the present stage
+    /// has lasted its full time. When the fade-out has ended, it asks for
+    /// the tags of the row that the user chose.
     fn advance_fade(&mut self, cx: &mut Context<Self>) {
         match self.fade {
             ViewFade::Leaving(since) if since.elapsed() >= motion::TAG_VIEW_LEAVE => {
                 self.fade = ViewFade::Hidden;
                 if let Some(browse) = self.pending_browse.take() {
-                    // `resetBrowse`
+                    // The loaded tags of the row shown before are dropped
+                    // and the tag editor is closed, and then the tags of the
+                    // chosen row are asked for.
                     self.browse = browse;
                     self.pager.tags.clear();
                     self.tags_epoch += 1;
@@ -443,12 +479,15 @@ impl TagsScreen {
         }
     }
 
-    // ── Edits ───────────────────────────────────────────────────
+    // The functions below change tags, groups and the tag preferences.
 
-    /// `runMutation`: runs an edit on the library's thread, telling the user
-    /// what `report` says (a delete is announced with an Undo button), then
-    /// reloads. On success the editor closes if `close_editor`, or else
-    /// returns from a merge or delete step; `then` follows.
+    /// Runs the edit `work` on the library's thread and notifies the user
+    /// as `report` says. A delete is reported with a notification that has
+    /// an Undo button. When the edit succeeds, the screen reads the tags
+    /// again. It then closes the tag editor if `close_editor` is true, and
+    /// otherwise only the merge or delete dialog that is open over the
+    /// editor. Last, it calls `then`. When the edit fails, the error is
+    /// shown at the top of the screen.
     fn mutate(
         &mut self,
         report: Report,
@@ -484,7 +523,9 @@ impl TagsScreen {
         );
     }
 
-    /// The tag preferences changed, here or in the Settings window.
+    /// Runs when the application settings were changed, on this screen or
+    /// in the Settings window. It takes over the tag preferences. When the
+    /// starred tags changed and the list shows them, it reads them again.
     fn follow_settings(&mut self, cx: &mut Context<Self>) {
         let next = Preferences::from_settings(crate::settings::current(cx));
         if next == self.preferences {
@@ -498,8 +539,9 @@ impl TagsScreen {
         cx.notify();
     }
 
-    /// Stores changed tag preferences through the settings model, which owns
-    /// the library's application settings and writes what changed.
+    /// Stores the tag preferences `next` through the settings model, which
+    /// holds the library's application settings and writes the ones that
+    /// changed.
     fn save_preferences(&mut self, next: Preferences, cx: &mut Context<Self>) {
         let colors = next.colors_json();
         let starred = next.starred.clone();
@@ -513,11 +555,13 @@ impl TagsScreen {
                 cx,
             )
         });
-        // The model tells every follower, this screen too.
+        // The screen takes over the new preferences at once and does not
+        // wait for the settings model to report the change.
         self.follow_settings(cx);
     }
 
-    /// Moves a starred tag's star to its new name after a rename.
+    /// After a tag was renamed, puts `next_name` in place of `previous` in
+    /// the list of starred tags, if `previous` is in it.
     fn rename_star(&mut self, previous: &str, next_name: &str, cx: &mut Context<Self>) {
         crate::tags::rename_star(previous, next_name, cx);
         self.follow_settings(cx);
@@ -529,8 +573,9 @@ impl TagsScreen {
         self.save_preferences(next, cx);
     }
 
-    /// Renames a tag, or merges it into the tag that already has the name,
-    /// as the application's `tags.rename_or_merge` does.
+    /// Renames a tag, or merges it into the tag that already has the name
+    /// (`crate::tags::rename_or_merge`). The tag editor is closed afterwards
+    /// if `close` is true.
     fn rename_tag(&mut self, tag: &TagRecord, name: String, close: bool, cx: &mut Context<Self>) {
         let previous = crate::tags::record_name(tag);
         let id = tag.tag_id;
@@ -661,8 +706,10 @@ impl TagsScreen {
         );
     }
 
-    /// The library drops deleted tags from the starred list it stores; the
-    /// settings model, which holds that list too, is told the same.
+    /// Removes from the starred tags every name that no tag of the library
+    /// has any more. The library has already removed the deleted tags from
+    /// the list of starred tags that it stores. The settings model holds a
+    /// copy of that list, and this function removes them from the copy too.
     fn forget_deleted_stars(&mut self, cx: &mut Context<Self>) {
         let answer = self.session.read(cx).run(|library| {
             library.tags().map(|tags| {
@@ -684,7 +731,8 @@ impl TagsScreen {
         .detach();
     }
 
-    /// `showTagManagerItems`: the All grid, filtered to items with the tag.
+    /// Shows the All grid with a filter that leaves only the items that
+    /// have the tag.
     fn show_items(&mut self, tag_id: TagId, cx: &mut Context<Self>) {
         self.session.update(cx, |session, cx| {
             let Some(all) = session.nav.iter().position(|entry| {
@@ -692,7 +740,7 @@ impl TagsScreen {
             }) else {
                 return;
             };
-            // The filter bar shows the tag, as `showTagItems` sets it.
+            // The filter holds the tag's name, which the filter bar shows.
             let name = session
                 .tags
                 .get(&tag_id.0)
@@ -709,7 +757,7 @@ impl TagsScreen {
         });
     }
 
-    // ── Dialogs ─────────────────────────────────────────────────
+    // The functions below open and close the dialogs.
 
     fn push(&mut self, dialog: Dialog, cx: &mut Context<Self>) {
         self.layers.push(Layer {
@@ -721,8 +769,9 @@ impl TagsScreen {
         cx.notify();
     }
 
-    /// `setSelected(tag)`: the editor for `tag`, with a merge or delete step
-    /// over it when one is given.
+    /// Opens the editor of `tag`. When `step` is given, that merge or delete
+    /// dialog is opened over the editor. An editor that is already open is
+    /// closed first.
     fn open_editor(
         &mut self,
         tag: TagRecord,
@@ -738,7 +787,8 @@ impl TagsScreen {
         }
     }
 
-    /// `closeEditor`: the editor and any step over it go at once.
+    /// Closes the tag editor and the merge or delete dialog that is open
+    /// over it. They do not fade out.
     fn close_editor(&mut self, cx: &mut Context<Self>) {
         let before = self.layers.len();
         self.drop_layers(Dialog::belongs_to_editor);
@@ -747,8 +797,8 @@ impl TagsScreen {
         }
     }
 
-    /// `setEditorAction(null)`: the merge or delete step goes, the editor
-    /// stays.
+    /// Closes the merge or delete dialog that is open over the tag editor.
+    /// The editor stays open.
     fn close_editor_step(&mut self) {
         self.drop_layers(|dialog| {
             matches!(dialog, Dialog::Merge { .. } | Dialog::DeleteTag { .. })
@@ -777,15 +827,16 @@ mod tests {
         let root = crate::application::guard(&root).unwrap();
         let library = Library::open(root.join("library.sqlite")).unwrap();
 
-        // The rail's counts add up to every tag, and General is the
-        // namespace with no name.
+        // The counts of the groups add up to the number of all tags, and
+        // General is the group with the empty name.
         let namespaces = library.tag_namespaces().unwrap();
         let tags = library.tags().unwrap();
         let total = namespaces.iter().map(|ns| ns.tag_count).sum::<u64>();
         assert_eq!(total as usize, tags.len());
         let general = namespaces.iter().find(|ns| ns.name.is_empty()).unwrap();
 
-        // Paging through General reaches exactly its tags.
+        // Reading the General group page by page loads all of its tags and
+        // no tag of another group.
         let mut pager = TagPager::new(super::PAGE_SIZE);
         let first = pager.begin("", Some(String::new()));
         let (page, next) = first.fetch(&library).unwrap();
@@ -797,7 +848,7 @@ mod tests {
         assert!(pager.tags.iter().all(|tag| tag.namespace.is_empty()));
         assert_eq!(pager.tags.len() as u64, general.tag_count);
 
-        // A search puts the exact name first.
+        // A search for a tag's exact name lists that tag first.
         let probe = tags.iter().find(|tag| !tag.subname.is_empty()).unwrap();
         let (found, _) = TagPager::new(super::PAGE_SIZE)
             .begin(&probe.subname, None)
@@ -808,7 +859,7 @@ mod tests {
             probe.subname.to_lowercase()
         );
 
-        // A rename goes through and back.
+        // A tag can be renamed, and then renamed back to its old name.
         let name = crate::tags::record_name(&probe);
         let renamed = format!("{name}_gpui_check");
         rename_or_merge(&library, probe.tag_id, &renamed).unwrap();

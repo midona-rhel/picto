@@ -1,5 +1,5 @@
 //! The media player, which plays the video and audio items that a viewer
-//! shows (production's `VideoPlayer.tsx`).
+//! shows.
 //!
 //! A video's picture fills the player's area. For audio, the audio
 //! visualizer is drawn there in its place. The controls are drawn along the
@@ -80,11 +80,11 @@ actions!(
 const FULLSCREEN_CONTEXT: &str = "PlayerFullscreen";
 
 /// Binds Escape to `ExitFullscreen` in the key context `PlayerFullscreen`,
-/// so that Escape ends the player's fullscreen, as Escape ends an element's
-/// fullscreen in a browser. The layer that shows the fullscreen player has
-/// that context and the keyboard focus. GPUI tries the bindings of the
-/// innermost key context first, so this binding is tried before any
-/// binding of Escape in the viewer or in the rest of the window.
+/// so that Escape ends the player's fullscreen. The layer that shows the
+/// fullscreen player has that context and the keyboard focus. GPUI tries
+/// the bindings of the innermost key context first, so this binding is
+/// tried before any binding of Escape in the viewer or in the rest of the
+/// window.
 pub fn bind(cx: &mut App) {
     cx.bind_keys([KeyBinding::new(
         "escape",
@@ -96,9 +96,7 @@ pub fn bind(cx: &mut App) {
 /// The record of the one player that is fullscreen. It exists from
 /// `enter_fullscreen` until `exit_fullscreen`. During that time the window
 /// is full screen and `fullscreen_layer` draws the player over the whole
-/// window, with its own controls and keys. This is what production gets
-/// from the browser when it calls `requestFullscreen` on the player's
-/// element.
+/// window, with its own controls and keys.
 struct Fullscreen {
     /// The window that shows the player over its whole area.
     window: AnyWindowHandle,
@@ -123,9 +121,7 @@ struct Fullscreen {
     seen_full_screen: bool,
     /// True after `release_fullscreen`, which a viewer calls when it stops
     /// showing the player because another item opens. `fullscreen_layer`
-    /// ends the player's fullscreen the next time it runs, as a browser
-    /// ends fullscreen when the fullscreen element is removed from the
-    /// page.
+    /// ends the player's fullscreen the next time it runs.
     released: bool,
 }
 
@@ -237,12 +233,13 @@ pub fn release_fullscreen(player: &Entity<VideoPlayer>, cx: &mut App) {
 
 /// Returns the layer that shows the fullscreen player over the whole of
 /// `window`, or `None` when no player is fullscreen in `window`. The layer
-/// has a black background, as a browser draws behind a fullscreen element.
-/// Nothing under the layer reacts to the pointer. The layer has the key
-/// contexts `PlayerFullscreen` and `Media`, and it handles `ExitFullscreen`
-/// and the player's other actions. The main window (`shell/mod.rs`) and the
-/// detail window (`viewer/detail.rs`) add the layer to their root element
-/// after their content, so that it is drawn over the content.
+/// has a black background, which shows in the parts of the window that the
+/// picture does not cover. Nothing under the layer reacts to the pointer.
+/// The layer has the key contexts `PlayerFullscreen` and `Media`, and it
+/// handles `ExitFullscreen` and the player's other actions. The main window
+/// (`shell/mod.rs`) and the detail window (`viewer/detail.rs`) add the
+/// layer to their root element after their content, so that it is drawn
+/// over the content.
 ///
 /// The function also ends the fullscreen, and returns `None`, in three
 /// cases: `release_fullscreen` was called for the player, the player no
@@ -395,13 +392,13 @@ pub fn on_actions<E: InteractiveElement>(
 }
 
 /// Writes one line of JSON to standard error which says that the media
-/// file `source` could not be played (production's `reportPlaybackFailure`).
-/// The line has the five fields of production's diagnostic entry: the level
+/// file `source` could not be played. The line has five fields: the level
 /// `ERROR`, the source `renderer`, the target `media.playback`, the time,
 /// and `message`. `message` is a second JSON object, written as text. It
 /// holds the file's path, the code `MEDIA_ERR_DECODE`, the backend's error
 /// `message`, the position and the length in seconds, and whether playback
-/// was paused.
+/// was paused. Picto 0.6.19 and earlier wrote the same entry for this
+/// failure, with the same field names and the same fixed values.
 fn report_playback_failure(source: &Path, message: &str, status: &Status) {
     let entry = serde_json::json!({
         // i18n: a JSON field
@@ -555,9 +552,8 @@ impl VideoPlayer {
     /// (`backend::open_video`), and audio with `backend::open_audio`. The
     /// volume, mute, rate and loop are taken from `options`, and playback
     /// starts at once when `options.auto_play` is true. The viewer builds
-    /// `options` with `Options::for_item`, which follows production's
-    /// `MediaView.tsx`. When the file cannot be opened, the player has no
-    /// backend and its status holds the error.
+    /// `options` with `Options::for_item`. When the file cannot be opened,
+    /// the player has no backend and its status holds the error.
     ///
     /// `waveform` is the path of the item's thumbnail. For an audio item
     /// the thumbnail is a picture of the waveform, and the two pictures the
@@ -669,9 +665,9 @@ impl VideoPlayer {
         self.playback.playing = false;
     }
 
-    /// Returns the video frame that is drawn now as a picture (production's
-    /// `captureVideoFrame`), or an error message when no frame has arrived
-    /// yet. Returns `None` for audio, which has no picture.
+    /// Returns the video frame that is drawn now as a picture, or an error
+    /// message when no frame has arrived yet. Returns `None` for audio,
+    /// which has no picture.
     pub fn capture_frame(&self) -> Option<Result<super::capture::Picture, String>> {
         if self.kind != Kind::Video {
             return None;
@@ -706,9 +702,9 @@ impl VideoPlayer {
         self.settle_until = Instant::now() + Duration::from_secs(1);
     }
 
-    /// Shows the controls (production's `revealControls`). They fade in
-    /// over 300 ms if they were hidden, and the 2.5 s after which they are
-    /// hidden are counted again from now.
+    /// Shows the controls. They fade in over 300 ms if they were hidden,
+    /// and the 2.5 s after which they are hidden are counted again from
+    /// now.
     fn reveal(&mut self, cx: &mut Context<Self>) {
         self.controls.reveal(Instant::now());
         self.controls_fade.set(true, motion::MEDIA_CONTROLS_FADE);
@@ -751,10 +747,10 @@ impl VideoPlayer {
         self.schedule_hide(cx);
     }
 
-    /// Pauses the media when it plays and plays it when it is paused
-    /// (production's `togglePlay`). When the media has stopped at its end,
-    /// playing starts again from the beginning, as an HTML media element
-    /// does. The function does nothing when the file could not be opened.
+    /// Pauses the media when it plays and plays it when it is paused. When
+    /// the media has stopped at its end, playing starts again from the
+    /// beginning. The function does nothing when the file could not be
+    /// opened.
     fn toggle_play(&mut self, _: &mut Context<Self>) {
         let Some(backend) = &mut self.backend else {
             return;
@@ -794,11 +790,10 @@ impl VideoPlayer {
         ));
     }
 
-    /// Pauses playback and moves the position by one frame (production's
-    /// `stepFrame`): forward when `direction` is 1 and back when it is -1.
-    /// The length of a frame comes from the frame rate the backend
-    /// reported, or from 30 frames a second (`model::DEFAULT_FPS`) when it
-    /// has reported none.
+    /// Pauses playback and moves the position by one frame: forward when
+    /// `direction` is 1 and back when it is -1. The length of a frame comes
+    /// from the frame rate the backend reported, or from 30 frames a second
+    /// (`model::DEFAULT_FPS`) when it has reported none.
     fn step_frame(&mut self, direction: i8) {
         if let Some(backend) = &mut self.backend {
             backend.pause();
@@ -841,12 +836,12 @@ impl VideoPlayer {
         }
     }
 
-    /// Shows the volume display (production's `VolumeHUD`) and starts a
-    /// timer that hides it after 800 ms (`VOLUME_HUD_DURATION`). It is
-    /// called for each press of a volume key. A press while the display is
-    /// shown keeps it shown for 800 ms from that press, because only the
-    /// latest timer hides the display. The display fades in over 150 ms
-    /// when it was not shown before.
+    /// Shows the volume display and starts a timer that hides it after
+    /// 800 ms (`VOLUME_HUD_DURATION`). It is called for each press of a
+    /// volume key. A press while the display is shown keeps it shown for
+    /// 800 ms from that press, because only the latest timer hides the
+    /// display. The display fades in over 150 ms when it was not shown
+    /// before.
     fn show_hud(&mut self, cx: &mut Context<Self>) {
         let first = self.hud.is_none();
         self.hud = Some(Instant::now());
@@ -1037,8 +1032,8 @@ impl VideoPlayer {
     }
 
     /// Builds the progress bar, which shows the playback position and is
-    /// pressed or dragged to seek (production's `ProgressBar`). It fills
-    /// the width of the controls, inside their padding.
+    /// pressed or dragged to seek. It fills the width of the controls,
+    /// inside their padding.
     ///
     /// Without a waveform the bar is 16 px tall and shows a track in its
     /// vertical centre. The part of the track up to the end of the buffered
@@ -1163,12 +1158,12 @@ impl VideoPlayer {
                     )
             }
             None => {
-                // The track (production's `.progressTrack`) is 4 px thick.
-                // While the pointer is over the bar or the bar is dragged
-                // it is 6 px thick, and it changes between the two in
-                // 100 ms (`bar_expand`). Its ends are rounded with a radius
-                // of half its thickness. It is white at 15%, and it clips
-                // the buffered part and the played part to its own shape.
+                // The track is 4 px thick. While the pointer is over the
+                // bar or the bar is dragged it is 6 px thick, and it
+                // changes between the two in 100 ms (`bar_expand`). Its
+                // ends are rounded with a radius of half its thickness. It
+                // is white at 15%, and it clips the buffered part and the
+                // played part to its own shape.
                 let expand = self.bar_expand.value_with(motion::EASE);
                 let thickness = 4. + 2. * expand;
                 let radius = thickness / 2.;
@@ -1199,14 +1194,13 @@ impl VideoPlayer {
             .bar_hover
             .or_else(|| (self.drag == Some(Drag::Seek)).then_some(self.bar_fraction));
         if let Some(fraction) = hover.filter(|_| self.playback.duration > 0.) {
-            // The label with the time at the pointer's position
-            // (production's `.progressHoverTime`). Its horizontal centre is
-            // at the pointer's position along the bar, and its bottom edge
-            // is 20 px above the bar's bottom edge. It is a box with a
-            // background of black at 80% and corners of radius 3 px, and
-            // its text is 11 px, monospaced and white at 95%. While the bar
-            // is dragged and the pointer is not over it, the label is
-            // drawn at the position the drag has moved to
+            // The label with the time at the pointer's position. Its
+            // horizontal centre is at the pointer's position along the bar,
+            // and its bottom edge is 20 px above the bar's bottom edge. It
+            // is a box with a background of black at 80% and corners of
+            // radius 3 px, and its text is 11 px, monospaced and white at
+            // 95%. While the bar is dragged and the pointer is not over it,
+            // the label is drawn at the position the drag has moved to
             // (`bar_fraction`), which stays between the bar's two ends.
             bar = bar.child(
                 div()
@@ -1238,8 +1232,7 @@ impl VideoPlayer {
         // fraction of the bar's width. A press of the left button shows
         // the controls, starts the drag, keeps the controls shown until the
         // drag ends, and seeks to the pointer's position. The press is not
-        // passed on to the elements behind the bar, as in production's
-        // `handleDown`.
+        // passed on to the elements behind the bar.
         bar.on_hover(cx.listener(|this, hovered: &bool, _, cx| {
             if !*hovered {
                 this.bar_hover = None;
@@ -1287,12 +1280,11 @@ impl VideoPlayer {
         self.seek(self.bar_fraction as f64 * self.playback.duration);
     }
 
-    /// Builds the volume control (production's `VolumePanel`, which
-    /// `controls::volume_panel` builds): the mute button, and the volume
-    /// slider that is shown above the button while the pointer is over
-    /// either of them. A press or a drag on the slider sets this player's
-    /// volume, and a click on the button turns this player's mute on or
-    /// off.
+    /// Builds the volume control with `controls::volume_panel`: the mute
+    /// button, and the volume slider that is shown above the button while
+    /// the pointer is over either of them. A press or a drag on the slider
+    /// sets this player's volume, and a click on the button turns this
+    /// player's mute on or off.
     fn volume_panel(&self, cx: &mut Context<Self>) -> controls::VolumePanel {
         let (change, mute) = (cx.entity().downgrade(), cx.entity().downgrade());
         controls::volume_panel("media-volume", self.playback.volume, self.playback.muted)
@@ -1310,13 +1302,12 @@ impl VideoPlayer {
             })
     }
 
-    /// Builds the control for the playback rate (production's
-    /// `PlaybackRateMenu`). It is a button whose label is the rate in use,
-    /// for example `1x`. A click on the button opens the list of the rates
-    /// in `PLAYBACK_RATES`, and another click closes it. The list is drawn
-    /// above the button, centred on it, with its bottom edge 36 px above
-    /// the bottom edge of the button's box. A click on a row of the list
-    /// sets that rate and closes the list.
+    /// Builds the control for the playback rate. It is a button whose label
+    /// is the rate in use, for example `1x`. A click on the button opens
+    /// the list of the rates in `PLAYBACK_RATES`, and another click closes
+    /// it. The list is drawn above the button, centred on it, with its
+    /// bottom edge 36 px above the bottom edge of the button's box. A click
+    /// on a row of the list sets that rate and closes the list.
     fn rate_menu(&self, cx: &mut Context<Self>) -> Div {
         let rate = self.playback.rate;
         let entity = cx.entity().downgrade();
@@ -1353,8 +1344,7 @@ impl VideoPlayer {
             // shows the controls for each move of the pointer over it.
             // Without it the controls, and the list with them, would be
             // hidden 2.5 s after the pointer came onto the list, while the
-            // user is choosing a rate. In production the event of the move
-            // reaches the player's element from the list by bubbling.
+            // user is choosing a rate.
             let mut menu = div()
                 .id("media-rate-menu")
                 .role(Role::Menu)
@@ -1404,9 +1394,8 @@ impl VideoPlayer {
         container
     }
 
-    /// Builds the controls along the bottom edge of the player
-    /// (production's `VideoControls`): the progress bar, and under it one
-    /// row of buttons.
+    /// Builds the controls along the bottom edge of the player: the
+    /// progress bar, and under it one row of buttons.
     ///
     /// At the left end of the row are the play or pause button, the button
     /// that skips 5 s back, the button that skips 5 s forward, a vertical
@@ -1419,7 +1408,7 @@ impl VideoPlayer {
     /// While `visible` is true the controls occlude the player behind
     /// them, so a click on them does not also play or pause. While it is
     /// false, which is the case while they fade out, pointer events pass
-    /// through them to the player (production's `.controlsHidden`).
+    /// through them to the player.
     fn controls(&self, shown: f32, visible: bool, cx: &mut Context<Self>) -> Stateful<Div> {
         let playing = self.playback.playing;
         let separator = div()
@@ -1534,12 +1523,12 @@ impl VideoPlayer {
             .child(controls::button_row(left, right))
     }
 
-    /// Builds the volume display (production's `VolumeHUD`), or returns
-    /// `None` while it is not shown. It is a box in the centre of the
-    /// player with a background of black at 70% and corners of radius
-    /// 12 px. The box holds the volume glyph at 28 px and, under it, the
-    /// volume as a percentage in 16 px semibold monospaced text. Both are
-    /// white at 95%. The percentage is 0 while the player is muted.
+    /// Builds the volume display, or returns `None` while it is not shown.
+    /// It is a box in the centre of the player with a background of black
+    /// at 70% and corners of radius 12 px. The box holds the volume glyph
+    /// at 28 px and, under it, the volume as a percentage in 16 px semibold
+    /// monospaced text. Both are white at 95%. The percentage is 0 while
+    /// the player is muted.
     fn hud(&self) -> Option<Div> {
         self.hud?;
         let effective = self.playback.effective_volume();
@@ -1571,10 +1560,9 @@ impl VideoPlayer {
                             div()
                                 .font_family(theme::FONT_MONO)
                                 .text_size(px(theme::TEXT_XL))
-                                // In production this text inherits its line
-                                // height from the page, which is 1.55 times
-                                // the font size (`LINE_HEIGHT_BODY`). The
-                                // same line height is set here.
+                                // The percentage has the line height of
+                                // body text, which is 1.55 times the font
+                                // size (`LINE_HEIGHT_BODY`).
                                 .line_height(px(theme::TEXT_XL * theme::LINE_HEIGHT_BODY))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(format!("{}%", (effective * 100.).round() as i32)),
@@ -1584,12 +1572,11 @@ impl VideoPlayer {
     }
 }
 
-/// Builds one row of the list of playback rates (production's
-/// `.rateMenuItem`). The row shows the label of `rate`, for example
-/// `0.75x`, centred, in 12 px monospaced text. The text is white at 70%,
-/// or white at 95% when `current` is true, which the caller passes for the
-/// rate in use. While the pointer is over the row, the row's background is
-/// white at 10% and its text is white at 95%.
+/// Builds one row of the list of playback rates. The row shows the label
+/// of `rate`, for example `0.75x`, centred, in 12 px monospaced text. The
+/// text is white at 70%, or white at 95% when `current` is true, which the
+/// caller passes for the rate in use. While the pointer is over the row,
+/// the row's background is white at 10% and its text is white at 95%.
 fn rate_row(rate: f32, current: bool) -> Stateful<Div> {
     let id = SharedString::from(format!("media-rate-{rate}"));
     let label = model::rate_label(rate);
@@ -1622,11 +1609,11 @@ fn rate_row(rate: f32, current: bool) -> Stateful<Div> {
 
 /// Makes the two pictures of the waveform that the progress bar of an
 /// audio item draws, from the item's thumbnail at `path`. Only the alpha
-/// channel of the thumbnail is used, as production uses the thumbnail as a
-/// CSS `mask-image`. The first picture is white at 20% and is drawn for the
-/// part that has not played yet. The second is white at 95% and is drawn
-/// for the part that has played. Returns `None` when the thumbnail cannot
-/// be read.
+/// channel of the thumbnail is used, and the thumbnail's colours are
+/// replaced with white. The first picture is white at 20% and is drawn for
+/// the part that has not played yet. The second is white at 95% and is
+/// drawn for the part that has played. Returns `None` when the thumbnail
+/// cannot be read.
 ///
 /// `RenderImage` holds its pixels in the order blue, green, red, alpha,
 /// and the `image` crate in the order red, green, blue, alpha. Every pixel
@@ -1695,7 +1682,7 @@ impl Render for VideoPlayer {
             // 10 s have passed since the player was created. This covers
             // media that is paused before the backend has loaded it: the
             // player keeps asking the backend until the length is known,
-            // so that the controls show the length, as production's do.
+            // so that the controls show the length.
             || (self.playback.duration <= 0.
                 && self.status.error.is_none()
                 && now < self.first_picture_until)
@@ -1745,10 +1732,10 @@ impl Render for VideoPlayer {
                 this.toggle_play(cx);
                 this.reveal(cx);
                 // The second click of a double-click on a video also makes
-                // the player fullscreen, or ends its fullscreen
-                // (production's `onDoubleClick`). Each of the two clicks
-                // has played or paused, so after a double-click the media
-                // plays or is paused as it was before.
+                // the player fullscreen, or ends its fullscreen. Each of
+                // the two clicks has played or paused, so after a
+                // double-click the media plays or is paused as it was
+                // before.
                 if video && event.click_count() == 2 {
                     toggle_fullscreen(&cx.entity(), window, cx);
                 }
@@ -1756,13 +1743,13 @@ impl Render for VideoPlayer {
         if video {
             root = root.cursor_pointer().children(self.picture());
         } else {
-            // The audio visualization (production's `AudioVisualizer`) is
-            // drawn over the whole of the player's area, behind the
-            // controls. `mode` is the kind of visualization chosen in the
-            // settings. `data` is what the analyser computes for this frame
-            // from the samples the backend is playing. It is empty when the
-            // mode is "none" and when the backend has no samples, and
-            // nothing is drawn for the mode "none".
+            // The audio visualization is drawn over the whole of the
+            // player's area, behind the controls. `mode` is the kind of
+            // visualization chosen in the settings. `data` is what the
+            // analyser computes for this frame from the samples the backend
+            // is playing. It is empty when the mode is "none" and when the
+            // backend has no samples, and nothing is drawn for the mode
+            // "none".
             let mode = visualizer::Mode::from_setting(
                 crate::settings::model(cx)
                     .read(cx)
@@ -1858,7 +1845,7 @@ impl Render for VideoPlayer {
         // not see the pointer move over them. They get their own handler,
         // which shows the controls for each move of the pointer over them.
         // While they fade out (`visible` is false), pointer events pass
-        // through them to the root (production's `.controlsHidden`).
+        // through them to the root.
         let fade = self.controls_fade.value_with(motion::EASE);
         if fade > 0. {
             let controls = self.controls(fade, visible, cx);

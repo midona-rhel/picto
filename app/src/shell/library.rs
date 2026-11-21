@@ -1,15 +1,14 @@
-//! The library switcher's popover (`LibrarySwitcherPopover.tsx`). From top to
-//! bottom it has a header with a search field, a list of the libraries the app
-//! knows, and three library actions. Each row of the list shows a library's
-//! cover, its name and its folder. The open library's row also has a check
-//! mark.
+//! The library switcher's popover. From top to bottom it has a header with a
+//! search field, a list of the libraries the app knows, and three library
+//! actions. Each row of the list shows a library's cover, its name and its
+//! folder. The open library's row also has a check mark.
 //!
-//! The list is this app's own (`libraryHistory` and `pinnedLibraries` in its
-//! `state.json`, see `crate::libraries`), never the Electron app's
-//! `config.json`, and it holds only the libraries this process may open. This
-//! view reads the cover file in each library's folder. It writes the cropped
-//! covers into the session's scratch folder and nowhere else. A click on a row
-//! opens its library under the rules of `libraries::admission`.
+//! The list is read from `libraryHistory` and `pinnedLibraries` in the app's
+//! `state.json` (see `crate::libraries`), and it holds only the libraries
+//! this process may list (`libraries::listed`). This view reads the cover
+//! file in each library's folder. It writes the cropped covers into the
+//! session's scratch folder and nowhere else. A click on a row opens its
+//! library under the rules of `libraries::admission`.
 use crate::grid::thumbnails::Thumbnails;
 use crate::i18n::t;
 use crate::session::Session;
@@ -22,20 +21,21 @@ use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-/// The placement of `LibrarySwitcherPopover`: 8px below the switcher button,
-/// and at least 8px from the window's edges.
+/// The placement of the popover: 8px below the switcher button, and at least
+/// 8px from the window's edges.
 const PLACEMENT: Placement = Placement::new(Side::Below, 8., 8.);
 /// The popover is 300px wide. It is placed as if it were 422px tall, so with
-/// the 8px margin its top is never lower than 430px above the window's bottom
-/// (`viewport.height - 430`).
+/// the 8px margin its top is never lower than 430px above the window's
+/// bottom.
 const SIZE: Size<f32> = Size {
     width: 300.,
     height: 422.,
 };
 const MAX_HEIGHT: f32 = 420.;
-/// The next four constants are the padding of `.list`, the padding of `.item`,
-/// the size of the avatar, and the gap between the parts of a row. `CHECK` is
-/// the size of the open library's check mark.
+/// The next four constants are the padding around the list of libraries, the
+/// left and right padding of a row, the size of a library's avatar, and the
+/// gap between the parts of a row. `CHECK` is the size of the open library's
+/// check mark. All five are in pixels.
 const LIST_PADDING: f32 = 8.;
 const ROW_PADDING: f32 = 8.;
 const AVATAR: f32 = 36.;
@@ -48,16 +48,16 @@ const CHECK: f32 = 14.;
 pub struct Known {
     pub path: String,
     pub name: String,
-    /// The folders above it, joined with `/` as the Electron row shows them.
+    /// The folders that contain the library, outermost first, joined with `/`.
     pub dir: String,
     pub current: bool,
     pub cover: Option<PathBuf>,
 }
 
-/// Returns a library's name and the folders above it, as the Electron app's
-/// row splits the path. The path is split on `/` and `\`, and empty parts are
-/// dropped. The name is the last part without `.library`. The folders are the
-/// other parts joined with `/`.
+/// Returns the name of the library at `path` and the folders that contain
+/// it, which are the two texts of the library's row. The path is split on `/`
+/// and `\`, and empty parts are dropped. The name is the last part without
+/// `.library`. The folders are the other parts joined with `/`.
 pub fn split(path: &str) -> (String, String) {
     let mut parts = path
         .split(['/', '\\'])
@@ -68,11 +68,11 @@ pub fn split(path: &str) -> (String, String) {
     (name.to_owned(), parts.join("/"))
 }
 
-/// Returns the rows in the Electron app's order: the pinned libraries first,
-/// then the libraries of the history that are not pinned. A library of the
-/// history whose folder no longer exists is left out. When no row is the open
-/// library, a row for it is put first, because opening a library puts it first
-/// in the history.
+/// Returns the rows in the order the popover lists them: the pinned
+/// libraries first, then the libraries of the history that are not pinned. A
+/// library of the history whose folder no longer exists is left out. When no
+/// row is the open library, a row for it is put first, because opening a
+/// library puts it first in the history.
 pub fn order(
     pinned: &[String],
     history: &[String],
@@ -121,9 +121,9 @@ pub fn order(
 
 /// Returns the widths that the row's flex layout gives to the name and to the
 /// folder, out of the width `available`. The name gets its own width `name`,
-/// but at most 70% of `available` minus the gap, because the folder
-/// (`flex: 1`) never gets less than 30%. The folder gets what remains after
-/// the name and the gap.
+/// but at most 70% of `available` minus the gap, so that the folder never
+/// gets less than 30%. The folder gets what remains after the name and the
+/// gap.
 pub fn info_widths(name: f32, available: f32) -> (f32, f32) {
     let name = name.min(0.7 * available - GAP).max(0.);
     (name, (available - GAP - name).max(0.))
@@ -250,8 +250,8 @@ impl LibraryPopover {
         self.hovered = None;
         self.search.update(cx, |search, cx| search.clear(cx));
         self.scroll.set_offset(point(px(0.), px(0.)));
-        // The search field takes the focus, as `autoFocus` gives it in the
-        // Electron app.
+        // The search field takes the keyboard focus, so the user can type a
+        // library's name as soon as the popover is open.
         let field = self.search.focus_handle(cx);
         window.focus(&field, cx);
         // The rows read before stay until this read replaces them.
@@ -341,8 +341,8 @@ impl LibraryPopover {
                     .child(ui::icon("library-search", 16., theme.text_tertiary())),
             )
             .child(
-                // `width: calc(100% - 24px)`: the search field takes the width
-                // that the 24px close button leaves.
+                // The search field takes the width that the 24px close button
+                // leaves.
                 div()
                     .h(px(48.))
                     .flex_1()
@@ -355,7 +355,7 @@ impl LibraryPopover {
                     })
                     .child(self.search.clone()),
             )
-            // This is the close button, `.closeButton`.
+            // This is the close button.
             .child(
                 // i18n: an icon's name
                 ui::icon_button("close-library-switcher", "x")
@@ -367,8 +367,8 @@ impl LibraryPopover {
 
     /// Called when the user chooses a library's row. Closes the popover and,
     /// unless the row is the open library, asks the host to switch to that
-    /// library (`picto.library.switch`). The host switches only if the rules
-    /// of `libraries::admission` allow it.
+    /// library (`libraries::host::request`). The host switches only if the
+    /// rules of `libraries::admission` allow it.
     fn pick(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let library = self.libraries.get(index).cloned();
         self.close(window, cx);
@@ -389,7 +389,7 @@ impl LibraryPopover {
         cx.defer(run);
     }
 
-    /// Builds the row for one library (`.item`).
+    /// Builds the row for one library. `width` is the popover's width.
     fn row(
         &self,
         index: usize,
@@ -465,10 +465,9 @@ impl LibraryPopover {
                 }
             })
             .child(
-                // `.itemInfo`: the name and the folder stand on one baseline.
-                // The baseline of the 13px name is 1px lower in its line than
-                // the baseline of the 12px folder, so the folder is moved down
-                // by 1px.
+                // The name and the folder stand on one baseline. The baseline
+                // of the 13px name is 1px lower in its line than the baseline
+                // of the 12px folder, so the folder is moved down by 1px.
                 div()
                     .flex_1()
                     .min_w_0()
@@ -496,8 +495,8 @@ impl LibraryPopover {
                     .flex_none()
                     .child(ui::icon("check", CHECK, theme.text()))
             }));
-        // `.item` is a `<button>` in the Electron app, so Enter and Space
-        // choose the row here too.
+        // The row is a button: it can take the keyboard focus, and Enter and
+        // Space choose it as a click does.
         let press = cx.listener(move |this, _, window, cx| this.pick(index, window, cx));
         ui::focus::button(
             row,
@@ -508,8 +507,8 @@ impl LibraryPopover {
         )
     }
 
-    /// Builds one of the actions at the bottom of the popover
-    /// (`.functionItem`): an icon and a label.
+    /// Builds one of the actions at the bottom of the popover: an icon and a
+    /// label.
     fn action(
         &self,
         id: &'static str,
@@ -564,7 +563,8 @@ impl Render for LibraryPopover {
         let mut rows = div().flex().flex_col();
         if shown.is_empty() {
             rows = rows.child(
-                // `.empty`: 12px text with the popover's line height of 1.55,
+                // This text is shown when no library matches the search. It
+                // is 12px text with a line height of 1.55 times its size,
                 // which is 18.6px.
                 div()
                     .p(px(16.))
@@ -596,9 +596,9 @@ impl Render for LibraryPopover {
                     .pt(px(LIST_PADDING))
                     .pb(px(LIST_PADDING))
                     .pl(px(LIST_PADDING))
-                    // `scrollbar-gutter: stable`: the scrollbar's width is
-                    // always reserved at the right, whether or not the bar
-                    // shows.
+                    // The scrollbar's width is always reserved at the right,
+                    // whether or not the bar shows, so the rows keep their
+                    // width when the bar appears.
                     .pr(px(LIST_PADDING + ui::scrollbar::GUTTER))
                     .child(rows),
             )
@@ -621,8 +621,8 @@ impl Render for LibraryPopover {
             // the panel's radius.
             .rounded_b(px(theme::RADIUS_LG))
             .child(
-                // Create Library… opens the Library Manager
-                // (`open_library_manager`), as the Electron app's row does.
+                // Create Library… opens the Library Manager, which is where
+                // a library is created.
                 ui::focus::stop(
                     "create-library",
                     self.action("create-library", "plus", t("Create Library…"), cx)
@@ -635,8 +635,8 @@ impl Render for LibraryPopover {
                 ),
             )
             .child(
-                // `picto.library.open`: lets the user choose a library folder
-                // and opens that library.
+                // Open Library… lets the user choose a library folder and
+                // opens that library.
                 ui::focus::stop(
                     "open-library",
                     self.action(

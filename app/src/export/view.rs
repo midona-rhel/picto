@@ -1,6 +1,6 @@
-//! What export shows: the Export dialog (`ExportModal.tsx`) and the Picto
-//! Pack dialog (`PictoPackModal.tsx`), both on the shared dialog with
-//! `GlassModal.module.css`'s form layout.
+//! Draws the two dialogs of export: the Export dialog and the Picto Pack
+//! dialog. Both are the shared modal dialog with the form layout of
+//! `crate::ui::form`.
 use super::{Convert, Dialog, Exports, Format, Pack, PackMode, PackSource};
 use crate::i18n::t;
 use crate::theme::Text as _;
@@ -10,7 +10,8 @@ use crate::ui::form::{field, label, row, stack};
 use crate::{theme, ui};
 use gpui::*;
 
-/// Runs `action` on the exports from a control's handler.
+/// Returns a handler for a control that runs `action` on the `Exports`
+/// view.
 fn on(
     this: &WeakEntity<Exports>,
     action: impl Fn(&mut Exports, &mut Context<Exports>) + 'static,
@@ -29,7 +30,8 @@ fn on_click(
     move |_, window, cx| handler(window, cx)
 }
 
-/// "Export 3 Files", with the count as production writes it, ungrouped.
+/// Returns the Export dialog's title, for example "Export 3 Files". The
+/// count is written without digit grouping.
 pub(super) fn convert_title(count: u64) -> String {
     crate::tf!(
         "Export {value0} File{value1}",
@@ -63,7 +65,8 @@ impl Exports {
         Some(modal.focus(&layer.focus).on_close(close).into_any_element())
     }
 
-    /// `ExportModal`: where, in which format and quality, and at what size.
+    /// Builds the Export dialog. It asks where the files go, in which format
+    /// and quality, and at what size.
     fn convert_dialog(
         convert: &Convert,
         theme: &theme::Theme,
@@ -128,7 +131,7 @@ impl Exports {
                     t("Resize (optional)"),
                     row()
                         .child(size_field("export-width", &convert.width))
-                        // `.inlineLabel`
+                        // The "×" between the width field and the height field.
                         .child(
                             div()
                                 .flex_none()
@@ -167,8 +170,8 @@ impl Exports {
             )
     }
 
-    /// `PictoPackModal`: what a pack keeps and, for one being imported,
-    /// what it holds.
+    /// Builds the Picto Pack dialog. It says what a pack keeps and, for a
+    /// pack that is being imported, what the pack holds.
     fn pack_dialog(
         pack: &Pack,
         theme: &theme::Theme,
@@ -210,9 +213,9 @@ impl Exports {
                 t("Smart-folder exports contain only the current matching items. The smart-folder rule and container are not included."),
             ));
         }
-        // The tile is 48 wide and 53 tall in production: its icon is an
-        // inline SVG, which sits on a text line and leaves the line's
-        // descender below it.
+        // The tile is 53 pixels tall. The icon (28 pixels) and the padding
+        // (10 pixels above and below it) take 48 of them, and the other 5
+        // are empty space below the icon.
         let glyph = div()
             .flex_none()
             .h(px(53.))
@@ -228,7 +231,7 @@ impl Exports {
                 28.,
                 theme.text_secondary(),
             ));
-        // `.rowSpread`: a name and its value in bold.
+        // A row with a name on the left and its value in bold on the right.
         let fact = |name: &'static str, value: String| {
             row()
                 .justify_between()

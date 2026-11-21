@@ -1,14 +1,16 @@
-//! `createOAuthAdapter` and `createPixivAdapter`: services whose login is
-//! an OAuth authorization (1.0a or 2), and Pixiv's own flow in the core;
-//! with OAuth 1.0a request signing (`oauth1AuthorizationHeader`):
-//! HMAC-SHA1 over the method, the address and every parameter, RFC 5849.
+//! The adapter for the services whose login is an OAuth authorization
+//! (OAuth 1.0a or OAuth 2), and the adapter for Pixiv, whose OAuth flow the
+//! application core runs. The file also holds the signing of OAuth 1.0a
+//! requests as RFC 5849 defines it: an HMAC-SHA1 over the method, the
+//! address and every parameter.
 use super::*;
 use hmac::{Hmac, Mac};
 
-/// What an OAuth login keeps between opening the authorization page and
-/// its callback, for as long as the window is open (production's
-/// `oauthState` and client): a callback refused by the user, then accepted,
-/// in the same window, is still checked against it.
+/// The values that an OAuth login keeps from the moment it opens the
+/// authorization page, for as long as the sign-in window is open. Every
+/// callback is checked against them. They are not cleared after a
+/// callback, so if the user refuses the authorization and then grants it
+/// in the same window, the second callback is checked against them too.
 #[derive(Clone)]
 pub(super) enum OAuthPending {
     Two {
@@ -22,8 +24,10 @@ pub(super) enum OAuthPending {
     },
 }
 
-/// `createOAuthAdapter`: OAuth 2 (an authorization code exchanged for a
-/// token) or OAuth 1 (a request token, then an access token).
+/// The adapter for OAuth logins. With OAuth 2 it exchanges the
+/// authorization code of the callback for a token. With OAuth 1 it obtains
+/// a request token first and exchanges it for an access token after the
+/// callback.
 pub struct OAuthAdapter {
     pub(super) site: Site,
     pub(super) pending: RefCell<Option<OAuthPending>>,
@@ -272,14 +276,16 @@ impl OAuthAdapter {
                     format!("{label} authorization completed."),
                 ))
             }
-            // A callback before the authorization page was prepared.
+            // The callback arrived before `prepare` stored the values to
+            // check it against.
             None => Err(format!("{label} OAuth state did not match.")),
         }
     }
 }
 
-/// `createPixivAdapter`: the application starts Pixiv's OAuth flow and
-/// exchanges the code the login redirects to; it saves the login itself.
+/// The adapter for Pixiv. The application starts Pixiv's OAuth flow
+/// (`pixiv_oauth_start`), exchanges the code that the callback carries
+/// (`pixiv_oauth_exchange`), and saves the login itself.
 pub struct PixivAdapter {
     pub(super) site: Site,
     pub(super) code_verifier: RefCell<Option<String>>,
@@ -348,8 +354,7 @@ impl PixivAdapter {
     }
 }
 
-/// `formBody`: `application/x-www-form-urlencoded`, as `URLSearchParams`
-/// writes it.
+/// Returns `values` encoded as `application/x-www-form-urlencoded`.
 pub fn form(values: &[(&str, &str)]) -> String {
     url::form_urlencoded::Serializer::new(String::new())
         .extend_pairs(values)
@@ -370,7 +375,9 @@ fn form_headers(authorization: String) -> Vec<(String, String)> {
     ]
 }
 
-/// `responseForm`: a form answer, or why it failed.
+/// Returns the fields of a form-encoded response. Returns an error that
+/// starts with `operation` if the status is not a success or the response
+/// has a field `error`.
 fn response_form(
     response: &HttpResponse,
     operation: &str,
@@ -387,7 +394,9 @@ fn response_form(
     Ok(values)
 }
 
-/// `responseJson`: a JSON answer, or why it failed.
+/// Returns the JSON of a response. Returns an error that starts with
+/// `operation` if the status is not a success; the error then gives the
+/// response's `error_description` or `error`, or else the status.
 fn response_json(response: &HttpResponse, operation: &str) -> Result<Value, String> {
     let body: Value =
         serde_json::from_str(&response.body).unwrap_or_else(|_| json!({ "error": response.body }));
@@ -403,7 +412,8 @@ fn response_json(response: &HttpResponse, operation: &str) -> Result<Value, Stri
 }
 
 
-/// What a request is signed over.
+/// The parts of a request that its OAuth 1.0a signature is computed from,
+/// and the keys that sign it.
 pub struct Signing<'a> {
     pub method: &'a str,
     pub url: &'a str,
@@ -414,8 +424,8 @@ pub struct Signing<'a> {
     pub token_secret: Option<&'a str>,
 }
 
-/// `oauthEncode`: RFC 3986 percent-encoding, everything but letters,
-/// digits and `-._~`.
+/// Returns `value` percent-encoded as RFC 3986 defines it: every byte is
+/// encoded except ASCII letters, digits and `-`, `.`, `_`, `~`.
 pub fn encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
@@ -428,12 +438,12 @@ pub fn encode(value: &str) -> String {
     out
 }
 
-/// A fresh nonce: a random UUID without its dashes, as production makes it.
+/// Returns a new nonce: a random UUID written without its dashes.
 pub fn nonce() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }
 
-/// Seconds since 1970.
+/// Returns the current time in seconds since 1970, as text.
 pub fn timestamp() -> String {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -442,7 +452,8 @@ pub fn timestamp() -> String {
         .to_string()
 }
 
-/// The `Authorization` header for `signing`, with the nonce and time given.
+/// Returns the value of the `Authorization` header that signs the request
+/// `signing` with the given nonce and timestamp.
 pub fn authorization_header(signing: &Signing, nonce: &str, timestamp: &str) -> String {
     // i18n: OAuth protocol fields
     let mut oauth: Vec<(&str, &str)> = vec![
@@ -455,9 +466,8 @@ pub fn authorization_header(signing: &Signing, nonce: &str, timestamp: &str) -> 
     if let Some(token) = signing.token {
         oauth.push(("oauth_token", token));
     }
-    // Every parameter, encoded and sorted by name then value. (Production
-    // sorts with `localeCompare`, which agrees with byte order on these
-    // lower-case names.)
+    // RFC 5849 signs every parameter, percent-encoded and sorted by name
+    // and then by value, in byte order.
     let mut pairs: Vec<(String, String)> = signing
         .params
         .iter()
@@ -513,11 +523,13 @@ mod tests {
         assert_eq!(encode("é"), "%C3%A9");
     }
 
-    /// The signature of RFC 5849 §3.4.1's example request is what any
-    /// OAuth 1 library computes for it.
+    /// Signs a published example request and compares the result with the
+    /// published signature.
     #[test]
     pub(super) fn a_request_is_signed_as_rfc_5849_signs_it() {
-        // Twitter's documented example ("Creating a signature").
+        // The request, the keys, the nonce, the timestamp and the expected
+        // signature are those of the example "Creating a signature" in
+        // Twitter's API documentation.
         let header = authorization_header(
             &Signing {
                 method: "post",

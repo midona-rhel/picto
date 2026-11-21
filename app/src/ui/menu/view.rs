@@ -1,5 +1,6 @@
-//! The menu's drawing: its keys, the panels' chrome, rows, swatch rows,
-//! view entries and separators, in the owner's window or a pop-up window.
+//! Draws the menu, in the owner's window or in a pop-up window: the handlers
+//! of its keys, the glass panels, the rows, the rows of swatches, the
+//! entries that hold a view, and the separators.
 use super::layout::{Path, Rect, Row};
 use super::{
     CHECK_SLOT, CUSTOM_PADDING, Entry, GAP, Menu, Opened, PADDING, Presentation, ROW_PADDING, Role,
@@ -14,12 +15,14 @@ use gpui::*;
 use std::time::Instant;
 
 impl Menu {
-    /// The menu's keys, on whichever of its windows has the keyboard. The
-    /// search field binds Enter, Escape and the side arrows itself; they are
-    /// taken here before it sees them.
+    /// Adds the handlers of the menu's keys to `element`. Every window of
+    /// the menu gets them, so that the keys work in whichever of them has
+    /// the keyboard. The search field binds Enter, Escape and the left and
+    /// right arrows itself, so the menu handles those four in the capture
+    /// phase, before the field receives them.
     fn keyboard(&self, element: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
-        // `role="menu"`: the element with the keyboard, whose highlighted
-        // row assistive technology reads as focused.
+        // This element has the keyboard and the menu role. Assistive
+        // technology reads its highlighted row as the focused one.
         element
             .role(gpui::Role::Menu)
             .aria_label(crate::i18n::t("Context menu"))
@@ -36,8 +39,9 @@ impl Menu {
                 this.left(cx);
             }))
             .capture_action(cx.listener(|this, _: &text_input::Commit, window, cx| {
-                // A field in an owner's row keeps its Enter unless a row is
-                // highlighted.
+                // Enter in a text field of an entry that holds a view goes to
+                // that field. The menu takes Enter only when a row is
+                // highlighted or the keyboard is in the menu's search field.
                 let in_row = this.current.is_some()
                     || this.opened().is_some_and(|(_, _, inside)| inside.is_some());
                 let in_search = this
@@ -65,8 +69,9 @@ impl Menu {
             }))
     }
 
-    /// While open, a press outside the panels closes the menu, with any
-    /// button, and goes no further.
+    /// Makes a press of any mouse button on `element`, which is the area
+    /// outside the panels, close the menu. The press is not passed on to
+    /// anything else. A menu that is closing does not get this handler.
     fn press_outside(&self, element: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
         if self.closing.is_some() {
             return element;
@@ -79,11 +84,11 @@ impl Menu {
             }))
     }
 
-    /// The glass panel of `w` × `h` at `at` in its window, holding `content`,
-    /// drawn at `scale` about `origin` and at `opacity`. GPUI cannot scale
-    /// the contents, so the panel's surface, border and shadow are drawn in
-    /// the scaled rectangle and the contents stay at full size and in place,
-    /// clipped to it.
+    /// Returns a glass panel of `w` × `h` at `at` in its window that holds
+    /// `content`. The panel is drawn at `scale` about `origin` and at
+    /// `opacity`. GPUI cannot scale the contents, so the panel's surface,
+    /// border and shadow are drawn in the scaled rectangle, and the contents
+    /// stay at full size and in place and are clipped to that rectangle.
     #[allow(clippy::too_many_arguments)]
     fn chrome(
         &self,
@@ -98,7 +103,7 @@ impl Menu {
         cx: &App,
     ) -> crate::ui::GlassPanel {
         let (dx, dy, scaled_w, scaled_h) = motion::scaled_frame(w, h, scale, origin);
-        // `.floatingGlassSurface`: the glass, with its edges.
+        // The panel's surface is glass in the menu's glass colour.
         super::glass_panel(id, theme::RADIUS_LG, cx)
             .bg(theme::theme(cx).menu_glass())
             .occlude()
@@ -122,10 +127,11 @@ impl Menu {
                     .flex_col(),
             )
             .when(self.presentation == Presentation::PopUpWindows, |panel| {
-                // What is behind is another window: the window's system blur
-                // shows beneath the panel instead, under a fill that gives it
-                // the glass's brightness, or, where the system cannot blur
-                // there, a more opaque glass.
+                // What is behind a pop-up window is another window, which GPUI
+                // cannot blur. Where the system can blur what is behind a
+                // window, its blur is placed under the panel, and the panel's
+                // fill gives that blur the brightness of the glass. Where the
+                // system cannot, the panel gets a more opaque fill.
                 let theme = theme::theme(cx);
                 let fill = if crate::ui::window_chrome::system_blurs() {
                     crate::ui::window_chrome::place_system_blur(
@@ -148,7 +154,9 @@ impl Menu {
             })
     }
 
-    /// A row as `.item` draws it, without what it does.
+    /// Returns the element of one row with its look and what assistive
+    /// technology is told about it, but without handlers for the pointer.
+    /// The callers add those.
     fn row(
         &self,
         id: impl Into<ElementId>,
@@ -178,8 +186,9 @@ impl Menu {
         } else {
             theme.text()
         };
-        // `role="menuitem"` (a check row as a checkable item, a submenu's
-        // row expanded while its submenu shows), named by its label.
+        // Assistive technology gets the row as a menu item whose name is its
+        // label. A row with a check mark is a checkable menu item, and a
+        // submenu's row is reported as expanded while its submenu is open.
         let mut row = div()
             .id(id)
             .role(match item {
@@ -248,8 +257,9 @@ impl Menu {
         }
         row = row.child(text);
         if let Some(item) = item {
-            // `.checkSlot`, in the primary text colour on any row. Its glyph is
-            // drawn at 16px: `.item svg` sizes every glyph in a row.
+            // The check mark or the cross is in the primary text colour on
+            // every row, also on a row drawn in the negative colour. It is
+            // 16px, like every glyph in a row.
             if item.checked.is_some() || item.excluded {
                 let glyph = if item.excluded {
                     Some("menu-x")
@@ -284,8 +294,8 @@ impl Menu {
                 return row.opacity(0.4);
             }
         } else {
-            // `.chevron`: 40% of the row's colour, and 16px like every
-            // glyph in a row.
+            // A submenu's row ends with a chevron in the row's colour at 40%
+            // opacity. It is 16px, like every glyph in a row.
             row = row.child(
                 div()
                     .relative()
@@ -298,8 +308,8 @@ impl Menu {
         row.cursor_pointer()
     }
 
-    /// The menu's own panel: the search row, then its rows, scrolling when
-    /// the panel is held shorter than they are.
+    /// Returns the menu's own panel: the search row, and below it the rows,
+    /// which scroll when the panel is shorter than they are.
     fn root_panel(
         &self,
         rows: &[Row],
@@ -364,8 +374,8 @@ impl Menu {
                         cx.listener(move |this, _, _, cx| this.choose_context(path, cx)),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| this.choose(path, cx))),
-                // A submenu row keeps its highlight when the pointer leaves
-                // it for the submenu.
+                // A submenu's row does nothing when the pointer leaves it, so
+                // it keeps its highlight while the pointer is in the submenu.
                 _ => element
                     .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
                         if *hovered {
@@ -403,7 +413,8 @@ impl Menu {
                     .items_center()
                     .pl(px(10.))
                     .gap(px(6.))
-                    // `box-shadow: 0 -1px 0 var(--color-border-secondary) inset`
+                    // A 1px line in the secondary border colour along the
+                    // bottom edge of the search row.
                     .shadow(vec![
                         BoxShadow::new(px(0.), px(-1.), theme.border_secondary().into()).inset(),
                     ])
@@ -418,8 +429,9 @@ impl Menu {
                     ),
             );
         }
-        // A menu taller than its area scrolls, and then shows the app's
-        // scrollbar, whose 8px gutter narrows the rows (`::-webkit-scrollbar`).
+        // A menu whose rows are taller than its panel scrolls. It then shows
+        // the app's scrollbar, and the rows are narrower by the scrollbar's
+        // 8px gutter.
         let overflows = self.height(rows) > rect.h + 0.5;
         let items_height = (rect.h - self.search_height()).max(0.);
         panel = panel.child(
@@ -452,7 +464,7 @@ impl Menu {
         )
     }
 
-    /// The open submenu's panel.
+    /// Returns the panel of the open submenu.
     fn submenu_panel(
         &self,
         open: &Opened,
@@ -531,7 +543,8 @@ impl Menu {
             window,
             cx,
         )
-        // Reaching the submenu keeps it open.
+        // When the pointer reaches the submenu's panel, the timer that would
+        // close the submenu is cancelled.
         .on_hover(cx.listener(|this, hovered: &bool, _, _| {
             if *hovered {
                 this.submenu_grace = None;
@@ -539,8 +552,9 @@ impl Menu {
         }))
     }
 
-    /// The owner window's part: the layer that takes the keyboard and
-    /// presses outside, and, drawn in the window, the panels.
+    /// Returns what the menu draws in the owner's window: a layer over the
+    /// whole window that handles the keys and the presses outside the
+    /// panels, and, for a menu drawn inside the window, the panels.
     fn render_main(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let view = window.viewport_size();
         self.viewport = Rect {
@@ -575,9 +589,10 @@ impl Menu {
             }
             Presentation::PopUpWindows => {
                 // The keyboard stays with this window, so the search field
-                // types here: a twin of it, invisible, at the same place in
-                // this window as the one shown in the pop-up, so both lay the
-                // text out alike.
+                // must be in this window to receive what is typed. It is drawn
+                // here at no opacity, at the same offset from the window's
+                // corner and at the same width as the visible one in the
+                // pop-up window, so that both lay the text out the same.
                 if let (Some(search), Some(screen)) = (&self.search, &self.screen) {
                     let rect = self.root_rect(&self.rows());
                     layer = layer.child(
@@ -596,7 +611,8 @@ impl Menu {
         layer.into_any_element()
     }
 
-    /// A pop-up window's part: a transparent window holding one panel.
+    /// Returns what the menu draws in one of its pop-up windows: the panel
+    /// that `role` names. The window itself is transparent.
     fn render_pop_up(
         &mut self,
         role: Role,
@@ -635,8 +651,8 @@ impl Menu {
         root.into_any_element()
     }
 
-    /// `ColorPicker`: swatches spread across the row, the chosen one ringed
-    /// in its colour over the app background, with a check.
+    /// Returns a row of colour swatches, spread evenly across the row. The
+    /// chosen swatch has a check mark and a ring (`color_picker::swatch`).
     fn swatch_row(&self, path: Path, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = theme::theme(cx);
         let Entry::Swatches(row) = self.entry(path) else {
@@ -686,8 +702,9 @@ impl Menu {
         line
     }
 
-    /// A view entry, at its own size. Reaching it takes the highlight off
-    /// the menu's rows, as `.customItem`'s `onMouseEnter` does.
+    /// Returns the row of an entry that holds a view, at the entry's own
+    /// height. When the pointer moves onto it, the menu's rows lose their
+    /// highlight.
     fn view_row(&self, path: Path, height: u32, cx: &mut Context<Self>) -> Stateful<Div> {
         let Entry::View(entry) = self.entry(path) else {
             return div().id("menu-view");
@@ -711,12 +728,15 @@ impl Menu {
     }
 }
 
-/// What assistive technology is told about a row beyond its entry.
+/// Holds what assistive technology is told about a row in addition to what
+/// its entry says.
 #[derive(Clone, Copy)]
 struct RowState {
-    /// The row is the one the keyboard is on (`aria-activedescendant`).
+    /// Whether the row is the one the arrow keys are on. Such a row is
+    /// reported as the active descendant of the menu.
     active: bool,
-    /// A submenu's row: whether its submenu shows.
+    /// For a submenu's row, whether its submenu is open. `None` for every
+    /// other row.
     expanded: Option<bool>,
 }
 
@@ -730,8 +750,10 @@ fn separator(cx: &App) -> Div {
 }
 
 impl Render for Menu {
-    /// The same menu draws in the owner's window and in each of its pop-up
-    /// windows; which part it draws depends on the window.
+    /// Draws the menu. The same `Menu` is drawn in the owner's window and
+    /// in each of its pop-up windows, and it draws a different part in
+    /// each: `render_main` in the owner's window, and `render_pop_up` in a
+    /// pop-up window.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.closing.is_some()
             || self.entering()
@@ -756,12 +778,15 @@ impl Render for Menu {
         {
             Some(Role::Submenu(open.serial))
         } else {
-            // A window drawn as it opens, before its handle is known.
+            // A pop-up window is drawn for the first time while it opens,
+            // before the menu has stored its handle. `opening` says which
+            // panel that window shows.
             self.opening
         };
         match role {
             Some(role) => self.render_pop_up(role, window, cx),
-            // A submenu window already replaced, about to close.
+            // This window belonged to a submenu that another submenu has
+            // replaced. It is about to close, so nothing is drawn in it.
             None => div().into_any_element(),
         }
     }

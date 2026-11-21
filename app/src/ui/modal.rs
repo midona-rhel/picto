@@ -1,5 +1,6 @@
-//! The centred dialog (`GlassModal.tsx`): a dimmed backdrop over the whole
-//! window and a glass panel with a title, a body and an optional footer.
+//! Draws the centred dialog: a dimmed backdrop over the whole window and, on
+//! it, a glass panel with a title, a body and, when the dialog has buttons, a
+//! footer.
 use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::prelude::FluentBuilder as _;
@@ -17,9 +18,9 @@ pub fn bind(cx: &mut App) {
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 
-/// A dialog's time on screen: when it opened and, once dismissed, when it
-/// began to leave. The owner keeps one per dialog and drops the dialog once
-/// [`Presence::finished`].
+/// Holds when a dialog opened and, once it was dismissed, when it began to fade
+/// out. The view that owns the dialog keeps one `Presence` per dialog, and
+/// removes the dialog when [`Presence::finished`] returns true.
 #[derive(Clone, Copy)]
 pub struct Presence {
     opened: Instant,
@@ -37,7 +38,7 @@ impl Presence {
         Self::since(Instant::now())
     }
 
-    /// Opened at `opened`.
+    /// Returns the presence of a dialog that opened at `opened`.
     pub fn since(opened: Instant) -> Self {
         Self {
             opened,
@@ -45,7 +46,8 @@ impl Presence {
         }
     }
 
-    /// Starts the 120 ms exit. Closing twice changes nothing.
+    /// Starts the fade-out, which takes `motion::MODAL_OUT` (120 ms). A second
+    /// call changes nothing.
     pub fn close(&mut self) {
         self.closing.get_or_insert_with(Instant::now);
     }
@@ -54,7 +56,8 @@ impl Presence {
         self.closing.is_some()
     }
 
-    /// The exit is over and the dialog can go.
+    /// Returns whether the fade-out has ended, so that the dialog can be
+    /// removed.
     pub fn finished(&self) -> bool {
         self.closing
             .is_some_and(|since| since.elapsed() >= motion::MODAL_OUT)
@@ -67,8 +70,9 @@ impl Presence {
         }
     }
 
-    /// How far in the panel is, 0 to 1: `modalIn` on the default curve,
-    /// `modalOut` on `ease-in`.
+    /// Returns how far the panel has come in, from 0 (hidden) to 1 (in place).
+    /// On the way in it follows `motion::EASE_DEFAULT`, and on the way out it
+    /// follows `motion::EASE_IN`.
     fn panel(&self) -> f32 {
         match self.closing {
             Some(since) => {
@@ -80,8 +84,8 @@ impl Presence {
         }
     }
 
-    /// The backdrop's opacity: `backdropIn` on `ease-out`, `backdropOut` on
-    /// `ease-in`.
+    /// Returns the backdrop's opacity, from 0 to 1. It rises along
+    /// `motion::EASE_OUT` and falls along `motion::EASE_IN`.
     pub(super) fn backdrop(&self) -> f32 {
         match self.closing {
             Some(since) => {
@@ -94,21 +98,23 @@ impl Presence {
     }
 }
 
-/// `.sm`, `.md`, `.lg` and `.xl`: the panel's width and the share of the
-/// window's height it may take.
+/// The four sizes of a dialog. A size sets the panel's width and the largest
+/// share of the window's height that the panel may take.
 #[derive(Clone, Copy)]
 pub enum Size {
     Small,
     Medium,
     Large,
-    /// `.xl`: `min(900px, 100vw - 48px)` wide and exactly
-    /// `min(600px, 100vh - 48px)` tall, whatever it holds.
+    /// 900px wide, or the window's width less 48px if that is smaller. Exactly
+    /// 600px tall, or the window's height less 48px if that is smaller,
+    /// whatever the dialog holds.
     ExtraLarge,
 }
 
 impl Size {
-    /// The width the body's contents get: the panel's inside its border,
-    /// less the body's padding and its scrollbar gutter.
+    /// Returns the width that the body's contents get: the panel's width, less
+    /// its border on both sides, the body's padding on both sides and the
+    /// scrollbar's gutter.
     pub fn content_width(self) -> f32 {
         self.width() - 2. * BORDER - 2. * BODY_PADDING - super::scrollbar::GUTTER
     }
@@ -126,15 +132,16 @@ impl Size {
             Size::Large | Size::ExtraLarge => 0.85,
         }
     }
-    /// The panel's width in a window `viewport` wide.
+    /// Returns the panel's width in a window that is `viewport` wide.
     fn width_in(self, viewport: f32) -> f32 {
         match self {
             Size::ExtraLarge => self.width().min(viewport - 48.),
             _ => self.width(),
         }
     }
-    /// The panel's own height, for a size that has one, in a window
-    /// `viewport` tall.
+    /// Returns the panel's height in a window that is `viewport` tall, for the
+    /// one size that has a fixed height (`ExtraLarge`). Returns `None` for the
+    /// other sizes.
     fn fixed_height(self, viewport: f32) -> Option<f32> {
         matches!(self, Size::ExtraLarge).then(|| 600_f32.min(viewport - 48.))
     }
@@ -142,9 +149,11 @@ impl Size {
 
 const HEADER: f32 = 48.;
 const FOOTER: f32 = 44.;
-/// `.panel`'s 1px glass border, which the contents sit inside.
+/// The width of the panel's glass border. The contents are laid out inside the
+/// border.
 const BORDER: f32 = 1.;
-/// The body's padding, and the scrollbar gutter it keeps on the right.
+/// The padding on each side of the body. On the right, the width of the
+/// scrollbar's gutter is added to it.
 const BODY_PADDING: f32 = 16.;
 
 #[derive(IntoElement)]
@@ -152,7 +161,8 @@ pub struct Modal {
     id: ElementId,
     title: SharedString,
     size: Size,
-    /// A width other than the size's (`panelClassName` widths).
+    /// A width that replaces the width of `size`, for a dialog that sets its
+    /// own width.
     width: Option<f32>,
     presence: Presence,
     body: Vec<AnyElement>,
@@ -160,12 +170,13 @@ pub struct Modal {
     on_close: Option<Handler>,
     focus: Option<FocusHandle>,
     priority: usize,
-    /// `flush`: the body has no padding, only the scrollbar's gutter.
+    /// Whether the body has no padding. The scrollbar's gutter on the right is
+    /// kept.
     flush: bool,
 }
 
-/// A dialog titled `title`. Draw it from the view that owns it; it covers
-/// the whole window whatever that view's bounds.
+/// Returns a dialog with the title `title`. The view that owns the dialog draws
+/// it. The dialog covers the whole window, whatever that view's bounds are.
 pub fn modal(
     id: impl Into<ElementId>,
     title: impl Into<SharedString>,
@@ -191,7 +202,7 @@ impl Modal {
         self.size = size;
         self
     }
-    /// A width other than the size's, for a dialog that sets its own.
+    /// Sets the panel's width, in place of the width of its size.
     pub fn width(mut self, width: f32) -> Self {
         self.width = Some(width);
         self
@@ -200,28 +211,31 @@ impl Modal {
         self.body.push(child.into_any_element());
         self
     }
-    /// A button in the footer, which shows once it has one.
+    /// Adds a button to the footer. The footer is drawn only when it has at
+    /// least one button.
     pub fn footer(mut self, button: impl IntoElement) -> Self {
         self.footer.push(button.into_any_element());
         self
     }
-    /// What the close button, Escape and a click on the backdrop do.
+    /// Sets what the close button, Escape and a click on the backdrop do.
     pub fn on_close(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_close = Some(Rc::new(handler));
         self
     }
-    /// The focus the dialog holds while no field in it has the keyboard, so
-    /// Escape reaches it.
+    /// Sets the focus handle that has the keyboard focus while no field in the
+    /// dialog has it, so that Escape reaches the dialog.
     pub fn focus(mut self, focus: &FocusHandle) -> Self {
         self.focus = Some(focus.clone());
         self
     }
-    /// `flush`: content that reaches the body's edges, such as a list.
+    /// Removes the body's padding, for content that reaches the body's edges,
+    /// such as a list.
     pub fn flush(mut self) -> Self {
         self.flush = true;
         self
     }
-    /// Dialogs opened over another one draw above it.
+    /// Sets the dialog's drawing order. A dialog that is opened over another
+    /// one is given a higher `priority`, so that it is drawn above the other.
     pub fn layer(mut self, priority: usize) -> Self {
         self.priority = priority;
         self
@@ -255,7 +269,9 @@ impl RenderOnce for Modal {
             )
             .read(cx)
             .clone();
-        // The body's own focus, so Tab can tell what it holds.
+        // The body has its own focus handle, so that `focus::follow` can tell
+        // whether the control that Tab moved the keyboard focus to is inside
+        // the body.
         let body_focus = window
             .use_keyed_state(
                 ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "body-focus".into()),
@@ -266,13 +282,15 @@ impl RenderOnce for Modal {
             .clone();
         super::focus::follow(&scroll, &body_focus, window, cx);
 
-        // `modalIn` / `modalOut`: `scale(0.97) translateY(4px)` about the
-        // centre, with the opacity. GPUI cannot scale the contents, so while
-        // the dialog moves the panel's surface is drawn at the scale, the
-        // contents stay at full size and in place, clipped to it. That needs
-        // the contents' height, measured on an earlier frame; until there is
-        // one, and whenever the dialog is at rest, the contents size the
-        // panel as usual.
+        // While the dialog fades in or out, its panel is drawn smaller about
+        // its centre (97% of its size when hidden), lower (by up to 4px) and
+        // partly transparent. GPUI cannot scale the contents, so during the
+        // animation only the panel's surface is drawn at the scale. The
+        // contents keep their full size and their place, and are clipped to the
+        // surface. For this the height of the contents must be known, and it is
+        // measured on an earlier frame. Until it has been measured, and
+        // whenever the dialog is not animating, the contents set the panel's
+        // size as usual.
         let width = self
             .width
             .unwrap_or(self.size.width_in(f32::from(viewport.width)));
@@ -325,7 +343,7 @@ impl RenderOnce for Modal {
                             .child(self.title.clone()),
                     )
                     .child({
-                        // `WindowCloseButton`, which closes the dialog.
+                        // The close button, which closes the dialog.
                         let close = self.on_close.clone();
                         super::window_chrome::close_button("window-close", move |_, window, cx| {
                             if let Some(close) = &close {
@@ -333,7 +351,8 @@ impl RenderOnce for Modal {
                             }
                         })
                     })
-                    // `box-shadow: 0 -1px 0 var(--color-border-secondary) inset`
+                    // A 1px line in the secondary border colour along the
+                    // bottom of the header.
                     .child(
                         div()
                             .absolute()
@@ -365,7 +384,9 @@ impl RenderOnce for Modal {
                             .pt(px(padding))
                             .pb(px(padding))
                             .pl(px(padding))
-                            // `scrollbar-gutter: stable` keeps the gutter.
+                            // The right padding includes the scrollbar's
+                            // gutter, so the contents have the same width
+                            // whether or not the scrollbar is shown.
                             .pr(px(padding + super::scrollbar::GUTTER))
                             .children(self.body),
                     )
@@ -387,8 +408,8 @@ impl RenderOnce for Modal {
                     .children(self.footer),
             );
         }
-        // While no control in it has the keyboard, the dialog is what
-        // assistive technology reads as focused.
+        // While no control in the dialog has the keyboard focus, assistive
+        // technology reads the dialog itself as focused.
         let mut panel = dialog_panel(self.id.clone(), theme::RADIUS_LG, self.title.clone(), cx)
             .when_some(self.focus.clone(), |panel, focus| panel.a11y_focus(&focus))
             .relative()
@@ -397,7 +418,8 @@ impl RenderOnce for Modal {
             .top(px(drop))
             .opacity(shown);
         panel = match frame {
-            // Centred by the backdrop, so the smaller frame stays centred.
+            // The backdrop centres the panel, so the smaller panel stays
+            // centred.
             Some((left, top, scaled_width, scaled_height)) => {
                 panel.w(px(scaled_width)).h(px(scaled_height)).child(
                     content
@@ -432,11 +454,12 @@ impl RenderOnce for Modal {
     }
 }
 
-/// `.panel`: a dialog's glass with its edges and corner `radius`;
-/// `role="dialog"` with `aria-modal` and `label` as its name. A press
-/// inside it is not a press on the [`backdrop`]. [`Modal`] is one; a
-/// dialog with no title bar ([`super::progress_dialog`], the import task
-/// dialog) lays its own contents in one.
+/// Returns a dialog's glass panel with the corner radius `radius`. Assistive
+/// technology is told that it is a modal dialog named `label`. A press inside
+/// the panel is stopped there, so it is not a press on the [`backdrop`].
+/// [`Modal`] uses this panel. A dialog with no title bar
+/// ([`super::progress_dialog`], the import task dialog) lays out its own
+/// contents in one.
 pub fn dialog_panel(
     id: impl Into<ElementId>,
     radius: f32,
@@ -451,13 +474,13 @@ pub fn dialog_panel(
         .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 
-/// `.backdrop`: the dimmed layer over the whole window that a dialog's
-/// panel sits centred on, at `strength` (0 to 1) of
-/// `--modal-backdrop`. It takes every press and scroll beneath it and
-/// holds the dialog's keys (`Modal`: Escape is [`Dismiss`]); with `focus` it
-/// holds the keyboard while no field in the dialog has it and keeps Tab
-/// and Shift-Tab among the dialog's controls. The dialog adds what Escape
-/// and a click on it do.
+/// Returns the dimmed layer over the whole window, in which a dialog's panel is
+/// centred. Its colour is `theme::MODAL_BACKDROP` at `strength` (0 to 1) of
+/// that colour's opacity. It stops every press and scroll from reaching what is
+/// beneath it. It has the key context `Modal`, in which Escape is [`Dismiss`].
+/// With `focus`, it has the keyboard focus while no field in the dialog has it,
+/// and it keeps Tab and Shift-Tab among the dialog's controls. The caller adds
+/// what Escape and a click on the layer do.
 pub fn backdrop(
     id: impl Into<ElementId>,
     strength: f32,
@@ -466,8 +489,9 @@ pub fn backdrop(
 ) -> Stateful<Div> {
     let viewport = window.viewport_size();
     let backdrop = rgba(theme::MODAL_BACKDROP);
-    // A press on it closes the dialog; assistive technology closes it with
-    // the close button or Escape instead.
+    // A press on the layer closes the dialog. The layer is hidden from
+    // assistive technology, whose users close the dialog with the close button
+    // or Escape.
     let layer = div()
         .id(id)
         .a11y_presentational()
@@ -482,7 +506,7 @@ pub fn backdrop(
             ..backdrop
         })
         .key_context("Modal")
-        // Nothing beneath the dialog scrolls while it is up.
+        // Nothing beneath the dialog scrolls while the dialog is open.
         .on_scroll(|_, _, cx| cx.stop_propagation());
     match focus {
         Some(focus) => super::focus::scope(layer.track_focus(focus), focus),
@@ -490,8 +514,9 @@ pub fn backdrop(
     }
 }
 
-/// A dialog's [`backdrop`], with its panel, over the whole window on
-/// `priority` (`ui::layer::DIALOG`, more for one opened over another).
+/// Draws a dialog's [`backdrop`], with the panel in it, over the whole window
+/// at the drawing order `priority`. That is `ui::layer::DIALOG`, or a higher
+/// number for a dialog that is opened over another.
 pub fn over_window(layer: Stateful<Div>, priority: usize) -> impl IntoElement {
     deferred(anchored().position(point(px(0.), px(0.))).child(layer)).with_priority(priority)
 }

@@ -9,16 +9,17 @@ type AddHandler = Box<dyn Fn(&Bounds<Pixels>, &mut Window, &mut App) + 'static>;
 type PressHandler = Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>;
 
 struct State {
-    /// The title pill, 50 ms.
+    /// The fade of the fill behind the title, which takes 50 ms.
     hover: motion::Fade,
-    /// The chevron and the add button appearing, 200 ms.
+    /// The fade of the chevron and the add button as they appear, which takes
+    /// 200 ms.
     reveal: motion::Fade,
 }
 
-/// A sidebar section title (`SectionRow` in `SidebarRow.tsx`). Hovering the
-/// header lights a pill behind the title, turns the title to the primary text
-/// colour, and reveals a chevron and the section's add button. A click folds
-/// the section.
+/// The title of a section of the sidebar. While the pointer is over the
+/// header, the title has a fill behind it and the primary text colour, and a
+/// chevron and the section's add button are shown. A click folds the section
+/// or unfolds it.
 #[derive(IntoElement)]
 pub struct SectionHeader {
     id: ElementId,
@@ -43,7 +44,7 @@ pub fn section_header(id: impl Into<ElementId>, label: impl Into<SharedString>) 
 }
 
 impl SectionHeader {
-    /// Shown after the title when it is not zero.
+    /// Sets the count, which is shown after the title when it is not zero.
     pub fn count(mut self, count: usize) -> Self {
         self.count = count;
         self
@@ -59,8 +60,9 @@ impl SectionHeader {
         self.on_toggle = Some(Box::new(handler));
         self
     }
-    /// The button at the header's right edge that adds to the section. The
-    /// handler is given the button's bounds, for a menu that opens below it.
+    /// Adds the button at the header's right edge that adds something to the
+    /// section. The handler is called with the button's bounds, so that a menu
+    /// can be opened below the button.
     pub fn on_add(
         mut self,
         tip: Tip,
@@ -69,7 +71,8 @@ impl SectionHeader {
         self.add = Some((tip, Box::new(handler)));
         self
     }
-    /// A right-button press: the section's context menu.
+    /// Sets the handler for a press of the right mouse button, which opens the
+    /// section's context menu.
     pub fn on_secondary(
         mut self,
         handler: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
@@ -91,7 +94,8 @@ impl RenderOnce for SectionHeader {
             cx,
             |_, _| tooltip::Hover::default(),
         );
-        // Where the add button was last painted, for its handler.
+        // The bounds at which the add button was last painted. They are passed
+        // to the button's handler.
         let placed = window.use_keyed_state(
             ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "add".into()),
             cx,
@@ -113,7 +117,10 @@ impl RenderOnce for SectionHeader {
         let mut title = div()
             .relative()
             .h(px(24.))
-            // `list-anchor + folder-glyph-inset − control-inset + text-nudge`
+            // The left margin is the list's inset (`theme::SIDEBAR_INSET`),
+            // plus the 3.5px by which a folder's glyph is inset, less the
+            // title's own padding (`theme::SIDEBAR_SECTION_INSET`), plus 1px
+            // that corrects the position of the text.
             .ml(px(theme::SIDEBAR_INSET + 3.5
                 - theme::SIDEBAR_SECTION_INSET
                 + 1.))
@@ -143,9 +150,7 @@ impl RenderOnce for SectionHeader {
                             .text_color(if hovered { theme.text() } else { tertiary })
                             .child(self.label.clone()),
                     )
-                    // The count follows the title with no space: the space
-                    // the markup has is a flex item's leading space, which
-                    // the browser drops.
+                    // The count follows the title with no space between them.
                     .children(
                         (self.count > 0)
                             .then(|| format!("({})", format::grouped(self.count as u64))),
@@ -168,8 +173,9 @@ impl RenderOnce for SectionHeader {
             );
         }
         let header_state = state.clone();
-        // `role="button"` with `aria-expanded`, read as its text: the label
-        // and the count after it.
+        // Assistive technology is told that the header is a button and whether
+        // its section is unfolded. The button's name is the label, followed by
+        // the count when there is one.
         let name: SharedString = if self.count > 0 {
             format!("{} ({})", self.label, format::grouped(self.count as u64)).into()
         } else {

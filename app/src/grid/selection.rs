@@ -1,36 +1,42 @@
-//! The grid's selection over a destination the grid only partly holds, as
-//! the Electron grid keeps it (`state/selection.ts`, `rangeSelection.ts`):
-//! items chosen one by one, by id; everything (Select All) less the items
-//! taken out since; or shift-click spans of the destination's order, plus
-//! items added outside them and less items taken out inside them. Spans and
-//! the whole destination reach items that are not loaded; an edit addresses
-//! them through the library (`SelectionTarget::Query`, `::Range`), which
-//! resolves them, never through what the grid holds.
+//! The grid's selection. The grid holds only a part of a destination's
+//! items, and a selection can include items that the grid has not loaded. A
+//! selection is one of three kinds: items chosen one by one, held by id;
+//! every item of the destination (Select All) except the items taken out
+//! afterwards; or spans of the destination's order made with shift-clicks,
+//! together with the items added outside the spans and without the items
+//! taken out inside them. For the last two kinds, an edit names the
+//! selection to the library as a query or as spans
+//! (`SelectionTarget::Query`, `SelectionTarget::Range`), and the library
+//! works out which items it holds. An edit never works from the items the
+//! grid has loaded.
 use picto_library::RootId;
 use picto_library::query::RootQuery;
 use picto_library::selection::{RangeSpan, SelectionTarget};
 use std::collections::{BTreeMap, HashMap};
 
-/// What a left press on a tile or the grid means, by the keys held
-/// (`event.metaKey || event.ctrlKey` in production, each platform's own key):
-/// on macOS a Control-press is a secondary click, which opens the menu, and
-/// the key that adds to the selection is Command there and Control
-/// elsewhere.
+/// What a left press on a tile or on the grid's empty space does, which
+/// depends on the keys held. The key that adds to the selection is Command
+/// on macOS and Control on Windows and Linux. On macOS a press with Control
+/// held is a secondary click, which opens the menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Press {
-    /// Selects only what was pressed (or starts a fresh rubber band).
+    /// Selects only the pressed item. On empty space it starts a rubber band
+    /// that replaces the selection.
     Plain,
-    /// Adds what was pressed to the selection or takes it out.
+    /// Adds the pressed item to the selection, or takes it out if it is
+    /// selected.
     Toggle,
-    /// Selects from the anchor to what was pressed; `keep` adds the span to
-    /// the selection rather than replacing it.
+    /// Selects the items from the anchor to the pressed item. With `keep`
+    /// they are added to the selection, and without it they replace the
+    /// selection.
     Range { keep: bool },
-    /// A secondary click: the menu, as a right-click.
+    /// A secondary click, which opens the menu as a right-click does.
     Menu,
 }
 
 impl Press {
-    /// The press these keys make, on this platform (`mac`).
+    /// Returns what a left press with `modifiers` held does. `mac` says
+    /// whether the platform is macOS.
     pub fn of(modifiers: gpui::Modifiers, mac: bool) -> Self {
         if mac && modifiers.control {
             return Press::Menu;
@@ -47,18 +53,20 @@ impl Press {
         }
     }
 
-    /// The press these keys make on the platform this runs on.
+    /// Returns what a left press with `modifiers` held does on the platform
+    /// the app runs on.
     pub fn here(modifiers: gpui::Modifiers) -> Self {
         Self::of(modifiers, cfg!(target_os = "macos"))
     }
 
-    /// Whether the press keeps what is selected: a rubber band adds to it.
+    /// Whether a rubber band started with this press adds to the selection
+    /// instead of replacing it.
     pub fn keeps(self) -> bool {
         matches!(self, Press::Toggle | Press::Range { .. })
     }
 }
 
-/// An item and where the destination's order has it.
+/// An item and its position in the destination's order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct End {
     pub id: RootId,
@@ -67,12 +75,14 @@ pub struct End {
 
 #[derive(Clone, Debug, PartialEq)]
 enum Kind {
-    /// Items chosen one by one, with where the grid showed each.
+    /// Items chosen one by one, each with the ordinal at which the grid
+    /// showed it.
     Explicit(BTreeMap<RootId, usize>),
-    /// Everything the destination holds.
+    /// Every item of the destination.
     Whole,
-    /// Spans of the order, each `(low, high)`, sorted and apart; and items
-    /// added outside them.
+    /// Spans of the destination's order, each from `low` to `high`, sorted,
+    /// with no two of them overlapping or adjacent; and the items added
+    /// outside the spans, each with its ordinal.
     Range {
         spans: Vec<(End, End)>,
         included: BTreeMap<RootId, usize>,
@@ -82,8 +92,8 @@ enum Kind {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Selection {
     kind: Kind,
-    /// Items taken out of the whole destination or out of a span, with
-    /// where the grid showed each.
+    /// The items taken out of the whole destination or out of a span, each
+    /// with the ordinal at which the grid showed it.
     excluded: BTreeMap<RootId, usize>,
 }
 
@@ -96,7 +106,8 @@ impl Default for Selection {
     }
 }
 
-/// `mergeSpans`: sorted, with spans that overlap or touch made one.
+/// Returns the spans sorted by their start, with spans that overlap or are
+/// adjacent joined into one.
 fn merge(mut spans: Vec<(End, End)>) -> Vec<(End, End)> {
     spans.sort_by_key(|(low, _)| low.ordinal);
     let mut merged: Vec<(End, End)> = Vec::with_capacity(spans.len());
@@ -127,7 +138,8 @@ fn in_spans(spans: &[(End, End)], ordinal: usize) -> bool {
         .any(|(low, high)| low.ordinal <= ordinal && ordinal <= high.ordinal)
 }
 
-/// Ids by where the grid showed them.
+/// Returns the ids of `items`, ordered by the ordinal at which the grid
+/// showed each.
 fn in_order(items: &BTreeMap<RootId, usize>) -> Vec<RootId> {
     let mut ordered = items.iter().map(|(id, at)| (*at, *id)).collect::<Vec<_>>();
     ordered.sort_unstable();
@@ -135,7 +147,7 @@ fn in_order(items: &BTreeMap<RootId, usize>) -> Vec<RootId> {
 }
 
 impl Selection {
-    /// One item alone, as a plain click selects it.
+    /// Returns a selection of one item, which is what a plain click leaves.
     pub fn only(end: End) -> Self {
         Self {
             kind: Kind::Explicit([(end.id, end.ordinal)].into()),
@@ -143,7 +155,8 @@ impl Selection {
         }
     }
 
-    /// These items, as a rubber band leaves them.
+    /// Returns a selection of these items, chosen one by one, which is what
+    /// a rubber band leaves.
     pub fn of(ends: impl IntoIterator<Item = End>) -> Self {
         Self {
             kind: Kind::Explicit(ends.into_iter().map(|end| (end.id, end.ordinal)).collect()),
@@ -151,7 +164,7 @@ impl Selection {
         }
     }
 
-    /// Everything the destination holds.
+    /// Returns a selection of every item of the destination.
     pub fn whole() -> Self {
         Self {
             kind: Kind::Whole,
@@ -167,13 +180,15 @@ impl Selection {
         }
     }
 
-    /// Whether the selection reaches past what was chosen one by one, so an
-    /// edit has to address the destination's query.
+    /// Whether the selection is the whole destination or holds spans. Such
+    /// a selection can include items the grid has not loaded, so an edit
+    /// names it to the library by the destination's query.
     pub fn query_wide(&self) -> bool {
         !matches!(self.kind, Kind::Explicit(_))
     }
 
-    /// Whether the item at `ordinal` is selected.
+    /// Whether the item `id`, which is at `ordinal` in the destination's
+    /// order, is selected.
     pub fn contains(&self, id: RootId, ordinal: usize) -> bool {
         match &self.kind {
             Kind::Explicit(items) => items.contains_key(&id),
@@ -185,7 +200,8 @@ impl Selection {
         }
     }
 
-    /// How many items are selected in a destination of `total`.
+    /// Returns the number of selected items in a destination of `total`
+    /// items.
     pub fn count(&self, total: u64) -> u64 {
         let excluded = self.excluded.len() as u64;
         match &self.kind {
@@ -201,8 +217,10 @@ impl Selection {
         }
     }
 
-    /// The items chosen one by one, in the grid's order: the whole
-    /// selection when it is explicit, else the items added outside spans.
+    /// Returns the items chosen one by one, in the grid's order. For an
+    /// explicit selection these are all of its items. For a selection with
+    /// spans they are the items added outside the spans. For the whole
+    /// destination there are none.
     pub fn chosen(&self) -> Vec<RootId> {
         match &self.kind {
             Kind::Explicit(items)
@@ -213,9 +231,10 @@ impl Selection {
         }
     }
 
-    /// A click with the selection key: adds the item, or takes it out.
-    /// Taking out the last item of a destination of `total` leaves nothing
-    /// selected.
+    /// Applies a click with the key that adds to the selection: adds the
+    /// item if it is not selected, and takes it out if it is. When that
+    /// takes out the last selected item of a destination of `total` items,
+    /// the selection becomes empty.
     pub fn toggle(&mut self, end: End, total: u64) {
         let flip = |items: &mut BTreeMap<RootId, usize>| {
             if items.remove(&end.id).is_none() {
@@ -238,10 +257,18 @@ impl Selection {
         }
     }
 
-    /// Shift-click from `anchor` to `focus`. With the anchor among the
-    /// items `loaded` (by ordinal) and nothing query-wide to extend, the
-    /// items between them are chosen one by one, added to the selection
-    /// with `keep`; otherwise the run is a span the library resolves.
+    /// Applies a shift-click that selects from `anchor` to `focus`. `loaded`
+    /// returns the id of the loaded item at an ordinal, or `None` when the
+    /// grid has not loaded that item.
+    ///
+    /// When `anchor` is loaded, and either `keep` is false or the selection
+    /// is explicit, the loaded items from `anchor` to `focus` are chosen one
+    /// by one. With `keep` they are added to the items already chosen.
+    ///
+    /// In every other case the run from `anchor` to `focus` is stored as a
+    /// span, which can include items that are not loaded and which the
+    /// library resolves. With `keep` the span is added to the selection, and
+    /// without it the span replaces the selection.
     pub fn extend(
         &mut self,
         anchor: End,
@@ -280,8 +307,9 @@ impl Selection {
         };
     }
 
-    /// `addSpan`: a span added to what is selected. Items chosen one by one
-    /// or taken out that the span covers become part of it.
+    /// Adds a span to the selection. Items chosen one by one that the span
+    /// covers become part of the span, and items taken out that the span
+    /// covers are selected again.
     fn add_span(&mut self, span: (End, End)) {
         let inside = |ordinal: usize| span.0.ordinal <= ordinal && ordinal <= span.1.ordinal;
         let outside = |items: &BTreeMap<RootId, usize>| {
@@ -309,8 +337,9 @@ impl Selection {
         };
     }
 
-    /// Every item whose place a refresh needs to know: the items chosen,
-    /// taken out, and the ends of spans.
+    /// Returns the id of every item whose position must be looked up after
+    /// the destination is read again: the items chosen one by one, the items
+    /// taken out, and the two ends of each span.
     pub fn tracked(&self) -> Vec<RootId> {
         let mut ids = self.excluded.keys().copied().collect::<Vec<_>>();
         match &self.kind {
@@ -328,12 +357,13 @@ impl Selection {
         ids
     }
 
-    /// `reconcileRange`: after the destination was read again, every item
-    /// moves to where it is now (`None`: it left the destination). Items
-    /// that left are dropped, and so is a span whose end left, since no run
-    /// of the order is what it described. Items not in `places` keep theirs.
-    /// Answers whether a span was dropped that way, which production warns
-    /// of.
+    /// Updates the selection after the destination was read again. `places`
+    /// gives the new ordinal of an item, or `None` when the item is no longer
+    /// in the destination. An item that is not in `places` keeps its ordinal.
+    /// Items that left the destination are removed from the selection. A
+    /// span is removed when one of its ends left, because it no longer
+    /// describes a run of the order. Returns whether a span was removed for
+    /// that reason, so that the caller can warn the user.
     pub fn reconcile(&mut self, places: &HashMap<RootId, Option<usize>>) -> bool {
         let mut lost_end = false;
         let moved = |id: &RootId, at: usize| match places.get(id) {
@@ -378,8 +408,10 @@ impl Selection {
         lost_end
     }
 
-    /// What an edit of the selection addresses in the destination `query`
-    /// shows.
+    /// Returns the description of the selection that an edit sends to the
+    /// library. `query` is the query of the destination that the grid shows.
+    /// Returns `None` when the selection is not explicit and there is no
+    /// query.
     pub fn target(&self, query: Option<&RootQuery>) -> Option<SelectionTarget> {
         let excluded = || in_order(&self.excluded);
         Some(match &self.kind {
@@ -420,7 +452,7 @@ mod tests {
             shift,
             ..Default::default()
         };
-        // macOS: Command toggles, Control is the secondary click.
+        // On macOS, Command toggles and Control is the secondary click.
         assert_eq!(Press::of(keys(false, true, false), true), Press::Toggle);
         assert_eq!(Press::of(keys(true, false, false), true), Press::Menu);
         assert_eq!(Press::of(keys(true, false, true), true), Press::Menu);
@@ -428,7 +460,8 @@ mod tests {
             Press::of(keys(false, true, true), true),
             Press::Range { keep: true }
         );
-        // Windows and Linux: Control toggles; the Windows key does nothing.
+        // On Windows and Linux, Control toggles and the Windows key does
+        // nothing.
         assert_eq!(Press::of(keys(true, false, false), false), Press::Toggle);
         assert_eq!(Press::of(keys(false, true, false), false), Press::Plain);
         assert_eq!(
@@ -445,14 +478,16 @@ mod tests {
     }
 
     fn end(ordinal: usize) -> End {
-        // Item ids differ from ordinals so the two are never confused.
+        // The item ids differ from the ordinals, so that a test cannot pass by
+        // using one in place of the other.
         End {
             id: RootId(ordinal as u32 + 1000),
             ordinal,
         }
     }
 
-    /// A window holding ordinals `start..start + count`.
+    /// Returns a function that stands for a grid that has loaded the items
+    /// at the ordinals `start..start + count`.
     fn window(start: usize, count: usize) -> impl Fn(usize) -> Option<RootId> {
         move |ordinal| {
             (start..start + count)
@@ -469,7 +504,7 @@ mod tests {
         assert_eq!(selection.count(2673), 5);
         assert!(selection.contains(end(12).id, 12));
         assert!(!selection.contains(end(15).id, 15));
-        // Kept: added to what was chosen.
+        // With `keep`, the items are added to those already chosen.
         let mut kept = Selection::only(end(100));
         kept.extend(end(10), end(12), true, window(0, 500));
         assert_eq!(kept.count(2673), 4);
@@ -477,13 +512,14 @@ mod tests {
 
     #[test]
     fn a_range_from_an_unloaded_anchor_is_a_span_the_library_resolves() {
-        // The anchor at ordinal 3 scrolled out of the window, which now
-        // holds 1,500..3,000; a shift-click on 2,000.
+        // The anchor at ordinal 3 is no longer loaded. The grid now holds the
+        // ordinals 1,500 to 2,999, and the shift-click is on ordinal 2,000.
         let mut selection = Selection::only(end(3));
         selection.extend(end(3), end(2000), false, window(1500, 1500));
         assert!(selection.query_wide());
         assert_eq!(selection.count(10_000), 1998);
-        // Unloaded items inside the span are selected; outside are not.
+        // Items inside the span that are not loaded are selected, and items
+        // outside it are not.
         assert!(selection.contains(end(700).id, 700));
         assert!(!selection.contains(end(2001).id, 2001));
         let query = RootQuery {
@@ -502,16 +538,16 @@ mod tests {
     fn toggling_inside_and_outside_a_span() {
         let mut selection = Selection::default();
         selection.extend(end(3), end(2000), false, window(1500, 1500));
-        // Inside the span: taken out.
+        // A toggle inside the span takes the item out.
         selection.toggle(end(1600), 10_000);
         assert!(!selection.contains(end(1600).id, 1600));
         assert_eq!(selection.count(10_000), 1997);
-        // Outside it: added.
+        // A toggle outside the span adds the item.
         selection.toggle(end(2500), 10_000);
         assert!(selection.contains(end(2500).id, 2500));
         assert_eq!(selection.count(10_000), 1998);
-        // A second span with Cmd-Shift covers the added item: it is part
-        // of the span, not counted twice.
+        // A second span, added with `keep`, covers the added item. The item
+        // becomes part of the span and is not counted twice.
         selection.extend(end(2400), end(2600), true, window(1500, 1500));
         assert_eq!(selection.count(10_000), 1997 + 201);
     }
@@ -559,16 +595,17 @@ mod tests {
     fn a_refresh_moves_items_and_drops_those_that_left() {
         let mut chosen = Selection::of([end(1), end(2), end(3)]);
         let places = HashMap::from([(end(1).id, Some(4)), (end(2).id, None)]);
-        // Items that left a chosen set are not a range's lost end.
+        // Items that left an explicit selection are not reported as the lost
+        // end of a span.
         assert!(!chosen.reconcile(&places));
         assert_eq!(chosen.count(100), 2);
         assert_eq!(chosen.chosen(), vec![end(3).id, end(1).id]);
-        // A span whose end left the destination is dropped.
+        // A span is removed when one of its ends left the destination.
         let mut spanned = Selection::default();
         spanned.extend(end(3), end(2000), false, window(1500, 10));
         assert!(spanned.reconcile(&HashMap::from([(end(3).id, None)])));
         assert!(spanned.is_empty());
-        // One whose ends moved follows them.
+        // A span whose end moved follows that end.
         let mut moved = Selection::default();
         moved.extend(end(3), end(2000), false, window(1500, 10));
         assert!(!moved.reconcile(&HashMap::from([(end(3).id, Some(5))])));

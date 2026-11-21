@@ -1,15 +1,18 @@
-//! A foreground task (an import) as the application reports it
-//! (`tasks.list`), and the words and states `taskPresentation.ts` gives it.
+//! A foreground task (an import) as the application reports it with the
+//! command `tasks.list`, and the texts, colours and states that the task
+//! dialog and the task bar show for it.
 use crate::i18n::format::grouped;
 use serde_json::Value;
 
-/// `ForegroundTask` (`core/src/tasks.rs`).
+/// A foreground task, with the fields of `ForegroundTask` in
+/// `core/src/tasks.rs`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Task {
     pub task_id: i64,
     pub kind: String,
     pub title: String,
-    /// running, paused, reverting, finished, stopped or reverted.
+    /// One of "running", "paused", "reverting", "finished", "stopped" and
+    /// "reverted".
     pub state: String,
     pub scan_complete: bool,
     pub total: u64,
@@ -27,7 +30,8 @@ pub struct Task {
 }
 
 impl Task {
-    /// One task of the `tasks.list` answer.
+    /// Reads one task of the `tasks.list` answer. Returns `None` when the
+    /// task has no id or no state.
     pub fn read(value: &Value) -> Option<Self> {
         let text = |key: &str| value[key].as_str().map(str::to_owned);
         let count = |key: &str| value[key].as_u64().unwrap_or(0);
@@ -60,14 +64,14 @@ impl Task {
         })
     }
 
-    /// The `tasks.list` answer (or a control's), or `None` when it is not
-    /// a list of tasks.
+    /// Reads the answer of `tasks.list` or of a task control. Returns `None`
+    /// when it is not a list of tasks.
     pub fn read_list(value: &Value) -> Option<Vec<Self>> {
         value.as_array()?.iter().map(Self::read).collect()
     }
 }
 
-/// `TaskFailure`: a file that could not be imported.
+/// A file that could not be imported, and the error.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Failure {
     pub path: String,
@@ -75,7 +79,8 @@ pub struct Failure {
 }
 
 impl Failure {
-    /// The `tasks.failures` answer.
+    /// Reads the answer of the command `tasks.failures`. A row without a
+    /// path is left out.
     pub fn read_list(value: &Value) -> Vec<Self> {
         value
             .as_array()
@@ -104,7 +109,7 @@ pub enum Phase {
     Undone,
 }
 
-/// `taskTone`: the colour of the task's glyph and progress.
+/// What decides the colour of the task's icon and of its progress bar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
     Working,
@@ -114,7 +119,7 @@ pub enum Tone {
 }
 
 impl Task {
-    /// `taskPhase`
+    /// Returns the phase that the task's state and `scan_complete` give.
     pub fn phase(&self) -> Phase {
         match self.state.as_str() {
             "paused" => Phase::Paused,
@@ -127,17 +132,18 @@ impl Task {
         }
     }
 
-    /// `isTaskWorking`: progress moves, so the list is read again each second.
+    /// Returns whether the task's progress is changing. While it is, the
+    /// task list is read again every second.
     pub fn working(&self) -> bool {
         matches!(self.state.as_str(), "running" | "reverting")
     }
 
-    /// `isTaskOpen`: not yet over.
+    /// Returns whether the task is not over yet.
     pub fn open(&self) -> bool {
         matches!(self.state.as_str(), "running" | "paused" | "reverting")
     }
 
-    /// `taskTitle`
+    /// Returns the title that the task dialog and the task bar show.
     pub fn heading(&self) -> String {
         let title = &self.title;
         match self.phase() {
@@ -149,7 +155,7 @@ impl Task {
         }
     }
 
-    /// `taskSubtitle`
+    /// Returns the line under the title of the task dialog.
     pub fn subtitle(&self) -> String {
         match self.phase() {
             Phase::Finding => crate::i18n::t("Finding files…").into(),
@@ -181,7 +187,7 @@ impl Task {
         }
     }
 
-    /// `taskTone`
+    /// Returns the tone of the task's icon and progress bar.
     pub fn tone(&self) -> Tone {
         match self.phase() {
             Phase::Paused => Tone::Paused,
@@ -192,7 +198,7 @@ impl Task {
         }
     }
 
-    /// The task's glyph (`TaskIcon`).
+    /// Returns the name of the task's icon.
     pub fn glyph(&self) -> &'static str {
         match self.phase() {
             Phase::Finding => "task-folder-search",
@@ -204,8 +210,9 @@ impl Task {
         }
     }
 
-    /// `Progress`: no share is known while files are still being found or
-    /// removed, or while none have been found.
+    /// Returns whether the share of the work done is unknown. It is unknown
+    /// while files are still being found or removed, and while none have been
+    /// found.
     pub fn indeterminate(&self) -> bool {
         match self.phase() {
             Phase::Finding | Phase::Removing => true,
@@ -214,7 +221,7 @@ impl Task {
         }
     }
 
-    /// How much of the track the fill covers, 0 to 1.
+    /// Returns how much of the progress bar is filled, from 0 to 1.
     pub fn share(&self) -> f32 {
         if self.phase() == Phase::Finished {
             return 1.;
@@ -225,7 +232,8 @@ impl Task {
         (self.done as f32 / self.total as f32).min(1.)
     }
 
-    /// `Counts`: the left and right of the counts line.
+    /// Returns the texts on the left and on the right of the line of counts
+    /// under the progress bar.
     pub fn counts(&self) -> (String, Option<String>) {
         match self.phase() {
             Phase::Finding => (
@@ -254,8 +262,9 @@ impl Task {
         }
     }
 
-    /// The task bar's detail: "N found" while finding, else "done / total"
-    /// with the short time left while importing.
+    /// Returns the text on a row of the task bar: "N found" while files are
+    /// being found, otherwise "done / total", followed by the short time left
+    /// while the task is importing.
     pub fn bar_detail(&self) -> String {
         let phase = self.phase();
         if phase == Phase::Finding {
@@ -268,7 +277,8 @@ impl Task {
         }
     }
 
-    /// The Stop view's question and its choices (`StopView`).
+    /// Returns the choices that the question about stopping offers: each
+    /// choice, its title and its description.
     pub fn stop_choices(&self) -> Vec<(StopChoice, &'static str, String)> {
         let remaining = self.total.saturating_sub(self.done);
         let mut choices = vec![(
@@ -294,15 +304,15 @@ impl Task {
     }
 }
 
-/// What a stopped import does with what it already added.
+/// What a stopped import does with the items that it has already added.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopChoice {
     Keep,
     Remove,
 }
 
-/// `formatTimeLeft`: "About 3 min left", or nothing while there is no
-/// estimate yet.
+/// Returns the time left in words, for example "About 3 min left".
+/// Returns `None` while there is no estimate yet.
 pub fn time_left(seconds: Option<u64>) -> Option<String> {
     let seconds = seconds?;
     Some(if seconds < 60 {
@@ -315,7 +325,8 @@ pub fn time_left(seconds: Option<u64>) -> Option<String> {
     })
 }
 
-/// `formatTimeLeftShort`: "3 min", "1 h 5 min".
+/// Returns the time left in short form, for example "3 min" or
+/// "1 h 5 min".
 pub fn time_left_short(seconds: Option<u64>) -> Option<String> {
     let seconds = seconds?;
     Some(if seconds < 60 {
@@ -328,7 +339,8 @@ pub fn time_left_short(seconds: Option<u64>) -> Option<String> {
     })
 }
 
-/// Whole hours, and the rest rounded to minutes, as `Math.round` does.
+/// Returns the whole hours in `seconds`, and the rest rounded to the
+/// nearest minute.
 fn hours_and_minutes(seconds: u64) -> (u64, u64) {
     (
         seconds / 3600,
@@ -336,7 +348,8 @@ fn hours_and_minutes(seconds: u64) -> (u64, u64) {
     )
 }
 
-/// `formatDuration`: "12 s", "3 min 4 s", "1 h 2 min"; at least a second.
+/// Returns a length of time in words, for example "12 s", "3 min 4 s" or
+/// "1 h 2 min". The shortest length is one second.
 pub fn duration(milliseconds: i64) -> String {
     let seconds = ((milliseconds as f64 / 1000.).round() as i64).max(1);
     if seconds < 60 {
@@ -349,8 +362,7 @@ pub fn duration(milliseconds: i64) -> String {
     crate::tf!("{value0} h {value1} min", minutes / 60, minutes % 60)
 }
 
-/// Which task the foreground dialog shows and which run in the task bar
-/// (`TaskPresentation`).
+/// Which task the task dialog shows and which tasks are in the task bar.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Presentation {
     pub focused: Option<i64>,
@@ -358,13 +370,13 @@ pub struct Presentation {
 }
 
 impl Presentation {
-    /// `showTask`: brings the task to the foreground dialog.
+    /// Brings the task to the task dialog.
     pub fn show(&mut self, task: i64) {
         self.minimized.retain(|id| *id != task);
         self.focused = Some(task);
     }
 
-    /// `minimizeTask`: the task goes on in the task bar.
+    /// Moves the task to the task bar. The task keeps running.
     pub fn minimize(&mut self, task: i64) {
         if !self.minimized.contains(&task) {
             self.minimized.push(task);
@@ -374,9 +386,9 @@ impl Presentation {
         }
     }
 
-    /// `applyTasks`: forgets tasks that are gone, and gives the foreground
-    /// to an open task that was not sent to the background, one resumed
-    /// after the app was reopened included.
+    /// Forgets the tasks that are no longer in the list. When the task dialog
+    /// shows none, it gets the first open task that is not minimized. This
+    /// includes a task that resumed after the app was reopened.
     pub fn apply(&mut self, tasks: &[Task]) {
         let known = |id: &i64| tasks.iter().any(|task| task.task_id == *id);
         self.minimized.retain(known);
@@ -389,7 +401,8 @@ impl Presentation {
         }
     }
 
-    /// The tasks the bar lists: sent to the background and not in front.
+    /// Returns the tasks that the task bar lists: those that are minimized
+    /// and not in the task dialog.
     pub fn in_bar<'a>(&'a self, tasks: &'a [Task]) -> impl Iterator<Item = &'a Task> + 'a {
         tasks.iter().filter(move |task| {
             self.minimized.contains(&task.task_id) && Some(task.task_id) != self.focused
@@ -397,8 +410,8 @@ impl Presentation {
     }
 }
 
-/// `taskGate('import')`: the open task that keeps an import from starting,
-/// and why, for a tooltip.
+/// Returns the open task that keeps `action` from starting, and the
+/// reason for a tooltip. Returns `None` when no task blocks the action.
 pub fn gate<'a>(tasks: &'a [Task], action: &str) -> Option<(&'a Task, String)> {
     let task = tasks
         .iter()
@@ -436,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn a_working_import_reads_as_production_words_it() {
+    fn a_working_import_reads_as_the_earlier_version_worded_it() {
         let task = task();
         assert_eq!(task.heading(), "Importing “Commissions 2024”");
         assert_eq!(task.subtitle(), "Adding to library · 42 files/s");
@@ -524,7 +537,7 @@ mod tests {
         presentation.show(7);
         assert_eq!(presentation.focused, Some(7));
         assert_eq!(presentation.in_bar(&tasks).count(), 0);
-        // A dismissed task is forgotten.
+        // A task that is no longer in the list is forgotten.
         presentation.apply(&[]);
         assert_eq!(presentation, Presentation::default());
     }

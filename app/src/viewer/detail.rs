@@ -1,9 +1,8 @@
-//! The detail window ("Open in New Window", `DetailWindow.tsx` and
-//! `GroupDetailWindow.tsx`, opened by `open_in_new_window` in the Electron
-//! main process): a frameless window of its own, sized from the media's
-//! shape and locked to it, showing the items that were selected when it
-//! opened. Its toolbar slides over the media and hides a second after the
-//! pointer last moved. Several can be open at once, one per item.
+//! The detail window, which the "Open in New Window" command opens. It is a
+//! frameless window of its own, sized from the media's shape and locked to
+//! that shape, and it shows the items that were selected when it opened. Its
+//! toolbar lies over the media and hides one second after the pointer last
+//! moved. Several detail windows can be open at once, one per item.
 use super::{
     Boundary, End, Media, NextItem, PreviousItem,
     group::GroupReader,
@@ -23,21 +22,24 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 // The detail window's own actions. Their keys come from the shortcut
-// registry (`crate::keymap`, the `DetailWindow` scope), as do the viewer's
-// previous, next and zoom actions it shares with the media view.
+// registry (`crate::keymap`, the `DetailWindow` scope). So do the keys of
+// the viewer's previous, next and zoom actions, which the detail window
+// shares with the media view.
 actions!(detail_window, [CloseWindow, ToggleAlwaysOnTop]);
 
-/// `.toolbar`: 38px tall, 10px in from either side.
+/// The height of the toolbar. `TOOLBAR_PADDING` is the space between the
+/// toolbar's contents and its left and right edges.
 const TOOLBAR_HEIGHT: f32 = 38.;
 const TOOLBAR_PADDING: f32 = 10.;
-/// `.titleName`'s `max-width`.
+/// The largest width of the title in the toolbar. A longer title is cut off.
 const TITLE_WIDTH: f32 = 300.;
-/// `.zoomRatio`'s `min-width`.
+/// The smallest width of the zoom percentage in the toolbar.
 const ZOOM_WIDTH: f32 = 38.;
 
-/// `calcDetailWindowSize`: the largest window of the media's shape within
-/// 85% of the display's work area, grown to at least 400×300 for very small
-/// or very narrow media. Without a known shape, the whole 85%.
+/// Returns the size of a detail window for media of the given pixel size:
+/// the largest window of the media's shape that fits in 85% of the display's
+/// work area, enlarged to at least 400×300 for very small or very narrow
+/// media. Returns the whole 85% when the media's size is not known.
 pub fn window_size(work_area: (f32, f32), media: Option<(u32, u32)>) -> (f32, f32) {
     let max_width = (work_area.0 * 0.85).round();
     let max_height = (work_area.1 * 0.85).round();
@@ -59,15 +61,15 @@ pub fn window_size(work_area: (f32, f32), media: Option<(u32, u32)>) -> (f32, f3
     (width, height)
 }
 
-/// `calcDetailWindowAspectRatio`: the shape the window keeps while resized,
-/// when the media's is known.
+/// Returns the ratio of width to height that the window keeps while it is
+/// resized, or `None` when the media's size is not known.
 pub fn aspect_ratio(media: Option<(u32, u32)>) -> Option<f64> {
     media
         .filter(|(w, h)| *w > 0 && *h > 0)
         .map(|(w, h)| w as f64 / h as f64)
 }
 
-/// `LightImage`: what the window keeps of each item it was given.
+/// What the window keeps of each item it was given.
 #[derive(Clone, Debug)]
 pub struct Entry {
     pub root: RootId,
@@ -96,8 +98,8 @@ impl Entry {
         Some((self.width?, self.height?))
     }
 
-    /// The window's label in the Electron main process: one window per
-    /// media file or collection.
+    /// The key under which the entry's window is held in `Windows`. There is
+    /// one window per media file or collection.
     fn label(&self) -> String {
         if self.collection {
             format!("detail-group-{}", self.root.0)
@@ -106,7 +108,9 @@ impl Entry {
         }
     }
 
-    /// `titleText`: the name (or the hash's start) and the size.
+    /// Returns the window's title: the item's name, or the first 12
+    /// characters of its hash when it has no name, followed by its pixel
+    /// size when that is known.
     fn title(&self) -> String {
         let name = if self.name.is_empty() {
             &self.hash[..self.hash.len().min(12)]
@@ -120,15 +124,16 @@ impl Entry {
     }
 }
 
-/// The open detail windows, by label.
+/// The open detail windows, keyed by the label of the entry each one was
+/// opened on.
 #[derive(Default)]
 struct Windows(HashMap<String, WindowHandle<DetailWindow>>);
 
 impl Global for Windows {}
 
-/// `openGridItemInWindow`: opens `entries[start]` in a window of its own,
-/// with the other entries to step through, or brings forward the window
-/// already showing it. A collection opens alone, as `GroupDetailWindow`.
+/// Opens `entries[start]` in a detail window, with the other entries to step
+/// through. If a window already shows that entry, that window is brought
+/// forward instead. A collection opens alone, without the other entries.
 pub fn open(session: Entity<Session>, mut entries: Vec<Entry>, start: usize, cx: &mut App) {
     let Some(entry) = entries.get(start).cloned() else {
         return;
@@ -162,8 +167,8 @@ pub fn open(session: Entity<Session>, mut entries: Vec<Entry>, start: usize, cx:
     let Ok(handle) = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            // `frame: false`: no titlebar and no traffic lights; the toolbar
-            // moves the window.
+            // The window has no title bar and no window buttons. The user
+            // moves it by dragging the toolbar.
             ..ui::window_chrome::frameless(title, None)
         },
         move |window, cx| cx.new(|cx| DetailWindow::new(session, entries, start, window, cx)),
@@ -184,29 +189,33 @@ pub struct DetailWindow {
     session: Entity<Session>,
     entries: Vec<Entry>,
     index: usize,
-    /// Opened on a collection (`GroupDetailWindow`): its members in the
-    /// reader, and the toolbar has only the pin and close buttons.
+    /// Whether the window was opened on a collection. It then shows the
+    /// collection's members in the reader, and its toolbar has only the
+    /// title and the pin and close buttons.
     group: bool,
     reader: Entity<GroupReader>,
-    /// A member of the collection opened by itself with a double-click
-    /// (`viewerIndex`): Escape goes back to the collection, the arrows
-    /// step through its members.
+    /// The index of a member of the collection that the user opened by
+    /// itself with a double-click. While it is set, Escape goes back to the
+    /// collection and the arrow keys step through the collection's members.
     opened: Option<usize>,
     /// The shown entry's details, once they have arrived.
     details: Option<RootDetails>,
-    /// Why a collection's details could not be read (`GroupDetailWindow`'s
-    /// error, shown in the window's middle in place of the members).
+    /// Why the window cannot show its collection: the details could not be
+    /// read, or the item is not a collection. The text is shown in the
+    /// middle of the window in place of the members.
     error: Option<SharedString>,
     loading: Option<Task<()>>,
     surface: Entity<MediaSurface>,
     focus: FocusHandle,
     on_top: bool,
-    /// The toolbar's opacity, and when it hides unless the pointer moves.
+    /// The toolbar's opacity. `hide_at` is the time at which the toolbar
+    /// hides unless the pointer moves first.
     toolbar: motion::Fade,
     hide_at: Option<Instant>,
     boundary: Boundary,
     recorded: Option<RootId>,
-    /// The viewer's context menu, and the actions of its rows.
+    /// The viewer's context menu. `menu_actions` holds the actions of its
+    /// rows.
     menu: ui::menu::Host,
     menu_actions: Vec<rows::Action>,
     _subscriptions: Vec<Subscription>,
@@ -224,9 +233,12 @@ impl DetailWindow {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let subscriptions = vec![
-            // The toolbar shows the zoom and whether an image is there.
+            // The toolbar shows the zoom percentage, and it shows the zoom
+            // buttons only while the surface shows an image, so the window is
+            // drawn again whenever the surface changes.
             cx.observe(&surface, |_, _, cx| cx.notify()),
-            // Focus shows the toolbar for a moment; leaving hides it at once.
+            // The toolbar is shown for one second when the window becomes
+            // active, and is hidden at once when the window stops being active.
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
                     this.wake(cx);
@@ -280,14 +292,15 @@ impl DetailWindow {
         self.entries.get(self.index)
     }
 
-    /// Shows the current entry: its thumbnail at once, its file once its
-    /// details arrive. The previous one stays until the thumbnail decodes.
+    /// Shows the current entry: its thumbnail at once, and its file once its
+    /// details have been read. The previous entry stays on screen until the
+    /// thumbnail has been decoded.
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(entry) = self.entry().cloned() else {
             return;
         };
-        // Until the new entry's details arrive, the menu and the copy keys
-        // have no file to act on rather than the previous entry's.
+        // The previous entry's details are cleared. Until the new entry's
+        // details arrive, the menu and the copy keys have no file to act on.
         self.details = None;
         self.error = None;
         window.set_window_title(&entry.title());
@@ -325,9 +338,10 @@ impl DetailWindow {
                         this.details = Some(details);
                         this.present(cx);
                     }
-                    // TODO: a single item whose details cannot be read keeps
-                    // its thumbnail and never opens its file; production
-                    // opens the file by its hash without reading details.
+                    // TODO: when the details of a single item cannot be read,
+                    // the window keeps showing the thumbnail and never opens
+                    // the file. Open the file by its hash, which does not need
+                    // the details.
                     Err(error) => {
                         if this.group {
                             this.error = Some(error.to_string().into());
@@ -360,8 +374,9 @@ impl DetailWindow {
         cx.notify();
     }
 
-    /// `navigate`: the previous or next entry, or the end's notice; with a
-    /// member opened by itself, the previous or next member.
+    /// Goes to the previous or the next entry, or shows the notice that the
+    /// first or the last entry is reached. While a member of a collection is
+    /// opened by itself, it goes to the previous or the next member instead.
     fn step(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         let (current, count) = match self.opened {
             Some(opened) => (
@@ -387,8 +402,7 @@ impl DetailWindow {
         }
     }
 
-    /// `resetToolbarTimer`: shows the toolbar and hides it a second after
-    /// the last call.
+    /// Shows the toolbar and hides it again one second after the last call.
     fn wake(&mut self, cx: &mut Context<Self>) {
         self.toolbar.set(true, motion::DETAIL_TOOLBAR_FADE);
         let waiting = self.hide_at.is_some();
@@ -429,8 +443,9 @@ impl DetailWindow {
         cx.notify();
     }
 
-    /// The shown file's path: a collection's member opened by itself is
-    /// that member's, not the collection's first.
+    /// Copies the shown file's path to the clipboard. For a member of a
+    /// collection that is opened by itself, that is the member's path, not
+    /// the path of the collection's first file.
     fn copy_path(&mut self, cx: &mut Context<Self>) {
         if let Some((path, ..)) = self.shown_file()
             && let Err(error) = crate::desktop::copy_paths(&[path.into()], cx)
@@ -439,8 +454,8 @@ impl DetailWindow {
         }
     }
 
-    /// `edit.copy` and the menu's Copy (`copyFileForHash`): the shown file
-    /// itself on the clipboard.
+    /// Puts the shown file itself on the clipboard. The Copy shortcut and the
+    /// Copy row of the context menu both run this.
     fn copy_file(&mut self, cx: &mut Context<Self>) {
         if let Some((path, ..)) = self.shown_file()
             && let Err(error) = crate::desktop::copy_files(&[path.into()], cx)
@@ -449,9 +464,10 @@ impl DetailWindow {
         }
     }
 
-    /// The file of its item the entry names: a collection member opened in
-    /// a window of its own is its collection's file of that hash; any
-    /// other item shows its first.
+    /// Returns the index, in the list of the item's files, of the file whose
+    /// hash is the entry's hash. This is how a member of a collection that
+    /// was opened in a window of its own is found among the files of its
+    /// collection. Returns 0, the first file, when no file has that hash.
     fn entry_member(&self) -> usize {
         let hash = self.entry().map(|entry| entry.hash.as_str());
         self.details
@@ -465,7 +481,8 @@ impl DetailWindow {
             .unwrap_or(0)
     }
 
-    /// The shown file: its path, content hash, type and name.
+    /// Returns the shown file's path, its content hash and its MIME type,
+    /// and the entry's name.
     fn shown_file(&self) -> Option<(String, String, String, String)> {
         let entry = self.entry()?;
         let media = self
@@ -481,9 +498,10 @@ impl DetailWindow {
         ))
     }
 
-    /// `useViewerEntityContextMenu` as the detail window calls it: on the
-    /// file alone, with no item to edit, so only the rows that open and
-    /// copy the file, search by it and set it as the library cover.
+    /// Opens the viewer's context menu for the shown file. The detail window
+    /// has no item to edit, so the menu has only the rows that act on the
+    /// file: open, reveal, copy, search by image, regenerate the thumbnail
+    /// and set as the library cover.
     fn open_menu(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         let Some((_, hash, mime, name)) = self.shown_file() else {
             return;
@@ -518,7 +536,7 @@ impl DetailWindow {
         let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
         let built = rows::viewer_menu(&description, playback, &hints);
         self.menu_actions = rows::actions(&built);
-        // The viewer's rows hold no view panels.
+        // The viewer's menu has no view panels, so this callback is not called.
         let entries = rows::entries(built, &mut |_| ui::menu::Entry::Separator);
         let menu = cx.new(|cx| ui::menu::Menu::new(entries, position, cx).search(false));
         self.menu
@@ -548,7 +566,8 @@ impl DetailWindow {
             Action::OpenDefault => crate::desktop::open_default(std::path::Path::new(&path), cx),
             Action::Reveal => crate::desktop::reveal(std::path::Path::new(&path), cx),
             Action::OpenInNewWindow => {
-                // One window per file: this one, brought forward.
+                // A file has only one detail window, and for the shown file
+                // that is this window, so `open` brings this window forward.
                 if let Some(entry) = self.entry().cloned() {
                     open(self.session.clone(), vec![entry], 0, cx);
                 }
@@ -576,9 +595,9 @@ impl DetailWindow {
                 super::capture::set_as_thumbnail(&self.surface, &self.session, hash, cx);
             }
             Action::SetLibraryCover => {
-                // Production's detail window has no dialog layer, so its row
-                // does nothing there; here the main window's dialog opens
-                // on the file, framed at once.
+                // The detail window has no dialog layer of its own. The main
+                // window's cover dialog is opened with the shown file already
+                // chosen, and the main window is brought forward.
                 let Some(entry) = self.entry() else {
                     return;
                 };
@@ -597,7 +616,8 @@ impl DetailWindow {
                     crate::app_menu::bring_forward(cx);
                 }
             }
-            // The user chose an engine: the shown original goes to it.
+            // The user chose a search engine, so the shown file is uploaded to
+            // it.
             Action::SearchByImage(engine) => crate::search_by_image::search(
                 engine,
                 crate::search_by_image::Upload {
@@ -610,13 +630,14 @@ impl DetailWindow {
         }
     }
 
-    /// `.toolbar`: the title and count on the left; the zoom, actual size,
-    /// fit, pin and close on the right, over a dark strip that moves the
-    /// window.
+    /// Builds the toolbar. The title and the count of entries are on the
+    /// left. The zoom percentage and the actual size, fit, pin and close
+    /// buttons are on the right. The toolbar has a dark translucent
+    /// background, and dragging it moves the window.
     fn toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> ui::GlassPanel {
         let theme = theme::theme(cx);
         let title = if self.group {
-            // `GroupDetailWindow`: the collection's name.
+            // A window opened on a collection shows the collection's name.
             self.details
                 .as_ref()
                 .map(|details| details.root.name.clone())
@@ -680,10 +701,11 @@ impl DetailWindow {
                 );
         }
         right = right
-            // Not offered where the window cannot be kept on top (Linux).
+            // The pin button is left out where a window cannot be kept on top
+            // (Linux).
             .children(ui::window_chrome::can_stay_on_top().then(|| {
-                // `.icBtnActive` composes `iconBtnFilled`: pinned shows the
-                // filled glyph, with no background of its own.
+                // A pinned window shows the filled pin icon. The button has no
+                // background of its own in either state.
                 ui::icon_button("detail-pin", if self.on_top { "pin-filled" } else { "pin" })
                     .tip(
                         ui::tip(if self.on_top {
@@ -708,9 +730,10 @@ impl DetailWindow {
                 window,
                 cx,
             ));
-        // The toolbar lies over the picture: a press on it moves the window
-        // and must not reach the picture under it, which would pan as soon
-        // as the window can go no further (against the top of the screen).
+        // The toolbar lies over the picture. A press on it moves the window and
+        // must not reach the picture under it: once the window can move no
+        // further, because it is against the top of the screen, the same drag
+        // would pan the picture.
         ui::GlassPanel::new(
             ui::drag_region("detail-toolbar", window, cx).occlude(),
             0.,
@@ -749,15 +772,17 @@ impl Render for DetailWindow {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                    // TODO: a collection's members have the tile menu on the
-                    // collection (`openMemberMenu`), and the space between
-                    // them the collection's (`openEmptyMenu`).
+                    // TODO: in a window opened on a collection, a right-click
+                    // on a member should open the tile menu for that member,
+                    // and a right-click on the space between the members
+                    // should open the collection's menu.
                     if !this.group || this.opened.is_some() {
                         this.open_menu(event.position, window, cx);
                     }
                 }),
             )
-            // Escape closes a member opened by itself before the window.
+            // Escape first closes a member that was opened by itself. Only when
+            // no member is opened does it close the window.
             .on_action(cx.listener(|this, _: &CloseWindow, _, cx| {
                 if this.opened.take().is_some() {
                     this.boundary.clear();
@@ -766,7 +791,8 @@ impl Render for DetailWindow {
                     cx.propagate();
                 }
             }))
-            // TODO: the per-image zoom memory (`zoomCache`).
+            // TODO: remember the zoom of each image, and restore it when the
+            // user steps back to that image.
             .child(
                 if let Some(error) = self.error.clone().filter(|_| self.group) {
                     div()
@@ -786,7 +812,8 @@ impl Render for DetailWindow {
             )
             .child(self.boundary.notice(End::First, cx))
             .child(self.boundary.notice(End::Last, cx));
-        // Hidden, the toolbar takes no pointer (`pointer-events: none`).
+        // A hidden toolbar is not added to the window, so that it takes no
+        // pointer events.
         if self.toolbar.on() || self.toolbar.animating() {
             pane = pane.child(self.toolbar(window, cx));
         }
@@ -814,7 +841,8 @@ impl Render for DetailWindow {
             .child(pane)
             .children(ui::window_chrome::resize_edges(window))
             .children(self.menu.layer(window, cx))
-            // A video player that has the window to itself, over everything.
+            // A video player in full-screen mode covers everything else in the
+            // window.
             .children(super::video::fullscreen_layer(window, cx))
     }
 }
@@ -829,19 +857,21 @@ mod tests {
     fn a_window_takes_the_media_shape_within_85_percent() {
         // 85% of the work area is 1285 × 802.
         assert_eq!(window_size(WORK_AREA, None), (1285., 802.));
-        // Wide media: limited by the width.
+        // Wide media is limited by the width.
         assert_eq!(window_size(WORK_AREA, Some((4000, 1000))), (1285., 321.));
-        // Tall media: limited by the height.
+        // Tall media is limited by the height.
         assert_eq!(window_size(WORK_AREA, Some((1000, 2000))), (401., 802.));
-        // Unknown or empty dimensions: the whole 85%.
+        // Media whose width or height is 0 or unknown gets the whole 85%.
         assert_eq!(window_size(WORK_AREA, Some((0, 100))), (1285., 802.));
     }
 
     #[test]
     fn a_window_is_grown_to_at_least_400_by_300() {
-        // Very wide media: 1285 × 129 grows until it is 300 tall.
+        // Very wide media would be 1285 × 129, so it is enlarged until it is
+        // 300 tall.
         assert_eq!(window_size(WORK_AREA, Some((10000, 1000))), (2988., 300.));
-        // Very tall media: 80 × 802 grows five times, to 400 wide.
+        // Very tall media would be 80 × 802, so it is enlarged five times, to
+        // 400 wide.
         assert_eq!(window_size(WORK_AREA, Some((100, 1000))), (400., 4010.));
     }
 

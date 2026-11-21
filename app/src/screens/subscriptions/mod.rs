@@ -1,8 +1,7 @@
-//! The Subscriptions screen (production's `SubscriptionsScreen.tsx`). At its
-//! top level the screen shows one tile for each of the library's
-//! subscriptions (`home.rs`). When a tile is opened, the screen shows that
-//! subscription's page (`detail.rs`), and the shell draws the page's rail
-//! where the inspector normally is (`toolbar.rs`).
+//! The Subscriptions screen. At its top level the screen shows one tile for
+//! each of the library's subscriptions (`home.rs`). When a tile is opened,
+//! the screen shows that subscription's page (`detail.rs`), and the shell
+//! draws the page's rail where the inspector normally is (`toolbar.rs`).
 //!
 //! The open subscription is a place inside the screen in the session's
 //! navigation (`Session::open_place`). Opening a subscription therefore adds
@@ -68,21 +67,19 @@ pub fn bind(cx: &mut App) {
 }
 
 /// How long the screen waits, after the application reports a change to the
-/// subscriptions, before it reads them again. It is 250 ms, the time that
-/// production's `subscriptionsSettle.ts` waits. Each further report within
-/// that time starts the wait again, so several changes close together
-/// cause one read.
+/// subscriptions, before it reads them again. It is 250 ms. Each further
+/// report within that time starts the wait again, so several changes close
+/// together cause one read.
 const INVALIDATION_DEBOUNCE: Duration = Duration::from_millis(250);
 /// How long the screen goes on reading the subscriptions every 1.5 s after
 /// it has sent a command that can start a run, even though no subscription
-/// is reported as running yet. It is 5 s, as in `subscriptionsSettle.ts`.
+/// is reported as running yet. It is 5 s.
 const RUN_GRACE: Duration = Duration::from_secs(5);
 
-/// A command that one of a subscription's controls sends to the application
-/// (production's `subscriptionsController`). The controls are the run
-/// button, the hold button, the Schedule control and the "Posts per run"
-/// field. `Command::request` gives the name the application knows each
-/// command by.
+/// A command that one of a subscription's controls sends to the
+/// application. The controls are the run button, the hold button, the
+/// Schedule control and the "Posts per run" field. `Command::request` gives
+/// the name the application knows each command by.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Command {
     /// Starts a run now (`subscriptions.run`).
@@ -173,10 +170,9 @@ impl Command {
     }
 }
 
-/// The schedules a subscription can have (production's `SCHEDULES`). Each
-/// pair holds the value that is stored and sent with
-/// `subscriptions.schedule`, and the label that the Schedule submenu of the
-/// context menu shows for it.
+/// The schedules a subscription can have. Each pair holds the value that is
+/// stored and sent with `subscriptions.schedule`, and the label that the
+/// Schedule submenu of the context menu shows for it.
 // i18n: translated where drawn (menu rows)
 const SCHEDULES: [(&str, &str); 4] = [
     ("manual", "Manual"),
@@ -396,10 +392,9 @@ pub struct SubscriptionsScreen {
     /// of such a subscription are disabled.
     acting: HashSet<i64>,
     /// The number of calls of `act` whose requests have not all been
-    /// answered yet (production's `busyKey`). While it is not 0, `busy()`
-    /// returns true, and the buttons of the Sources and Problems rows, the
-    /// dialogs' buttons and the Add button of the row that adds a source
-    /// are disabled.
+    /// answered yet. While it is not 0, `busy()` returns true, and the
+    /// buttons of the Sources and Problems rows, the dialogs' buttons and
+    /// the Add button of the row that adds a source are disabled.
     busy: usize,
     /// Where the screen's commands are sent (`requests::Outbox`). Normally
     /// they go to the application. When the environment variable
@@ -449,8 +444,7 @@ impl SubscriptionsScreen {
             // subscription's runs and problems again, 250 ms after the last
             // such report (`INVALIDATION_DEBOUNCE`). A report that names
             // `tasks` and not `subscriptions` makes the screen read the list
-            // again at once. Production's `subscriptionsSettle.ts` does the
-            // same.
+            // again at once.
             cx.subscribe(&session, |this, _, event: &BackendEvent, cx| {
                 let BackendEvent::Changed(changed) = event else {
                     return;
@@ -565,11 +559,11 @@ impl SubscriptionsScreen {
         self.busy > 0 || !self.acting.is_empty()
     }
 
-    /// Sends `requests` to the application one after another (production's
-    /// `act`). It waits for the answer to each request before it sends the
-    /// next, and it sends no more after the first one that fails. A failure
-    /// is shown as the error notification "Subscription action failed" with
-    /// the application's message.
+    /// Sends `requests` to the application one after another. It waits for
+    /// the answer to each request before it sends the next, and it sends no
+    /// more after the first one that fails. A failure is shown as the error
+    /// notification "Subscription action failed" with the application's
+    /// message.
     ///
     /// When the requests are done, `then` is called with the answer to the
     /// last request that was sent, which is the error if one failed. After
@@ -660,12 +654,11 @@ impl SubscriptionsScreen {
             .update(cx, |session, cx| session.open_place(Some(id), cx));
     }
 
-    // ── Selection ───────────────────────────────────────────────
+    // The functions below change and read the selection of tiles.
 
-    /// Changes the selection for a click on the tile at `index` of `order`,
-    /// as production's `SubscriptionsGrid` does. `order` holds the ids of
-    /// the subscriptions in the order their tiles are shown, and
-    /// `modifiers` holds the keys held during the click.
+    /// Changes the selection for a click on the tile at `index` of `order`.
+    /// `order` holds the ids of the subscriptions in the order their tiles
+    /// are shown, and `modifiers` holds the keys held during the click.
     ///
     /// The key that adds to a selection is Command on macOS and Control on
     /// Windows and Linux, the same key as in the grid
@@ -726,11 +719,11 @@ impl SubscriptionsScreen {
             .collect()
     }
 
-    // ── Context menu ────────────────────────────────────────────
+    // The functions below open and close the context menu.
 
     /// Opens a context menu at `position` that acts on the subscriptions
-    /// `targets` (production's `subscriptionsContextMenu.tsx`). No menu
-    /// opens when the list has not been read or holds none of `targets`.
+    /// `targets`. No menu opens when the list has not been read or holds
+    /// none of `targets`.
     ///
     /// The menu for one subscription has these rows:
     ///
@@ -872,9 +865,9 @@ impl SubscriptionsScreen {
                     ("cover", [id]) => this.open_cover(*id, cx),
                     ("reset", [id]) => this.confirm_reset(*id, cx),
                     ("delete", [id]) => this.confirm_delete(*id, cx),
-                    // A row of the menu for several subscriptions sends
-                    // one command for each subscription, as production's
-                    // `handleBulk*` functions do.
+                    // The Run, Hold and Release Hold rows of the menu for
+                    // several subscriptions send one command for each
+                    // subscription.
                     ("run-all", _) => this.perform(targets, |_| Command::Run, cx),
                     ("hold-all", _) => this.perform(targets, |_| Command::Hold(true), cx),
                     ("release-all", _) => this.perform(targets, |_| Command::Hold(false), cx),
@@ -912,7 +905,7 @@ impl SubscriptionsScreen {
         self.menu.close(cx);
     }
 
-    // ── Destination ─────────────────────────────────────────────
+    // The functions below edit a subscription's folders and tags.
 
     /// Saves the destination of the subscription `id`
     /// (`subscriptions.destination`): `folders` are the folders that its
@@ -1025,10 +1018,9 @@ impl SubscriptionsScreen {
     }
 
     /// Called when a folder is checked (`add` is true) or unchecked in the
-    /// folder picker (production's `onApplyFolders`). The folder is added
-    /// to the end of, or removed from, the folders that the subscription
-    /// the picker was opened for adds its new files to, and the destination
-    /// is saved.
+    /// folder picker. The folder is added to the end of, or removed from,
+    /// the folders that the subscription the picker was opened for adds its
+    /// new files to, and the destination is saved.
     fn folder_picked(&mut self, folder: i64, add: bool, cx: &mut Context<Self>) {
         let Some(Picking::Folders(id)) = self.picking else {
             return;
@@ -1046,9 +1038,9 @@ impl SubscriptionsScreen {
     }
 
     /// Called when a tag is checked (`add` is true) or unchecked in the tag
-    /// picker (production's `onApplyTags`). The tag is added to the end of,
-    /// or removed from, the tags that the subscription the picker was
-    /// opened for gives its new files, and the destination is saved.
+    /// picker. The tag is added to the end of, or removed from, the tags
+    /// that the subscription the picker was opened for gives its new files,
+    /// and the destination is saved.
     fn tag_picked(&mut self, name: &str, add: bool, cx: &mut Context<Self>) {
         let Some(Picking::Tags(id)) = self.picking else {
             return;
@@ -1065,7 +1057,7 @@ impl SubscriptionsScreen {
         self.set_destination(id, folders, tags, cx);
     }
 
-    // ── Sources ─────────────────────────────────────────────────
+    // The functions below add a source and change one source.
 
     /// Sets the site that is chosen in the row that adds a source, and
     /// changes the placeholder of the row's text field to that site's
@@ -1080,11 +1072,10 @@ impl SubscriptionsScreen {
     }
 
     /// Adds the query typed in the row that adds a source to the open
-    /// subscription, as a source of the chosen site (the submit of
-    /// production's `AddQueryBar`). The Add button and Enter in the text
-    /// field call it. It does nothing when the field is empty or holds only
-    /// spaces, when no site is chosen, when no subscription's page is
-    /// shown, or while `busy()` is true.
+    /// subscription, as a source of the chosen site. The Add button and
+    /// Enter in the text field call it. It does nothing when the field is
+    /// empty or holds only spaces, when no site is chosen, when no
+    /// subscription's page is shown, or while `busy()` is true.
     ///
     /// Whether the new source groups the media of one post is taken from
     /// the setting `subscription_default_group_posts`. The field is emptied
@@ -1113,8 +1104,8 @@ impl SubscriptionsScreen {
         });
     }
 
-    /// Starts a run of the source `query` alone (production's `runQuery`,
-    /// `subscriptions.queries.run`). The run downloads files.
+    /// Starts a run of the source `query` alone
+    /// (`subscriptions.queries.run`). The run downloads files.
     fn run_query(&mut self, query: i64, cx: &mut Context<Self>) {
         self.act(vec![requests::run_query(query)], cx, |_, _, _| {});
     }
@@ -1136,7 +1127,7 @@ impl SubscriptionsScreen {
         );
     }
 
-    // ── Deleting ────────────────────────────────────────────────
+    // The function below deletes the selected subscriptions.
 
     /// Opens the dialog that asks whether to delete the selected
     /// subscriptions. They are deleted when the user confirms. The Delete
@@ -1306,7 +1297,7 @@ mod tests {
     use picto_core::ipc;
 
     #[test]
-    fn controls_send_the_commands_the_electron_screen_sends() {
+    fn controls_send_the_commands_the_earlier_versions_screen_sent() {
         assert_eq!(Command::primary(false, false), Command::Run);
         assert_eq!(Command::primary(true, true), Command::Pause);
         assert_eq!(Command::primary(true, false), Command::Resume);

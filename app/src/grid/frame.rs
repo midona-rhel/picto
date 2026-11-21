@@ -273,8 +273,7 @@ impl GridView {
                     .items
                     .iter()
                     // An item whose width and height are not known is laid
-                    // out with an aspect ratio of 3:2, as in
-                    // `gridLayoutModel.ts`.
+                    // out with an aspect ratio of 3:2.
                     .map(|item| aspect(item).unwrap_or(1.5))
                     .collect::<Vec<_>>();
                 let compute = |aspects: &[f64]| {
@@ -293,15 +292,14 @@ impl GridView {
                 // destination's total to estimate the scrollable height of
                 // the whole destination. The session keeps the value that
                 // was measured for this geometry (width, tile size,
-                // spacing, layout mode and text rows), as production's
-                // `densityRef` does, so the estimated height stays the same
-                // while other windows of the same results load. When the
-                // session has no value for this geometry, the value is
-                // measured here on the first 500 items (`window::SAMPLE`)
-                // of the window that is held now, or on all of them when
-                // the window holds fewer: the height of their layout
-                // divided by their number. It is written to the session
-                // after the block.
+                // spacing, layout mode and text rows), so the estimated
+                // height stays the same while other windows of the same
+                // results load. When the session has no value for this
+                // geometry, the value is measured here on the first 500
+                // items (`window::SAMPLE`) of the window that is held now,
+                // or on all of them when the window holds fewer: the height
+                // of their layout divided by their number. It is written to
+                // the session after the block.
                 let density = match session.density {
                     Some((measured_for, density)) if measured_for == geometry => density,
                     _ => {
@@ -513,13 +511,12 @@ impl GridView {
                     // width, the spacing, the layout mode or the text rows,
                     // or the window of results was replaced by another
                     // window or was read again in place. One tile is kept at
-                    // the same place on screen, as `CanvasGrid` does: the
-                    // topmost tile in the viewport, or the topmost selected
-                    // tile in the viewport when there is one
-                    // (`layout::scroll_anchor`). The tile's item can be at
-                    // another index in the new window, so it is looked up
-                    // by its id. `now` maps the id of each item in the new
-                    // window to its index there.
+                    // the same place on screen: the topmost tile in the
+                    // viewport, or the topmost selected tile in the viewport
+                    // when there is one (`layout::scroll_anchor`). The
+                    // tile's item can be at another index in the new
+                    // window, so it is looked up by its id. `now` maps the
+                    // id of each item in the new window to its index there.
                     let now = ids
                         .iter()
                         .enumerate()
@@ -620,7 +617,7 @@ impl GridView {
                 marquee.track(top - self.placement.top, &self.layout, text_height);
             }
             // Choose what fills the grid's area. The first of these that
-            // applies is used, in the order `GridScreen.tsx` uses:
+            // applies is used:
             //
             // 1. The error message, when the session has an error.
             // 2. The tiles, when the window of results holds items, or when

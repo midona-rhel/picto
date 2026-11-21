@@ -1,8 +1,9 @@
-//! The application menu's commands on the window's content, as
-//! `applicationMenuRuntime.ts` runs them: the menu tells the window what it
-//! acts on (`menuContext`), and the window performs the rows. Each row's
-//! action is handled here only while production's rule enables the row, so
-//! AppKit shows the row enabled exactly then.
+//! Carries out the application menu's commands that act on the window's
+//! content. The shell gives the application menu a `MenuContext`, which says
+//! what is selected and which destination is shown (`Shell::sync_menu`), and
+//! the methods of `MenuContext` say from it which rows apply. Each row's
+//! action is handled here only while the row applies, so the menu shows the
+//! row as enabled exactly then.
 use super::Shell;
 use super::shortcuts::Picker;
 use crate::app_menu::{self, MenuContext, ScopeKind, Status};
@@ -13,9 +14,9 @@ use gpui::*;
 use picto_library::query::{ItemScope, RootSummary};
 use picto_library::{FolderId, Lifecycle, RootKind};
 
-/// The grid's destination (`gridScopeAtom`), worked out once for the
-/// application menu, the item menus, the keys and imports; none while a
-/// screen shows instead of the grid.
+/// The scope of the destination that the grid shows. The application menu,
+/// the item menus, the keyboard shortcuts and the imports all read it from
+/// here. It holds `None` while a screen is shown instead of the grid.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct GridScope(Option<ItemScope>);
 
@@ -30,7 +31,8 @@ impl GridScope {
         )
     }
 
-    /// The destination's kind (`gridScope.kind`).
+    /// Returns the destination's kind: All, Inbox, Trash, a folder, a smart
+    /// folder, or `Other` for every other destination and for a screen.
     pub fn kind(&self) -> ScopeKind {
         match &self.0 {
             Some(ItemScope::All) => ScopeKind::All,
@@ -42,7 +44,8 @@ impl GridScope {
         }
     }
 
-    /// The kind as the grid's menus tell destinations apart (`scopeKind`).
+    /// Returns the destination's kind as the grid's item menus distinguish
+    /// it: a folder, a smart folder, or `System` for every other destination.
     pub fn menu_kind(&self) -> rows::ScopeKind {
         match self.kind() {
             ScopeKind::Folder => rows::ScopeKind::Folder,
@@ -51,7 +54,9 @@ impl GridScope {
         }
     }
 
-    /// The folder open, with or without its subfolders.
+    /// Returns the folder that is open, whether the grid shows it with or
+    /// without the items of its subfolders. Returns `None` when the
+    /// destination is not a folder.
     pub fn folder(&self) -> Option<FolderId> {
         match &self.0 {
             Some(ItemScope::Folder { folder_id } | ItemScope::FolderTree { folder_id }) => {
@@ -61,9 +66,10 @@ impl GridScope {
         }
     }
 
-    /// Files, a folder or the clipboard can be imported here from a menu
-    /// or a key: not into the Trash, a smart folder, Recently Viewed or
-    /// media matches (`canImport`).
+    /// Returns whether a menu row or a keyboard shortcut may import files,
+    /// a folder or the clipboard into this destination. It may not import
+    /// into the Trash, a smart folder, Recently Viewed, or the list of the
+    /// items that share a file with one item (`ItemScope::MediaMatches`).
     pub fn imports(&self) -> bool {
         !matches!(
             self.0,
@@ -76,13 +82,14 @@ impl GridScope {
         )
     }
 
-    /// Files dropped on the grid are imported anywhere but media matches,
-    /// as production's drop handler decides.
+    /// Returns whether files dropped on the grid are imported. They are
+    /// imported in every destination except `ItemScope::MediaMatches`.
     pub fn takes_drops(&self) -> bool {
         !matches!(self.0, Some(ItemScope::MediaMatches { .. }))
     }
 
-    /// Where an import from here goes.
+    /// Returns where an import that is started in this destination puts
+    /// its items.
     pub fn import_destination(&self) -> crate::imports::plan::Destination {
         self.0.as_ref().map_or_else(
             Default::default,
@@ -90,8 +97,12 @@ impl GridScope {
         )
     }
 
-    /// The application menu's `statusFilter` (`menuContext`): the Trash
-    /// before the Inbox, else the lifecycle the selection shares.
+    /// Returns the status that the application menu's rows are chosen for.
+    /// `shared` is the lifecycle that all the selected items have, if they
+    /// all have the same one. The status is Trash when the items are in
+    /// the Trash or the destination is the Trash. Otherwise it is Inbox
+    /// when the items are in the Inbox or the destination is the Inbox.
+    /// Otherwise it is the shared lifecycle.
     pub fn menu_status(&self, shared: Option<Lifecycle>) -> Option<Status> {
         let kind = self.kind();
         if shared == Some(Lifecycle::Trash) || kind == ScopeKind::Trash {
@@ -103,9 +114,12 @@ impl GridScope {
         }
     }
 
-    /// A tile menu's `statusFilter` (`GridScreen`): the Inbox before the
-    /// Trash, and the library only in All. Production's two menus order
-    /// the two differently; both are kept.
+    /// Returns the status that the rows of a tile's context menu are chosen
+    /// for. Unlike `menu_status`, it tests for the Inbox before the Trash,
+    /// and outside the Inbox and the Trash it is `Active` in the All
+    /// destination and `None` everywhere else. Picto 0.6.19 and earlier
+    /// chose the rows of its two menus by these two different rules, and
+    /// both rules are kept.
     pub fn tile_status(&self, shared: Option<Lifecycle>) -> Option<Status> {
         let kind = self.kind();
         if shared == Some(Lifecycle::Inbox) || kind == ScopeKind::Inbox {
@@ -118,8 +132,8 @@ impl GridScope {
     }
 }
 
-/// The lifecycle every one of `items` shares (`selectionLifecycle`,
-/// `commonLifecycle`); none for no items.
+/// Returns the lifecycle that every one of `items` has. Returns `None` when
+/// the items have different lifecycles and when there are no items.
 pub(super) fn shared_lifecycle<'a>(
     items: impl IntoIterator<Item = &'a RootSummary>,
 ) -> Option<Lifecycle> {
@@ -133,8 +147,9 @@ impl Shell {
         GridScope::of(self.session.read(cx))
     }
 
-    /// What the menu's rows depend on (`menuContext`). The selection counts
-    /// only while the grid is the destination (`gridActive`).
+    /// Builds the `MenuContext`: the facts that decide which rows of the
+    /// application menu apply. The selection counts as empty while a screen
+    /// is shown instead of the grid.
     pub(super) fn menu_context(&self, cx: &App) -> MenuContext {
         let session = self.session.read(cx);
         let grid_active = session.screen().is_none();
@@ -144,8 +159,10 @@ impl Shell {
         } else {
             0
         };
-        // Items chosen one by one; a Select All or a shift-click span is
-        // resolved by the library, never from what the grid holds.
+        // `explicit` is true when the user selected the items one by one. A
+        // selection made with Select All or as a range is resolved by the
+        // library and not from the items the grid has loaded, so for such a
+        // selection `selected` is left empty.
         let explicit = !session.selection.query_wide();
         let selected = if explicit {
             session.selected_loaded()
@@ -175,8 +192,10 @@ impl Shell {
         }
     }
 
-    /// Gives the menu the window's context; when the rows change, the root
-    /// is drawn again so that its handlers follow.
+    /// Gives the application menu the window's current `MenuContext`. When
+    /// the context has changed, the shell is drawn again, because
+    /// `menu_actions` adds the handlers of the rows that apply each time the
+    /// shell is drawn.
     pub(super) fn sync_menu(&mut self, cx: &mut Context<Self>) {
         let context = self.menu_context(cx);
         if app_menu::set_context(context, cx) {
@@ -184,15 +203,15 @@ impl Shell {
         }
     }
 
-    /// Opens a screen destination (`menu:navigate`).
-    /// Opens the log window if it is not open (`picto:open-diagnostics`).
+    /// Opens the log window if it is not open.
     pub(crate) fn show_diagnostics(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.diagnostics.is_none() {
             self.toggle_diagnostics(window, cx);
         }
     }
 
-    /// View › Log Window: opens the log window, or closes it.
+    /// Opens the log window, or closes it if it is open. The View menu's
+    /// Log Window row runs this.
     pub(crate) fn toggle_diagnostics(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.diagnostics.is_some() {
             self.close_diagnostics(window, cx);
@@ -207,9 +226,10 @@ impl Shell {
                 this.close_diagnostics(window, cx)
             },
         );
-        // Escape closes it first, wherever the keyboard is (its shortcut
-        // scope's priority 100, in text fields too), before any binding
-        // sees the key: an open menu still closes before it.
+        // Escape closes the log window wherever the keyboard focus is,
+        // also in a text field: the key press is taken here before any key
+        // binding sees it. While a context menu is open, Escape closes that
+        // menu and the log window stays open.
         let shell = cx.entity().downgrade();
         let this_window = window.window_handle();
         let escape = cx.intercept_keystrokes(move |event, window, cx| {
@@ -231,8 +251,8 @@ impl Shell {
         cx.notify();
     }
 
-    /// Closes the log window; the keyboard goes back to the window's
-    /// content if it was in the panel.
+    /// Closes the log window. If the keyboard focus was inside the log
+    /// window, it goes to the shell's `focus` handle.
     pub(crate) fn close_diagnostics(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((panel, _)) = self.diagnostics.take() {
             if panel.focus_handle(cx).contains_focused(window, cx) {
@@ -255,8 +275,10 @@ impl Shell {
         }
     }
 
-    /// The new folder rows: a top-level folder, or, in a folder, one inside
-    /// it (`foldersController.create('New Folder', parentId)`).
+    /// Carries out the New Folder and New Subfolder rows. When `inside` is
+    /// false, it creates a top-level folder. When `inside` is true, it
+    /// creates a folder inside the folder that is open, and does nothing if
+    /// no folder is open.
     fn menu_new_folder(&mut self, inside: bool, window: &mut Window, cx: &mut Context<Self>) {
         let parent = if inside {
             match self.grid_scope(cx).folder() {
@@ -271,8 +293,10 @@ impl Shell {
         });
     }
 
-    /// Batch Rename…: the dialog on the selected items, every one loaded
-    /// and chosen one by one.
+    /// Opens the batch rename dialog on the selected items. The Rename
+    /// action is handled only while every selected item is loaded and was
+    /// selected individually (`MenuContext::names`), so `selected_loaded`
+    /// returns all of them.
     pub(super) fn rename_selected(&mut self, cx: &mut Context<Self>) {
         let items = self
             .session
@@ -284,8 +308,10 @@ impl Shell {
         self.batch_rename(items, cx);
     }
 
-    /// Regenerate Thumbnail(s): the selected media's files (every selected
-    /// item a loaded media item, chosen one by one, as the rule says).
+    /// Regenerates the thumbnails of the selected items' files, for the
+    /// Regenerate Thumbnail(s) row. The row applies only while every
+    /// selected item is a media item that is loaded and was selected
+    /// individually (`MenuContext::thumbnails`).
     fn regenerate_selected(&mut self, cx: &mut Context<Self>) {
         let files = self
             .session
@@ -297,22 +323,25 @@ impl Shell {
         self.regenerate_thumbnails(files, cx);
     }
 
-    /// The commands the application menu and the keys share, each with the
-    /// one rule that says when it applies and what it does. A row with keys
-    /// in production binds the keymap's action itself; a row production
-    /// shows without keys has an action of its own (a row shows the keys of
-    /// its action) under the same rule. Each action is handled only while
-    /// its rule holds, so AppKit enables the row, and the key reaches it,
-    /// exactly then. The rules are production's menu rules
-    /// (`applicationMenuRuntime.ts`'s `menuContext`), whose accelerators the
-    /// keys are; the viewer adds the item it shows.
+    /// Adds to `root`, the window's root element, the handlers of the
+    /// commands that the application menu and the keyboard shortcuts share,
+    /// and returns `root`.
+    ///
+    /// A menu row that has a shortcut uses the action that `crate::keymap`
+    /// binds to the shortcut's keys, and the menu shows those keys on the
+    /// row. A row without a shortcut has an action of its own in
+    /// `app_menu`. Each action is handled only while its row applies (the
+    /// methods of `MenuContext`). The menu shows the row as enabled, and
+    /// the shortcut's key press reaches the handler, exactly then. While
+    /// the media view or Quick Look is open, Accept, Reject, Auto Tag and
+    /// the rating rows also apply to the item that is shown.
     pub(super) fn menu_actions(&self, root: Div, cx: &mut Context<Self>) -> Div {
         use crate::keymap;
         let menu = app_menu::context(cx);
         let has = menu.has_selection();
         let viewing = self.viewing(cx);
         let mut root = root;
-        // ── Library and File ──
+        // The handlers of the Library and File menus' rows follow.
         root = when(
             root,
             menu.can_create_folder(),
@@ -350,8 +379,8 @@ impl Shell {
                 this.import(super::import::Import::Folder, window, cx)
             },
         );
-        // ── Edit ──
-        // Rename for one item, Batch Rename… for several.
+        // The handlers of the Edit menu's rows follow. `rename` renames one
+        // selected item and opens the batch rename dialog for several.
         root = when(
             root,
             menu.names,
@@ -363,7 +392,9 @@ impl Shell {
             has,
             cx,
             |this, _: &keymap::CopyFilePath, window, cx| {
-                // The viewer's: the file it shows.
+                // While the media view or Quick Look is open, the path of
+                // the file that is shown is copied. Otherwise the paths of
+                // the selected items' files are copied.
                 let row = if this.viewing(cx) {
                     Row::CopyPath
                 } else {
@@ -384,7 +415,9 @@ impl Shell {
             this.session
                 .update(cx, |session, cx| session.clear_selection(cx))
         });
-        // The rows on the Delete keys leave a text field's ⌘⌫ to the field.
+        // The shortcuts of the next rows use the Delete key. Their handlers
+        // do nothing while the keyboard focus is in a text field, so that
+        // ⌘⌫ deletes text in the field.
         let remove = menu.in_folder() && has;
         root = row::<app_menu::RemoveFromFolder>(root, remove, Row::RemoveFromFolder, true, cx);
         root = row::<keymap::RemoveFromFolder>(root, remove, Row::RemoveFromFolder, true, cx);
@@ -393,10 +426,9 @@ impl Shell {
         root = row::<app_menu::DeletePermanently>(root, trash, Row::DeletePermanently, true, cx);
         root =
             row::<app_menu::MoveToTrash>(root, !menu.in_trash() && has, Row::MoveToTrash, true, cx);
-        // ── Organize ──
-        // Over the media view or Quick Look, Accept and Reject review the
-        // item being viewed (`InboxReviewControls`); over the grid, the
-        // selection.
+        // The handlers of the Organize menu's rows follow. While the media
+        // view or Quick Look is open, Accept and Reject review the item that
+        // is shown. Over the grid they review the selected items.
         let inbox = menu.in_inbox() && has;
         root = when(
             root,
@@ -460,7 +492,7 @@ impl Shell {
         root = when(root, true, cx, |this, _: &app_menu::ShowTags, _, cx| {
             this.show_screen(Screen::Tags, cx)
         });
-        // ── View ──
+        // The handlers of the View menu's rows follow.
         root = when(
             root,
             true,
@@ -487,8 +519,10 @@ impl Shell {
     }
 }
 
-/// Runs the item menu's `row` for `A` while `enabled`. A row on the Delete
-/// keys (`delete_key`) leaves a text field's ⌘⌫ to the field.
+/// Adds to `root` a handler of the action `A` while `enabled` is true. The
+/// handler runs the item menu's row `row` on the selected items. When
+/// `delete_key` is true, the handler does nothing while the keyboard focus is
+/// in a text field, so that ⌘⌫ deletes text in the field.
 fn row<A: Action>(
     root: Div,
     enabled: bool,
@@ -503,7 +537,8 @@ fn row<A: Action>(
     })
 }
 
-/// Handles `A` on `root` while `enabled`.
+/// Adds `handler` to `root` as the handler of the action `A` when `enabled`
+/// is true, and returns `root`.
 fn when<A: Action>(
     root: Div,
     enabled: bool,
@@ -584,7 +619,7 @@ mod tests {
                 rows::ScopeKind::System,
                 None,
             ),
-            // A screen instead of the grid.
+            // A screen is shown instead of the grid.
             (
                 GridScope::default(),
                 ScopeKind::Other,
@@ -600,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn menus_and_keys_import_where_production_does_and_drops_go_further() {
+    fn menus_and_keys_import_where_the_earlier_version_did_and_drops_go_further() {
         let matches = at(ItemScope::MediaMatches { item_id: 3 });
         for refused in [
             at(ItemScope::Trash),
@@ -611,8 +646,8 @@ mod tests {
         }
         assert!(at(ItemScope::Inbox).imports());
         assert!(GridScope::default().imports());
-        // A drop is refused only over media matches (`GridScreen`'s drop
-        // handler), so the Trash takes one.
+        // A drop is refused only over `ItemScope::MediaMatches`, so the
+        // Trash takes one.
         assert!(at(ItemScope::Trash).takes_drops());
         assert!(!matches.takes_drops());
         assert!(at(ItemScope::Inbox).import_destination().inbox);
@@ -627,19 +662,20 @@ mod tests {
     }
 
     #[test]
-    fn the_two_menus_read_the_lifecycle_as_production_does() {
+    fn the_two_menus_read_the_lifecycle_as_the_earlier_version_did() {
         let all = at(ItemScope::All);
         let folder = at(ItemScope::Folder {
             folder_id: FolderId(2),
         });
-        // In the Trash and the Inbox both menus act within them.
+        // In the Trash and in the Inbox, both menus give that destination's
+        // status.
         for grid in [at(ItemScope::Trash), at(ItemScope::Inbox)] {
             let status = grid.menu_status(None);
             assert!(status.is_some());
             assert_eq!(grid.tile_status(None), status);
         }
-        // Items the library holds: the application menu says so wherever
-        // they are; a tile's menu only in All.
+        // For active items, the application menu gives `Active` in every
+        // destination, and a tile's menu gives it only in All.
         assert_eq!(
             all.menu_status(Some(Lifecycle::Active)),
             Some(Status::Active)
@@ -653,10 +689,12 @@ mod tests {
             Some(Status::Active)
         );
         assert_eq!(folder.tile_status(Some(Lifecycle::Active)), None);
-        // A mixed selection outside the Trash and the Inbox.
+        // The selected items have different lifecycles, and the destination
+        // is neither the Trash nor the Inbox.
         assert_eq!(all.menu_status(None), None);
         assert_eq!(all.tile_status(None), Some(Status::Active));
-        // Trashed items seen elsewhere (Recently Viewed).
+        // Items that are in the Trash are selected in another destination,
+        // here Recently Viewed.
         let recent = at(ItemScope::RecentlyViewed);
         assert_eq!(
             recent.menu_status(Some(Lifecycle::Trash)),
@@ -678,10 +716,14 @@ mod tests {
 }
 
 impl Shell {
-    /// `ApplicationMenuButton`: the application menu in the window, under
-    /// the button (its left edge, 4px below it), 220px wide and without a
-    /// search row. A row chosen goes where the keyboard was when the menu
-    /// opened, as the menu bar's rows do.
+    /// Opens the application menu inside the window, for the application
+    /// menu button in the titlebar (Windows and Linux). The menu's left
+    /// edge is at the button's left edge and its top is 4 px below the
+    /// button. It is 220 px wide (`app_menu::IN_WINDOW_WIDTH`) and has no
+    /// search row. Before the action of the chosen row is dispatched, the
+    /// keyboard focus goes back to the element that had it when the menu
+    /// opened, so the action reaches the handlers that a row of the
+    /// system's menu bar would reach.
     pub(super) fn open_app_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let entries = app_menu::in_window_entries(window, cx);
         let button_bottom = (crate::theme::TITLEBAR_HEIGHT + crate::theme::CONTROL_MD) / 2.;
@@ -710,8 +752,10 @@ impl Shell {
             });
     }
 
-    /// `buildPanelVisibilityContextEntries`: the panel toggle button's menu,
-    /// each row with its shortcut, kept open so several can be toggled.
+    /// Opens the context menu of the Toggle Panels button at `position`.
+    /// Its rows toggle both panels, the sidebar or the inspector, and each
+    /// row shows its shortcut. The menu stays open after a row is chosen,
+    /// so the user can toggle several panels.
     pub(super) fn open_panels_menu(
         &mut self,
         position: Point<Pixels>,

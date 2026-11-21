@@ -19,8 +19,8 @@ pub enum Denied {
         root: PathBuf,
         identity: crate::libraries::Identity,
     },
-    /// The change was refused or it failed. The value is the message to show,
-    /// in the Electron app's wording.
+    /// The change was refused or it failed. The value is the message to
+    /// show.
     Error(String),
     /// The path is a disposable copy of a library, and it is not the open
     /// library. The Library Manager never lists such a copy, so it shows
@@ -29,8 +29,7 @@ pub enum Denied {
 }
 
 /// The error message for a rename, a move or a delete that is asked for while
-/// the host is busy with another library operation. The wording is the
-/// Electron app's.
+/// the host is busy with another library operation.
 const BUSY: &str = "A library operation is already in progress.";
 
 /// Decides whether the library at `path` may be changed on disk, or revealed
@@ -60,13 +59,13 @@ pub fn permit(path: &Path, cx: &mut App) -> Result<(), Denied> {
     }
 }
 
-/// Does the Library Manager's Rename (`renameLibrary` in the Electron app):
-/// renames the library's folder `from` to `to`, which is in the same parent
-/// folder. The library keeps its position in the list of libraries and among
-/// the pinned libraries, its colour and icon, and the user's consent. If the
-/// library is open, it is closed before the rename and opened again
-/// afterwards, at the new path after a success and at the old path after a
-/// failure. The result is passed to `done`.
+/// Does the Library Manager's Rename: renames the library's folder `from` to
+/// `to`, which is in the same parent folder (`files::rename_to`). The library
+/// keeps its position in the list of libraries and among the pinned
+/// libraries, its colour and icon, and the user's consent. If the library is
+/// open, it is closed before the rename and opened again afterwards, at the
+/// new path after a success and at the old path after a failure. The result
+/// is passed to `done`.
 pub fn rename(
     from: PathBuf,
     to: PathBuf,
@@ -76,14 +75,13 @@ pub fn rename(
     relocate(from, to, Relocation::Rename, cx, done);
 }
 
-/// Does the Library Manager's Move… (`relocateLibrary` in the Electron app):
-/// moves the library's folder `from` to the path `to`, which is in another
-/// folder (`files::move_to`). Everything else is done as [`rename`] does it:
-/// the same checks are made, the open library is closed and opened again, the
-/// library keeps its position in the list of libraries and among the pinned
-/// libraries, its colour and its icon, and the result is passed to `done`.
-/// After a move to another volume the user is asked for consent again, because
-/// the database file is then a new file.
+/// Does the Library Manager's Move…: moves the library's folder `from` to the
+/// path `to`, which is in another folder (`files::move_to`). Everything else
+/// is done as [`rename`] does it: the same checks are made, the open library
+/// is closed and opened again, the library keeps its position in the list of
+/// libraries and among the pinned libraries, its colour and its icon, and the
+/// result is passed to `done`. After a move to another volume the user is
+/// asked for consent again, because the database file is then a new file.
 pub fn move_library(
     from: PathBuf,
     to: PathBuf,
@@ -110,12 +108,12 @@ fn relocate(
         return done(Err(Denied::Error(BUSY.to_owned())), cx);
     }
     let probes = host(cx).read(cx).probes.clone();
-    // The Electron app renames or moves a library only after it has closed it.
-    // This app cannot tell which library the Electron app has open, so it
-    // refuses the change whenever the Electron app is running, and also when
-    // it cannot find out whether the Electron app is running. When the
-    // Electron app is not running, `permits_library` still refuses a library
-    // that this process may not open.
+    // A library must not be renamed or moved while another Picto has it
+    // open. This app cannot tell which library another Picto has open, so it
+    // refuses the change whenever another Picto is running, and also when it
+    // cannot find out whether one is running. When no other Picto is
+    // running, `permits_library` still refuses a library that this process
+    // may not open.
     let refused = match probes.picto_process() {
         Ok(None) => crate::libraries::facts().permits_library(&from).err(),
         Ok(Some(process)) => Some(Refusal::PictoRunning(process)),
@@ -192,10 +190,9 @@ fn relocate(
                 }
                 // The error is passed to `done`, which shows it in the Library
                 // Manager, where the user asked for the change. When the
-                // rename or the move itself fails, the message has the
-                // Electron app's wording: "Failed to rename library: …" or
-                // "Failed to move library: …". If the library was open, it is
-                // opened again at its old path.
+                // rename or the move itself fails, the message is "Failed to
+                // rename library: …" or "Failed to move library: …". If the
+                // library was open, it is opened again at its old path.
                 Err(error) => {
                     if is_open {
                         request(&from, Origin::Manager, cx);
@@ -208,15 +205,14 @@ fn relocate(
     .detach();
 }
 
-/// Does the Library Manager's Delete… (`deleteLibrary` in the Electron app),
-/// after the user has confirmed it. It first checks the library again with
-/// [`permit`], because things may have changed since the user chose Delete…:
-/// the Electron app may have been started, or the consent may have been
-/// withdrawn. It then removes the library's folder and everything in it
-/// (`files::delete`). The folder is not moved to the system's Trash, and the
-/// open library is never deleted. After a success the library is taken out of
-/// the list of libraries and its stored consent is removed. The result is
-/// passed to `done`.
+/// Does the Library Manager's Delete…, after the user has confirmed it. It
+/// first checks the library again with [`permit`], because things may have
+/// changed since the user chose Delete…: another Picto may have been
+/// started, or the consent may have been withdrawn. It then removes the
+/// library's folder and everything in it (`files::delete`). The folder is not
+/// moved to the system's Trash, and the open library is never deleted. After
+/// a success the library is taken out of the list of libraries and its stored
+/// consent is removed. The result is passed to `done`.
 pub fn delete(
     path: PathBuf,
     cx: &mut App,

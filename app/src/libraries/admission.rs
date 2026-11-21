@@ -1,23 +1,28 @@
-//! Whether a library may be opened (README, "Opening libraries"). A
-//! disposable copy is opened as it always was (`application::guard`); a
-//! library the user keeps only when every rule below holds, in this order:
+//! Decides whether a library may be opened (`app/README.md`, "Opening a
+//! library you keep"). A disposable copy is opened when
+//! `application::guard` accepts it. A library the user keeps is opened only
+//! when every rule below holds. The rules are checked in this order:
 //!
-//! 1. it is a library (`library.sqlite` in a `.library` folder) and carries
-//!    no copy's marker (a marked folder that fails the guard is a copy out
-//!    of place, and is refused as the guard words it);
-//! 2. the build permits it: a release build does; a debug or test build
-//!    only when started with `--allow-real-libraries`;
-//! 3. no automation seam is active in the process (`seams::automation`);
-//! 4. the user asked for it: the Library Manager, Open Library…, a recent
-//!    library, the switcher, the library this app last had open, or the
-//!    command line with the flag; never a file the system handed over;
-//! 5. the Electron app is not running (it holds no lock this app can see);
-//! 6. the core finds its schema current, read without writing anything;
-//! 7. the user agreed, once per library (path and database file), that this
-//!    app reads and writes it directly.
+//! 1. The folder is a library (a `.library` folder that holds
+//!    `library.sqlite`) and has no marker file of a copy. A folder that has
+//!    the marker file and that the guard refuses is a copy in the wrong
+//!    place, and it is refused with the guard's message.
+//! 2. The build permits it. A release build does. A debug or test build
+//!    does only when it was started with `--allow-real-libraries`.
+//! 3. No automation seam is active in the process (`seams::automation`).
+//! 4. The user asked for the library: in the Library Manager, with Open
+//!    Library…, with a row of Recent Libraries or of the switcher, by
+//!    having had it open last, or on the command line with the flag. A file
+//!    that the system handed over never opens a library.
+//! 5. No other Picto is running. Picto 0.6.19 and earlier hold no lock that
+//!    this app can see, so the list of processes is read instead.
+//! 6. The core finds the library's schema current. The schema is read
+//!    without writing anything.
+//! 7. The user agreed, once for each library (its path and its database
+//!    file), that this app reads and writes the library directly.
 //!
-//! Nothing here writes: the checks read the folder, the system's process
-//! list and the database with SQLite's `immutable` flag.
+//! Nothing in this module writes. The checks read the folder, the system's
+//! list of processes, and the database with SQLite's `immutable` flag.
 use std::path::{Path, PathBuf};
 
 /// The command-line flag that lets a debug or test build open libraries
@@ -27,26 +32,28 @@ pub const FLAG: &str = "--allow-real-libraries";
 /// Where a request to open a library came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {
-    /// Chosen in the Library Manager (a row, Open Library, New Library).
+    /// The user chose the library in the Library Manager: a row, Open
+    /// Library or New Library.
     Manager,
-    /// Chosen in Open Library…'s folder dialog.
+    /// The user chose the library in the folder dialog of Open Library….
     OpenDialog,
-    /// A row of File › Recent Libraries.
+    /// The user chose a row of File › Recent Libraries.
     Recent,
-    /// A row of the sidebar's library switcher.
+    /// The user chose a row of the library switcher in the sidebar.
     Switcher,
-    /// The library this app had open last, at start.
+    /// The app is starting and opens the library it had open last.
     LastOpened,
-    /// The command line; `flag` is whether `--allow-real-libraries` was on
-    /// it.
+    /// The library was named on the command line. `flag` is whether
+    /// `--allow-real-libraries` was on the command line too.
     CommandLine { flag: bool },
-    /// A file the system handed over: a launch with files, Open With, a
-    /// drop on the Dock icon, a second launch.
+    /// The system handed the library over as a file: a launch with files,
+    /// Open With, a drop on the Dock icon, or a second launch.
     Associated,
 }
 
 impl Origin {
-    /// Whether the user chose the library in this app.
+    /// Returns whether a request from this origin counts as the user asking
+    /// for the library (rule 4).
     fn chosen_by_the_user(self) -> bool {
         match self {
             Origin::Manager
@@ -60,24 +67,26 @@ impl Origin {
     }
 }
 
-/// What this process is: its build, its flag, its seams.
+/// The facts about this process that the rules decide on: its build, its
+/// flag, its automation seam and the test folder.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Facts {
-    /// A release build (no test seams compiled in).
+    /// Whether this is a release build. A release build holds no test seams.
     pub release: bool,
-    /// Started with [`FLAG`].
+    /// Whether the process was started with [`FLAG`].
     pub flag: bool,
-    /// The automation seam active, if any.
+    /// The name of the automation seam that is active, if one is.
     pub seam: Option<&'static str>,
-    /// Test builds only: a scratch folder whose generated libraries count
-    /// as permitted (rules 2 and 3), for the off-screen tool
-    /// (`PICTO_GPUI_TEST_LIBRARIES`).
+    /// In a test build only: a folder whose libraries pass rules 2 and 3
+    /// whatever the build and the seam are. The off-screen tool names the
+    /// folder with `PICTO_GPUI_TEST_LIBRARIES` and puts generated libraries
+    /// in it.
     pub test_folder: Option<PathBuf>,
 }
 
 impl Facts {
-    /// Whether libraries the user keeps may be opened at all in this
-    /// process (rules 2 and 3), and why not.
+    /// Returns whether this process may open libraries the user keeps at
+    /// all (rules 2 and 3), or the reason why it may not.
     pub fn permits(&self) -> Result<(), Refusal> {
         if let Some(seam) = self.seam {
             return Err(Refusal::Seam(seam));
@@ -88,9 +97,9 @@ impl Facts {
         Ok(())
     }
 
-    /// Whether `root` (canonical) may be opened as far as rules 2 and 3 go:
-    /// the process permits it, or (in a test build) it lies directly in the
-    /// test folder.
+    /// Returns whether the library at `root` passes rules 2 and 3: the
+    /// process permits it, or, in a test build, the library is directly in
+    /// the test folder. `root` must be canonical.
     pub fn permits_library(&self, root: &Path) -> Result<(), Refusal> {
         if self
             .test_folder
@@ -103,21 +112,24 @@ impl Facts {
     }
 }
 
-/// A library's identity for the user's consent: where it is, and its
-/// database file on disk, so a different library later put at the same
-/// path is asked about again.
+/// What the user's consent is given for: the library's path and the
+/// identity of its database file on disk. Because the database file is part
+/// of it, the user is asked again when a different library is later put at
+/// the same path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
     pub path: String,
     pub database: String,
 }
 
-/// Why a library was not opened. Each says so in words the user can act on.
+/// The reason a library was not opened. [`Refusal::words`] returns the title
+/// and the message that tell the user the reason.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Refusal {
     Missing(PathBuf),
     NotALibrary(PathBuf),
-    /// A marked folder the guard refused: its words.
+    /// The folder has the marker file of a copy and the guard refused it.
+    /// The text is the guard's message.
     CopyOutOfPlace(String),
     Build,
     Seam(&'static str),
@@ -128,10 +140,12 @@ pub enum Refusal {
 }
 
 impl Refusal {
-    /// The title and message a notification or the Library Manager shows.
+    /// Returns the title and the message that a notification or the Library
+    /// Manager shows for this refusal.
     pub fn words(&self) -> (String, String) {
         use crate::i18n::en;
-        // Production's main process writes these in English, without keys.
+        // None of these texts has a key in the locale files, so each is
+        // shown in English in every language.
         let not_opened = en("Could not open Picto Library").to_owned();
         match self {
             Refusal::Missing(path) => (
@@ -188,18 +202,21 @@ impl Refusal {
     }
 }
 
-/// What a request came to.
+/// The result of a request to open a library.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Decision {
-    /// A disposable copy the guard accepted: opened and detached as always.
+    /// A disposable copy that the guard accepted. It is detached when it is
+    /// opened.
     Copy(PathBuf),
     /// A library the user keeps that passed every rule.
     Real {
         root: PathBuf,
         identity: Identity,
     },
-    /// Every rule held but the user has not yet agreed for this library:
-    /// ask (naming its path), keep the answer, and ask again.
+    /// A library the user keeps that passed every rule except the last: the
+    /// user has not yet given consent for this library. The caller asks the
+    /// user, naming the library's path, stores the consent if the user
+    /// agrees, and then calls `admit` again.
     Ask {
         root: PathBuf,
         identity: Identity,
@@ -207,17 +224,20 @@ pub enum Decision {
     Refused(Refusal),
 }
 
-/// What the checks ask the system; injectable for tests.
+/// The questions that the rules ask the system. Tests give `admit` their
+/// own answers through this trait.
 pub trait Probes {
-    /// The Electron app's process, if one runs.
+    /// Returns a text that names another Picto that is running, `None` when
+    /// none is running, or an error when the list of processes could not be
+    /// read.
     fn picto_process(&self) -> Result<Option<String>, String>;
-    /// The identity of a database file on disk.
+    /// Returns a text that identifies the database file on disk.
     fn file_identity(&self, database: &Path) -> std::io::Result<String> {
         crate::libraries::platform::file_identity(database)
     }
 }
 
-/// The system itself.
+/// Asks the system itself (`libraries::platform`).
 pub struct System;
 
 impl Probes for System {
@@ -226,8 +246,8 @@ impl Probes for System {
     }
 }
 
-/// Decides whether `path` may be opened. `consents` are the identities the
-/// user agreed to.
+/// Decides whether the library at `path` may be opened. `consents` holds the
+/// identities of the libraries that the user has agreed to.
 pub fn admit(
     path: &Path,
     origin: Origin,
@@ -238,12 +258,13 @@ pub fn admit(
     let Ok(root) = path.canonicalize() else {
         return Decision::Refused(Refusal::Missing(path.to_path_buf()));
     };
-    // A disposable copy, exactly as before.
+    // A folder that the guard accepts is a disposable copy. The numbered
+    // rules below do not apply to it.
     match crate::application::guard(&root) {
         Ok(copy) => {
             return if origin == Origin::Associated {
-                // Production switches to an opened `.library`; this app
-                // opens no library from a file the system handed over.
+                // This app opens no library from a file that the system
+                // handed over, and that includes a disposable copy.
                 Decision::Refused(Refusal::Origin)
             } else {
                 Decision::Copy(copy)
@@ -254,7 +275,7 @@ pub fn admit(
         }
         Err(_) => {}
     }
-    // 1. A library.
+    // Rule 1: the folder is a library.
     let database = root.join("library.sqlite");
     let named = root
         .file_name()
@@ -263,25 +284,25 @@ pub fn admit(
     if !named || !root.is_dir() || !database.is_file() {
         return Decision::Refused(Refusal::NotALibrary(root));
     }
-    // 2 and 3. The build and the seams.
+    // Rules 2 and 3: the build permits it and no automation seam is active.
     if let Err(refusal) = facts.permits_library(&root) {
         return Decision::Refused(refusal);
     }
-    // 4. Chosen by the user.
+    // Rule 4: the user asked for the library.
     if !origin.chosen_by_the_user() {
         return Decision::Refused(Refusal::Origin);
     }
-    // 5. The Electron app.
+    // Rule 5: no other Picto is running.
     match probes.picto_process() {
         Ok(None) => {}
         Ok(Some(process)) => return Decision::Refused(Refusal::PictoRunning(process)),
         Err(error) => return Decision::Refused(Refusal::ProbeFailed(error)),
     }
-    // 6. The schema, as the core judges it.
+    // Rule 6: the core finds the schema current.
     if let Err(message) = compatibility(&root) {
         return Decision::Refused(Refusal::Incompatible(message));
     }
-    // 7. The user's consent.
+    // Rule 7: the user has given consent for this library.
     let identity = match probes.file_identity(&database) {
         Ok(database) => Identity {
             path: root.to_string_lossy().into_owned(),
@@ -301,8 +322,9 @@ pub fn admit(
     }
 }
 
-/// Whether a new library may be made at `path` (New Library): the rules
-/// that do not need a library yet (2, 3 and 5), and nothing there already.
+/// Decides whether New Library may make a library at `path`. Nothing may
+/// exist at `path` yet, and rules 2, 3 and 5 must hold. The other rules need
+/// a library that already exists.
 pub fn admit_new(path: &Path, facts: &Facts, probes: &dyn Probes) -> Result<(), Refusal> {
     if path.exists() {
         return Err(Refusal::NotALibrary(path.to_path_buf()));
@@ -320,11 +342,13 @@ pub fn admit_new(path: &Path, facts: &Facts, probes: &dyn Probes) -> Result<(), 
     }
 }
 
-/// Whether the core finds the library's schema current
-/// (`picto_library::schema::validate`), read through SQLite's `immutable`
-/// flag: no lock, no journal, no shared-memory file, nothing written. The
-/// error is the core's own message (`incompatible library: …`). The core's
-/// open would migrate an older schema in place; this app never asks it to.
+/// Checks that the core finds the schema of the library at `root` current
+/// (`picto_library::schema::validate`). The database is opened with SQLite's
+/// `immutable` flag, so no lock is taken, no journal or shared-memory file
+/// is made, and nothing is written. The error is the core's own message
+/// (`incompatible library: …`). When the core opens a library with an older
+/// schema, it migrates the schema in place. This app refuses such a library
+/// here, before the core opens it.
 pub fn compatibility(root: &Path) -> Result<(), String> {
     let database = root.join("library.sqlite");
     let mut address = url::Url::from_file_path(&database)
@@ -347,7 +371,7 @@ pub(crate) mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    /// A probe that answers what it is told.
+    /// Answers `picto_process` with the value it was given.
     pub struct Fake {
         pub running: Result<Option<String>, String>,
     }
@@ -371,13 +395,15 @@ pub(crate) mod tests {
         }
     }
 
-    /// A library as production makes one, outside any scratch folder.
+    /// Makes a library in `folder` that has the core's schema and no marker
+    /// file of a copy, and returns its canonical path.
     pub fn real_library(folder: &Path, name: &str) -> PathBuf {
         let root = folder.join(format!("{name}.library"));
         std::fs::create_dir_all(root.join("blobs")).unwrap();
         let mut database = rusqlite::Connection::open(root.join("library.sqlite")).unwrap();
-        // In the journal mode a library keeps, so a read that would leave
-        // its shared-memory or log file behind shows in a snapshot.
+        // The database is put in WAL mode, the journal mode that a library
+        // has. A read that left a shared-memory file or a log file behind
+        // would then show in a snapshot of the folder.
         database
             .query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))
             .unwrap();
@@ -386,7 +412,8 @@ pub(crate) mod tests {
         root.canonicalize().unwrap()
     }
 
-    /// Every file under `root` with its length and modification time.
+    /// Returns every file and folder under `root` with its length and its
+    /// modification time.
     pub fn snapshot(root: &Path) -> BTreeMap<PathBuf, (u64, std::time::SystemTime)> {
         let mut files = BTreeMap::new();
         let mut folders = vec![root.to_path_buf()];
@@ -486,7 +513,8 @@ pub(crate) mod tests {
                 Decision::Refused(Refusal::Seam(facts.seam.unwrap()))
             );
         }
-        // The process this test runs in is a test build: a seam.
+        // The process that runs this test is a test build, which counts as
+        // an automation seam.
         assert_eq!(
             crate::libraries::facts().permits(),
             Err(Refusal::Seam("a test build"))
@@ -523,9 +551,10 @@ pub(crate) mod tests {
         }
     }
 
-    /// A probe that finds no Electron app and reports the database file's
-    /// identity it is told, so the consent rule is tested apart from what
-    /// a file system makes of a replaced file (`platform::tests`).
+    /// Answers that no other Picto is running, and answers `file_identity`
+    /// with the text it was given. The consent rule is then tested without
+    /// depending on the identity that a file system gives a replaced file,
+    /// which `platform::tests` covers.
     struct Database(&'static str);
 
     impl Probes for Database {
@@ -554,13 +583,14 @@ pub(crate) mod tests {
             admit(&root, Origin::Manager, &release(), &consents, &first),
             Decision::Real { .. }
         ));
-        // Another library put at the same path is asked about again.
+        // When another library is put at the same path, the user is asked
+        // again.
         let replaced = Database("second");
         assert!(matches!(
             admit(&root, Origin::Manager, &release(), &consents, &replaced),
             Decision::Ask { .. }
         ));
-        // And a consent says nothing of the same database somewhere else.
+        // A consent does not cover the same database at another path.
         let elsewhere = real_library(folder.path(), "Other");
         assert!(matches!(
             admit(&elsewhere, Origin::Manager, &release(), &consents, &first),
@@ -614,7 +644,7 @@ pub(crate) mod tests {
             "{message}"
         );
         assert_eq!(snapshot(&root), before);
-        // Not a Picto database at all.
+        // This database is not a Picto database.
         let other = folder.path().join("Other.library");
         std::fs::create_dir(&other).unwrap();
         rusqlite::Connection::open(other.join("library.sqlite"))
@@ -652,8 +682,8 @@ pub(crate) mod tests {
             ),
             Decision::Refused(Refusal::Missing(_))
         ));
-        // Production creates a library in an empty `.library` folder; this
-        // app wrote nothing there.
+        // The empty `.library` folder was refused, and nothing was written
+        // into it.
         assert_eq!(std::fs::read_dir(&empty).unwrap().count(), 0);
     }
 
@@ -673,7 +703,8 @@ pub(crate) mod tests {
             format!("{}\n", source.display()),
         )
         .unwrap();
-        // Whatever the build, flag, seams or consent: a copy is a copy.
+        // A copy is admitted as a copy whatever the build, the flag, the
+        // seam, the consents and the running processes are.
         let debug = Facts {
             release: false,
             flag: false,
@@ -693,8 +724,8 @@ pub(crate) mod tests {
             ),
             Decision::Copy(copy.canonicalize().unwrap())
         );
-        // A marked folder the guard refuses is never taken for a library
-        // the user keeps.
+        // A folder that has the marker file and that the guard refuses is
+        // never admitted as a library the user keeps.
         let moved = elsewhere.path().join("Moved.library");
         std::fs::create_dir(&moved).unwrap();
         std::fs::write(moved.join("library.sqlite"), b"copy").unwrap();

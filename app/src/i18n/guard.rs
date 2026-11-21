@@ -1,42 +1,51 @@
-//! Keeps the interface translated: reads the crate's sources and fails on
-//! text that would show in English whatever the language.
+//! A test that reads the source files of the app and fails when the app
+//! would show a text in English in every language without a stated reason.
 //!
-//! What it checks, in the code outside tests:
-//! - every literal given to `t(…)` or `tf!(…)`, or to a shared control
-//!   that translates what it is given (a menu row, a select's choice, a text
-//!   field's placeholder), is one of production's keys (`en.json`), so the
-//!   lookup cannot miss;
-//! - every literal given to `en(…)`, the mark of a text only this app has,
-//!   is not a key (it would be translatable) and is listed in
-//!   `gpui_only.txt`, and every line there is still used;
-//! - no literal that is one of production's keys is left outside `t`,
-//!   unless a comment says why (`// i18n: <reason>` on its line or the line
-//!   above, such as "not shown" or "production keeps it in English";
-//!   `// i18n: translated where drawn` covers the lines after it up to a
-//!   blank line, for a table whose labels go through `t` when drawn) or
-//!   its file is listed below as one that shows none;
-//! - no literal with letters is handed straight to a drawing call (`.child`,
-//!   `.label`, `.tooltip`, `.placeholder`, a notification, a confirmation,
-//!   …) without `t`, `tf!` or `en`.
+//! It checks these things in the code outside tests:
+//! - Every literal given to `t(…)` or `tf!(…)`, or to a shared control that
+//!   translates what it is given (a menu row, a select's choice, a text
+//!   field's placeholder), is a key of `locales/en.json`. A literal that is
+//!   not a key has no translation.
+//! - Every literal given to `en(…)`, which marks a text that has no key, is
+//!   really not a key of `locales/en.json` and is listed in `gpui_only.txt`.
+//!   Every line of `gpui_only.txt` is still used by an `en(…)` call.
+//! - No literal that is a key of `locales/en.json` is used without `t(…)`.
+//!   A literal is exempt when a comment `// i18n: <reason>` is on its line
+//!   or on the line above. The reason says why the text is not translated
+//!   there, for example "not shown". A comment
+//!   `// i18n: translated where drawn` exempts the lines after it up to the
+//!   next blank line. It is for a table whose labels are given to `t(…)`
+//!   where they are drawn. A literal is also exempt when it names something
+//!   and is not shown ([`identifier`]), and when its file is in `NOT_SHOWN`.
+//! - No literal with letters is given directly to a call that draws it
+//!   (`.child`, `.label`, `.tooltip`, a notification and the other calls in
+//!   `SINKS`) without `t`, `tf!` or `en`. The exemptions of the point above
+//!   apply here too.
+//! - No `format!` writes a message that has a key. A `format!` template that
+//!   is equal to a key once the placeholders are ignored (`{name}` in the
+//!   template, `{value0}` in the key) must be written with `tf!` instead.
 //!
-//! - no `format!` rebuilds one of production's messages: a template that
-//!   is a key once its placeholders are set aside (`{name}` against
-//!   `{value0}`) goes through `tf!` instead.
-//!
-//! What it does not catch: a text of this app's own built with `format!` and
-//! then drawn, a literal kept in a variable or a table and drawn later
-//! (unless it is a key), a drawing call it does not list, and a key used
-//! where production itself leaves the text in English.
+//! The test does not find these: a text without a key that is built with
+//! `format!` and then drawn, a literal without a key that is kept in a
+//! variable or a table and drawn later, a literal given to a drawing call
+//! that `SINKS` does not list, and a literal whose `// i18n:` comment gives
+//! a reason that is not true.
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// Files that draw no interface text of their own: the test tool, the
-/// network check, the tests, the application menu, which production leaves in English
-/// (`electron/windows/menu.mjs` is not localized), and the shortcut
-/// registry, data whose labels, groups and descriptions Settings draws
-/// through `t()` and whose key names stay English as production writes
-/// them; and this module's own data (the languages' number and date
-/// words, the English plural suffix).
+/// The files that the test does not read, because no text in them has to be
+/// given to `t(…)` there:
+/// - `offscreen.rs`, which plays a script into the app and saves pictures of
+///   its window, and `net_check.rs`, which checks the app's network features
+///   in debug builds. Neither is part of the interface.
+/// - This module's tests and the test itself.
+/// - `format.rs` and `mod.rs` of this module, which hold the number and date
+///   words of each language and the English plural suffix.
+/// - The files of the application menu, whose rows are shown in English in
+///   every language.
+/// - The shortcut registry. Settings gives its labels, groups and
+///   descriptions to `t(…)` where it draws them, and the names of the keys
+///   are English in every language.
 const NOT_SHOWN: [&str; 10] = [
     "offscreen.rs",
     "net_check.rs",
@@ -50,8 +59,8 @@ const NOT_SHOWN: [&str; 10] = [
     "settings/registry.rs",
 ];
 
-/// Calls whose literal argument is drawn, or read by assistive technology
-/// (an accessible name, description, value or placeholder).
+/// The calls that draw their literal argument, or that give it to assistive
+/// technology as an accessible name, description, value or placeholder.
 const SINKS: [&str; 17] = [
     "tip(",
     ".child(",
@@ -72,35 +81,43 @@ const SINKS: [&str; 17] = [
     ".aria_value(",
 ];
 
-/// A string literal and where it is.
+/// Holds one string literal of a source file and the code around it.
 struct Literal {
     text: String,
     line: usize,
-    /// The code before it on its line and the line before, without
-    /// comments or other literals.
+    /// The code before the literal on its line, and the line before that.
+    /// Comments are left out of it, and every other literal is written as an
+    /// empty one.
     before: String,
-    /// Marked `// i18n: <reason>` on its line or the line above.
+    /// Whether an `// i18n:` comment covers the literal: one on its line or
+    /// on the line above, or an `// i18n: translated where drawn` comment
+    /// further up.
     marked: bool,
-    /// The code after it on its line.
+    /// The code after the literal on its line.
     after: String,
-    /// Where `after` starts in the file's code.
+    /// The position at which `after` starts in the file's code, where the
+    /// code has no comments and every literal is written as an empty one.
     code_end: usize,
 }
 
-/// The literals of a Rust file outside `#[cfg(test)]` items, and the lines
-/// marked as showing no text.
+/// Returns the string literals of a Rust source file that are outside
+/// `#[cfg(test)]` items. Each literal says whether an `// i18n:` comment
+/// covers it.
 fn literals(source: &str) -> Vec<Literal> {
     let chars: Vec<char> = source.chars().collect();
     let mut found = Vec::new();
     let mut code = String::new();
     let mut line = 1;
     let mut index = 0;
-    // `#[cfg(test)]` items are skipped: from the attribute to the end of
-    // the item (its closing brace at the same depth, or its semicolon).
+    // A `#[cfg(test)]` item is skipped, from the attribute to the end of the
+    // item. The item ends at its closing brace at the same depth, or at its
+    // semicolon.
     let mut skip_from: Option<(usize, bool)> = None;
     let mut depth = 0usize;
     let mut markers = BTreeSet::new();
-    // A block marker covers the lines after it up to the next blank line.
+    // The line of the last `// i18n: translated where drawn` comment, while
+    // the lines after it are still covered. The comment covers the lines up
+    // to the next blank line.
     let mut block_from: Option<usize> = None;
     let starts = |at: usize, text: &str| {
         text.chars()
@@ -126,7 +143,9 @@ fn literals(source: &str) -> Vec<Literal> {
             continue;
         }
         if starts(index, "//") {
-            // Keep a marker comment in the code so a literal can see it.
+            // A comment is left out of `code`. The line of an `// i18n:`
+            // comment is recorded in `markers`, so that the literals on that
+            // line and on the next are marked.
             let start = index;
             while index < chars.len() && chars[index] != '\n' {
                 index += 1;
@@ -156,7 +175,8 @@ fn literals(source: &str) -> Vec<Literal> {
             index += "#[cfg(test)]".len();
             continue;
         }
-        // Raw strings: r"…", r#"…"#, br"…".
+        // A raw string is `r"…"`, `r#"…"#` or `br"…"`. A raw byte string is
+        // never drawn, so it is skipped and not recorded.
         let raw_start = if starts(index, "br") {
             2
         } else if c == 'r' {
@@ -203,7 +223,8 @@ fn literals(source: &str) -> Vec<Literal> {
             }
         }
         if c == 'b' && chars.get(index + 1) == Some(&'"') && !previous_is_ident {
-            // A byte string is never drawn.
+            // A byte string is never drawn, so it is skipped and not
+            // recorded.
             index += 1;
             let mut i = index + 1;
             while i < chars.len() && chars[i] != '"' {
@@ -230,7 +251,7 @@ fn literals(source: &str) -> Vec<Literal> {
                         Some('n') => text.push('\n'),
                         Some('t') => text.push('\t'),
                         Some('u') => {
-                            // \u{…}
+                            // The escape `\u{…}` stands for one character.
                             let close = (i..chars.len()).find(|&j| chars[j] == '}').unwrap_or(i);
                             let hex: String = chars[i + 2..close].iter().collect();
                             if let Some(ch) =
@@ -241,8 +262,9 @@ fn literals(source: &str) -> Vec<Literal> {
                             i = close;
                         }
                         Some('\n') => {
-                            // A continued line drops the break and the
-                            // indentation after it.
+                            // A backslash at the end of a line removes the
+                            // line break and the indentation of the next
+                            // line from the text.
                             line += 1;
                             while chars.get(i + 1).is_some_and(|ch| ch.is_whitespace()) {
                                 i += 1;
@@ -276,7 +298,9 @@ fn literals(source: &str) -> Vec<Literal> {
             continue;
         }
         if c == '\'' {
-            // A character literal ('x', '\'', '\u{…}'); otherwise a lifetime.
+            // A quote starts a character literal (`'x'`, `'\''`, `'\u{…}'`),
+            // which is written to `code` as `' '`. Any other quote starts a
+            // lifetime and is kept as code.
             if chars.get(index + 1) == Some(&'\\') {
                 let mut i = index + 2;
                 while i < chars.len() && chars[i] != '\'' {
@@ -330,8 +354,9 @@ fn literals(source: &str) -> Vec<Literal> {
 }
 
 fn literal(text: String, line: usize, code: &str) -> Literal {
-    // The current line and the one before, so a call broken across lines
-    // (`.child(\n "…"`) is seen.
+    // `before` holds the current line and the line before it, so that a
+    // call whose literal is on the next line (`.child(` and then `"…"`) is
+    // recognised.
     let mut lines = code.rsplit('\n');
     let current = lines.next().unwrap_or("");
     let previous = lines.next().unwrap_or("");
@@ -345,7 +370,9 @@ fn literal(text: String, line: usize, code: &str) -> Literal {
     }
 }
 
-/// How a literal is used: given to `t`/`tf!`, to `en`, or neither.
+/// Says how a literal is used. `Translated` means it is given to `t` or
+/// `tf!`, or to a shared control that translates it. `GpuiOnly` means it is
+/// given to `en`. `Plain` means neither.
 #[derive(Debug, PartialEq)]
 enum Use {
     Translated,
@@ -363,11 +390,13 @@ fn usage(before: &str) -> Use {
                 .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.')
         })
     };
-    // The shared menu's rows and a select's choices translate their labels
-    // themselves, as production's `ContextMenu` and `CmSelect` do.
+    // A row of the shared menu, a choice of a select and the placeholder of
+    // a text field translate the label they are given, so a label given to
+    // them counts as translated.
     let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
-    // `item(<action>, "…"`: the label after an action that is a literal or
-    // a path (`Action::Rename`).
+    // In `item(<action>, "…")` and `choice(<value>, "…")` the label is the
+    // second argument. It is recognised when the first argument is a literal
+    // or a path such as `Action::Rename`, with no call and no comma in it.
     let translating = ["item(", "choice("].iter().any(|callee| {
         compact.rfind(callee).is_some_and(|at| {
             let head_ok = !compact[..at]
@@ -392,9 +421,9 @@ fn usage(before: &str) -> Use {
     }
 }
 
-/// A literal in a place where it names something rather than being shown:
-/// a match pattern, one side of a comparison, an icon's name, a JSON value
-/// sent to the library.
+/// Returns whether the literal is in a place where it names something and
+/// is not shown: a match pattern, one side of a comparison, an icon's name,
+/// or a value on a line with a `json!` call.
 fn identifier(literal: &Literal) -> bool {
     let before = literal.before.trim_end();
     let after = literal.after.trim_start();
@@ -433,7 +462,8 @@ fn sources() -> Vec<PathBuf> {
     out
 }
 
-/// Files that are test modules: declared under `#[cfg(test)]` as `mod x;`.
+/// Returns the files that are test modules: those declared as `mod x;` on
+/// the line after `#[cfg(test)]`.
 fn test_modules(files: &[PathBuf]) -> BTreeSet<PathBuf> {
     let mut out = BTreeSet::new();
     for file in files {
@@ -473,20 +503,23 @@ fn gpui_only() -> BTreeSet<String> {
         .collect()
 }
 
-/// What the guard finds, by kind.
+/// Holds what the test found. Each field holds the findings of one kind.
 #[derive(Default)]
 struct Findings {
-    /// Literals given to `t` that are not keys.
+    /// The literals given to `t` that are not keys of `locales/en.json`.
     unknown_keys: Vec<String>,
-    /// Literals given to `en` that are keys or are not listed.
+    /// The literals given to `en` that are keys of `locales/en.json`, or
+    /// that `gpui_only.txt` does not list.
     unlisted: Vec<String>,
-    /// Listed GPUI-only texts no longer used.
+    /// The lines of `gpui_only.txt` that no `en(…)` call uses.
     stale: Vec<String>,
-    /// Keys left in English, by file.
+    /// The keys of `locales/en.json` that are used without `t`, for each
+    /// file.
     untranslated: BTreeMap<String, Vec<String>>,
-    /// Literals drawn without `t`, by file.
+    /// The literals without a key that are drawn without `t` or `en`, for
+    /// each file.
     drawn: BTreeMap<String, Vec<String>>,
-    /// `format!` templates that rebuild one of production's messages.
+    /// The `format!` templates that write a message that has a key.
     formatted: Vec<String>,
 }
 
@@ -494,9 +527,9 @@ fn has_letters(text: &str) -> bool {
     text.chars().any(|c| c.is_alphabetic())
 }
 
-/// A message with each placeholder written `{}`, so that a `format!`
-/// template (`{name}`, `{}`, `{0:>3}`) compares with a key (`{value0}`).
-/// `{{` and `}}` stay the braces they write.
+/// Returns `text` with each placeholder replaced by `{}`. A `format!`
+/// template (`{name}`, `{}`, `{0:>3}`) and a key (`{value0}`) that write the
+/// same message are then equal. `{{` and `}}` are kept as they are.
 fn template(text: &str) -> String {
     let mut out = String::new();
     let mut chars = text.chars().peekable();
@@ -524,17 +557,17 @@ fn template(text: &str) -> String {
     out
 }
 
-/// Whether a template holds a word of its own besides its placeholders, so
-/// that joins such as `{}{}`, `{} · {}` or `{}x` are not taken for a
-/// message.
+/// Returns whether `template` has two letters in a row outside its
+/// placeholders. A template that only joins values, such as `{}{}`,
+/// `{} · {}` or `{}x`, has none and is not a message.
 fn worded(template: &str) -> bool {
     let text: Vec<char> = template.replace("{}", " ").chars().collect();
     text.windows(2)
         .any(|pair| pair[0].is_alphabetic() && pair[1].is_alphabetic())
 }
 
-/// The templates of production's messages that hold a placeholder and a
-/// word.
+/// Returns the keys of `locales/en.json` that have a placeholder and a word,
+/// each in the form that [`template`] returns.
 fn key_templates() -> BTreeSet<String> {
     super::catalog(super::Locale::En)
         .keys()
@@ -668,7 +701,7 @@ fn a_format_template_is_compared_with_the_keys_by_its_placeholders() {
     let templates = key_templates();
     assert!(templates.contains(&template("Add to \u{201c}{name}\u{201d}")));
     assert!(!templates.contains(&template("Move {count} to Trash, at once")));
-    // A join of values is not a message.
+    // A template that only joins values is not a message.
     assert!(!templates.contains(&template("{rate}x")));
     assert!(!templates.contains(&template("{progress} · {left}")));
 }

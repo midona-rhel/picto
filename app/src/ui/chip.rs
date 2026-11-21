@@ -8,9 +8,9 @@ use std::rc::Rc;
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type MenuHandler = Box<dyn Fn(&Point<Pixels>, &mut Window, &mut App) + 'static>;
 
-/// The label colour for a chip of this colour (`tagTextColors` in
-/// `TagChip.tsx`): a pale tint of the chip's hue, or the primary text colour
-/// for a grey chip.
+/// Returns the colour of the label of a chip that has the colour `color`: a
+/// pale tint of the chip's hue on the dark themes, a dark shade of it on the
+/// light themes, or the primary text colour for a grey chip.
 fn text_color(color: u32, theme: theme::Theme) -> Rgba {
     let (r, g, b) = (
         (color >> 16 & 0xff) as f32,
@@ -30,8 +30,8 @@ fn text_color(color: u32, theme: theme::Theme) -> Rgba {
         60. * ((r - g) / delta + 4.)
     };
     let hue = if hue < 0. { hue + 360. } else { hue };
-    // `TAG_TEXT_COLORS`: a pale tint on the dark themes, a dark shade on
-    // the light ones.
+    // For each range of hues, the pale tint for the dark themes and the dark
+    // shade for the light themes.
     let (dark, light) = match hue {
         h if !(15. ..345.).contains(&h) => (0xf8e7e6, 0x513636),
         h if h < 45. => (0xf8f0e1, 0x4c3e31),
@@ -45,12 +45,12 @@ fn text_color(color: u32, theme: theme::Theme) -> Rgba {
     rgb(if theme.is_light() { light } else { dark })
 }
 
-/// `.subtag { max-width: 120px }`
+/// The largest width of a chip's label.
 const LABEL_LIMIT: f32 = 120.;
 
-/// The inspector's label chip (`TagChip.tsx`), for tags and folders: a tint
-/// of its colour that deepens under the pointer over 200 ms, with an optional
-/// namespace prefix and remove button.
+/// The inspector's chip for a tag or a folder. Its background and border are
+/// tints of its colour that become stronger under the pointer over 200 ms. It
+/// can have a namespace before its label and a remove button after it.
 #[derive(IntoElement)]
 pub struct Chip {
     id: ElementId,
@@ -73,7 +73,7 @@ pub fn chip(id: impl Into<ElementId>, label: impl Into<SharedString>, color: u32
 }
 
 impl Chip {
-    /// Shown as `namespace:` before the label.
+    /// Sets the namespace, which is shown as `namespace:` before the label.
     pub fn namespace(mut self, namespace: Option<SharedString>) -> Self {
         self.namespace = namespace;
         self
@@ -85,7 +85,9 @@ impl Chip {
         self.on_remove = Some(Box::new(handler));
         self
     }
-    /// A right-click on the chip, with where it was, for its context menu.
+    /// Sets the handler for a right-click on the chip. It is called with the
+    /// position of the click, so that the caller can open the chip's context
+    /// menu there.
     pub fn on_menu(
         mut self,
         handler: impl Fn(&Point<Pixels>, &mut Window, &mut App) + 'static,
@@ -114,7 +116,8 @@ impl RenderOnce for Chip {
         let label = div().h(px(16.)).line_height(px(16.)).child(shown);
         let tint = |percent: f32| rgba(self.color << 8 | (percent / 100. * 255.).round() as u32);
         let removable = self.on_remove.is_some();
-        // Read as its whole name (namespace and tag), however it is cut.
+        // Assistive technology reads the chip's whole name (namespace and
+        // tag), also when the label is cut off.
         let name: SharedString = match &self.namespace {
             Some(namespace) => format!("{namespace}:{}", self.label).into(),
             None => self.label.clone(),
@@ -171,7 +174,7 @@ impl RenderOnce for Chip {
                     cx.stop_propagation();
                     handler(event, window, cx);
                 });
-            // `TagChip`'s remove `<button>`: a stop, with no ring.
+            // The remove button is a Tab stop and draws no focus ring.
             let remove = super::focus::button(
                 remove,
                 &ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "remove".into()),
@@ -200,7 +203,8 @@ mod tests {
 
     #[test]
     fn a_chip_label_takes_a_pale_tint_of_the_chip_hue() {
-        // The namespace colours of `TagChip.tsx` and the labels they give.
+        // The colours of the namespaces, and the label colours that result
+        // from them.
         assert_eq!(text_color(0xff6667, DARK), rgb(0xf8e7e6)); // creator: red
         assert_eq!(text_color(0x30d159, DARK), rgb(0xe4f5e9)); // character: green
         assert_eq!(text_color(0xc499ff, DARK), rgb(0xf3eff9)); // series: purple

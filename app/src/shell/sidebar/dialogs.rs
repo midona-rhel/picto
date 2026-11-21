@@ -1,5 +1,7 @@
-//! The sidebar's dialogs: the confirmations (`ConfirmModal`) before deleting
-//! folders and smart folders and before removing a watched folder.
+//! The sidebar's dialogs: the confirmation before folders and smart folders
+//! are deleted and before a folder's watch is removed, the dialog that sets
+//! the auto tags of folders, and the dialog that sets the directory a folder
+//! watches.
 use super::{Sidebar, folder_id, tree};
 use crate::i18n::t;
 use crate::session::{Reread, edit_then_in};
@@ -10,56 +12,61 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use picto_library::{FolderId, Lifecycle};
 
-/// What a confirmation does when confirmed.
+/// What a confirmation dialog does when the user confirms.
 #[derive(Clone)]
 pub enum Confirmed {
-    /// Deletes these folder and smart-folder definitions.
+    /// Deletes the folders and smart folders with these node ids.
     Delete(Vec<String>),
-    /// Stops watching a folder's directory.
+    /// Stops the folder from watching its directory.
     RemoveWatch(FolderId),
 }
 
 pub enum Dialog {
-    /// `ConfirmModal`: a message, Cancel, and the confirming button.
+    /// A confirmation: a title, a message, a Cancel button, and a button
+    /// labelled `label` that confirms.
     Confirm {
         title: &'static str,
         message: String,
         label: &'static str,
         then: Confirmed,
     },
-    /// `FolderAutoTagsModal`: the tags every chosen folder gives the items
-    /// it receives. Each change is saved at once.
+    /// The auto-tags dialog. `tags` are the tags that every one of
+    /// `folders` adds to the items that are put into it. Each change is
+    /// saved at once.
     AutoTags {
         folders: Vec<FolderId>,
         tags: Vec<String>,
-        /// Where the add button was last drawn, which the picker opens
-        /// above.
+        /// The bounds at which the add button was last drawn. The tag
+        /// picker opens above them.
         add_button: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     },
-    /// `FolderWatchModal`: the directory a folder imports from.
+    /// The dialog that sets the directory on disk that a folder watches.
+    /// New files in that directory are imported into the folder.
     Watch {
         folder: FolderId,
         path: Option<String>,
         enabled: bool,
         subfolders: bool,
         status: Lifecycle,
-        /// What `imports.folder.analyze` said of the folder's depth.
+        /// The result of the command `imports.folder.analyze` for the
+        /// chosen directory.
         analysis: WatchAnalysis,
-        /// Counts the analyses asked for, so an old answer is ignored.
+        /// The number of analyses that were started. The answer to an
+        /// analysis that is not the latest one is ignored.
         asked: u64,
     },
 }
 
-/// The watched folder's structure as the dialog checks it.
+/// The state of the analysis of the chosen directory's structure.
 pub enum WatchAnalysis {
-    /// No folder chosen yet.
+    /// No directory is chosen yet.
     None,
     Checking,
     Done(serde_json::Value),
     Failed,
 }
 
-/// `singleFolderDeletionMessage`.
+/// Returns the message that asks whether to delete the folder `name`.
 pub fn folder_deletion(name: &str) -> String {
     crate::tf!(
         "Delete \"{value0}\" and all its subfolders? Media inside these folders will remain untouched.",
@@ -67,7 +74,8 @@ pub fn folder_deletion(name: &str) -> String {
     )
 }
 
-/// `bulkFolderDeletionMessage`.
+/// Returns the message that asks whether to delete `count` selected folders
+/// or smart folders.
 pub fn bulk_deletion(count: usize) -> String {
     if count == 1 {
         t("Delete the selected item? Its folder and subfolders will be deleted. Media inside these folders will remain untouched.").into()
@@ -79,7 +87,9 @@ pub fn bulk_deletion(count: usize) -> String {
     }
 }
 
-/// The smart-folder menu's confirmation: a group takes its children with it.
+/// Returns the message that asks whether to delete the smart folder `name`.
+/// For a group the message says that its child smart folders are deleted
+/// too.
 pub fn smart_folder_deletion(name: &str, group: bool) -> String {
     if group {
         format!("Delete \"{name}\" and its child smart folders? This does not delete any media.")
@@ -89,8 +99,8 @@ pub fn smart_folder_deletion(name: &str, group: bool) -> String {
 }
 
 impl Sidebar {
-    /// Opens a dialog, which takes the keyboard and gives it back to the
-    /// sidebar when it goes.
+    /// Opens a dialog. The dialog takes keyboard focus, and `home` receives
+    /// the focus when the dialog closes.
     pub(super) fn open_dialog(
         &mut self,
         dialog: Dialog,
@@ -99,18 +109,20 @@ impl Sidebar {
         self.dialog.open(dialog, Return::To(self.home.clone()), cx)
     }
 
-    /// The close button, Escape and the backdrop: the dialog fades out.
+    /// Closes the dialog with its fade-out. The close button, Escape and a
+    /// click on the backdrop run this.
     pub(super) fn dismiss_dialog(&mut self, cx: &mut Context<Self>) {
         self.dialog.dismiss(cx);
     }
 
-    /// Cancel, or a dialog whose work is done: it goes at once.
+    /// Removes the dialog at once, without a fade-out. Cancel runs this, and
+    /// so does a dialog whose action has been carried out.
     pub(super) fn close_dialog(&mut self, cx: &mut Context<Self>) {
         self.dialog.close(cx);
     }
 
-    /// Asks before deleting folders and smart folders, in the Electron
-    /// sidebar's words.
+    /// Opens the confirmation that asks whether to delete the folders and
+    /// smart folders `nodes`.
     pub(super) fn confirm_delete(&mut self, nodes: Vec<String>, cx: &mut Context<Self>) {
         let (title, message) = match nodes.as_slice() {
             [node] => {
@@ -143,7 +155,8 @@ impl Sidebar {
         );
     }
 
-    /// `openFolderAutoTagsEditor`: the tags all chosen folders share.
+    /// Opens the auto-tags dialog for `folders`. The dialog starts with the
+    /// auto tags that all of the folders have in common.
     pub(super) fn edit_auto_tags(
         &mut self,
         folders: Vec<FolderId>,
@@ -204,7 +217,8 @@ impl Sidebar {
         .detach();
     }
 
-    /// The add button: the tag picker opens above it, on the dialog's tags.
+    /// Opens the tag picker above the add button of the auto-tags dialog.
+    /// The picker shows the dialog's tags as chosen.
     fn open_auto_tag_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(Dialog::AutoTags {
             tags, add_button, ..
@@ -224,8 +238,9 @@ impl Sidebar {
         });
     }
 
-    /// A tag picked or unpicked in the picker: the dialog's tags follow and
-    /// are saved (`onApplyTags`).
+    /// Handles a tag that was chosen or unchosen in the tag picker. The tag
+    /// is added to the dialog's tags or removed from them, and the tags are
+    /// saved.
     pub(super) fn auto_tag_picked(
         &mut self,
         event: &crate::inspector::tag_picker::Event,
@@ -249,7 +264,8 @@ impl Sidebar {
         cx.notify();
     }
 
-    /// A chip's remove button.
+    /// Removes `tag` from the dialog's tags and saves them. The remove
+    /// button of the tag's chip runs this.
     fn remove_auto_tag(&mut self, tag: &str, cx: &mut Context<Self>) {
         let Some(Dialog::AutoTags { folders, tags, .. }) = self.dialog.content_mut() else {
             return;
@@ -260,10 +276,11 @@ impl Sidebar {
         cx.notify();
     }
 
-    /// `TagAssignmentControl`: "Automatically add tags" over the tags as
-    /// chips, each with its remove button, and the add button: the whole
-    /// width with "Add tags" while there are none, a 26px square after the
-    /// chips once there are.
+    /// Draws the content of the auto-tags dialog: the label "Automatically
+    /// add tags", and below it the tags as chips that each have a remove
+    /// button, and the add button. While there are no tags, the add button
+    /// is as wide as the content and is labelled "Add tags". Once there are
+    /// tags, it is a 26px square after the last chip.
     fn tag_assignment(
         tags: &[String],
         add_button: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
@@ -342,7 +359,8 @@ impl Sidebar {
         } else {
             add.w(px(26.)).child(glyph())
         };
-        // The add control is a `<button>`.
+        // The add button is a tab stop, so it can be reached and pressed
+        // with the keyboard.
         let add = ui::focus::stop(
             "auto-tags-add",
             add,
@@ -359,7 +377,8 @@ impl Sidebar {
             .child(values.child(add))
     }
 
-    /// `foldersController.setAutoTags` for each folder.
+    /// Saves `names` as the auto tags of each of `folders`. A tag that the
+    /// library does not have yet is created.
     fn save_auto_tags(
         &mut self,
         folders: Vec<FolderId>,
@@ -388,7 +407,9 @@ impl Sidebar {
         });
     }
 
-    /// "Attach Watched Folder...": the folder's watch as it is stored.
+    /// Opens the watch dialog for `folder`, filled with the folder's watch
+    /// as the library stores it. The menu row "Attach Watched Folder..."
+    /// runs this.
     pub(super) fn edit_watch(
         &mut self,
         folder: FolderId,
@@ -407,7 +428,8 @@ impl Sidebar {
                 return;
             };
             let _ = this.update(cx, move |this, cx| {
-                // `folderWatchInitial`: an enabled watch fills the dialog.
+                // The dialog is filled from the stored watch only when that
+                // watch is enabled and has a path.
                 let watched =
                     record.filter(|record| record.watch_enabled && record.watch_path.is_some());
                 this.open_dialog(
@@ -435,7 +457,8 @@ impl Sidebar {
         .detach();
     }
 
-    /// Browse: the system's folder chooser.
+    /// Opens the system's folder chooser and puts the chosen directory in
+    /// the watch dialog. The Browse button runs this.
     fn browse_watch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let chosen = crate::prompt::folder(t("Select folder to watch"), cx);
         cx.spawn_in(window, async move |this, cx| {
@@ -453,9 +476,11 @@ impl Sidebar {
         .detach();
     }
 
-    /// `analyzeFolderTree`: how the chosen folder's depth fits under the
-    /// Picto folder, asked again when the folder or "Watch Subfolders"
-    /// changes.
+    /// Asks the application to analyse the structure of the chosen directory
+    /// as an import into the folder (`imports.folder.analyze`). The dialog
+    /// shows a warning that is made from the result
+    /// (`consolidation_message`). The analysis is started again whenever the
+    /// directory or "Watch Subfolders" changes.
     fn analyze_watch(&mut self, cx: &mut Context<Self>) {
         let Some(Dialog::Watch {
             folder,
@@ -504,10 +529,11 @@ impl Sidebar {
         .detach();
     }
 
-    /// `foldersController.setWatchConfig`: `folders.watch.set`, or
-    /// `folders.watch.clear` when the watch is turned off. The application
-    /// checks the folder (it must exist and lie outside the library) and its
-    /// watcher imports what arrives there.
+    /// Saves the watch dialog and closes it. An enabled watch is saved with
+    /// the command `folders.watch.set`, and a watch that is turned off is
+    /// removed with `folders.watch.clear`. The application checks the
+    /// directory, which must exist and be outside the library, and its
+    /// watcher imports the files that arrive there.
     fn save_watch(&mut self, cx: &mut Context<Self>) {
         let Some(Dialog::Watch {
             folder,
@@ -548,7 +574,8 @@ impl Sidebar {
         }
     }
 
-    /// The open dialog, drawn over the whole window.
+    /// Draws the open dialog over the whole window. Returns `None` when no
+    /// dialog is open.
     pub(super) fn dialog_layer(
         &mut self,
         window: &mut Window,
@@ -592,7 +619,7 @@ impl Sidebar {
                     _ => None,
                 };
                 let help = |text: String| {
-                    // `.helpText`: 12px on an 18px line.
+                    // Help text is drawn at `TEXT_SM` on an 18px line.
                     div()
                         .text(theme::TEXT_SM)
                         .line_height(px(18.))
@@ -789,7 +816,9 @@ impl Sidebar {
     }
 }
 
-/// A view listener taking no event, as the dialog's close handler.
+/// Turns a view listener for the empty event `()` into a handler that takes
+/// no event. The dialog's `on_close` and a toggle's `on_toggle` take such a
+/// handler.
 trait IntoHandler {
     fn into_handler(self) -> impl Fn(&mut Window, &mut App) + 'static;
 }
@@ -805,7 +834,7 @@ mod tests {
     use super::{bulk_deletion, folder_deletion, smart_folder_deletion};
 
     #[test]
-    fn deletion_messages_read_as_the_electron_sidebar_writes_them() {
+    fn deletion_messages_read_as_the_earlier_versions_sidebar_wrote_them() {
         assert_eq!(
             folder_deletion("Trips"),
             "Delete \"Trips\" and all its subfolders? Media inside these folders will remain untouched."
@@ -818,11 +847,13 @@ mod tests {
 }
 
 impl Sidebar {
-    /// "Move to..." for folders (`FolderPickerPanel` with
-    /// `onApplyFolderParent`): the folder picker in its move mode at the
-    /// menu's position, offering Library and every folder that is neither
-    /// moving nor under a moving one, with the folders' shared parent
-    /// chosen; Move moves the topmost of them there.
+    /// Opens the folder picker in its move mode at the position of the last
+    /// context menu. "Move to..." for folders runs this. The picker offers
+    /// Library and every folder that is neither moving nor under a moving
+    /// folder. When all moving folders have the same parent, that parent is
+    /// shown as chosen. The picker's Move button moves the folders
+    /// (`move_folders_to`). A folder in `nodes` that is inside another
+    /// folder in `nodes` is not moved by itself.
     pub(super) fn pick_folder_parent(
         &mut self,
         nodes: Vec<String>,
@@ -858,7 +889,9 @@ impl Sidebar {
         });
     }
 
-    /// The picker's Move: `foldersController.moveMany` with no new order.
+    /// Moves the folders in `moving_folders` under `parent`, or to the top
+    /// level when `parent` is `None`. The order of the parent's children is
+    /// not changed. The Move button of the folder picker runs this.
     pub(super) fn move_folders_to(
         &mut self,
         parent: Option<FolderId>,
@@ -886,7 +919,7 @@ impl Sidebar {
     }
 }
 
-/// `folders.watch.clear`.
+/// Removes the watch of `folder` with the command `folders.watch.clear`.
 fn clear_watch(session: &Entity<crate::session::Session>, folder: FolderId, cx: &mut App) {
     watch_command(
         session,
@@ -896,10 +929,11 @@ fn clear_watch(session: &Entity<crate::session::Session>, folder: FolderId, cx: 
     );
 }
 
-/// Sends a watch command to the application; the sidebar and inspector
-/// follow the `folders` change it announces. Production leaves a refused
-/// watch to the console (`setWatchConfig` is not awaited); a folder the
-/// application will not watch (gone, or inside the library) is said here.
+/// Sends a watch command to the application. The application announces that
+/// `folders` changed, and the sidebar and the inspector update from that
+/// announcement. When the application refuses the command, for example
+/// because the directory is gone or is inside the library, an error
+/// notification titled "Could not watch folder" is shown.
 fn watch_command(
     session: &Entity<crate::session::Session>,
     command: &'static str,

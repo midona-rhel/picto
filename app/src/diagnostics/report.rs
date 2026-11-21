@@ -1,12 +1,10 @@
 //! Builds the text that the log window copies to the clipboard and the support
-//! report that it saves to a file. It ports `supportReport.ts`, and
-//! `picto:diagnostics:save` in the Electron main process's
-//! `registerHandlers.mjs`.
+//! report that it saves to a file.
 use super::Entry;
 use serde_json::Value;
 
-/// `WorkerDiagnostic`: one worker's state, as `diagnostics.snapshot` returns
-/// it.
+/// The state of one of the application's workers, as the command
+/// `diagnostics.snapshot` returns it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Worker {
     pub id: String,
@@ -52,8 +50,9 @@ impl Worker {
     }
 }
 
-/// `formatDiagnosticEntry`: returns all of an entry's fields in full,
-/// separated by tabs.
+/// Returns all of an entry's fields in full, separated by tabs: the
+/// timestamp, the level, the source, the target, the duration and the
+/// message.
 pub fn entry_line(entry: &Entry) -> String {
     let duration = match (entry.duration_ms, entry.native_duration_ms) {
         (None, _) => String::new(),
@@ -71,12 +70,12 @@ pub fn entry_line(entry: &Entry) -> String {
     .join("\t")
 }
 
-/// `DISPLAY_COLUMN_WIDTHS`: the width in characters of each of the first five
-/// columns of a line in the log window.
+/// The width in characters of each of the first five columns of a line in
+/// the log window.
 const DISPLAY_COLUMNS: [usize; 5] = [14, 8, 10, 34, 38];
 
-/// `formatDiagnosticDisplayEntry`: returns one line for the log window. Each
-/// of the first five fields is padded with spaces to its width in
+/// Returns one line for the log window. Each of the first five fields is
+/// padded with spaces to its width in
 /// `DISPLAY_COLUMNS`, so the columns line up in a monospace font. No field is
 /// cut short. `time` replaces the timestamp in the first column.
 pub fn display_line(entry: &Entry, time: &str) -> String {
@@ -87,9 +86,8 @@ pub fn display_line(entry: &Entry, time: &str) -> String {
     let mut out = String::new();
     for (field, width) in fields.iter().zip(DISPLAY_COLUMNS) {
         out.push_str(field);
-        // The Electron app's `padEnd` counts UTF-16 units and this loop counts
-        // characters. The fields are ASCII, except that a target may not be,
-        // and for a target the difference is small enough to ignore.
+        // The width of a field is counted in characters. A field that is
+        // already as wide as its column, or wider, gets no spaces.
         for _ in field.chars().count()..width {
             out.push(' ');
         }
@@ -98,9 +96,8 @@ pub fn display_line(entry: &Entry, time: &str) -> String {
     out
 }
 
-/// `formatTime`: returns the timestamp as the local time of day on the 24-hour
-/// clock, with milliseconds. A timestamp that cannot be parsed is returned
-/// unchanged.
+/// Returns the timestamp as the local time of day on the 24-hour clock, with
+/// milliseconds. A timestamp that cannot be parsed is returned unchanged.
 pub fn local_time(timestamp: &str) -> String {
     chrono::DateTime::parse_from_rfc3339(timestamp)
         .map(|time| {
@@ -111,10 +108,9 @@ pub fn local_time(timestamp: &str) -> String {
         .unwrap_or_else(|_| timestamp.to_owned())
 }
 
-/// `scrubSupportText`: removes personal data from the text. A home folder
-/// becomes `~`, an e-mail address becomes `<email>`, a bearer token becomes
-/// `<redacted>`, and a link keeps its origin while its path and query become
-/// `<redacted>`.
+/// Returns the text with personal data removed. A home folder becomes `~`,
+/// an e-mail address becomes `<email>`, a bearer token becomes `<redacted>`,
+/// and a link keeps its origin while its path and query become `<redacted>`.
 pub fn scrub(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let chars: Vec<char> = text.chars().collect();
@@ -252,10 +248,11 @@ fn email_at(text: &str) -> Option<usize> {
     })
 }
 
-/// `buildSupportReport`: returns the text of the support report, scrubbed with
-/// [`scrub`]. It includes the Version and Host lines that the Electron main
-/// process adds when it saves the report. `runtime` and `language` take the
-/// place of the user agent and `navigator.language`.
+/// Returns the text of the support report, scrubbed with [`scrub`]. The
+/// report starts with the lines Version, Host, Created, Runtime and
+/// Language. The workers follow, one on each line, and then the log lines.
+/// `runtime` names the app and the system that it runs on, and `language` is
+/// the system's language.
 pub fn build(
     entries: &[Entry],
     workers: &[Worker],
@@ -265,7 +262,7 @@ pub fn build(
     host: &str,
     created: &str,
 ) -> String {
-    // i18n: the report is written in English, as production's
+    // i18n: the support report is written in English in every language
     let mut lines = vec![
         "Picto support report".to_owned(),
         format!("Version\t{version}"),
@@ -274,7 +271,7 @@ pub fn build(
         format!("Runtime\t{runtime}"),
         format!("Language\t{language}"),
         String::new(),
-        // i18n: the report is written in English, as production's
+        // i18n: the support report is written in English in every language
         "Workers".to_owned(),
         "ID\tName\tState\tActive\tQueued\tAttention\tDetail".to_owned(),
     ];
@@ -292,7 +289,7 @@ pub fn build(
     }));
     lines.extend([
         String::new(),
-        // i18n: the report is written in English, as production's
+        // i18n: the support report is written in English in every language
         "Logs".to_owned(),
         "Timestamp\tLevel\tSource\tTarget\tDuration\tMessage".to_owned(),
     ]);
@@ -307,13 +304,12 @@ pub fn file_name(created: &str) -> String {
     format!("picto-support-{}.txt", created.replace([':', '.'], "-"))
 }
 
-/// The largest report that [`write`] saves, 10 MB. The Electron main process
-/// refuses an empty report and one over 10 MB.
+/// The largest report that [`write`] saves, 10 MB.
 pub const MAX_BYTES: usize = 10 * 1024 * 1024;
 
 /// Writes the report to `path`, the file the user chose. On Unix the file is
-/// created with `mode: 0o600`, so only the user can read it. An empty report,
-/// or one over [`MAX_BYTES`], is not written and gives an error.
+/// created with the mode `0o600`, so only the user can read it. An empty
+/// report, or one over [`MAX_BYTES`], is not written and gives an error.
 pub fn write(path: &std::path::Path, report: &str) -> std::io::Result<()> {
     if report.is_empty() || report.len() > MAX_BYTES {
         return Err(std::io::Error::other(
@@ -328,8 +324,10 @@ pub fn write(path: &std::path::Path, report: &str) -> std::io::Result<()> {
 }
 
 /// Returns the text of the report's Host line: the operating system, its
-/// version and its architecture, written as Node's `platform()`, `release()`
-/// and `arch()` write them.
+/// version and its architecture, for example `darwin 25.0.0 arm64`. The
+/// system is named `darwin`, `win32` or `linux`, and the architecture `arm64`
+/// or `x64`. These are the names that the support report of Picto 0.6.19 and
+/// earlier used.
 pub fn host() -> String {
     let platform = match std::env::consts::OS {
         "macos" => "darwin",

@@ -1,5 +1,7 @@
-//! What the Subscriptions screen says about a subscription: its status, its
-//! times and counts, as `subscriptionUtils.ts` and the components word them.
+//! The functions that work out what the Subscriptions screen says about a
+//! subscription: its status, its times and its counts. The module also holds
+//! the list of sites that the screen offers and the rule that gives the
+//! columns of the screen's tables their widths.
 use super::data::{Query, Run, Subscription};
 use crate::i18n::format::{Unit, relative};
 use crate::i18n::{en, t};
@@ -8,8 +10,9 @@ use picto_core::subscriptions::sites::{SITES, SiteEntry};
 
 pub use crate::ui::status_badge::Tone;
 
-/// A run that is under way rather than waiting: the application's
-/// `runningSubscriptionIds`.
+/// Returns whether the subscription's active run is in progress, which is
+/// when the run's status is `pending` or `running`. An active run with
+/// another status is paused or has stopped on a failure.
 pub fn running(subscription: &Subscription) -> bool {
     subscription.active_run_id.is_some()
         && matches!(
@@ -18,7 +21,9 @@ pub fn running(subscription: &Subscription) -> bool {
         )
 }
 
-/// `isQueryCompleted`
+/// Returns whether a source has read every post its site has: the source is
+/// not on hold, its first run and its history are complete, it has run with
+/// success at least once, and no failure is recorded for it.
 pub fn query_completed(query: &Query) -> bool {
     !query.paused
         && query.initial_run_complete
@@ -28,18 +33,20 @@ pub fn query_completed(query: &Query) -> bool {
         && query.last_failure_kind.is_none()
 }
 
-/// `isSubscriptionCompleted`
+/// Returns whether a subscription is complete: it is not on hold, it has at
+/// least one source, and every source is completed (`query_completed`).
 pub fn subscription_completed(subscription: &Subscription) -> bool {
     !subscription.paused
         && !subscription.queries.is_empty()
         && subscription.queries.iter().all(query_completed)
 }
 
-/// What a failure of this kind asks of the user, when it will not mend
-/// itself. The network, the site's rate limit, a full inbox and an
-/// interrupted run all pass on the next run and are no warning; one file
-/// that would not download is listed under Problems and is no warning
-/// either.
+/// Returns the label of the warning for a failure of the kind `kind`, or
+/// `None` for a kind that gives no warning. A failure of the network, a
+/// rate limit, a site that is unavailable, a full inbox, a pause and an
+/// interrupted run give no warning, because the next run can succeed
+/// without the user doing anything. A problem with the login gives "Login
+/// required", and every other kind gives "Failed".
 fn lasting_failure(kind: &str) -> Option<&'static str> {
     match kind {
         "network" | "rate_limited" | "source_unavailable" | "interrupted" | "stale"
@@ -49,8 +56,9 @@ fn lasting_failure(kind: &str) -> Option<&'static str> {
     }
 }
 
-/// The source whose last run failed in a way that will not mend itself: the
-/// latest such failure, sources the user paused aside.
+/// Returns the source whose last failure gives a warning
+/// (`lasting_failure`). Sources on hold are left out. When several sources
+/// have such a failure, the one that failed last is returned.
 pub fn failing(subscription: &Subscription) -> Option<&Query> {
     subscription
         .queries
@@ -65,14 +73,17 @@ pub fn failing(subscription: &Subscription) -> Option<&Query> {
         .max_by(|left, right| left.last_failure_at.cmp(&right.last_failure_at))
 }
 
-/// The badge of a subscription, on its card and in its rail. It warns only
-/// when the subscription is not working and will stay that way: a run that
-/// stopped on a failure and waits for Retry, or a source whose last run
-/// failed for a reason that lasts. The label names the reason.
+/// Returns the tone and the label of a subscription's status badge, which
+/// is on its tile and in the header of its page. The badge warns
+/// (`Tone::Attention`) in two cases only: a run has stopped on a failure
+/// and waits for Retry, or the last failure of a source gives a warning
+/// (`lasting_failure`). The label then names the reason. Open problems
+/// with single files do not make the badge warn.
 pub fn status(subscription: &Subscription) -> (Tone, &'static str) {
     let active = subscription.active_run_id.is_some();
     let running = running(subscription);
-    // Why a run that is kept is not going, when it is not.
+    // The status of an active run that is not in progress. It says why the
+    // run stopped.
     let stopped = (active && !running)
         .then_some(subscription.run_status.as_deref())
         .flatten();
@@ -83,7 +94,8 @@ pub fn status(subscription: &Subscription) -> (Tone, &'static str) {
     } else if running {
         (Tone::Running, t("Syncing"))
     } else if let Some(kind) = stopped {
-        // The run waits for Retry whatever stopped it.
+        // A run that stopped on a failure waits for Retry, whatever the
+        // kind of the failure, so the badge warns for every kind.
         (
             Tone::Attention,
             lasting_failure(kind).unwrap_or(t("Failed")),
@@ -102,7 +114,8 @@ pub fn status(subscription: &Subscription) -> (Tone, &'static str) {
     }
 }
 
-/// The badge of a row in the History tab (`HistoryTab.tsx`).
+/// Returns the tone and the label of the status badge of a run in the
+/// History tab.
 pub fn run_status(run: &Run) -> (Tone, String) {
     let pending = run.status == "pending";
     let waiting = pending && run.failure_kind.as_deref() == Some("inbox_full");
@@ -127,17 +140,21 @@ pub fn run_status(run: &Run) -> (Tone, String) {
     (tone, label)
 }
 
-/// The badge of an issue in the Problems tab.
+/// Returns the label of the status badge of a problem in the Problems tab.
+/// It is the problem's kind with spaces in place of underscores, except
+/// that the kind `download_item` is shown as "download".
 pub fn issue_label(kind: &str) -> String {
     if kind == "download_item" {
-        // i18n: production's badge, in English
+        // i18n: a badge's label, shown in English in every language
         "download".to_owned()
     } else {
         kind.replace('_', " ")
     }
 }
 
-/// `describeFailure`: what to do about a query's recorded failure.
+/// Returns the text that tells the user what to do about a source's
+/// recorded failure of the kind `kind`. For a kind that has no text of its
+/// own, it returns the failure's `message`.
 pub fn describe_failure(kind: Option<&str>, message: Option<&str>) -> Option<String> {
     let text = match kind {
         Some("not_found" | "invalid_query") => t("User/query not found — check the handle"),
@@ -157,7 +174,9 @@ pub fn describe_failure(kind: Option<&str>, message: Option<&str>) -> Option<Str
     Some(text.to_owned())
 }
 
-/// `describeGalleryFailure`
+/// Returns the short text that says why a gallery download failed. The
+/// text is chosen by words in the failure's `message`, and by the failure's
+/// `kind` when the message has none of those words.
 pub fn describe_gallery_failure(kind: Option<&str>, message: Option<&str>) -> &'static str {
     let message = message.unwrap_or_default().to_lowercase();
     if message.contains("requires gp") {
@@ -177,40 +196,46 @@ pub fn describe_gallery_failure(kind: Option<&str>, message: Option<&str>) -> &'
     }
 }
 
-/// A gallery download: a subscription of one E-Hentai query, which the
-/// screen shows in its header rather than as a card.
+/// Returns whether the subscription is a gallery download: a subscription
+/// with exactly one source, whose site is E-Hentai. The screen lists a
+/// gallery download in the bar above the tiles and does not show it as a
+/// tile.
 pub fn is_gallery_job(subscription: &Subscription) -> bool {
     subscription.queries.len() == 1 && subscription.queries[0].site_id == "ehentai"
 }
 
-/// The sources the screen offers (`getSubscriptionSites`): the source
-/// catalog the application answers `sources.list` with, less the sources the
-/// interface leaves out.
+/// Returns the sites that the screen offers: the application's catalog of
+/// sites (`picto_core::subscriptions::sites::SITES`) without the sites in
+/// `REMOVED`.
 pub fn sites() -> impl Iterator<Item = &'static SiteEntry> {
-    /// `REMOVED_SITE_IDS`
+    /// The ids of the sites that the screen does not offer.
     const REMOVED: [&str; 1] = ["tumblr"];
     SITES.iter().filter(|site| !REMOVED.contains(&site.id))
 }
 
-/// The catalog's entry for a source.
+/// Returns the catalog's entry for the site with the id `site_id`, or
+/// `None` when the screen does not offer that site.
 pub fn site(site_id: &str) -> Option<&'static SiteEntry> {
     sites().find(|site| site.id == site_id)
 }
 
-/// `getSiteLabel`: the source's name, or its id when it is not offered.
+/// Returns the name of the site with the id `site_id`, or the id itself
+/// when the screen does not offer that site.
 pub fn site_label(site_id: &str) -> String {
     site(site_id).map_or_else(|| site_id.to_owned(), |site| site.name.to_owned())
 }
 
-/// The sources sorted by name, as the edit dialog lists them.
+/// Returns the sites sorted by name. The "Edit query" dialog lists them in
+/// this order.
 pub fn sites_by_name() -> Vec<&'static SiteEntry> {
     let mut sites = sites().collect::<Vec<_>>();
     sites.sort_by_key(|site| site.name.to_lowercase());
     sites
 }
 
-/// The sources a query can be added for (`AddQueryBar`), sorted by name;
-/// galleries are added elsewhere.
+/// Returns the sites that the row that adds a source offers, sorted by
+/// name. E-Hentai is left out, because a gallery is added with the "Add
+/// gallery" dialog.
 pub fn query_sites() -> Vec<&'static SiteEntry> {
     sites_by_name()
         .into_iter()
@@ -218,8 +243,10 @@ pub fn query_sites() -> Vec<&'static SiteEntry> {
         .collect()
 }
 
-/// `getSubscriptionRunTarget`: the posts a run means to settle, the per-run
-/// limit for each source that is not on hold.
+/// Returns the number of posts that a run of the subscription is expected
+/// to process: the "Posts per run" limit multiplied by the number of
+/// sources that are not on hold. A limit that is not set counts as 100,
+/// and the number of sources counts as at least 1.
 pub fn run_target(subscription: &Subscription) -> i64 {
     let per_query = if subscription.posts_per_run > 0 {
         subscription.posts_per_run
@@ -234,7 +261,8 @@ pub fn run_target(subscription: &Subscription) -> i64 {
     per_query * active.max(1)
 }
 
-/// The newest success or failure of any query: "Last check".
+/// Returns the time of the latest success or failure of any of the
+/// subscription's sources. The rail shows it as "Last check".
 pub fn last_check(subscription: &Subscription) -> Option<&str> {
     subscription
         .queries
@@ -249,7 +277,7 @@ pub fn last_check(subscription: &Subscription) -> Option<&str> {
         .max()
 }
 
-/// A source's own last check: its newest success or failure.
+/// Returns the time of the source's latest success or failure.
 pub fn query_last_check(query: &Query) -> Option<&str> {
     [
         query.last_success_at.as_deref(),
@@ -260,8 +288,9 @@ pub fn query_last_check(query: &Query) -> Option<&str> {
     .max()
 }
 
-/// The source details' State: on hold, failed, caught up, or still reading
-/// its history for the first time.
+/// Returns the text of the State row in a source's details: "Paused" for a
+/// source on hold, "Failed" for one with a recorded failure, "Ready" for
+/// one whose first run is complete, and "Initial sync" for any other.
 pub fn query_state(query: &Query) -> &'static str {
     if query.paused {
         t("Paused")
@@ -279,13 +308,19 @@ pub fn query_state(query: &Query) -> &'static str {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Login {
     pub site: String,
-    /// The last check's status, when it has been checked.
+    /// The status of the last check of the login, or `None` when the login
+    /// has not been checked.
     pub health: Option<String>,
     pub last_error: Option<String>,
 }
 
-/// `getQueryAuthState`, for the chip a source shows when its site needs a
-/// login before it can run: the chip's text, or `None` when nothing blocks.
+/// Returns the text of the warning that a source's row shows when its site
+/// needs a login before the source can run, or `None` when no warning is
+/// needed. A warning is needed when the last check of the site's login
+/// failed, or when the site cannot run without a login and none is saved.
+/// The text is "Sign in required" when no login is saved. Otherwise it is
+/// the error of the last check, or "Sign in again" when that check has no
+/// error text.
 pub fn auth_warning(site_id: &str, logins: &[Login], health: &[Login]) -> Option<String> {
     let site = site(site_id)?;
     let owner = site.credential_owner_site_id;
@@ -314,8 +349,9 @@ pub fn auth_warning(site_id: &str, logins: &[Login], health: &[Login]) -> Option
     })
 }
 
-/// The gallery service an address belongs to, as the Add Gallery dialog
-/// follows what is typed: `exhentai` or `ehentai`.
+/// Returns the gallery service that the address `url` belongs to,
+/// `exhentai` or `ehentai`, or `None` for any other address. The "Add
+/// gallery" dialog sets its Service control from the address that is typed.
 pub fn gallery_service(url: &str) -> Option<&'static str> {
     let url = url.trim().to_lowercase();
     let rest = url
@@ -332,9 +368,10 @@ pub fn gallery_service(url: &str) -> Option<&'static str> {
     }
 }
 
-/// What a card says under its name: items, then sources when there are any.
+/// Returns the text that a tile shows after its status badge: the number of
+/// items, followed by the number of sources when there is at least one.
 pub fn card_meta(items: i64, sources: usize) -> String {
-    // `{items} {t("item")}{items === 1 ? '' : t("s")}`
+    // The word "item" and the plural ending "s" are translated separately.
     let mut meta = format!(
         "{} {}{}",
         crate::i18n::format::grouped(items),
@@ -344,15 +381,15 @@ pub fn card_meta(items: i64, sources: usize) -> String {
     if sources > 0 {
         meta.push_str(&format!(
             " · {sources} source{}",
-            // i18n: production writes the sources in English
+            // i18n: "source" is shown in English in every language
             if sources == 1 { "" } else { "s" }
         ));
     }
     meta
 }
 
-/// A stored time, as `Date.parse` reads it: RFC 3339, or a plain date and
-/// time in local time.
+/// Reads a stored time. It accepts a time in RFC 3339 form, and a date and
+/// time without a time zone, which it takes as local time.
 fn parse_time(value: &str) -> Option<DateTime<Local>> {
     if let Ok(time) = DateTime::parse_from_rfc3339(value) {
         return Some(time.with_timezone(&Local));
@@ -367,13 +404,18 @@ fn parse_time(value: &str) -> Option<DateTime<Local>> {
     .and_then(|naive| Local.from_local_datetime(&naive).earliest())
 }
 
-/// JavaScript's `Math.round`: halves go up.
+/// Rounds to the nearest whole number. A value exactly halfway between two
+/// whole numbers is rounded up, so -1.5 gives -1.
 fn round(value: f64) -> i64 {
     (value + 0.5).floor() as i64
 }
 
-/// `formatRelativeTime`, relative to `now`, in the system's language as
-/// `Intl.RelativeTimeFormat` without a locale writes it.
+/// Returns the time `value` relative to `now` in the system's language, for
+/// example "2 hours ago" (`i18n::format::relative`). The time is given in
+/// minutes when it is less than 60 minutes away, in hours when it is less
+/// than 48 hours away, in days when it is less than 30 days away, and in
+/// months otherwise. Returns "Never" when there is no time, and `value`
+/// itself when it cannot be read as a time.
 pub fn relative_time(value: Option<&str>, now: DateTime<Local>) -> String {
     let Some(value) = value.filter(|value| !value.is_empty()) else {
         return t("Never").to_owned();
@@ -396,8 +438,9 @@ pub fn relative_time(value: Option<&str>, now: DateTime<Local>) -> String {
     relative(round(days as f64 / 30.), Unit::Month)
 }
 
-/// The Accounts dialog's `formatRelativeTime` (`authUtils.ts`): as
-/// [`relative_time`], but days however far back.
+/// Returns the time `value` relative to `now` as [`relative_time`] does,
+/// except that a time 48 hours or more away is always given in days and
+/// never in months. The "Site accounts" dialog uses it.
 pub fn relative_time_in_days(value: Option<&str>, now: DateTime<Local>) -> String {
     let Some(value) = value.filter(|value| !value.is_empty()) else {
         return t("Never").to_owned();
@@ -416,7 +459,10 @@ pub fn relative_time_in_days(value: Option<&str>, now: DateTime<Local>) -> Strin
     relative(round(hours as f64 / 24.), Unit::Day)
 }
 
-/// `formatDateTime`: the medium date and short time, as en-US writes them.
+/// Returns the time `value` as a date and a time of day, for example
+/// "Nov 3, 2026, 9:05 AM" (`i18n::format::medium_date_time`). Returns
+/// "None" when there is no time, and `value` itself when it cannot be read
+/// as a time.
 pub fn date_time(value: Option<&str>) -> String {
     let Some(value) = value.filter(|value| !value.is_empty()) else {
         return t("None").to_owned();
@@ -427,7 +473,9 @@ pub fn date_time(value: Option<&str>) -> String {
     )
 }
 
-/// The grid's order: by name, then by the card's key.
+/// Sorts the subscriptions into the order their tiles are shown in: by name
+/// (`text::natural_order`), and subscriptions with the same name by the
+/// text `sub:<id>`.
 pub fn card_order(subscriptions: &mut [&Subscription]) {
     subscriptions.sort_by(|left, right| {
         crate::text::natural_order(&left.name, &right.name)
@@ -435,17 +483,19 @@ pub fn card_order(subscriptions: &mut [&Subscription]) {
     });
 }
 
-/// A CSS grid track.
+/// The rule for the width of one column of a table.
 #[derive(Clone, Copy, Debug)]
 pub enum Track {
     Fixed(f32),
-    /// `minmax(min, <n>fr)`
+    /// A column that is at least the first number of pixels wide and gets
+    /// a share of the free width in proportion to the second number.
     Flex(f32, f32),
 }
 
-/// The widths CSS grid gives these tracks across `width` with `gap` between
-/// them: fixed tracks first, and the rest shared by fraction, a flexible
-/// track never narrower than its minimum.
+/// Returns the width of each of `tracks` when they share `width` with `gap`
+/// between them. A fixed track gets its size. The width that is left is
+/// shared among the flexible tracks in proportion to their fractions, and
+/// a flexible track is never narrower than its minimum.
 pub fn tracks(width: f32, gap: f32, tracks: &[Track]) -> Vec<f32> {
     let gaps = gap * tracks.len().saturating_sub(1) as f32;
     let mut sizes: Vec<f32> = tracks
@@ -529,10 +579,12 @@ mod tests {
             ..Subscription::default()
         };
         assert_eq!(status(&subscription), (Tone::Success, "Complete"));
-        // Files that would not download are listed, not warned about.
+        // Open problems with files that could not be downloaded do not make
+        // the badge warn.
         subscription.open_issues = 2;
         assert_eq!(status(&subscription), (Tone::Success, "Complete"));
-        // What the next run mends is no warning; what it will not is named.
+        // A failure that the next run can get past gives no warning. Any
+        // other failure gives a warning that names it.
         for (kind, expected) in [
             ("network", (Tone::Idle, "Idle")),
             ("inbox_full", (Tone::Idle, "Idle")),
@@ -545,7 +597,8 @@ mod tests {
         subscription.active_run_id = Some(4);
         subscription.run_status = Some("running".into());
         assert_eq!(status(&subscription), (Tone::Running, "Syncing"));
-        // A run that stopped waits for Retry, a pause or a full inbox aside.
+        // A run that stopped gives the warning "Failed", unless it stopped
+        // on a pause or a full inbox.
         subscription.run_status = Some("network".into());
         assert_eq!(status(&subscription), (Tone::Attention, "Failed"));
         subscription.run_status = Some("paused".into());
@@ -599,7 +652,8 @@ mod tests {
         assert_eq!(say(Duration::seconds(10)), "this minute");
         assert_eq!(say(-Duration::minutes(1)), "1 minute ago");
         assert_eq!(say(-Duration::minutes(59)), "59 minutes ago");
-        // `Math.round` takes a half toward positive infinity.
+        // A half is rounded toward positive infinity, so -1.5 hours is
+        // "1 hour ago".
         assert_eq!(say(-Duration::minutes(90)), "1 hour ago");
         assert_eq!(say(-Duration::minutes(150)), "2 hours ago");
         assert_eq!(say(Duration::hours(3)), "in 3 hours");
@@ -631,8 +685,8 @@ mod tests {
         assert_eq!(describe_failure(None, None), None);
         assert_eq!(site_label("furaffinity"), "Fur Affinity");
         assert_eq!(site_label("unknown"), "unknown");
-        // The add-query bar starts on the first by name, galleries aside;
-        // sources the interface leaves out are not offered.
+        // The row that adds a source starts on the first site by name. It
+        // offers neither E-Hentai nor the sites that the screen leaves out.
         let first = query_sites()[0];
         assert_eq!((first.id, first.example_query), ("danbooru", "1girl solo"));
         assert!(
@@ -658,8 +712,9 @@ mod tests {
 
     #[test]
     fn grid_tracks_share_the_room_as_css_does() {
-        // The sources table: minmax(90px, .28fr) minmax(0, 1fr) 76px 76px
-        // 128px with 10px gaps.
+        // Five columns with 10px gaps: one of at least 90px with the
+        // fraction 0.28, one without a minimum with the fraction 1, and
+        // fixed columns of 76px, 76px and 128px.
         let columns = [
             Track::Flex(90., 0.28),
             Track::Flex(0., 1.),
@@ -668,9 +723,9 @@ mod tests {
             Track::Fixed(128.),
         ];
         let wide = tracks(920., 10., &columns);
-        // 600px shared .28 : 1.
+        // The 600px that are left are shared in the proportion 0.28 to 1.
         assert!((wide[0] - 131.25).abs() < 0.01 && (wide[1] - 468.75).abs() < 0.01);
-        // Narrower, the first column holds its minimum.
+        // In a narrower table the first column keeps its minimum of 90px.
         let narrow = tracks(560., 10., &columns);
         assert_eq!(narrow[0], 90.);
         assert!((narrow[1] - 150.).abs() < 0.01);
@@ -708,7 +763,8 @@ mod tests {
             ),
             Some("Sign in again".to_owned())
         );
-        // A status the rule does not name is no warning.
+        // A status that is not one of the four failed statuses gives no
+        // warning.
         assert_eq!(
             auth_warning(
                 "newgrounds",

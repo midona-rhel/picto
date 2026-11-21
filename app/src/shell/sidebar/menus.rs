@@ -1,5 +1,6 @@
-//! The sidebar's context menus: what each row, selection and section
-//! header offers, and the opening of those menus.
+//! This file builds the sidebar's context menus and opens them: the menu of
+//! a system row, of a folder, of a smart folder, of several selected rows,
+//! of a section header, and of a subfolder tile in the grid.
 use super::{
     ALWAYS_SHOWN, Preferences, SYSTEM_ROWS, Section, ShowMenu, Sidebar, Target, expandable, tree,
 };
@@ -12,10 +13,11 @@ use gpui::*;
 use picto_library::model::ContentSortField;
 use std::collections::HashSet;
 
-// ── Menus ───────────────────────────────────────────────────────────
+// The functions below build the entries of the menus.
 
-/// `sidebarVisibilityEntries`: which system rows and sections show, each
-/// with a check while it is shown. Toggling a row keeps the menu open.
+/// Builds the menu that shows and hides the system rows and the sections.
+/// Each row has a check mark while the thing it names is shown. The menu
+/// stays open when a row is chosen.
 fn visibility_menu(prefs: &Preferences) -> Vec<menu::Entry> {
     let mut entries = SYSTEM_ROWS
         .iter()
@@ -49,21 +51,24 @@ fn visibility_menu(prefs: &Preferences) -> Vec<menu::Entry> {
     entries
 }
 
-/// What a folder's or smart folder's menu shows besides its fixed rows.
+/// The state of a folder or smart folder that decides which rows its
+/// context menu shows and how they are drawn.
 struct NodeMenu {
     expanded: bool,
     has_children: bool,
     any_expanded: bool,
     any_expandable: bool,
-    /// The node is in Quick Access.
+    /// Whether the node is in Quick Access.
     quick: bool,
-    /// The folder watches a directory.
+    /// Whether the folder watches a directory on disk.
     watched: bool,
-    /// The colour the swatch row shows chosen.
+    /// The node's colour, which the row of colour swatches marks as chosen.
     color: Option<String>,
-    /// The icon picker the "Change Icon" submenu holds.
+    /// The icon picker that the "Change Icon" submenu holds.
     icon_picker: AnyView,
-    /// Where a smart folder can move: its label and node id, after Top Level.
+    /// The smart folders under which this smart folder can be moved, each
+    /// with its label and its node id. The "Move to..." submenu lists them
+    /// after "Top Level".
     move_targets: Vec<(String, String)>,
 }
 
@@ -79,7 +84,8 @@ fn quick_access_row(quick: bool) -> menu::Entry {
     }
 }
 
-/// "Change Icon": the compact icon picker in a submenu of its own.
+/// Builds the "Change Icon" row. Its submenu holds the icon picker and
+/// nothing else.
 fn change_icon(picker: AnyView) -> menu::Entry {
     menu::submenu(
         t("Change Icon"),
@@ -96,7 +102,8 @@ fn change_icon(picker: AnyView) -> menu::Entry {
     .into()
 }
 
-/// `contentSortSubmenu`: the field a folder's items are sorted by.
+/// Builds the "Sort by" submenu, which lists the fields by which a folder's
+/// items can be sorted.
 fn content_sort() -> menu::Entry {
     menu::submenu(
         t("Sort by"),
@@ -116,8 +123,7 @@ pub(super) fn content_sort_field(value: &str) -> Option<ContentSortField> {
         .map(|(field, ..)| *field)
 }
 
-/// `buildExportContextEntry`: the export submenu of a folder or smart
-/// folder.
+/// Builds the "Export" submenu of a folder or smart folder.
 fn export_submenu() -> menu::Entry {
     menu::submenu(
         t("Export"),
@@ -131,10 +137,12 @@ fn export_submenu() -> menu::Entry {
     .into()
 }
 
-/// A menu row's padding inside its panel, which a view in a submenu fills.
+/// The padding in pixels between a menu's panel and its rows on each side.
+/// The view that holds the icon picker in a submenu is given the picker's
+/// width plus this padding on both sides.
 const MENU_PADDING: f32 = 4.;
 
-/// `openFolderMenu`.
+/// Builds the context menu of a folder's row in the sidebar.
 fn folder_menu(node: NodeMenu, cx: &App) -> Vec<menu::Entry> {
     let mut entries = vec![
         menu::item("new-folder", "New Folder")
@@ -197,7 +205,9 @@ fn folder_menu(node: NodeMenu, cx: &App) -> Vec<menu::Entry> {
     entries
 }
 
-/// "Sort Folders": a folder's children, or its whole tree, by name.
+/// Builds the "Sort Folders" submenu. Its rows sort a folder's children by
+/// name, or its children and all their descendants, from A to Z or from Z
+/// to A.
 fn sort_folders() -> menu::Entry {
     menu::submenu(
         t("Sort Folders"),
@@ -216,8 +226,7 @@ fn sort_folders() -> menu::Entry {
     .into()
 }
 
-/// `buildFolderContextMenu`: a subfolder tile's menu in the grid, the folder
-/// operations every surface but the sidebar shows.
+/// Builds the context menu of a subfolder tile in the grid.
 fn tile_menu(
     quick: bool,
     watched: bool,
@@ -283,7 +292,9 @@ fn tile_menu(
     entries
 }
 
-/// `buildBulkFolderContextMenu`: several subfolder tiles selected.
+/// Builds the context menu of several selected subfolder tiles in the grid.
+/// `count` is the number of tiles, and `all_quick` says whether all of them
+/// are in Quick Access.
 fn tile_bulk_menu(count: usize, all_quick: bool) -> Vec<menu::Entry> {
     vec![
         if all_quick {
@@ -313,8 +324,8 @@ fn tile_bulk_menu(count: usize, all_quick: bool) -> Vec<menu::Entry> {
     ]
 }
 
-/// A smart folder's "Move to..." submenu: Top Level, then every smart folder
-/// it can move under.
+/// Builds the "Move to..." submenu of a smart folder. It lists "Top Level"
+/// and then every smart folder in `targets`.
 fn smart_move_submenu(targets: &[(String, String)]) -> menu::Entry {
     let mut rows: Vec<menu::Entry> = vec![menu::item("move-under", "Top Level").value("").into()];
     rows.extend(targets.iter().map(|(label, node)| {
@@ -327,8 +338,9 @@ fn smart_move_submenu(targets: &[(String, String)]) -> menu::Entry {
         .into()
 }
 
-/// `openSmartFolderMenu`. A group has no rules, so it has nothing to edit,
-/// refresh, sort or export.
+/// Builds the context menu of a smart folder's row. A group has no rules,
+/// so its menu has no rows that edit, refresh, sort or export, and no Quick
+/// Access row.
 fn smart_folder_menu(group: bool, node: NodeMenu) -> Vec<menu::Entry> {
     let mut entries: Vec<menu::Entry> = Vec::new();
     if !group {
@@ -392,7 +404,9 @@ fn smart_folder_menu(group: bool, node: NodeMenu) -> Vec<menu::Entry> {
     entries
 }
 
-/// Collapse or Expand a folder (`smart`: a smart folder).
+/// Builds the row that collapses or expands a folder's branch, or a smart
+/// folder's branch when `smart` is true. The row is disabled when the node
+/// has no children.
 fn expand_row(smart: bool, expanded: bool, has_children: bool) -> menu::Entry {
     let (label, icon) = match (smart, expanded) {
         (false, true) => (t("Collapse Folder"), "menu-collapse"),
@@ -406,7 +420,9 @@ fn expand_row(smart: bool, expanded: bool, has_children: bool) -> menu::Entry {
         .into()
 }
 
-/// Collapse or Expand every folder of a section (`smart`: Smart Folders).
+/// Builds the row that collapses or expands every branch of the Folders
+/// section, or of the Smart Folders section when `smart` is true. The row
+/// is disabled when no node of the section has children.
 fn expand_all_row(smart: bool, any_expanded: bool, any_expandable: bool) -> menu::Entry {
     let (label, icon) = match (smart, any_expanded) {
         (false, true) => (t("Collapse All Folders"), "menu-collapse-all"),
@@ -420,18 +436,22 @@ fn expand_all_row(smart: bool, any_expanded: bool, any_expandable: bool) -> menu
         .into()
 }
 
-/// What the selection's menu shows besides its fixed rows.
+/// The state of several selected rows that decides which rows their context
+/// menu shows.
 struct BulkMenu {
     has_collapsed: bool,
     has_expanded: bool,
-    /// Selected rows in and out of Quick Access.
+    /// Whether a selected row is in Quick Access. `any_not_quick` says
+    /// whether a selected row is not in Quick Access.
     any_quick: bool,
     any_not_quick: bool,
-    /// Where selected smart folders can move.
+    /// The smart folders under which the selected smart folders can be
+    /// moved, each with its label and its node id.
     move_targets: Vec<(String, String)>,
 }
 
-/// `openBulkMenu`: several folders, several smart folders, or a mix.
+/// Builds the context menu of several selected rows, which can be folders,
+/// smart folders, or both.
 fn bulk_menu(nodes: &[String], bulk: BulkMenu, cx: &App) -> Vec<menu::Entry> {
     let all_folders = nodes.iter().all(|id| id.starts_with("folder:"));
     let all_smart = nodes.iter().all(|id| id.starts_with("smart:"));
@@ -521,12 +541,14 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) {
         self.menu_position = position;
-        // The system rows' menus never offer a search (`showSearch: false`).
+        // The menu of a system row has no search field.
         let searchable = !matches!(target, Target::System);
         let menu = cx.new(|cx| Menu::new(entries, position, cx).search(searchable));
         let chosen = target.clone();
-        // The subscriptions of a menu replaced by this one go first, so its
-        // release does not clear this menu's highlight.
+        // This assignment drops the subscriptions of the menu that this menu
+        // replaces. Otherwise the release of that menu would clear
+        // `context`, and the row this menu was opened on would lose its
+        // highlight.
         self._menu = vec![
             cx.subscribe_in(
                 &menu,
@@ -543,7 +565,8 @@ impl Sidebar {
             }),
         ];
         self.menu = Some(menu.downgrade());
-        // Only a single folder's or smart folder's menu marks its row.
+        // A row is highlighted while its menu is open only when the menu
+        // belongs to a single folder or smart folder.
         self.context = match target {
             Target::Node(node) => Some(node),
             _ => None,
@@ -552,8 +575,9 @@ impl Sidebar {
         cx.notify();
     }
 
-    /// `openSystemMenu`: Recently Viewed and Trash have their own menus;
-    /// every other system row shows which rows and sections are visible.
+    /// Opens the context menu of a system row. Recently Viewed and Trash
+    /// have menus of their own. Every other system row opens the menu that
+    /// shows and hides the system rows and the sections.
     pub(super) fn system_menu(
         &mut self,
         index: usize,
@@ -573,8 +597,8 @@ impl Sidebar {
                     .into(),
             ],
             "system:trash" => vec![
-                // Deletes everything in the Trash for good, after a
-                // confirmation, through the core (`shell::delete`).
+                // "Empty Trash" permanently deletes everything in the Trash
+                // after the user confirms (`shell::delete`).
                 menu::item("empty-trash", "Empty Trash")
                     .icon("menu-trash")
                     .danger(true)
@@ -590,7 +614,9 @@ impl Sidebar {
         self.open_menu(Target::System, entries, position, window, cx);
     }
 
-    /// The icon picker a menu's "Change Icon" holds, for these nodes.
+    /// Creates the icon picker that a menu's "Change Icon" submenu holds.
+    /// The picker marks `current` as chosen, and choosing an icon sets it on
+    /// `nodes`.
     fn icon_picker(
         &self,
         nodes: Vec<String>,
@@ -607,7 +633,8 @@ impl Sidebar {
         .into()
     }
 
-    /// The labels and ids of the nodes a smart-folder selection can move under.
+    /// Returns the label and the node id of every smart folder under which
+    /// the smart folders `moving` can be moved.
     fn smart_move_targets(&self, moving: &[String], cx: &App) -> Vec<(String, String)> {
         let entries = &self.session.read(cx).nav;
         let nodes = tree::nodes(entries, "smart:");
@@ -621,9 +648,10 @@ impl Sidebar {
             .collect()
     }
 
-    /// `handleFolderContextMenu` and `handleSmartFolderContextMenu`: the
-    /// selection's menu when the row is part of a larger selection,
-    /// otherwise the row's own, which clears the selection.
+    /// Opens the context menu of the row of a folder or smart folder. When
+    /// the row is one of several selected rows, the menu acts on all of
+    /// them. Otherwise the selection is cleared and the menu acts on this
+    /// row.
     pub(super) fn node_menu(
         &mut self,
         index: usize,
@@ -686,8 +714,9 @@ impl Sidebar {
         self.open_menu(Target::Node(node), menu, position, window, cx);
     }
 
-    /// A subfolder tile's menu (`onFolderContextMenu`), or the menu of the
-    /// tiles selected with it. The grid that asked does its renames.
+    /// Opens the context menu of a subfolder tile in the grid. When the tile
+    /// is one of several selected tiles, the menu acts on all of them.
+    /// "Rename" renames the tile in place in `grid`.
     pub fn tile_menu(
         &mut self,
         node: String,
@@ -732,7 +761,8 @@ impl Sidebar {
         self.open_menu(Target::Tile(node), entries, position, window, cx);
     }
 
-    /// The section header's menu, and the Smart Folders add button's.
+    /// Opens the menu of a section header. The add button of the Smart
+    /// Folders section opens the same menu.
     pub(super) fn section_menu(
         &mut self,
         section: Section,

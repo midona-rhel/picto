@@ -4,16 +4,17 @@ use std::rc::Rc;
 
 type ToggleHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
 
-/// `ToggleSwitch.tsx`: a 32×20 track with a 16px knob. Switching on fills
-/// the track with the primary colour and slides the knob 12px while it
-/// brightens from 60%, all over 200 ms on CSS `ease`. Disabled, it dims to
-/// 35% and takes no clicks.
+/// A switch: a track 32px wide and 20px high with a 16px knob. When it is
+/// switched on, the track is filled with the primary colour, and the knob
+/// moves 12px to the right and goes from 60% to full strength. This takes 200
+/// ms and follows `motion::EASE`. A disabled switch is drawn at 35% and takes
+/// no clicks.
 #[derive(IntoElement)]
 pub struct Toggle {
     id: ElementId,
     on: bool,
     disabled: bool,
-    /// Its accessible name (`ToggleSwitch`'s `ariaLabel`).
+    /// The name that assistive technology gives the switch.
     name: Option<SharedString>,
     on_toggle: Option<ToggleHandler>,
 }
@@ -29,8 +30,8 @@ pub fn toggle(id: impl Into<ElementId>, on: bool) -> Toggle {
 }
 
 impl Toggle {
-    /// What assistive technology calls the switch: the label of the row
-    /// it sits in, or production's `ariaLabel` for it.
+    /// Sets the name that assistive technology gives the switch. It is usually
+    /// the label of the row that the switch is in.
     pub fn name(mut self, name: impl Into<SharedString>) -> Self {
         self.name = Some(name.into());
         self
@@ -40,7 +41,8 @@ impl Toggle {
         self.disabled = disabled;
         self
     }
-    /// Called with the click; the owner flips the value it passed in.
+    /// Sets the handler that is called on a click. The switch does not change
+    /// `on` itself; the caller changes the value that it passes in.
     pub fn on_toggle(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_toggle = Some(Box::new(handler));
         self
@@ -59,7 +61,7 @@ impl RenderOnce for Toggle {
         if fade.read(cx).animating() {
             window.request_animation_frame();
         }
-        // `rgba(128, 128, 128, 0.25)`, then `--color-primary`.
+        // The track goes from `theme::TOGGLE_TRACK_OFF` to the primary colour.
         let track = theme::blend(rgba(theme::TOGGLE_TRACK_OFF), theme.primary(), amount);
         let focus = super::focus::control(&self.id, window, cx);
         let mut toggle = div()
@@ -105,8 +107,8 @@ impl RenderOnce for Toggle {
             return toggle.opacity(0.35);
         }
         toggle = toggle.cursor_pointer();
-        // `role="switch"` with `tabIndex={0}`: Enter and Space switch it. It
-        // draws no ring.
+        // The switch is a Tab stop, and Enter and Space switch it. It draws no
+        // focus ring.
         let handler: Option<Rc<dyn Fn(&mut Window, &mut App)>> = self.on_toggle.map(Rc::from);
         if let Some(handler) = handler.clone() {
             toggle = toggle.on_click(move |_, window, cx| {

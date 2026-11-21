@@ -1,12 +1,12 @@
-//! Where each tile of the grid goes. Most of this file is a port of
-//! `src/features/grid/layout/layoutMath.ts`.
+//! Computes the position and size of each tile of the grid in the three
+//! layout modes: grid, waterfall and justified.
 //!
-//! It differs from production in how the zoom's tile size becomes a number
-//! of columns. Production rounds the tile size to a multiple of 50 px before
-//! it counts columns. Because of that rounding, some steps of production's
-//! zoom do not change the layout, and other steps skip a column count. This
-//! file uses the tile size without rounding it, and one step of the zoom
-//! adds or removes exactly one column ([`zoom`], [`zoom_step`]).
+//! The number of columns is counted from the zoom's tile size as it is,
+//! without rounding the size first, and one step of the zoom adds or removes
+//! exactly one column ([`zoom`], [`zoom_step`]). If the tile size were
+//! rounded to a multiple of 50 px before the columns are counted, some steps
+//! of the zoom would not change the layout and other steps would skip a
+//! number of columns.
 
 /// The selection stroke around a selected tile extends this many pixels beyond
 /// the picture's rectangle on every side.
@@ -48,9 +48,8 @@ pub struct Tile {
 
 impl Tile {
     /// Builds a tile from `f64` values and stores them as `f32`. The layout
-    /// computes in `f64`, as `layoutMath.ts` does with JavaScript numbers.
-    /// When two waterfall columns are almost equally tall, this makes the tile
-    /// go into the same column as in production.
+    /// computes in `f64` so that rounding errors do not decide which of two
+    /// waterfall columns of almost the same height a tile goes into.
     fn new(x: f64, y: f64, w: f64, h: f64) -> Self {
         Self {
             x: x as f32,
@@ -92,35 +91,38 @@ pub fn safe_aspect_ratio(value: f64) -> f64 {
     value.clamp(0.125, 8.)
 }
 
-/// Rounds as JavaScript's `Math.round` does: a value exactly halfway between
-/// two whole numbers is rounded up, toward positive infinity.
+/// Rounds `value` to the nearest whole number. A value exactly halfway
+/// between two whole numbers is rounded up, toward positive infinity, as
+/// JavaScript's `Math.round` does. `f64::round` rounds such a value away
+/// from zero instead.
 fn js_round(value: f64) -> f64 {
     (value + 0.5).floor()
 }
 
-/// The number of columns whose tiles are closest to `target_size` in a grid
-/// `container_width` wide, at least one. It is not limited by
-/// [`most_columns`]. Each column takes `target_size + gap` pixels, because
-/// `target_size` includes the selection stroke around the picture.
+/// Returns the number of columns whose tiles are closest to `target_size` in
+/// a grid `container_width` wide. The result is at least one and is not
+/// limited by [`most_columns`]. Each column takes `target_size + gap` pixels,
+/// because `target_size` includes the selection stroke around the picture.
 fn columns_that_fit(container_width: f64, target_size: f64, gap: f64) -> f64 {
     js_round((container_width - gap) / (target_size + gap)).max(1.)
 }
 
-/// The largest number of columns the zoom allows in a grid `container_width`
-/// wide: the number that tiles of [`SMALLEST_TILE`] give.
+/// Returns the largest number of columns the zoom allows in a grid
+/// `container_width` wide, which is the number that tiles of
+/// [`SMALLEST_TILE`] give.
 pub fn most_columns(container_width: f32, gap: f32) -> usize {
     columns_that_fit(container_width.into(), SMALLEST_TILE.into(), gap.into()) as usize
 }
 
-/// The number of columns the grid and waterfall layouts have in a grid
-/// `container_width` wide at the tile size `target_size`. It is between one
-/// and [`most_columns`].
+/// Returns the number of columns the grid and waterfall layouts have in a
+/// grid `container_width` wide at the tile size `target_size`. The result is
+/// between one and [`most_columns`].
 pub fn columns(container_width: f32, target_size: f32, gap: f32) -> usize {
     (columns_that_fit(container_width.into(), target_size.into(), gap.into()) as usize)
         .min(most_columns(container_width, gap))
 }
 
-/// The tile size at which exactly `columns` columns fill a grid
+/// Returns the tile size at which exactly `columns` columns fill a grid
 /// `container_width` wide. The session saves this size after a zoom step to
 /// that number of columns. With this size, [`columns`] returns the same
 /// number again at the same width, and a larger number at a larger width.
@@ -149,7 +151,7 @@ pub enum Zoom {
     Height(f32),
 }
 
-/// The zoom that the tile size `target_size` gives in a grid
+/// Returns the zoom that the tile size `target_size` gives in a grid
 /// `container_width` wide.
 pub fn zoom(container_width: f32, target_size: f32, gap: f32, mode: ViewMode) -> Zoom {
     match mode {
@@ -167,8 +169,8 @@ pub fn zoom(container_width: f32, target_size: f32, gap: f32, mode: ViewMode) ->
     }
 }
 
-/// The tile size after one step of the zoom, or `None` when the zoom is
-/// already at that end of its range. In the grid and waterfall layouts a
+/// Returns the tile size after one step of the zoom, or `None` when the zoom
+/// is already at that end of its range. In the grid and waterfall layouts a
 /// step with `larger` set removes one column and a step without it adds one
 /// column. In the justified layout a step multiplies or divides the row
 /// height by 1.1.
@@ -203,9 +205,9 @@ pub fn zoom_step(
     }
 }
 
-/// The two distances keyboard movement uses. The first is the number of
-/// items the Up and Down keys move by, which is the number of columns. The
-/// second is the height in pixels of one row including the gap below it,
+/// Returns the two distances keyboard movement uses. The first is the number
+/// of items the Up and Down keys move by, which is the number of columns.
+/// The second is the height in pixels of one row including the gap below it,
 /// which Page Up and Page Down use to count the rows in the viewport.
 ///
 /// The waterfall layout has no rows of one height, so it uses the height of
@@ -306,9 +308,9 @@ impl Layout {
         }
     }
 
-    /// The indexes of the tiles that touch the vertical range from `top` to
-    /// `bottom`, in ascending order. `top` and `bottom` are measured in pixels
-    /// from the top of the layout.
+    /// Returns the indexes of the tiles that touch the vertical range from
+    /// `top` to `bottom`, in ascending order. `top` and `bottom` are measured
+    /// in pixels from the top of the layout.
     pub fn visible(&self, top: f32, bottom: f32) -> Vec<usize> {
         if self.bands.is_empty() || bottom < 0. {
             return Vec::new();
@@ -341,7 +343,7 @@ fn waterfall(aspect_ratios: &[f64], geometry: &Geometry, text_height: f64) -> (V
     // nearly the same height swap order when the window is resized by a few
     // pixels, and every later tile changes column with them. With the
     // zoom's tile size a tile changes column only when the number of
-    // columns changes. Production uses the real width and has the swap.
+    // columns changes.
     let reference = geometry.target_media_size;
     let mut decided = vec![0f64; geometry.column_count];
     let mut tiles = Vec::with_capacity(aspect_ratios.len());
@@ -446,10 +448,9 @@ fn justified(aspect_ratios: &[f64], geometry: &Geometry, text_height: f64) -> (V
     (tiles, (y - gap).max(0.))
 }
 
-/// The scroll position that keeps one tile at the same place on screen after
-/// the layout changed (production's `resolveGridScrollAnchor`). The tile is
-/// the topmost tile in the viewport, or the topmost selected tile in the
-/// viewport when there is one.
+/// Returns the scroll position that keeps one tile at the same place on
+/// screen after the layout changed. The tile is the topmost tile in the
+/// viewport, or the topmost selected tile in the viewport when there is one.
 ///
 /// `previous` and `next` are the tiles before and after the change. `selected`
 /// holds indexes into `previous`. `scroll_top` and `viewport` are the scroll
@@ -459,6 +460,7 @@ fn justified(aspect_ratios: &[f64], geometry: &Geometry, text_height: f64) -> (V
 /// item is gone.
 ///
 /// Returns `None` when no tile was in the viewport or the tile's item is gone.
+/// The scroll position returned is never less than 0.
 pub fn scroll_anchor(
     previous: &[Tile],
     next: &[Tile],

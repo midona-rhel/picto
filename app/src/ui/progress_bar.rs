@@ -1,15 +1,18 @@
-//! `ProgressBar.tsx`: a thin bar on the subtle overlay, filled to the share
-//! of done over total, or, with `indeterminate`, swept by a 35% primary
-//! segment every 900 ms. Views that restyle a progress track (the import
-//! task's, a model's download, a subscription's run) give it their colours,
-//! corners and sweep.
+//! The progress bar: a thin bar in the subtle overlay colour. When the
+//! progress is known, the bar is filled to the share that is done. When it is
+//! not known, a segment in the primary colour, 35% of the bar's width, moves
+//! across the bar every 900 ms. A view that needs a different bar (for the
+//! import task, the download of a model, the run of a subscription) sets its
+//! own colours, corner radius and segment.
 use crate::{motion, theme};
 use gpui::*;
 use std::time::{Duration, Instant};
 
-/// The indeterminate segment: its width as a share of the track, one
-/// sweep's time, and how far it travels (`translateX(-110%)` to
-/// `translateX(-110% + travel)` of its own width, on `ease-in-out`).
+/// The moving segment of a bar of unknown progress. `segment` is its width as
+/// a share of the track. `period` is the time of one crossing. `travel` is how
+/// far it moves during one crossing, in multiples of its own width. Its left
+/// edge starts 1.1 of its own width to the left of the track's left end, and
+/// it moves along `motion::EASE_IN_OUT`.
 #[derive(Clone, Copy)]
 pub struct Sweep {
     pub segment: f32,
@@ -17,7 +20,9 @@ pub struct Sweep {
     pub travel: f32,
 }
 
-/// `.indeterminate { width: 35% }`, to `translateX(310%)` every 900 ms.
+/// The usual segment: 35% of the track wide. Every 900 ms it moves by 4.2
+/// times its own width, from just outside the track's left end to past its
+/// right end.
 pub const SWEEP: Sweep = Sweep {
     segment: 0.35,
     period: motion::PROGRESS_SWEEP,
@@ -25,16 +30,16 @@ pub const SWEEP: Sweep = Sweep {
 };
 
 impl Sweep {
-    /// Where the segment's left edge is, as a share of the track, over and
-    /// over.
+    /// Returns where the segment's left edge is after `elapsed`, as a share of
+    /// the track's width. The movement repeats every `period`.
     fn offset(&self, elapsed: Duration) -> f32 {
         let along = (elapsed.as_secs_f32() % self.period.as_secs_f32()) / self.period.as_secs_f32();
         self.segment * (-1.1 + self.travel * motion::EASE_IN_OUT.ease(along))
     }
 }
 
-/// The share `done / total` fills, from 0 to 1; nothing while the total is
-/// not known.
+/// Returns the share that `done` is of `total`, from 0 to 1. Returns 0 while
+/// the total is not known, which is when it is 0 or less.
 pub fn share(done: i64, total: i64) -> f32 {
     if total > 0 {
         (done as f32 / total as f32).clamp(0., 1.)
@@ -46,19 +51,22 @@ pub fn share(done: i64, total: i64) -> f32 {
 #[derive(IntoElement)]
 pub struct ProgressBar {
     height: f32,
-    /// A known share, and the id its fill's movement is kept under.
+    /// The share that is done, when it is known, and the id under which the
+    /// state of the fill's animation is kept.
     filled: Option<(ElementId, f32)>,
-    /// A rounder track and its own colour, where a caller restyles
-    /// `[role='progressbar']` (the cloud bar and the progress dialog).
+    /// The corner radius of the track and of the fill. Some callers, such as
+    /// the cloud bar and the progress dialog, set a larger radius, and their
+    /// own colours in `track` and `fill`.
     radius: f32,
     track: Option<Rgba>,
     fill: Option<Rgba>,
     sweep: Sweep,
 }
 
-/// A bar of unknown progress (`<ProgressBar indeterminate />`).
+/// Returns a bar of unknown progress. A call to `filled` makes it a bar of
+/// known progress.
 pub fn progress_bar() -> ProgressBar {
-    // `height = 3` by default.
+    // The bar is 3px high unless the caller sets another height.
     ProgressBar {
         height: 3.,
         filled: None,
@@ -69,7 +77,8 @@ pub fn progress_bar() -> ProgressBar {
     }
 }
 
-/// Where a fill is moving from and to, and since when.
+/// The animation of a fill's width: the share it starts from, the share it
+/// ends at, and the time it started.
 #[derive(Clone, Copy)]
 struct Fill {
     from: f32,
@@ -90,28 +99,29 @@ impl ProgressBar {
         self.height = height;
         self
     }
-    /// The track's and the fill's corners.
+    /// Sets the corner radius of the track and of the fill.
     pub fn radius(mut self, radius: f32) -> Self {
         self.radius = radius;
         self
     }
-    /// The track's colour instead of the subtle overlay.
+    /// Sets the track's colour, in place of the subtle overlay.
     pub fn track(mut self, color: Rgba) -> Self {
         self.track = Some(color);
         self
     }
-    /// The fill's colour instead of the primary one.
+    /// Sets the fill's colour, in place of the primary colour.
     pub fn fill_color(mut self, color: Rgba) -> Self {
         self.fill = Some(color);
         self
     }
-    /// The indeterminate segment's own size and timing.
+    /// Sets the width, the period and the travel of the moving segment.
     pub fn sweep(mut self, sweep: Sweep) -> Self {
         self.sweep = sweep;
         self
     }
-    /// A bar of known progress (`done` and `total`), filled to `share`; a
-    /// change of share slides the fill there.
+    /// Makes this a bar of known progress that is filled to `share`. When the
+    /// share changes, the fill's width moves to the new share over
+    /// `motion::PROGRESS_FILL`. `id` identifies the bar between frames.
     pub fn filled(mut self, id: impl Into<ElementId>, share: f32) -> Self {
         self.filled = Some((id.into(), share.clamp(0., 1.)));
         self
@@ -121,7 +131,9 @@ impl ProgressBar {
 impl RenderOnce for ProgressBar {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
-        // `role="progressbar"`: its percent, or none while indeterminate.
+        // Assistive technology is told that this is a progress bar, and the
+        // percentage that is done. It is told no value while the progress is
+        // not known.
         let (id, percent) = match &self.filled {
             Some((id, share)) => (
                 ElementId::NamedChild(std::sync::Arc::new(id.clone()), "progress".into()),
@@ -197,9 +209,9 @@ mod tests {
     fn the_segment_sweeps_from_before_the_track_to_past_it() {
         let segment = SWEEP.segment;
         assert!((SWEEP.offset(Duration::ZERO) - segment * -1.1).abs() < 1e-4);
-        // Halfway through a sweep, ease-in-out is halfway too.
+        // Halfway through a crossing, `EASE_IN_OUT` is halfway too.
         assert!((SWEEP.offset(Duration::from_millis(450)) - segment * 1.).abs() < 1e-3);
-        // It starts again from the left.
+        // After a full period the segment starts again from the left.
         assert!((SWEEP.offset(Duration::from_millis(900)) - segment * -1.1).abs() < 1e-4);
         assert!(SWEEP.offset(Duration::from_millis(899)) > 1.);
     }

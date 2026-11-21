@@ -1,5 +1,8 @@
-//! The viewer, and library edits: run on the library's thread, reported
-//! as production reports them, and followed by the reads they need.
+//! The part of `Session` that opens and closes the viewer and runs edits of
+//! the library. An edit runs on the library's thread. When it has finished,
+//! the session reports a failure and reads again what the edit may have
+//! changed. This file also holds the functions with which a view runs an
+//! edit or a read and continues when the answer has arrived.
 use super::{Change, Session, Visit};
 use crate::backend;
 use crate::i18n::t;
@@ -7,10 +10,12 @@ use gpui::*;
 use picto_library::RootId;
 
 impl Session {
-    // ── Viewer ──────────────────────────────────────────────────
+    // The methods below open and close the viewer.
 
-    /// Opens the selected item. It is a place of its own: Back returns to
-    /// the grid it was opened from, where that was scrolled to.
+    /// Opens the viewer on the item the inspector shows and adds a Back and
+    /// Forward history entry for it. Back then closes the viewer and shows
+    /// the grid again at its scroll position. Does nothing when the viewer
+    /// is already open or the inspector shows no item.
     pub fn open_viewer(&mut self, cx: &mut Context<Self>) {
         if !self.viewer && self.focus.is_some() {
             self.viewer = true;
@@ -26,8 +31,11 @@ impl Session {
         }
     }
 
-    /// Returns to the grid. Closing an item opened from this grid is the
-    /// same as going back from it.
+    /// Closes the viewer and shows the grid. When the history entry before
+    /// the current one is this grid, which it is when the viewer was opened
+    /// from it, the history goes back to that entry, so closing the viewer
+    /// has the same result as Back. Otherwise a history entry for the grid
+    /// is added, unless the current entry already is the grid.
     pub fn close_viewer(&mut self, cx: &mut Context<Self>) {
         if !self.viewer {
             return;
@@ -48,6 +56,9 @@ impl Session {
         cx.emit(Change::Navigation);
     }
 
+    /// Moves the viewer `delta` members along the collection it has open: 1
+    /// is the next member and -1 is the previous one. The index stays
+    /// between the first member and the last member.
     pub fn step_member(&mut self, delta: isize, cx: &mut Context<Self>) {
         let count = self
             .details
@@ -60,16 +71,19 @@ impl Session {
         cx.emit(Change::Viewer);
     }
 
-    // ── Edits, each through the library's own owner ─────────────
+    // The methods below run edits of the library and read again what an edit
+    // changed.
 
-    /// Runs an edit on the library's thread, reports a failure on the
-    /// console, and reads again what `reread` names, whether or not the edit
-    /// went through. Hands back the edit's answer once the reads are asked
-    /// for, so a view's own follow-up comes after them. What was shown stays
-    /// until each read arrives. The sidebar's destinations and counts follow
-    /// the library's change events by themselves. Production tells the user
-    /// of a failed edit only where the call says so; such a call uses
-    /// [`Session::edit_reporting`].
+    /// Runs the edit `work` on the library's thread. When the edit has
+    /// finished, whether it succeeded or failed, the session reads again
+    /// what `reread` names. The views keep showing what they showed until
+    /// each read arrives. A failure is printed to the console and is not
+    /// shown to the user; an edit whose failure the user must see uses
+    /// [`Session::edit_reporting`]. Returns a receiver for the edit's
+    /// result. The result is sent after the reads have been started, so what
+    /// a view does with the result happens after them. The sidebar's
+    /// destinations and counts need no `reread`: the session reads them
+    /// again when the application layer reports the change.
     pub fn edit<T: Send + 'static, E: std::fmt::Display + Send + 'static>(
         &mut self,
         work: impl FnOnce(&picto_library::Library) -> Result<T, E> + Send + 'static,
@@ -79,9 +93,11 @@ impl Session {
         self.edit_reporting(Report::default(), work, reread, cx)
     }
 
-    /// [`Session::edit`], telling the user what `report` says: a failure as
-    /// an error notification with its title, and a broad change as the
-    /// notification with Undo that production announces it with.
+    /// Does what [`Session::edit`] does, and tells the user what `report`
+    /// asks for. With `report.failure`, a failed edit is shown as an error
+    /// notification with that title. With `report.announce`, a successful
+    /// edit that recorded an undo entry of that command is shown as a
+    /// notification that describes the change and has an Undo button.
     pub fn edit_reporting<T: Send + 'static, E: std::fmt::Display + Send + 'static>(
         &mut self,
         report: Report,
@@ -120,7 +136,8 @@ impl Session {
                         Some(title) if report.shows(&message) => {
                             crate::ui::notify::error(title.clone(), message, cx)
                         }
-                        // Production leaves it to the console.
+                        // A failure that `report` does not ask to show is
+                        // only printed to the console.
                         _ => eprintln!("picto: {message}"),
                     }
                 }
@@ -135,8 +152,10 @@ impl Session {
         receiver
     }
 
-    /// Reads again what an edit may have changed, keeping what is shown
-    /// until each answer arrives.
+    /// Starts the reads that `reread` names, except the read of the
+    /// sidebar's destinations, which `edit_reporting` makes together with
+    /// the edit. The views keep showing what they showed until each answer
+    /// arrives.
     pub fn reread(&mut self, reread: Reread, cx: &mut Context<Self>) {
         if reread.details {
             self.refresh_details(cx);
@@ -149,8 +168,9 @@ impl Session {
         }
     }
 
-    /// Moves `target` to the trash, the Inbox or the library, and reads the
-    /// destination again in place. The answer says whether it went through.
+    /// Moves the items in `target` to the trash, to the Inbox or to the
+    /// library, as `lifecycle` says, and then reads the destination's
+    /// results again in place. Returns a receiver for the edit's result.
     pub fn set_lifecycle(
         &mut self,
         target: picto_library::selection::SelectionTarget,
@@ -164,16 +184,17 @@ impl Session {
         )
     }
 
-    /// Fetches the selected item's details again, after an edit changed
-    /// them.
+    /// Reads the details of the item the inspector shows again, after an
+    /// edit changed them.
     pub fn refresh_details(&mut self, cx: &mut Context<Self>) {
         if let Some(id) = self.selected_item().map(|item| item.root_id) {
             self.read_details(id, cx);
         }
     }
 
-    /// Reads an item's details, which are shown if it is still the one
-    /// selected when they arrive.
+    /// Reads the details of the item `id` from the library. When they
+    /// arrive, they are shown only if that item is still the one the
+    /// inspector shows. The item's name in the grid is updated from them.
     pub(super) fn read_details(&mut self, id: RootId, cx: &mut Context<Self>) {
         let answer = self.run(move |library| library.details(id));
         then_on(
@@ -197,21 +218,25 @@ impl Session {
         );
     }
 
-    /// Undoes the library's last edit, whatever is selected (`edit.undo` is
-    /// app-wide): an undone move to the trash brings back an item that is no
-    /// longer in the grid, and an undone folder edit changes the sidebar. So
-    /// the results, the selection and the destinations are read again.
+    /// Undoes the library's newest change. This does not depend on what is
+    /// selected or on which destination is open. An undone move to the trash
+    /// brings back an item that the grid no longer holds, and an undone
+    /// folder edit changes the sidebar, so the results, the selection and
+    /// the destinations are all read again.
     pub fn undo(&mut self, cx: &mut Context<Self>) {
         self.step_history_entry(true, cx);
     }
 
+    /// Redoes the change that was undone last, and reads the same things
+    /// again as `undo` does.
     pub fn redo(&mut self, cx: &mut Context<Self>) {
         self.step_history_entry(false, cx);
     }
 
-    /// `historyRuntime.perform`: undoes or redoes the library's newest
-    /// change, and says what it did ("Undone — …") or why it could not
-    /// ("Could not undo").
+    /// Undoes the library's newest change when `undo` is true, and redoes
+    /// the change that was undone last otherwise. On success a notification
+    /// titled "Undone" or "Redone" describes the change. On failure an error
+    /// notification titled "Could not undo" or "Could not redo" is shown.
     pub fn step_history_entry(&mut self, undo: bool, cx: &mut Context<Self>) {
         let failure = if undo {
             t("Could not undo")
@@ -232,12 +257,12 @@ impl Session {
     }
 }
 
-/// A view's library edit and what the view does once it is done: `work`
-/// runs as [`Session::edit_reporting`] runs it (a failure reported under
-/// `report`'s title, a broad change announced with Undo, `reread` read
-/// again), then `then` has its answer on the view, if the view and the
-/// session are still there. A view that needs its window afterwards uses
-/// [`edit_then_in`]; an edit nothing follows calls `edit_reporting` itself.
+/// Runs the edit `work` for a view and then calls `then` on the view with
+/// the edit's result. The edit runs as [`Session::edit_reporting`] runs it:
+/// `report` decides what the user is told, and `reread` decides what is read
+/// again. `then` is not called when the view or the session no longer exists
+/// at that time. A view whose `then` needs its window uses [`edit_then_in`].
+/// A view that does nothing after the edit calls `edit_reporting` directly.
 pub fn edit_then<V: 'static, T: Send + 'static, E: std::fmt::Display + Send + 'static>(
     session: &Entity<Session>,
     report: Report,
@@ -252,8 +277,9 @@ pub fn edit_then<V: 'static, T: Send + 'static, E: std::fmt::Display + Send + 's
     then_on(answer, cx, then);
 }
 
-/// Hands `answer` to `then` on the view once it arrives, if the view is
-/// still there; nothing happens when no answer comes.
+/// Calls `then` on the view with the value that `answer` receives, if the
+/// view still exists at that time. `then` is not called when the sender of
+/// `answer` is dropped without sending a value.
 pub(super) fn then_on<V: 'static, R: 'static>(
     answer: futures::channel::oneshot::Receiver<R>,
     cx: &mut Context<V>,
@@ -266,10 +292,11 @@ pub(super) fn then_on<V: 'static, R: 'static>(
     });
 }
 
-/// Hands `answer` to `then` on the view once it arrives, or `None` once
-/// none will (the work was dropped), if the view is still there: for a
-/// view that has to finish something either way, such as a read it noted
-/// as under way.
+/// Calls `then` on the view when `answer` receives a value, or when its
+/// sender is dropped without sending one, if the view still exists at that
+/// time. `then` gets `Some(value)` in the first case and `None` in the
+/// second. This is for a caller that must do something in both cases, for
+/// example record that a read is no longer running.
 pub(super) fn when_answered<V: 'static, R: 'static>(
     answer: futures::channel::oneshot::Receiver<R>,
     cx: &mut Context<V>,
@@ -282,8 +309,8 @@ pub(super) fn when_answered<V: 'static, R: 'static>(
     .detach();
 }
 
-/// [`edit_then`] for a follow-up that needs the view's window (a field to
-/// focus, a dialog to open).
+/// Does what [`edit_then`] does, and also gives `then` the view's window,
+/// which `then` needs for example to focus a field or to open a dialog.
 pub fn edit_then_in<V: 'static, T: Send + 'static, E: std::fmt::Display + Send + 'static>(
     session: &Entity<Session>,
     report: Report,
@@ -304,10 +331,11 @@ pub fn edit_then_in<V: 'static, T: Send + 'static, E: std::fmt::Display + Send +
     .detach();
 }
 
-/// A view's read of the library: `work` runs on the library's thread (see
-/// [`Session::run`]), then `then` has its answer on the view, if the view
-/// is still there. Nothing is reported or read again; a read changes
-/// nothing to read.
+/// Runs the read `work` on the library's thread for a view (see
+/// [`Session::run`]) and then calls `then` on the view with its result, if
+/// the view still exists at that time. Nothing is reported to the user and
+/// nothing is read again afterwards, because a read does not change the
+/// library.
 pub fn read_then<V: 'static, T: Send + 'static>(
     session: &Entity<Session>,
     work: impl FnOnce(&picto_library::Library) -> T + Send + 'static,
@@ -318,7 +346,7 @@ pub fn read_then<V: 'static, T: Send + 'static>(
     then_on(answer, cx, then);
 }
 
-/// [`read_then`] for a follow-up that needs the view's window.
+/// Does what [`read_then`] does, and also gives `then` the view's window.
 pub fn read_then_in<V: 'static, T: Send + 'static>(
     session: &Entity<Session>,
     work: impl FnOnce(&picto_library::Library) -> T + Send + 'static,
@@ -335,21 +363,26 @@ pub fn read_then_in<V: 'static, T: Send + 'static>(
     .detach();
 }
 
-/// What [`Session::edit_reporting`] tells the user about an edit, as the
-/// production call it stands for does.
+/// Says what [`Session::edit_reporting`] tells the user about an edit.
 #[derive(Clone, Default)]
 pub struct Report {
-    /// The title of the error notification a failure shows.
+    /// The title of the error notification that is shown when the edit
+    /// fails. With `None`, a failure is only printed to the console.
     pub failure: Option<SharedString>,
-    /// Only a folder nested too deep is reported (`warnOnFolderDepth`),
-    /// as the warning every error about it becomes.
+    /// When true, a failure is shown only if it is the library's error
+    /// about a folder that would be nested too deep. The notification shows
+    /// that error as a warning that explains the limit. Any other failure is
+    /// only printed to the console.
     pub folder_depth: bool,
-    /// The history command a broad change records, which is announced with
-    /// an Undo button (`announceUndoableMutation`).
+    /// The name of the history command that the edit records. When the edit
+    /// succeeds and has recorded an undo entry of this command, a
+    /// notification describes the change and has an Undo button.
     pub announce: Option<&'static str>,
 }
 
 impl Report {
+    /// Returns a report that shows a failed edit as an error notification
+    /// titled `title`.
     pub fn failure(title: impl Into<SharedString>) -> Self {
         Self {
             failure: Some(title.into()),
@@ -357,6 +390,8 @@ impl Report {
         }
     }
 
+    /// Returns a report that shows a failed edit only if the failure is the
+    /// error about a folder that would be nested too deep.
     pub fn folder_depth() -> Self {
         Self {
             failure: Some(t("Folder depth limit").into()),
@@ -365,6 +400,8 @@ impl Report {
         }
     }
 
+    /// Returns a report that announces a successful edit recorded under the
+    /// history command `command`, and shows no failure.
     pub fn announce(command: &'static str) -> Self {
         Self {
             announce: Some(command),
@@ -372,69 +409,81 @@ impl Report {
         }
     }
 
-    /// Whether a failure with `message` is shown.
+    /// Whether a failed edit with the error message `message` is shown to
+    /// the user.
     fn shows(&self, message: &str) -> bool {
         self.failure.is_some()
             && (!self.folder_depth || message.contains(crate::ui::notify::FOLDER_DEPTH_LIMIT))
     }
 
+    /// Returns this report with the announcement of a successful edit
+    /// recorded under the history command `command` added.
     pub fn and_announce(mut self, command: &'static str) -> Self {
         self.announce = Some(command);
         self
     }
 }
 
-/// What an edit may have changed, and so what [`Session::edit`] reads again
-/// once it is done.
+/// Says what an edit may have changed. [`Session::edit`] reads these things
+/// again when the edit has finished.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Reread {
-    /// The selected item's details.
+    /// The details of the item the inspector shows.
     pub details: bool,
-    /// The summary the inspector shows of several selected items
-    /// ([`Change::Edited`]).
+    /// The inspector's summary of several selected items. The session emits
+    /// [`Change::Edited`], and the inspector then reads the summary again.
     pub summary: bool,
-    /// The grid's results, read in place: the same items stay selected and
-    /// the grid where it was scrolled ([`Session::refresh_results`]).
+    /// The grid's results, refreshed in place: the same items stay selected
+    /// and the grid keeps its scroll position
+    /// ([`Session::refresh_results`]).
     pub results: bool,
-    /// The sidebar's destinations, read with the edit and put in place
-    /// before its answer is handed back, for a follow-up that needs them at
-    /// once, such as a new folder renamed in place.
+    /// The sidebar's destinations. They are read on the library's thread
+    /// directly after the edit, and they replace the session's list before
+    /// the edit's result is sent. This is for an edit whose caller needs the
+    /// new list at once, such as a new folder whose name the user then edits
+    /// in the sidebar.
     pub navigation: bool,
 }
 
 impl Reread {
+    /// Nothing is read again.
     pub const NOTHING: Self = Self {
         details: false,
         summary: false,
         results: false,
         navigation: false,
     };
+    /// Only the details of the item the inspector shows.
     pub const DETAILS: Self = Self {
         details: true,
         ..Self::NOTHING
     };
-    /// The selected items: the one shown and the summary of them all.
+    /// The details of the item the inspector shows and the summary of all
+    /// selected items.
     pub const SELECTION: Self = Self {
         details: true,
         summary: true,
         ..Self::NOTHING
     };
-    /// The selected items, and the results they may have left or joined.
+    /// What `SELECTION` reads, and the grid's results, because the edit may
+    /// have removed items from the destination or added items to it.
     pub const RESULTS: Self = Self {
         results: true,
         ..Self::SELECTION
     };
-    /// The results alone, for an edit of what the destination holds rather
-    /// than of its items.
+    /// Only the grid's results. This is for an edit that changes which items
+    /// the destination holds and does not change the items themselves.
     pub const RESULTS_ONLY: Self = Self {
         results: true,
         ..Self::NOTHING
     };
+    /// Only the sidebar's destinations.
     pub const NAVIGATION: Self = Self {
         navigation: true,
         ..Self::NOTHING
     };
-    /// Whatever an edit could have touched, for undo and redo.
+    /// Everything: what `RESULTS` reads and the sidebar's destinations. Undo
+    /// and redo use it, because they can change any of these.
     pub const EVERYTHING: Self = Self {
         navigation: true,
         ..Self::RESULTS

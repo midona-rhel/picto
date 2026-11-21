@@ -1,8 +1,8 @@
 //! What the libraries code needs from the system, with one file per system.
-//! The first thing is whether another Picto is running: the Electron app,
-//! which holds no lock that this app can see, or a packaged release build of
-//! this app. The second thing is a text that identifies a database file on
-//! disk.
+//! The first thing is whether another Picto is running: a packaged release
+//! build of this app, or an Electron-based Picto (version 0.6.19 or
+//! earlier), which holds no lock that this app can see. The second thing is
+//! a text that identifies a database file on disk.
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -47,8 +47,9 @@ mod tests {
         database
     }
 
-    /// Whether the file system records when a file was made. Without it a
-    /// replacement can only be told by its inode, which may be the old one.
+    /// Returns whether the file system records the time a file was created.
+    /// Without that time a new file can be told from the file it replaced
+    /// only by its inode, and the new file may have the old file's inode.
     fn keeps_creation_time(file: &Path) -> bool {
         std::fs::metadata(file).is_ok_and(|meta| meta.created().is_ok())
     }
@@ -67,10 +68,10 @@ mod tests {
         std::fs::rename(&library, &moved).unwrap();
         assert_eq!(file_identity(&moved.join("library.sqlite")).unwrap(), first);
 
-        // Another library made where the first was. File systems round a
-        // file's creation time to the clock's tick (up to 10 ms on Linux),
-        // and the new file may be handed the old one's inode, so the
-        // replacement is made a few ticks later, as any real one is.
+        // A second library is made at the path of the first. File systems
+        // round a file's creation time to the tick of the clock (up to
+        // 10 ms on Linux), and the new file may get the old file's inode.
+        // The test waits 50 ms first, so the two creation times differ.
         std::fs::remove_dir_all(&moved).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(50));
         let replacement = database_in(&library);

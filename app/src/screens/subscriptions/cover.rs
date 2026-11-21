@@ -1,6 +1,7 @@
-//! A subscription's cover (`SubscriptionCoverDialog`:
-//! `subscriptions.cover.candidates`, `subscriptions.cover.set`). It is chosen
-//! in the cover dialog that the library's cover also uses, `ui::cover_dialog`.
+//! The choice of a subscription's cover picture. The cover is chosen in the
+//! dialog that the library's cover also uses (`ui::cover_dialog`). This file
+//! reads the pictures that can be chosen (`subscriptions.cover.candidates`)
+//! and saves the chosen one (`subscriptions.cover.set`).
 use super::dialogs::Dialog;
 use super::{SubscriptionsScreen, data, requests};
 use crate::grid::thumbnails::Thumbnails;
@@ -16,8 +17,9 @@ const INSTRUCTIONS: &str =
 const EMPTY: &str = crate::i18n::en("No images have been added yet.");
 
 impl SubscriptionsScreen {
-    /// Opens the dialog for the subscription `id`. Called by Set Cover Photo…
-    /// in the subscription's menu.
+    /// Opens the cover dialog for the subscription `id` and loads the first
+    /// page of pictures. "Set Cover Photo…" in the subscription's menu calls
+    /// it.
     pub(super) fn open_cover(&mut self, id: i64, cx: &mut Context<Self>) {
         self.show_dialog(
             Dialog::Cover(Box::new(Cover::new(

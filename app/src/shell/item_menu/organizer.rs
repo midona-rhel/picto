@@ -1,8 +1,11 @@
-//! The group organizer (`GroupOrganizerModal.tsx`): grouping a selection
-//! that needs a decision. With collections among the selection, which one
-//! keeps its name, cover, order, folders and lifecycle ("Choose the Group to
-//! Keep"); with none, the new group's name ("Create Group"). Either way the
-//! notes the selection carries, which the group takes.
+//! The group organizer: the dialog that groups a selection when the user has
+//! to decide something first. When the selection holds collections, the
+//! user chooses the one that keeps its name, cover, order, folders and
+//! lifecycle, and the dialog's title is "Choose the Group to Keep". When it
+//! holds none, the user types the name of the new group, and the title is
+//! "Create Group". In both cases the dialog shows the notes of the selected
+//! items in a field that the user can edit, and the group takes the text of
+//! that field as its notes.
 use crate::i18n::format::grouped;
 use crate::i18n::{en, t};
 use crate::session::{Report, Reread, Session};
@@ -17,7 +20,9 @@ use gpui::*;
 use picto_library::RootId;
 use picto_library::selection::{SelectionCollectionCandidate, SelectionTarget};
 
-/// What the organizer groups, and what it found to decide between.
+/// Holds the selection that the organizer groups and what the user decides
+/// about: the collections in the selection (`groups`) and the notes of the
+/// selected items (`notes`), which may be at most `maximum_bytes` long.
 pub struct Request {
     pub target: SelectionTarget,
     /// The item whose cover the new group takes.
@@ -27,7 +32,8 @@ pub struct Request {
     pub maximum_bytes: u64,
 }
 
-/// The group was made; the dialog closes.
+/// The event that the organizer emits when the group has been made. The
+/// shell then closes the dialog.
 pub struct Organized;
 
 impl EventEmitter<Organized> for Organizer {}
@@ -46,8 +52,11 @@ pub struct Organizer {
     _subscriptions: Vec<Subscription>,
 }
 
-/// `canSubmit`: not while saving, nor with notes over the limit; a winner
-/// chosen, or a name typed.
+/// Returns whether the dialog can be submitted. It cannot while a save is
+/// running, nor while the notes are longer than `maximum_bytes`. Apart from
+/// that, a dialog in which the user chooses between groups (`choosing`)
+/// needs a chosen group (`winner`), and a dialog that makes a new group
+/// needs a name that is not blank.
 pub fn submittable(
     choosing: bool,
     winner: bool,
@@ -81,7 +90,7 @@ impl Organizer {
         let subscriptions = vec![
             cx.observe(&name, |_, _, cx| cx.notify()),
             cx.observe(&notes, |_, _, cx| cx.notify()),
-            // Enter in the name submits (`onKeyDown` Enter).
+            // Enter in the name field submits the dialog.
             cx.subscribe(&name, |this, _, _: &ui::text_input::Submitted, cx| {
                 this.submit(cx)
             }),
@@ -101,8 +110,9 @@ impl Organizer {
         }
     }
 
-    /// The field that takes the keyboard as the dialog opens: the name,
-    /// when there is one to type (`autoFocus`).
+    /// Returns the field that takes the keyboard focus when the dialog
+    /// opens. That is the name field when a new group is made, and `None`
+    /// when the user chooses between groups.
     pub fn first_focus(&self, cx: &App) -> Option<FocusHandle> {
         (!self.choosing()).then(|| self.name.read(cx).focus_handle(cx))
     }
@@ -142,15 +152,15 @@ impl Organizer {
         )
     }
 
-    /// `submit`: groups the selection as decided, as one undoable change.
-    /// A failure shows in the dialog, which stays open.
+    /// Groups the selection as the user decided, as one change that can be
+    /// undone. A failure is shown in the dialog, and the dialog stays open.
     pub fn submit(&mut self, cx: &mut Context<Self>) {
         if !self.can_submit(cx) {
             return;
         }
         self.saving = true;
         self.error = None;
-        // `onBeforeSubmit`: the grid's selection clears first.
+        // The grid's selection is cleared before the edit is made.
         self.session
             .update(cx, |session, cx| session.clear_selection(cx));
         let choosing = self.choosing();
@@ -171,8 +181,8 @@ impl Organizer {
             cx,
             |this, result, cx| {
                 match result {
-                    // `onComplete`: the new group alone, once the results
-                    // hold it.
+                    // The new group is selected alone once the results list
+                    // it.
                     Ok((group, _)) => {
                         this.session
                             .update(cx, |session, cx| session.select_when_listed(group, cx));
@@ -189,7 +199,8 @@ impl Organizer {
         cx.notify();
     }
 
-    /// `.choice`: a radio, the group's name, and how many items it holds.
+    /// Draws the row of one group that can be chosen: a radio button, the
+    /// group's name, and the number of items in the group.
     fn choice(
         &self,
         group: &SelectionCollectionCandidate,
@@ -256,8 +267,9 @@ impl Organizer {
 impl Render for Organizer {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
-        // `.field`: a label over its control, 6px apart, in small
-        // secondary type on the body's 20px lines.
+        // Draws the label of a field. The label stands above its control
+        // with 6 px between them. It has the small text size, the secondary
+        // text colour and a line 20 px high.
         let label = |text: &'static str| {
             div()
                 .text(theme::TEXT_SM)
@@ -268,7 +280,8 @@ impl Render for Organizer {
         let mut body = div().flex().flex_col();
         if self.choosing() {
             let mut choices = div().flex().flex_col().gap(px(6.)).child(
-                // `.help`: 12px under it, before the choices' own gap.
+                // The help text has 12 px below it, in addition to the 6 px
+                // gap between the choices.
                 div()
                     .mb(px(12.))
                     .text(theme::TEXT_SM)
@@ -281,8 +294,9 @@ impl Render for Organizer {
             for group in self.groups.clone() {
                 let choice = self.choice(&group, cx);
                 let id = group.collection_id;
-                // The radios are one stop, at the chosen one, as a browser
-                // makes a radio group.
+                // The radio buttons are one stop for the Tab key, and the
+                // stop is on the chosen one. A radio group on a web page
+                // behaves the same way.
                 choices = if self.winner == Some(id) {
                     choices.child(ui::focus::stop(
                         ("group-choice", id.0 as u64),

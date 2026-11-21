@@ -1,11 +1,13 @@
-//! The log window's lines, as production's renderer keeps them
-//! (`diagnosticsStore.ts`, `diagnosticsRuntime.ts`): the core's tracing
-//! events (its `log` event, forwarded by `picto_core::events::EventEmitLayer`),
-//! slow and failed commands, and panics, the last 2,000 of them. The store is
-//! the process's, filled from any thread from the moment the application
-//! starts, so lines logged before the window opens are kept; the panel
-//! (`panel.rs`) shows it, `report.rs` writes it out, and `crash.rs` records
-//! panics.
+//! Keeps the lines that the log window shows. The lines are the core's
+//! tracing events (the core's `log` event, which
+//! `picto_core::events::EventEmitLayer` sends), the commands run on the core
+//! that were slow or failed, the warnings and errors of the `log` crate, and
+//! panics. Only the last 2,000 lines are kept.
+//!
+//! The process has one store of lines. Any thread can add to it, from the
+//! moment the application starts, so lines that are logged before the log
+//! window opens are kept. `panel.rs` shows the lines, `report.rs` writes
+//! them to a support report, and `crash.rs` records panics.
 pub mod crash;
 pub mod panel;
 pub mod report;
@@ -15,10 +17,11 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// `MAX_ENTRIES`.
+/// The largest number of lines that the store keeps.
 pub const MAX_ENTRIES: usize = 2_000;
 
-/// `DiagnosticLevel`, most severe first as the panel lists them.
+/// The severity of a line, with the most severe first. The log window lists
+/// its level filters in this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
     Error,
@@ -37,7 +40,8 @@ impl Level {
         Level::Trace,
     ];
 
-    /// As production writes it, in the panel and the report.
+    /// Returns the level's name as the log window and the support report
+    /// write it.
     pub fn name(self) -> &'static str {
         match self {
             Level::Error => "ERROR",
@@ -48,7 +52,8 @@ impl Level {
         }
     }
 
-    /// `normalizeLevel`: anything not named is INFO.
+    /// Returns the level that `level` names, ignoring case. A missing name,
+    /// and a name that is none of the five, gives `Info`.
     pub fn parse(level: Option<&str>) -> Level {
         match level.map(str::to_ascii_uppercase).as_deref() {
             Some("TRACE") => Level::Trace,
@@ -60,9 +65,12 @@ impl Level {
     }
 }
 
-/// `DiagnosticSource`. Production's main process and renderer are one
-/// process here: `Main` holds what the app records about itself between
-/// launches (a panic of the previous session), `Renderer` a panic now.
+/// The part of the app that a line comes from. `Core` is the core's tracing.
+/// `Ipc` is a command run on the core. `Renderer` is this process: a panic,
+/// a warning or error of the `log` crate, or a support report that could not
+/// be written. `Main` is a panic of an earlier run of the app, which is
+/// shown at the next start. The log window and the support report of Picto
+/// 0.6.19 and earlier used the same four names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
     Core,
@@ -83,7 +91,9 @@ impl Source {
         }
     }
 
-    /// `sourceForTarget`.
+    /// Returns the source of a `log` event of the core from the event's
+    /// target: `Main` when the target starts with `electron` or `main`,
+    /// `Renderer` when it starts with `renderer`, and `Core` otherwise.
     pub fn for_target(target: &str) -> Source {
         if target.starts_with("electron") || target.starts_with("main") {
             Source::Main
@@ -95,7 +105,7 @@ impl Source {
     }
 }
 
-/// `DiagnosticEntry`.
+/// One kept line.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
     pub id: u64,
@@ -103,13 +113,15 @@ pub struct Entry {
     pub source: Source,
     pub target: String,
     pub message: String,
-    /// ISO 8601 in UTC with milliseconds, as `toISOString()` writes it.
+    /// The time in UTC as ISO 8601 with milliseconds, for example
+    /// `2026-08-26T12:00:00.000Z`.
     pub timestamp: String,
     pub duration_ms: Option<f64>,
     pub native_duration_ms: Option<f64>,
 }
 
-/// A line before it is numbered.
+/// A line that is not in the store yet. The store gives the line its `id`
+/// when it adds it.
 pub struct Line {
     pub level: Level,
     pub source: Source,
@@ -119,7 +131,7 @@ pub struct Line {
     pub duration_ms: Option<f64>,
 }
 
-/// The lines kept, oldest first.
+/// Holds the kept lines, oldest first.
 #[derive(Default)]
 pub struct Store {
     entries: VecDeque<Entry>,
@@ -127,7 +139,8 @@ pub struct Store {
 }
 
 impl Store {
-    /// `addDiagnostic`: numbered, and the oldest let go past the limit.
+    /// Adds `line` with the next number as its `id`. When the store then
+    /// holds more than `MAX_ENTRIES` lines, the oldest are removed.
     pub fn add(&mut self, line: Line) {
         self.next_id += 1;
         self.entries.push_back(Entry {
@@ -155,7 +168,8 @@ impl Store {
 }
 
 static STORE: Mutex<Option<Store>> = Mutex::new(None);
-/// Bumped on every change, so the panel redraws only when there is more.
+/// A number that is increased every time the store changes. The panel reads
+/// the lines again only when this number has changed.
 static REVISION: AtomicU64 = AtomicU64::new(0);
 
 fn with_store<R>(change: impl FnOnce(&mut Store) -> R) -> R {
@@ -170,7 +184,10 @@ pub fn add(line: Line) {
     REVISION.fetch_add(1, Ordering::Release);
 }
 
-/// Adds `line` unless the store is held (by the thread that panicked).
+/// Adds `line` if the store's lock is free. If the lock is held, the line is
+/// dropped. The panic hook and the logger call this, because they can run on
+/// a thread that already holds the lock, and waiting for the lock would then
+/// never end.
 pub fn try_add(line: Line) {
     if let Ok(mut store) = STORE.try_lock() {
         store.get_or_insert_with(Store::default).add(line);
@@ -179,7 +196,7 @@ pub fn try_add(line: Line) {
     }
 }
 
-/// `clearDiagnostics`.
+/// Removes every kept line.
 pub fn clear() {
     with_store(Store::clear);
     REVISION.fetch_add(1, Ordering::Release);
@@ -189,19 +206,23 @@ pub fn revision() -> u64 {
     REVISION.load(Ordering::Acquire)
 }
 
-/// The lines kept now, oldest first.
+/// Returns a copy of the kept lines, oldest first.
 pub fn snapshot() -> Vec<Entry> {
     with_store(|store| store.entries().cloned().collect())
 }
 
-/// Now, as `new Date().toISOString()` writes it.
+/// Returns the current time in UTC as ISO 8601 with milliseconds, which is
+/// the form of a line's `timestamp`.
 pub fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-/// `accept` for the core's `log` event: its level, target, message and
-/// time. The core's own command trace (`picto::ipc`) is left out, as the
-/// command timings below say the same with more context.
+/// Reads one `log` event of the core and returns it as a line. The event is
+/// JSON with the fields `level`, `target`, `message`, `timestamp` and
+/// `source`. Returns `None` for text that is not JSON, and for an event
+/// whose target is `picto::ipc`. That target is the core's own trace of its
+/// commands, and [`ipc_line`] records the same commands with their duration
+/// and their error.
 pub fn parse_core(payload: &str) -> Option<Line> {
     let raw: Value = serde_json::from_str(payload).ok()?;
     let text = |key: &str| {
@@ -228,18 +249,26 @@ pub fn parse_core(payload: &str) -> Option<Line> {
     })
 }
 
-/// The core's `log` event, from whichever thread logged it.
+/// Adds one `log` event of the core to the store. It can be called from any
+/// thread.
 pub fn accept_core(payload: &str) {
     if let Some(line) = parse_core(payload) {
         add(line);
     }
 }
 
-/// `recordIpcCall`: what a command's round trip is worth keeping. Routine,
-/// quick commands are not; slow ones are DEBUG, or WARN from 100 ms;
-/// failures are ERROR. The panel's own poll, a grid read superseded by a
-/// newer one, and the cloud status asked before the library is open are
-/// expected and kept out (the superseded read as DEBUG when slow).
+/// Returns the line to keep for one command that was run on the core, or
+/// `None` when the command gets no line. A command that failed gets an ERROR
+/// line with its error. A command that succeeded gets no line when it took
+/// less than 16 ms, a DEBUG line when it took less than 100 ms, and a WARN
+/// line otherwise.
+///
+/// Three cases are expected and are treated differently. The command
+/// `diagnostics.snapshot`, which the log window itself runs every 750 ms,
+/// never gets a line. An `items.window` that failed with `query superseded`,
+/// because a newer read of the grid replaced it, gets a DEBUG line when it
+/// took 16 ms or more and no line otherwise. A `cloud.status.get` that
+/// failed because no library is open gets no line.
 pub fn ipc_line(command: &str, duration_ms: f64, error: Option<&str>) -> Option<Line> {
     if command == "diagnostics.snapshot" {
         return None;
@@ -258,7 +287,9 @@ pub fn ipc_line(command: &str, duration_ms: f64, error: Option<&str>) -> Option<
     }
     if command == "cloud.status.get"
         && error.is_some_and(|error| {
-            // `/^No library is open\b/i`
+            // The error starts with `no library is open`, ignoring case, and
+            // the character after these words, if there is one, is not a
+            // letter, a digit or an underscore.
             let lower = error.to_ascii_lowercase();
             lower.starts_with("no library is open")
                 && lower[18..]
@@ -278,26 +309,33 @@ pub fn ipc_line(command: &str, duration_ms: f64, error: Option<&str>) -> Option<
             } else {
                 Level::Debug
             },
-            // The command ran in this process: there is no delivery time to
-            // tell from the core's, so production's message without one.
+            // The message holds no duration. The command has one duration,
+            // which is in the line's `duration_ms`, and the log window shows
+            // it in a column of its own.
             "Completed",
         )),
     }
 }
 
-/// Records a command's round trip, from any thread.
+/// Adds the line that [`ipc_line`] returns for a command, if it returns one.
+/// It can be called from any thread.
 pub fn record_ipc(command: &str, duration_ms: f64, error: Option<&str>) {
     if let Some(line) = ipc_line(command, duration_ms, error) {
         add(line);
     }
 }
 
-/// The `log` crate's records: GPUI, its renderers, wgpu and the decoders
-/// report through it (a skipped frame, a lost drawable, a failed upload).
-/// Warnings and errors go to the log window as the renderer's, and to
-/// standard error. Installed before the core's tracing, whose own bridge for
-/// `log` then stays out: its filter keeps only the core's targets, which
-/// do not log through `log`.
+/// Receives the records of the `log` crate. GPUI, its renderers, wgpu and
+/// the decoders report through that crate, for example a skipped frame, a
+/// lost drawable or a failed upload. Warnings and errors are written to
+/// standard error and added to the log window with the source `Renderer`.
+/// Records of a lower level are ignored.
+///
+/// It is installed before the core starts its tracing. The core's tracing
+/// would otherwise install its own receiver for the `log` crate, and only
+/// one receiver can be installed. Nothing is lost by this: the core's
+/// receiver keeps only the records of the core's targets, and the core does
+/// not log through the `log` crate.
 struct Logger;
 
 impl log::Log for Logger {
@@ -315,15 +353,17 @@ impl log::Log for Logger {
         };
         let message = record.args().to_string();
         eprintln!("picto: {} {}: {message}", level.name(), record.target());
-        // GPUI reports every picture it could not load, without its path:
-        // a thumbnail not written yet, or missing, which the views already
-        // show as the torn page. Kept out of the window, where they would
-        // be most of the errors.
+        // GPUI logs an error for every picture that it could not load, and
+        // the error does not name the file. Such a picture is a thumbnail
+        // that is not written yet or is missing, and the views already draw
+        // the picture of a torn page in its place. These errors are not
+        // added to the log window, where they would be most of the errors.
         if record.target() == "gpui::asset_cache" {
             return;
         }
-        // `try_add`: a record logged while the store is held (a panic
-        // being recorded) is not worth waiting for.
+        // `try_add` is used because a record can be logged while the
+        // store's lock is held, for example while a panic is being
+        // recorded. The record is then dropped.
         try_add(Line {
             level,
             source: Source::Renderer,
@@ -337,7 +377,9 @@ impl log::Log for Logger {
     fn flush(&self) {}
 }
 
-/// Takes the `log` crate's warnings and errors from here on.
+/// Installs `Logger` as the logger of the `log` crate, and sets warnings
+/// as the lowest level that the crate passes on. It does nothing if a logger
+/// is already installed.
 pub fn install_logger() {
     static LOGGER: Logger = Logger;
     if log::set_logger(&LOGGER).is_ok() {
@@ -450,9 +492,10 @@ mod tests {
         assert_eq!(line.level, Level::Warn);
         assert_eq!(line.source, Source::Core);
         assert_eq!(line.timestamp, "2026-08-26T12:00:00.000Z");
-        // The core's own command trace is left to the command timings.
+        // An event of the core's own trace of its commands gives no line.
         assert!(parse_core(r#"{"level":"INFO","target":"picto::ipc","message":"x"}"#).is_none());
-        // An unknown level is INFO; a main-process target is `main`.
+        // An unknown level becomes INFO, and a target that starts with
+        // `main` has the source `Main`.
         let line = parse_core(r#"{"level":"notice","target":"main.crash"}"#).unwrap();
         assert_eq!((line.level, line.source), (Level::Info, Source::Main));
     }

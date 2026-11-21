@@ -1,22 +1,25 @@
-//! The requests the app makes outside a library: the update feed and its
-//! downloads (`updates`), the search engines' pages (`search_by_image`) and
-//! the services' icons (`site_icons`).
+//! Makes the requests that do not go to a library: the update feed and its
+//! downloads (`updates`), the pages of the search engines (`search_by_image`)
+//! and the icons of the services (`site_icons`).
 //!
-//! A real run reaches the real addresses. A run under a check never does:
-//! with `PICTO_GPUI_NET_ORIGIN` every address moves onto that loopback
-//! origin (its host becomes the first part of the path, and a redirect
-//! leaving the origin is not followed); with any other seam, or in a test
-//! build, nothing is fetched at all.
+//! A normal run sends each request to its real address. A run that a check
+//! drives never does. When `PICTO_GPUI_NET_ORIGIN` is set, every address is
+//! changed to one on that loopback origin: the host of the address becomes
+//! the first part of the path, and a redirect that leaves the origin is not
+//! followed. When any other variable of `seams.rs` is set, or in a test
+//! build, no request is sent at all.
 use std::future::Future;
 
-/// Where this run's requests go.
+/// Says where the requests of this run are sent.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Reach {
-    /// The real addresses.
+    /// Each request is sent to its real address.
     Real,
-    /// That loopback origin, for the checks.
+    /// Every request is sent to this loopback origin, where a check serves
+    /// the answers.
     Local(String),
-    /// Nowhere: a check without local fixtures.
+    /// No request is sent. This is the case in a test build and in a run that
+    /// a check drives without `PICTO_GPUI_NET_ORIGIN`.
     Nowhere,
 }
 
@@ -30,7 +33,8 @@ pub fn reach() -> Reach {
     Reach::Real
 }
 
-/// The address to fetch for `url` in this run, if any.
+/// Returns the address to request for `url` in this run, or `None` when this
+/// run sends no requests.
 pub fn address(url: &str) -> Option<String> {
     match reach() {
         Reach::Real => Some(url.to_owned()),
@@ -39,8 +43,9 @@ pub fn address(url: &str) -> Option<String> {
     }
 }
 
-/// `https://host/path?query` as `<origin>/host/path?query`. An address
-/// already on the origin is kept.
+/// Returns `url` moved onto `origin`: `https://host/path?query` becomes
+/// `<origin>/host/path?query`. An address that is already on the origin, or
+/// that cannot be parsed, is returned unchanged.
 pub fn relocate(url: &str, origin: &str) -> String {
     let Ok(parsed) = url::Url::parse(url) else {
         return url.to_owned();
@@ -57,8 +62,9 @@ pub fn relocate(url: &str, origin: &str) -> String {
     moved
 }
 
-/// A client for this run: redirects are followed (up to ten, as `fetch`
-/// does), but never off the local origin of a check.
+/// Builds the HTTP client for this run. It follows up to ten redirects and
+/// fails on the eleventh. When a check serves the answers from a loopback
+/// origin, it does not follow a redirect that leaves that origin.
 pub fn client() -> Result<reqwest::Client, String> {
     let local = match reach() {
         Reach::Local(origin) => Some(origin),
@@ -80,8 +86,8 @@ pub fn client() -> Result<reqwest::Client, String> {
         .map_err(|error| error.to_string())
 }
 
-/// Runs `work` to the end on the calling thread, which must be a
-/// background one.
+/// Runs `work` until it finishes, on the calling thread. The calling thread
+/// waits for the whole time, so it must be a background thread.
 pub fn block_on<F: Future>(work: F) -> Result<F::Output, String> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -90,9 +96,10 @@ pub fn block_on<F: Future>(work: F) -> Result<F::Output, String> {
     Ok(runtime.block_on(work))
 }
 
-/// A page for the user in the browser (a results page, a release page);
-/// under a check, written on standard error (and kept for the check,
-/// [`opened`]) instead of opened.
+/// Opens `url` in the user's browser, for example a page of search results or
+/// a release page. When a check serves the answers from a loopback origin,
+/// the page is not opened: its address is printed on standard error and, in a
+/// debug build, kept for [`opened`].
 pub fn open_in_browser(url: &str, cx: &mut gpui::App) {
     if matches!(reach(), Reach::Local(_)) {
         eprintln!("picto: would open in the browser: {url}");
@@ -108,7 +115,8 @@ pub fn open_in_browser(url: &str, cx: &mut gpui::App) {
 #[cfg(debug_assertions)]
 static OPENED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
-/// The pages a check would have opened in the browser, oldest first.
+/// Returns the addresses that [`open_in_browser`] kept instead of opening
+/// them in the browser, oldest first.
 #[cfg(debug_assertions)]
 pub fn opened() -> Vec<String> {
     OPENED

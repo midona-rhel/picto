@@ -1,9 +1,8 @@
-//! The frame that the document viewers draw around a page (production's
-//! `DocumentViewerShell.tsx`). It has two parts. The upper part is a viewport
-//! with the dark document backdrop, which scrolls and shows the page in its
-//! centre. The lower part is a footer as tall as the titlebar, which holds
-//! the Previous page button, the text "Page n of m" and the Next page
-//! button.
+//! The frame that the document viewers draw around a page. It has two parts.
+//! The upper part is a viewport with the dark document backdrop, which
+//! scrolls and shows the page in its centre. The lower part is a footer as
+//! tall as the titlebar, which holds the Previous page button, the text
+//! "Page n of m" and the Next page button.
 use crate::i18n::t;
 use crate::theme::Text as _;
 use crate::{theme, ui};
@@ -11,8 +10,7 @@ use gpui::*;
 
 type ClickHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
 
-/// The padding in pixels between the viewport's edges and the page
-/// (the padding of `.viewport` in production's CSS).
+/// The padding in pixels between the viewport's edges and the page.
 pub const VIEWPORT_PADDING: f32 = 24.;
 
 /// Returns the width and the height in pixels that a page has room for when
@@ -67,9 +65,8 @@ impl DocumentShell {
         self
     }
 
-    /// Shows `error` in the centre of the viewport in place of the page
-    /// (production's `.message`, which has `role="alert"`). With `None` the
-    /// page is shown.
+    /// Shows `error` in the centre of the viewport in place of the page.
+    /// With `None` the page is shown.
     pub fn error(mut self, error: Option<SharedString>) -> Self {
         self.error = error;
         self
@@ -98,7 +95,7 @@ impl RenderOnce for DocumentShell {
 
         let body: AnyElement = match self.error {
             // The message is drawn in the centre of the viewport, in 12 px
-            // text with a line height of 1.5 (production's `.message`).
+            // text with a line height of 1.5 times the text size.
             Some(error) => div()
                 .size_full()
                 .flex()
@@ -107,9 +104,9 @@ impl RenderOnce for DocumentShell {
                 .text_size(px(theme::TEXT_SM))
                 .line_height(px(theme::TEXT_SM * 1.5))
                 .text_color(theme.text_secondary())
-                // A message that is one of production's translation keys is
-                // shown in the app's language. Any other message, such as the
-                // detail a decoder reported, is shown as it is.
+                // A message that has a translation is shown in the app's
+                // language. Any other message, such as the detail a decoder
+                // reported, is shown as it is.
                 .child(crate::i18n::t_shared(error))
                 .into_any_element(),
             None => div()
@@ -120,12 +117,11 @@ impl RenderOnce for DocumentShell {
                 .flex()
                 .child(
                     // This box is at least as large as the viewport and
-                    // holds the padding, and the page is centred in it, as
-                    // production's `display: grid; place-items: center`
-                    // does. A page that is larger than the viewport makes
-                    // the box larger, and the box then starts at the
-                    // viewport's top-left corner, so every part of the page
-                    // can be scrolled into view.
+                    // holds the padding, and the page is centred in it. A
+                    // page that is larger than the viewport makes the box
+                    // larger, and the box then starts at the viewport's
+                    // top-left corner, so every part of the page can be
+                    // scrolled into view.
                     div()
                         .flex_none()
                         .min_w_full()
@@ -157,7 +153,7 @@ impl RenderOnce for DocumentShell {
         let next = self.on_next;
         let footer = footer(cx).child(
             // The two buttons with the page count between them, 4 px
-            // apart (production's `TitlebarControlGroup`).
+            // apart.
             div()
                 .flex()
                 .items_center()
@@ -198,10 +194,10 @@ impl RenderOnce for DocumentShell {
     }
 }
 
-/// Returns the element that shows "Page n of m" in the footer (production's
-/// `.pageStatus`). The text is in the secondary text colour, at medium
-/// weight, with digits of equal width. The element is at least 92 px wide,
-/// so the buttons beside it do not move when the number of digits changes.
+/// Returns the element that shows "Page n of m" in the footer. The text is
+/// in the secondary text colour, at medium weight, with digits of equal
+/// width. The element is at least 92 px wide, so the buttons beside it do
+/// not move when the number of digits changes.
 pub fn page_status_label(page: usize, count: usize, cx: &App) -> Div {
     div()
         .min_w(px(92.))
@@ -215,9 +211,9 @@ pub fn page_status_label(page: usize, count: usize, cx: &App) -> Div {
         .child(page_status(page, count))
 }
 
-/// Returns the footer that is drawn under a document (production's
-/// `.footer`), without content. It is as tall as the titlebar and has a 1 px
-/// line along its top edge. Content added to it is centred in it.
+/// Returns the footer that is drawn under a document, without content. It
+/// is as tall as the titlebar and has a 1 px line along its top edge.
+/// Content added to it is centred in it.
 pub fn footer(cx: &App) -> Div {
     let theme = theme::theme(cx);
     div()
@@ -237,8 +233,8 @@ pub fn footer(cx: &App) -> Div {
 /// the number of pages is not known (`count` is 0), a dash is written in its
 /// place: "Page 1 of —".
 pub fn page_status(page: usize, count: usize) -> String {
-    // Production builds the text from two translated parts, each with a
-    // trailing space: `{t("Page ")}{pageNumber} {t("of ")}{pageCount || '—'}`.
+    // The translations hold the words "Page " and "of " as two separate
+    // texts, each ending with a space, so the text is built from those two.
     let (word, of) = (crate::i18n::t("Page "), crate::i18n::t("of "));
     if count == 0 {
         format!("{word}{page} {of}—")
@@ -252,7 +248,7 @@ mod tests {
     use super::page_status;
 
     #[test]
-    fn the_counter_reads_as_production_does() {
+    fn the_counter_reads_as_the_earlier_versions_did() {
         assert_eq!(page_status(1, 0), "Page 1 of —");
         assert_eq!(page_status(3, 12), "Page 3 of 12");
     }

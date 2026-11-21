@@ -1,8 +1,8 @@
-//! Reading the accessibility tree a window builds, for tests and the
-//! off-screen tool's `a11y` line: a [`Harness`] draws any element in a test
-//! window with the tree switched on, and a [`Tree`] answers what assistive
+//! Reads the accessibility tree that a window builds, for tests and for the
+//! `a11y` line of the off-screen tool. A [`Harness`] draws any element in a
+//! test window with the tree switched on. A [`Tree`] holds what assistive
 //! technology would be told (each node's role, name, states and actions) and
-//! writes it out as indented text.
+//! writes it as indented text.
 use gpui::accesskit::{Action, ActionRequest, Node, NodeId, Role, Toggled, TreeUpdate};
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, Context, IntoElement, Pixels,
@@ -10,7 +10,7 @@ use gpui::{
 };
 use std::collections::HashMap;
 
-/// One frame's tree.
+/// The tree of one frame.
 pub struct Tree {
     nodes: HashMap<NodeId, Node>,
     root: NodeId,
@@ -46,19 +46,20 @@ impl Tree {
         At { tree: self, id }
     }
 
-    /// The node assistive technology is told has the keyboard.
+    /// Returns the node that assistive technology is told has the keyboard
+    /// focus.
     pub fn focused(&self) -> At<'_> {
         self.at(self.focus)
     }
 
-    /// Every node, parents before children, in drawing order.
+    /// Returns every node, parents before children, in drawing order.
     pub fn all(&self) -> Vec<At<'_>> {
         let mut out = Vec::new();
         self.root().walk(&mut |node, _| out.push(node));
         out
     }
 
-    /// The nodes of `role`.
+    /// Returns the nodes that have the role `role`.
     pub fn with_role(&self, role: Role) -> Vec<At<'_>> {
         self.all()
             .into_iter()
@@ -66,7 +67,8 @@ impl Tree {
             .collect()
     }
 
-    /// The first node of `role` named `name`, or a failure that shows the tree.
+    /// Returns the first node with the role `role` and the name `name`. Panics
+    /// with the tree's text when there is none.
     pub fn find(&self, role: Role, name: &str) -> At<'_> {
         self.try_find(role, name)
             .unwrap_or_else(|| panic!("no {role:?} named {name:?} in\n{}", self.dump()))
@@ -78,8 +80,8 @@ impl Tree {
             .find(|node| node.role() == role && node.name() == name)
     }
 
-    /// The tree as indented text: a line per node, its role, name in quotes,
-    /// value, and states.
+    /// Returns the tree as indented text, one line per node: its role, its
+    /// name in quotes, its value and its states.
     pub fn dump(&self) -> String {
         let mut out = String::new();
         self.root().walk(&mut |node, depth| {
@@ -120,7 +122,7 @@ impl<'a> At<'a> {
         go(*self, 0, visit);
     }
 
-    /// The descendants of this node, parents first.
+    /// Returns the descendants of this node, parents first.
     pub fn descendants(&self) -> Vec<At<'a>> {
         let mut out = Vec::new();
         self.walk(&mut |node, depth| {
@@ -131,7 +133,7 @@ impl<'a> At<'a> {
         out
     }
 
-    /// The first descendant of `role` named `name`.
+    /// Returns the first descendant with the role `role` and the name `name`.
     pub fn find(&self, role: Role, name: &str) -> At<'a> {
         self.descendants()
             .into_iter()
@@ -139,8 +141,9 @@ impl<'a> At<'a> {
             .unwrap_or_else(|| panic!("no {role:?} named {name:?} under\n{}", self.tree.dump()))
     }
 
-    /// The name assistive technology reads, as the platforms compute it from
-    /// AccessKit: the label, else the text of the labels inside it.
+    /// Returns the name that assistive technology reads, computed as the
+    /// platforms compute it from AccessKit: the node's label, or else the text
+    /// of the labels inside the node.
     pub fn name(&self) -> String {
         if let Some(label) = self.node().label() {
             return label.to_owned();
@@ -148,7 +151,8 @@ impl<'a> At<'a> {
         if self.role() == Role::Label {
             return self.node().value().unwrap_or_default().to_owned();
         }
-        // Only these take their name from the text inside them.
+        // Only nodes with these roles take their name from the text inside
+        // them.
         const FROM_CONTENT: [Role; 10] = [
             Role::Button,
             Role::Link,
@@ -296,8 +300,9 @@ impl Render for Host {
 }
 
 impl Harness {
-    /// A window drawing what `draw` returns each frame, with the dark theme
-    /// and the shared controls' keys, as the app prepares itself.
+    /// Opens a window that draws what `draw` returns in each frame. It sets
+    /// the dark theme and binds the keys of the shared controls, as the app
+    /// does when it starts.
     pub fn new<E: IntoElement + 'static>(
         draw: impl Fn(&mut Window, &mut App) -> E + 'static,
     ) -> Self {
@@ -316,7 +321,8 @@ impl Harness {
         Self { cx, window }
     }
 
-    /// Lets the window settle and draws a frame: the tree it built.
+    /// Runs the work that is pending, draws a frame, and returns the tree that
+    /// the frame built.
     pub fn tree(&mut self) -> Tree {
         self.cx.run_until_parked();
         let update = self
@@ -331,7 +337,8 @@ impl Harness {
         Tree::new(update)
     }
 
-    /// Elements in the last frame that take a click but have no role.
+    /// Returns the elements of the last frame that handle a click but have no
+    /// role.
     pub fn unexposed(&mut self) -> Vec<(String, Bounds<Pixels>)> {
         self.cx
             .update_window(self.window, |_, window, _| {
@@ -340,7 +347,7 @@ impl Harness {
             .unwrap()
     }
 
-    /// Asks for `action` on `node`, as assistive technology does.
+    /// Requests `action` on `node`, as assistive technology does.
     pub fn act(&mut self, node: NodeId, action: Action) {
         self.cx
             .update_window(self.window, |_, window, cx| {

@@ -1,6 +1,7 @@
-//! `DatePickerButton.tsx`: a button showing a day, which opens a month's
-//! calendar below it (above it without room), with Today and Clear. Days
-//! are local `YYYY-MM-DD` keys; an empty key is no day.
+//! The date picker: a button that shows a day and opens a calendar of one
+//! month below it, or above it when there is no room below. The calendar has
+//! the buttons Today and Clear. A day is a text of the form `YYYY-MM-DD` in
+//! local time. An empty text means no day.
 use super::popover::{Dismissal, Flip, Placement, Side, floating, place};
 use crate::i18n::{en, t};
 use crate::theme;
@@ -12,16 +13,17 @@ use std::{cell::Cell, rc::Rc};
 
 type ChangeHandler = Rc<dyn Fn(String, &mut Window, &mut App) + 'static>;
 
-/// `.popover`'s width and the height it is placed by.
+/// The calendar's width, and the height that is used to place it.
 const WIDTH: f32 = 278.;
 const HEIGHT: f32 = 340.;
-/// `.popover`'s place: 5px under the button's left edge, kept 8px inside
-/// the window, or above the button when it does not fit below.
+/// Where the calendar opens: 5px below the button, with its left edge at the
+/// button's left edge, and at least 8px inside the window. It opens above the
+/// button when it does not fit below.
 const PLACEMENT: Placement = Placement::new(Side::Below, 5., 8.).flip(Flip::WhenNoRoom);
 
 struct State {
     open: bool,
-    /// The first day of the month shown.
+    /// The first day of the month that the calendar shows.
     month: NaiveDate,
     bounds: Rc<Cell<Bounds<Pixels>>>,
 }
@@ -30,8 +32,7 @@ struct State {
 pub struct DatePicker {
     id: ElementId,
     value: SharedString,
-    /// `DatePickerButton`'s `ariaLabel`: the trigger's and the calendar's
-    /// accessible name.
+    /// The name that assistive technology gives the button and the calendar.
     name: Option<SharedString>,
     on_change: Option<ChangeHandler>,
 }
@@ -46,27 +47,31 @@ pub fn date_picker(id: impl Into<ElementId>, value: impl Into<SharedString>) -> 
 }
 
 impl DatePicker {
-    /// What assistive technology calls the picker ("From", "To").
+    /// Sets the name that assistive technology gives the picker, for example
+    /// "From" or "To".
     pub fn name(mut self, name: impl Into<SharedString>) -> Self {
         self.name = Some(name.into());
         self
     }
 
-    /// Called with the day chosen, or an empty key for Clear.
+    /// Sets the handler that is called with the day the user chose, or with an
+    /// empty text when the user pressed Clear.
     pub fn on_change(mut self, handler: impl Fn(String, &mut Window, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(handler));
         self
     }
 }
 
-/// `parseDate`: a valid `YYYY-MM-DD` day.
+/// Returns the day that `value` names, if `value` is a real day written as
+/// `YYYY-MM-DD`.
 fn parse_day(value: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(value, crate::text::date_format::DAY)
         .ok()
         .filter(|date| date.format(crate::text::date_format::DAY).to_string() == value)
 }
 
-/// `calendarDays`: six weeks from the Sunday on or before the month's first.
+/// Returns the 42 days that the calendar shows for `month`: six weeks,
+/// starting on the Sunday on or before the first day of the month.
 fn calendar_days(month: NaiveDate) -> Vec<NaiveDate> {
     let first = month.with_day(1).unwrap_or(month);
     let start = first - Days::days(first.weekday().num_days_from_sunday() as i64);
@@ -79,10 +84,10 @@ fn add_months(month: NaiveDate, delta: i32) -> NaiveDate {
         .unwrap_or(month)
 }
 
-/// Opens or closes the calendar, at the chosen day's month (today's
-/// without one). The keyboard stays where it was: Escape reaches the
-/// dialog or menu the picker is in, as production's window listeners take
-/// it before the calendar's own.
+/// Opens the calendar, or closes it when it is open. It opens at the month of
+/// the chosen day, or at the current month when no day is chosen. The keyboard
+/// focus stays where it was, so Escape reaches the dialog or the menu that the
+/// picker is in.
 fn toggle_open(state: &Entity<State>, selected: Option<NaiveDate>, cx: &mut App) {
     state.update(cx, |state, cx| {
         state.open = !state.open;
@@ -99,8 +104,9 @@ fn close(state: &Entity<State>, cx: &mut App) {
     });
 }
 
-/// `.navButton` and `.footerButton`: 26px, a faint border and fill that
-/// deepen under the pointer.
+/// Returns a button of the calendar's header or footer, without its contents:
+/// 26px high, with a faint border and a faint fill. The caller makes the
+/// border and the fill stronger under the pointer.
 fn frame_button(id: impl Into<ElementId>, theme: theme::Theme) -> Stateful<Div> {
     div()
         .id(id)
@@ -115,8 +121,8 @@ fn frame_button(id: impl Into<ElementId>, theme: theme::Theme) -> Stateful<Div> 
         .cursor_pointer()
 }
 
-/// `.trigger`, `.navButton`, `.day` and `.footerButton` `:focus-visible`:
-/// 1px of the primary text colour, 1px out.
+/// Returns the focus ring of the picker's button and of the calendar's
+/// buttons: 1px wide, in the primary text colour, 1px outside the button.
 fn ring(theme: &theme::Theme) -> super::focus::Ring {
     super::focus::Ring {
         width: 1.,
@@ -125,8 +131,9 @@ fn ring(theme: &theme::Theme) -> super::focus::Ring {
     }
 }
 
-/// A button of the calendar: a stop that Enter and Space press, with its
-/// ring. `border` is how thick the button's own border is.
+/// Makes `button` a button of the calendar: a Tab stop that Enter and Space
+/// press, named `name` for assistive technology, with its focus ring. `border`
+/// is the width of the button's own border.
 #[allow(clippy::too_many_arguments)]
 fn calendar_button(
     button: Stateful<Div>,
@@ -181,7 +188,7 @@ impl RenderOnce for DatePicker {
             .flex()
             .items_center()
             .gap(px(7.))
-            // `font-variant-numeric: tabular-nums`
+            // The digits are tabular figures, which all have the same width.
             .font_features(theme::tabular_figures())
             .overflow_hidden()
             .rounded(px(theme::RADIUS_MD))
@@ -221,7 +228,8 @@ impl RenderOnce for DatePicker {
         if selected.is_none() {
             trigger = trigger.text_color(theme.text_tertiary());
         }
-        // The trigger clips its label, so its ring is drawn beside it.
+        // The button clips what is inside it, so its focus ring is not its
+        // child. The ring is drawn by the element that wraps the button.
         let focus = super::focus::control(&self.id, window, cx);
         let trigger_ring = focus.ring(ring(&theme), theme::RADIUS_MD, 0.);
         let trigger = focus.attach(trigger, super::focus::Kind::Button, move |_, _, cx| {
@@ -320,7 +328,7 @@ impl RenderOnce for DatePicker {
             .line_height(px(22.))
             .text_color(theme.text_tertiary())
             .children(
-                // Production writes the initials in English.
+                // The initials of the weekdays are English in every language.
                 [
                     en("S"),
                     en("M"),
@@ -350,7 +358,9 @@ impl RenderOnce for DatePicker {
                     .aria_toggled(super::a11y::toggled(is_selected))
                     .relative()
                     .flex_1()
-                    // `aspect-ratio: 1` on a seventh of the 260px grid.
+                    // A cell is as high as it is wide: a seventh of the 260px
+                    // inside the calendar's padding, less the six gaps of 2px
+                    // between the cells.
                     .h(px((WIDTH - 18. - 12.) / 7.))
                     .flex()
                     .items_center()
@@ -379,7 +389,8 @@ impl RenderOnce for DatePicker {
                     cell.hover(move |style| style.bg(theme.contrast(10.)))
                 };
                 if is_today {
-                    // `.today::after`: a 1px line 4px from the bottom.
+                    // Today has a 1px line under its number, 4px from the
+                    // bottom of the cell.
                     cell = cell.child(
                         div()
                             .absolute()
@@ -454,7 +465,7 @@ impl RenderOnce for DatePicker {
                     })
             })
             .child(t("Clear"));
-        // Disabled with no day, and then no stop.
+        // With no day chosen, Clear is disabled and is not a Tab stop.
         if selected.is_none() {
             clear_button = clear_button
                 .role(Role::Button)
@@ -495,7 +506,8 @@ impl RenderOnce for DatePicker {
         .role(Role::Dialog)
         .when_some(self.name.clone(), |popover, name| popover.aria_label(name))
         .w(px(WIDTH))
-        // `.popover`'s 9px padding inside its 1px glass border.
+        // The calendar has 9px of padding inside its 1px glass border. The
+        // border is drawn over the contents, so the padding here is 10px.
         .p(px(10.))
         .font_family(theme::FONT_UI)
         .text(theme::TEXT_SM)
@@ -504,7 +516,7 @@ impl RenderOnce for DatePicker {
         .child(weekdays)
         .child(grid)
         .child(footer);
-        // `.backdrop`: a press anywhere else closes the calendar.
+        // A press anywhere outside the calendar closes it.
         div().w_full().child(trigger).child(
             floating(
                 ElementId::NamedChild(std::sync::Arc::new(self.id), "floating".into()),

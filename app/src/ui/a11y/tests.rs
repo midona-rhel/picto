@@ -1,7 +1,8 @@
-//! The tree each shared control gives assistive technology: its role, name,
-//! value, states and actions, and that the actions do what the pointer
-//! does. Each test also checks that nothing it drew takes a click without a
-//! role (see `guard_every_clickable_has_a_role_and_every_control_a_name`).
+//! Tests of the tree that each shared control gives assistive technology: its
+//! role, name, value, states and actions, and that the actions do what the
+//! pointer does. Each test also checks that nothing it drew handles a click
+//! without a role (see
+//! `guard_every_clickable_has_a_role_and_every_control_a_name`).
 use super::tree::{Harness, Tree};
 use crate::i18n::t;
 use crate::ui::tooltip::tip;
@@ -11,7 +12,7 @@ use gpui::{Focusable as _, IntoElement, ParentElement as _, Styled as _, div, po
 use std::cell::Cell;
 use std::rc::Rc;
 
-/// Nodes whose role is a control assistive technology presses or edits.
+/// The roles of the controls that assistive technology presses or edits.
 const CONTROLS: [Role; 16] = [
     Role::Button,
     Role::CheckBox,
@@ -31,14 +32,14 @@ const CONTROLS: [Role; 16] = [
     Role::MultilineTextInput,
 ];
 
-/// What every test asserts of a whole tree: each control has a name (a
-/// field may be known by its placeholder instead), and the frame drew no
-/// clickable element without a role.
+/// Asserts what every test asserts of a whole tree: each control has a name,
+/// and the frame drew no clickable element without a role. A field may have a
+/// placeholder in place of a name.
 pub fn assert_complete(harness: &mut Harness, tree: &Tree) {
     for node in tree.all() {
         if CONTROLS.contains(&node.role()) {
-            // A field may be known by its placeholder and a select by the
-            // choice it shows, as production's unlabelled ones are.
+            // A field may have only a placeholder, and a select may have only
+            // the choice it shows.
             let named = !node.name().is_empty()
                 || node.node().placeholder().is_some()
                 || (node.role() == Role::ComboBox && node.value().is_some_and(|v| !v.is_empty()));
@@ -86,7 +87,8 @@ fn an_icon_button_is_named_by_its_tooltip_and_pressed_by_assistive_technology() 
     assert_eq!(lock.toggled(), Some(Toggled::True));
     assert!(lock.disabled());
     assert!(!lock.supports(Action::Click));
-    // A name given over the tooltip's text.
+    // This button's name was set with `name` and is not the text of its
+    // tooltip.
     tree.find(Role::Button, "Close Quick Look");
     let id = filter.id;
     assert_complete(&mut harness, &tree);
@@ -273,7 +275,8 @@ fn a_text_field_exposes_its_text_placeholder_and_selection() {
         selection.focus.character_index, 8,
         "the caret after the text"
     );
-    // Focusing the field from assistive technology puts the keyboard there.
+    // A focus request from assistive technology gives the field the keyboard
+    // focus.
     let id = field.id;
     assert!(field.supports(Action::Focus));
     assert_complete(&mut harness, &tree);
@@ -348,7 +351,7 @@ fn a_dialog_is_named_by_its_title_and_holds_the_focus() {
             .on_confirm(|_, _| {}),
         )
     });
-    // The dialog fades in; the tree is there from the first frame.
+    // The dialog fades in. The tree has the dialog from the first frame.
     let tree = harness.tree();
     let dialog = tree.find(Role::Dialog, "Delete tag");
     assert!(dialog.node().is_modal());
@@ -529,7 +532,8 @@ fn the_interface_zoom_scales_the_tree_to_the_window() {
     assert_eq!(transform.as_coeffs()[0], 1.5);
 }
 
-/// Every `.rs` file under `src/`, with its path from there.
+/// Returns every `.rs` file under `src/`: its path relative to `src/`, and its
+/// text.
 fn sources() -> Vec<(String, String)> {
     fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, String)>) {
         for entry in std::fs::read_dir(dir).unwrap().flatten() {
@@ -552,13 +556,13 @@ fn sources() -> Vec<(String, String)> {
     out
 }
 
-/// A glyph button shows no text, so assistive technology knows it only by
-/// the name it is given: its tooltip (production's `aria-label` repeats
-/// it), a label, or a name of its own. Every call that makes one gives it
-/// one of these before the statement ends.
+/// A glyph button shows no text, so assistive technology knows it only by the
+/// name it is given: its tooltip, a label, or a name of its own. This test
+/// checks that every call that makes a glyph button gives it one of these
+/// before the statement ends.
 #[test]
 fn guard_every_glyph_button_is_named() {
-    // The builders that take no tooltip themselves.
+    // The builders that do not take a tooltip as an argument.
     const BUILDERS: [&str; 3] = ["icon_button(", "small_button(", "filter_action("];
     let mut unnamed = Vec::new();
     for (file, text) in sources() {
@@ -571,9 +575,10 @@ fn guard_every_glyph_button_is_named() {
             let Some(builder) = BUILDERS.iter().find(|builder| code.contains(*builder)) else {
                 continue;
             };
-            // The definitions, calls that only forward to one, a view's own
-            // method of the same name, and a call marked `// a11y: <why>`
-            // on its line or the line above.
+            // These lines are skipped: the definitions of the builders, calls
+            // that only pass the button on, a view's own method of the same
+            // name, and a call marked `// a11y: <why>` on its line or the line
+            // above.
             let above = |back: usize| lines[at.saturating_sub(back)..at].join("\n");
             if code.contains(&format!("fn {builder}"))
                 || code.contains(&format!("self.{builder}"))
@@ -584,7 +589,8 @@ fn guard_every_glyph_button_is_named() {
             {
                 continue;
             }
-            // The chain, up to the end of its statement or expression.
+            // The chain of calls, up to the end of its statement or
+            // expression.
             let depth = line.len() - line.trim_start().len();
             let mut chain = String::new();
             for next in lines.iter().skip(at).take(40) {
@@ -599,7 +605,7 @@ fn guard_every_glyph_button_is_named() {
             let named = [".tip(", ".name(", ".label("]
                 .iter()
                 .any(|call| chain.contains(call))
-                // A wrapper that returns the button for its callers to name.
+                // A wrapper that returns the button, for its callers to name.
                 || chain.contains("-> ui::icon_button::IconButton")
                 || chain.contains("-> super::icon_button::IconButton")
                 || chain.contains("-> IconButton");
@@ -615,9 +621,10 @@ fn guard_every_glyph_button_is_named() {
     );
 }
 
-/// Each shared control that takes a click or the keyboard says what it is:
-/// a file of `ui/` that makes an element clickable or a tab stop sets a role
-/// there (or declares the click presentational).
+/// Each shared control that handles a click or the keyboard has a role. This
+/// test checks that a file of `ui/` that makes an element clickable or a Tab
+/// stop also sets a role, or declares that the click is not for assistive
+/// technology.
 #[test]
 fn guard_every_interactive_shared_control_has_a_role() {
     let mut missing = Vec::new();

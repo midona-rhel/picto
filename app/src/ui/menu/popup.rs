@@ -1,14 +1,18 @@
-//! The pop-up windows a menu's panels are shown in: the registry of open
-//! menu windows and the windows their controls opened, opening and closing
-//! them, and the watch that closes the menu when none has the keyboard.
+//! Manages the pop-up windows that a menu's panels are shown in. This file
+//! holds the record of the open menu windows and of the windows that
+//! controls inside them opened, the code that opens and closes these
+//! windows, and the code that closes the menu when none of its windows has
+//! the keyboard.
 use super::layout::{Rect, place};
 use super::{ACTIVATION_SETTLE, Menu, Presentation, Role, SHADOW_ROOM, Screen, VIEWPORT_INSET};
 use gpui::*;
 
-/// The pop-up windows menus have open, and the pop-up windows a control
-/// inside one of them opened (a select's list), each with the menu window it
-/// was opened from. A child closes with its menu window, and while a child
-/// has the keyboard its menu counts as having it.
+/// Holds the pop-up windows that menus have open (`menus`), and the pop-up
+/// windows that a control inside one of them opened, such as the list of a
+/// select (`children`). Each entry of `children` is the menu window that the
+/// window was opened from, followed by the window itself. A child window is
+/// closed when its menu window closes, and while a child window has the
+/// keyboard its menu counts as having the keyboard.
 #[derive(Default)]
 struct PopUps {
     menus: Vec<AnyWindowHandle>,
@@ -17,28 +21,30 @@ struct PopUps {
 
 impl Global for PopUps {}
 
-/// Whether this window is one of a menu's pop-up windows, where a control
-/// cannot open anything over the window and must open a pop-up of its own
-/// ([`adopt`]).
+/// Returns whether this window is one of a menu's pop-up windows. A control
+/// in such a window cannot draw anything that reaches past the window, so it
+/// must open a pop-up window of its own and record it with [`adopt`].
 pub fn is_pop_up(window: &Window, cx: &App) -> bool {
     let handle = window.window_handle();
     cx.try_global::<PopUps>()
         .is_some_and(|pop_ups| pop_ups.menus.contains(&handle))
 }
 
-/// Records a pop-up window opened from a menu's pop-up window, so that it
-/// closes with it.
+/// Records that the pop-up window `child` was opened from the menu's pop-up
+/// window `owner`, so that `child` is closed when `owner` closes. If `owner`
+/// is no longer a menu's window, `child` is closed at once.
 pub fn adopt(owner: AnyWindowHandle, child: AnyWindowHandle, cx: &mut App) {
     let pop_ups = cx.default_global::<PopUps>();
     if pop_ups.menus.contains(&owner) {
         pop_ups.children.push((owner, child));
     } else {
-        // The menu closed while the child opened.
+        // The menu closed while the child window was opening.
         close_window(child, cx);
     }
 }
 
-/// Forgets a child pop-up its control closed itself.
+/// Removes `child` from the record. A control calls this when it has closed
+/// its pop-up window itself.
 pub fn release(child: AnyWindowHandle, cx: &mut App) {
     cx.default_global::<PopUps>()
         .children
@@ -49,7 +55,8 @@ fn register(window: AnyWindowHandle, cx: &mut App) {
     cx.default_global::<PopUps>().menus.push(window);
 }
 
-/// Forgets a menu window that is closing, and closes its children.
+/// Removes a menu window that is closing from the record, and closes the
+/// windows that were opened from it.
 fn forget(window: AnyWindowHandle, cx: &mut App) {
     let pop_ups = cx.default_global::<PopUps>();
     pop_ups.menus.retain(|open| *open != window);
@@ -78,19 +85,21 @@ fn children_of(owners: &[AnyWindowHandle], cx: &App) -> Vec<AnyWindowHandle> {
 }
 
 impl Menu {
-    // ── Pop-up windows ──────────────────────────────────────────────
+    // The methods below open, close and watch the menu's pop-up windows.
 
-    /// Finds the display and the owner window's place on it, and opens the
-    /// root panel's window. Falls back to the overlay when there is no
-    /// display to place it on.
+    /// Finds the display that the owner's window is on and where the
+    /// window's content starts on that display, and opens the pop-up window
+    /// of the root panel. When the window has no display, the menu is drawn
+    /// inside the owner's window instead.
     pub(super) fn open_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(display) = window.display(cx) else {
             self.presentation = Presentation::InWindow;
             return;
         };
-        // The display and the owner's content on it, in the interface
-        // zoom's points, as the menu is laid out; the windows' frames are
-        // these times the zoom (`open_pop_up`).
+        // The display's area and the origin of the owner's content are
+        // converted to the points of the interface zoom, because the menu
+        // is laid out in those points. `open_pop_up` multiplies by the zoom
+        // again for the frames of the windows.
         let origin = crate::zoom::content_origin_in_ui(window);
         let area = Rect::from_bounds(crate::zoom::screen_to_ui(
             display.visible_bounds(),
@@ -118,8 +127,10 @@ impl Menu {
         self.open_pop_up(Role::Root, cx);
     }
 
-    /// Opens a pop-up window for the root panel or the open submenu, once
-    /// this update is over: the window draws the menu as it opens.
+    /// Opens a pop-up window for the root panel or for the open submenu.
+    /// The window is opened after the current update has ended, because a
+    /// window draws its view while it opens, and the menu cannot be drawn
+    /// while it is being updated.
     pub(super) fn open_pop_up(&mut self, role: Role, cx: &mut Context<Self>) {
         let Some(screen) = &self.screen else {
             return;
@@ -131,10 +142,10 @@ impl Menu {
                 None => return,
             },
         };
-        // `menuIn`: the root panel scales in from where it was asked for.
-        // (Production's `transform-origin` is the panel's corner, which is
-        // its bottom edge whenever the panel was moved up to fit; the click
-        // itself reads better.) Submenus appear at once.
+        // The window of the root panel is scaled in about the point the menu
+        // was opened at, or about the nearest point of the panel when the
+        // panel was moved away from that point to fit (`pop_point`). The
+        // window of a submenu is shown without an animation.
         let pop = match role {
             Role::Root => {
                 let (_, pointer) = self.area();
@@ -181,8 +192,9 @@ impl Menu {
                 is_resizable: false,
                 is_minimizable: false,
                 window_background: WindowBackgroundAppearance::Transparent,
-                // Never the key window: without this its hover and fades
-                // would run at 30 frames a second.
+                // A pop-up window is never the key window. With GPUI's
+                // default interval for inactive windows, its hover
+                // highlights and fades would be drawn at 30 frames a second.
                 inactive_frame_interval: None,
                 ..Default::default()
             };
@@ -192,8 +204,10 @@ impl Menu {
                     without_system_shadow(window);
                     crate::ui::window_chrome::system_blur_behind(window);
                     pop_in(window, None);
-                    // The scale starts with the first frame the window
-                    // shows; begun now, it would be over before then.
+                    // The first call only turns off the system's own
+                    // animation. The scale animation is started on the
+                    // first frame the window shows, because one started
+                    // now would have ended before the window is visible.
                     window.on_next_frame(move |window, _| pop_in(window, pop));
                     window.focus(&focus, cx);
                     view
@@ -217,7 +231,8 @@ impl Menu {
                         }
                         _ => close_window(handle, cx),
                     },
-                    // The platform has no pop-up windows: draw in the window.
+                    // The pop-up window could not be opened, so the menu is
+                    // drawn inside the owner's window.
                     (Role::Root, None) => {
                         this.presentation = Presentation::InWindow;
                         this.screen = None;
@@ -229,8 +244,9 @@ impl Menu {
         });
     }
 
-    /// Closes the pop-up windows. If one of them had taken the keyboard (a
-    /// click in a panel makes it the key window), it goes back to the owner.
+    /// Closes the menu's pop-up windows. If one of them had the keyboard (a
+    /// click in a panel makes its window the key window), the owner's window
+    /// is activated, so that it has the keyboard again.
     pub(super) fn close_pop_ups(&mut self, cx: &mut Context<Self>) {
         let mut windows = Vec::new();
         if let Some(screen) = &mut self.screen {
@@ -258,9 +274,12 @@ impl Menu {
         });
     }
 
-    /// Closes the menu when the keyboard leaves all of its windows: another
-    /// application was chosen, or the owner window was. A pop-up stays
-    /// above other applications' windows, so it must not outlive that.
+    /// Starts watching the activation of `window`, once for each window.
+    /// When a watched window is activated or deactivated and none of the
+    /// menu's windows has the keyboard afterwards, the menu closes. This
+    /// happens when the user switches to another application. A pop-up
+    /// window stays above the windows of other applications, so it must not
+    /// stay open then.
     pub(super) fn watch_activation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let handle = window.window_handle();
         if self.presentation != Presentation::PopUpWindows || self.watched.contains(&handle) {
@@ -271,11 +290,13 @@ impl Menu {
             let mut windows = this.main.into_iter().collect::<Vec<_>>();
             windows.extend(this.screen.as_ref().and_then(|screen| screen.window));
             windows.extend(this.submenu.as_ref().and_then(|open| open.window));
-            // A select's list opened from a panel counts as the menu's.
+            // A window that a control in a panel opened, such as a select's
+            // list, counts as one of the menu's windows.
             windows.extend(children_of(&windows, cx));
             // When a click moves the keyboard from one of the menu's windows
-            // to another, the one losing it reports first; wait for the
-            // other before deciding.
+            // to another, the window that loses it reports first. The check
+            // waits `ACTIVATION_SETTLE`, so that the other window has
+            // reported by then.
             this.activation = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(ACTIVATION_SETTLE).await;
                 let active = windows.iter().any(|window| {
@@ -292,7 +313,8 @@ impl Menu {
     }
 }
 
-/// Closes a window once the current update is over.
+/// Closes a window after the current update has ended, and removes it from
+/// the record of pop-up windows.
 pub(super) fn close_window(window: AnyWindowHandle, cx: &mut App) {
     cx.defer(move |cx| {
         forget(window, cx);
@@ -300,10 +322,11 @@ pub(super) fn close_window(window: AnyWindowHandle, cx: &mut App) {
     });
 }
 
-/// A transparent window still gets the system's own shadow and edge
-/// highlight, traced round whatever it draws, which shows as a second, glassy
-/// border round the panel. The panel draws its own shadow, so the system's
-/// is turned off. GPUI has no option for this, so it asks AppKit directly.
+/// Turns off the shadow that macOS gives the window. The system draws its
+/// shadow and an edge highlight around whatever a transparent window draws,
+/// and around a panel these look like a second border. The panel draws its
+/// own shadow. GPUI has no option that turns the system's shadow off, so
+/// this function calls AppKit directly.
 #[cfg(target_os = "macos")]
 pub(crate) fn without_system_shadow(window: &Window) {
     use crate::platform::macos;
@@ -313,18 +336,20 @@ pub(crate) fn without_system_shadow(window: &Window) {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn without_system_shadow(_: &Window) {}
 
-/// The point a menu asked for at `pointer` scales in about: the pointer,
-/// or the nearest point of its `panel` where the panel was moved away from
-/// it to fit. Given in the window `bounds` from the window's centre with y
-/// upwards, as `platform::macos::pop_in` takes it.
+/// Returns the point that the window of a menu opened at `pointer` is scaled
+/// in about. The point is `pointer`, or the point of `panel` nearest to it
+/// when the panel was moved away from the pointer to fit. It is measured
+/// from the centre of the window `bounds` with y upwards, which is what
+/// `platform::macos::pop_in` takes.
 fn pop_point(pointer: (f32, f32), panel: Rect, bounds: Rect) -> (f32, f32) {
     let x = pointer.0.clamp(panel.x, panel.x + panel.w) - bounds.x;
     let y = pointer.1.clamp(panel.y, panel.y + panel.h) - bounds.y;
     (x - bounds.w / 2., bounds.h / 2. - y)
 }
 
-/// Plays `menuIn` on a pop-up window that has a point to scale about, and
-/// turns off the system's own animation for every pop-up.
+/// Turns off the animation that macOS plays when a window appears. With a
+/// point in `about`, it also scales the window in about that point, from
+/// `motion::MENU_IN_SCALE` to full size over `motion::MENU_IN`.
 #[cfg(target_os = "macos")]
 fn pop_in(window: &Window, about: Option<(f32, f32)>) {
     use crate::{motion, platform::macos};
@@ -363,12 +388,15 @@ mod tests {
             w: 270.,
             h: 400.,
         };
-        // Opened below and right of the pointer: its top-left corner, left
-        // of and above the window's centre.
+        // The panel opened below and to the right of the pointer. The point
+        // is the panel's top-left corner, which is left of and above the
+        // window's centre.
         assert_eq!(pop_point((100., 200.), panel, bounds), (-135., 200.));
-        // Moved up to fit: the pointer is part-way down its left edge.
+        // The panel was moved up to fit. The point is the pointer, which is
+        // part of the way down the panel's left edge.
         assert_eq!(pop_point((100., 500.), panel, bounds), (-135., -100.));
-        // Moved in from the right and bottom edges past the pointer.
+        // The panel was moved left and up so far that the pointer is outside
+        // it. The point is the panel's bottom-right corner.
         assert_eq!(pop_point((900., 900.), panel, bounds), (135., -200.));
     }
 }

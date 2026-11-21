@@ -1,39 +1,44 @@
-//! The interface zoom: production's `zoomController.ts`, which sets CSS
-//! `zoom` on the main window's document. Cmd+= or Cmd++ zooms in, Cmd+−
-//! zooms out and Cmd+0 resets (Control with them too on macOS, as
-//! `AppShell`'s scope reads `metaKey || ctrlKey`; Control elsewhere), by 5%
-//! between 50% and 200%, rounded to whole percent. The zoom is kept per
-//! machine (`localStorage` `picto-zoom-factor` there, `zoomFactor` in
-//! `state.json` here) and restored at launch. Only Cmd+0 resets it.
+//! The zoom of the whole interface. Cmd+= or Cmd++ zooms in, Cmd+− zooms
+//! out and Cmd+0 resets the zoom to 100%. On macOS the same keys also work
+//! with Control in place of Cmd; on Windows and Linux the modifier is
+//! Control. Each step is 5%, the zoom stays between 50% and 200%, and it is
+//! rounded to a whole percent. Picto 0.6.19 and earlier used the same keys,
+//! step and limits. The zoom is stored per machine, as `zoomFactor` in
+//! `state.json`, and applied again at launch. Only Cmd+0 resets it.
 //!
-//! The keys belong to the main window's own scope, so they do nothing while
-//! a text field, menu, popover or dialog has the keyboard, and the viewer's
-//! keys come first: Cmd+0 is the viewer's Actual Size on an image, a paged
-//! document or a font (and the Duplicates screen's Actual Pixels), Cmd+= and
-//! Cmd+− size a font's preview; on anything else they pass through to here
-//! (`viewer::surface::host_actions`). The grid's own `+` and `−` change the
-//! tile size and are not these keys.
+//! The keys are bound in the main window's own scope, so they do nothing
+//! while a text field, menu, popover or dialog has the keyboard. The
+//! viewer's bindings of the same keys take precedence: Cmd+0 is the viewer's
+//! Actual Size on an image, a paged document or a font (and Actual Pixels on
+//! the Duplicates screen), and Cmd+= and Cmd+− change the size of a font's
+//! preview. On any other kind of item the viewer passes the keys on to the
+//! bindings here (`viewer::surface::host_actions`). The grid's `+` and `−`
+//! keys, without a modifier, change the tile size and are separate from
+//! these.
 //!
-//! GPUI draws the zoom for every window (`App::set_ui_zoom`, a patch in
-//! `vendor/`): each lays out in its size divided by the zoom and draws at
-//! the display's scale times the zoom, as a browser's page zoom does.
-//! Production zooms the main window and, when they open, detail windows;
-//! here the Settings window and the pop-up menus follow too, at once.
-//! Settings' Zoom Level is a different value (the library's `zoomFactor`),
-//! saved and never applied, in production as here.
+//! GPUI applies the zoom to every window (`App::set_ui_zoom`, a patch in
+//! `vendor/`). Each window is laid out in its size divided by the zoom and
+//! drawn at the display's scale times the zoom, as a browser's page zoom
+//! does. The zoom applies to all windows at once, including the Settings
+//! window and the pop-up menus.
+//!
+//! Zoom Level in Settings is a different value (the library's `zoomFactor`
+//! setting). It is saved and never applied.
 use crate::keymap::{self, Scope};
 use crate::state;
 use gpui::*;
 
-/// `ZOOM_STEP`, `ZOOM_MIN`, `ZOOM_MAX`.
+/// The amount one zoom step changes the zoom by, and the smallest and
+/// largest zoom, as factors (1.0 is 100%).
 pub const STEP: f64 = 0.05;
 pub const MIN: f64 = 0.5;
 pub const MAX: f64 = 2.0;
 
 actions!(zoom, [ZoomIn, ZoomOut, ResetZoom]);
 
-/// `setZoom`'s rounding to whole percent and its limits. A stored value
-/// that is not a number is 100%.
+/// Returns the factor rounded to a whole percent and limited to the range
+/// from `MIN` to `MAX`. Returns 1.0 (100%) for a value that is not a finite
+/// number.
 pub fn clamp(factor: f64) -> f64 {
     if !factor.is_finite() {
         return 1.0;
@@ -41,24 +46,24 @@ pub fn clamp(factor: f64) -> f64 {
     ((factor * 100.).round() / 100.).clamp(MIN, MAX)
 }
 
-/// `zoomIn`.
+/// Returns the zoom one step above `current`.
 pub fn zoomed_in(current: f64) -> f64 {
     clamp(current + STEP)
 }
 
-/// `zoomOut`.
+/// Returns the zoom one step below `current`.
 pub fn zoomed_out(current: f64) -> f64 {
     clamp(current - STEP)
 }
 
-/// Binds the keys and starts every window at the kept zoom. Called before
-/// the first window opens.
+/// Binds the zoom keys and applies the stored zoom, so that every window
+/// opens at it. Called before the first window opens.
 pub fn bind(cx: &mut App) {
     cx.set_ui_zoom(clamp(state::get(cx).zoom_factor) as f32);
     let context = Scope::App.predicate();
     let context = context.as_deref();
-    // `e.key === '=' || e.key === '+'`, `'-'`, `'0'` with either modifier on
-    // the Mac; Control is the only one elsewhere.
+    // On macOS the keys work with Cmd and with Control. On Windows and
+    // Linux `Mod` is Control, which is the only modifier there.
     let modifiers: &[&str] = if cfg!(target_os = "macos") {
         &["Mod", "Ctrl"]
     } else {
@@ -79,24 +84,27 @@ fn current(cx: &App) -> f64 {
     state::get(cx).zoom_factor
 }
 
-/// Zooms every window to `factor` (rounded and limited) and keeps it.
+/// Zooms every window to `factor`, rounded and limited as `clamp` does,
+/// and stores the zoom in `state.json`.
 pub fn set(factor: f64, cx: &mut App) {
     let factor = clamp(factor);
     state::update(cx, |state| state.zoom_factor = factor);
     cx.set_ui_zoom(factor as f32);
 }
 
-/// Where `window`'s content starts on its display, in screen points: below
-/// any system titlebar, at the frame's bottom less the content's height.
+/// Returns the top-left corner of the window's content on its display, in
+/// screen points. The content lies below any titlebar the system draws, so
+/// its top is the bottom of the window's frame minus the content's height.
 fn content_origin(window: &Window) -> Point<Pixels> {
     let frame = window.bounds();
     let content = window.viewport_size().height * window.ui_zoom();
     point(frame.origin.x, frame.origin.y + frame.size.height - content)
 }
 
-/// Screen bounds (a display's area) in the zoomed points a window of the
-/// app is laid out in, so that pop-up windows can be placed with the same
-/// numbers as what is drawn in the window.
+/// Converts bounds on the screen (for example a display's area) to the
+/// zoomed points that the app's windows are laid out in. Pop-up windows can
+/// then be placed with the same coordinates as the elements drawn in a
+/// window.
 pub fn screen_to_ui(bounds: Bounds<Pixels>, zoom: f32) -> Bounds<Pixels> {
     Bounds::new(
         bounds.origin / zoom,
@@ -104,8 +112,9 @@ pub fn screen_to_ui(bounds: Bounds<Pixels>, zoom: f32) -> Bounds<Pixels> {
     )
 }
 
-/// Bounds in zoomed points ([`screen_to_ui`]) back on the screen: the frame
-/// of a pop-up window that shows them.
+/// Converts bounds in zoomed points (see [`screen_to_ui`]) back to bounds
+/// on the screen. The result is the frame of a pop-up window that shows
+/// those bounds.
 pub fn ui_to_screen(bounds: Bounds<Pixels>, zoom: f32) -> Bounds<Pixels> {
     Bounds::new(
         bounds.origin * zoom,
@@ -113,7 +122,8 @@ pub fn ui_to_screen(bounds: Bounds<Pixels>, zoom: f32) -> Bounds<Pixels> {
     )
 }
 
-/// Where `window`'s content starts on its display, in zoomed points.
+/// Returns the top-left corner of the window's content on its display, in
+/// zoomed points.
 pub fn content_origin_in_ui(window: &Window) -> (f32, f32) {
     let origin = content_origin(window) / window.ui_zoom();
     (f32::from(origin.x), f32::from(origin.y))
@@ -134,7 +144,7 @@ mod tests {
         }
         assert_eq!(seen[0], 1.05);
         assert_eq!(seen[9], 1.5);
-        // Stops at 200%.
+        // The zoom does not go above 200%.
         assert_eq!(seen[19], 2.0);
         assert_eq!(seen[24], 2.0);
         let mut zoom = 1.0;
@@ -146,7 +156,8 @@ mod tests {
             zoom = zoomed_out(zoom);
         }
         assert_eq!(zoom, 0.5);
-        // Back from the floor in exact steps, as production's rounding does.
+        // One step up from the smallest zoom is exactly 55%, because each
+        // result is rounded to a whole percent.
         assert_eq!(zoomed_in(0.5), 0.55);
     }
 
@@ -159,8 +170,8 @@ mod tests {
         assert_eq!(clamp(f64::INFINITY), 1.0);
     }
 
-    /// A box 100 points from the window's corner, which counts the presses
-    /// that land on it.
+    /// A view that draws a box of 50 points, 100 points from the window's
+    /// top-left corner, and counts the mouse presses on the box.
     struct Target(u32);
 
     impl gpui::Render for Target {
@@ -221,8 +232,9 @@ mod tests {
             })
             .unwrap()
         };
-        // The box is drawn at 150..225 screen points: a press at 160 lands
-        // on it, one at 110 (on it at 100%) does not.
+        // At 150% the box is drawn from 150 to 225 screen points. A press
+        // at 160 is on it. A press at 110, which would be on it at 100%, is
+        // not.
         let (zoomed, zoomed_scale, at) = press(&mut cx, 160., 160.);
         assert_eq!(zoomed.width, viewport.width / 1.5);
         assert_eq!(zoomed_scale, scale * 1.5);
@@ -230,7 +242,7 @@ mod tests {
         press(&mut cx, 110., 110.);
         let count = window.read_with(&cx, |target, _| target.0).unwrap();
         assert_eq!(count, 1);
-        // A window opened afterwards starts at the zoom.
+        // A window opened after the zoom was set is zoomed from the start.
         let later: AnyWindowHandle = cx.add_window(|_, _| Target(0)).into();
         let later_scale = cx
             .update_window(later, |_, window, _| window.scale_factor())

@@ -1,8 +1,8 @@
-//! Fills this app's list of libraries on the first run from the Electron app's
-//! list. The Electron app keeps its list in `config.json` (`globalConfig.mjs`:
-//! `libraryHistory`, `pinnedLibraries`, and each library's colour and icon in
-//! `libraryMeta`). The file is in the folder `picto` of the per-user
-//! application data (`app.getPath('appData')`): on macOS
+//! Fills this app's list of libraries on the first run from the list of an
+//! Electron-based Picto (version 0.6.19 or earlier). Such a Picto keeps its
+//! list in `config.json`: `libraryHistory`, `pinnedLibraries`, and each
+//! library's colour and icon in `libraryMeta`. The file is in the folder
+//! `picto` of the per-user application data: on macOS
 //! `~/Library/Application Support/picto/config.json`, on Windows
 //! `%APPDATA%\picto\config.json`, on Linux
 //! `$XDG_CONFIG_HOME/picto/config.json` or `~/.config/picto/config.json`
@@ -19,8 +19,8 @@
 //! malformed, nothing is seeded and no error is reported.
 use std::path::{Path, PathBuf};
 
-/// The libraries that the Electron app's `config.json` lists, with their
-/// colours and icons.
+/// The libraries that the `config.json` of an Electron-based Picto (version
+/// 0.6.19 or earlier) lists, with their colours and icons.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Seed {
     pub history: Vec<String>,
@@ -30,10 +30,11 @@ pub struct Seed {
     pub looks: std::collections::BTreeMap<String, crate::state::LibraryLook>,
 }
 
-/// Returns the path of the Electron app's `config.json` on this platform, or
-/// `None` when the per-user configuration folder is not known.
-pub fn production_config() -> Option<PathBuf> {
-    // i18n: a folder and a file name production writes
+/// Returns the path of the `config.json` of an Electron-based Picto (version
+/// 0.6.19 or earlier) on this platform, or `None` when the per-user
+/// configuration folder is not known.
+pub fn earlier_version_config() -> Option<PathBuf> {
+    // i18n: the names of a folder and of a file on disk
     crate::state::config_folder().map(|folder| folder.join("picto").join("config.json"))
 }
 
@@ -108,7 +109,7 @@ pub fn once(cx: &mut gpui::App) {
     if crate::state::get(cx).libraries_seeded || super::facts().permits().is_err() {
         return;
     }
-    let Some(path) = production_config() else {
+    let Some(path) = earlier_version_config() else {
         return;
     };
     crate::state::update(cx, |state| {
@@ -129,7 +130,7 @@ mod tests {
     }
 
     #[test]
-    fn the_list_is_read_from_productions_keys() {
+    fn the_list_is_read_from_the_earlier_versions_keys() {
         let (_folder, path) = fixture(
             r##"{
               "libraryHistory": ["/home/me/Pictures/Main.library", "/Volumes/Art/Art.library",
@@ -181,8 +182,8 @@ mod tests {
             let (_folder, path) = fixture(text);
             assert_eq!(read(&path), None, "{text}");
         }
-        // When the Electron app's keys hold values of the wrong type, no
-        // library is listed.
+        // When `libraryHistory` and `pinnedLibraries` hold values of the
+        // wrong type, no library is listed.
         let (_folder, path) = fixture(r#"{"libraryHistory": "x", "pinnedLibraries": {}}"#);
         assert_eq!(read(&path), Some(Seed::default()));
         let mut state = State::default();

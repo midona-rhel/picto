@@ -1,6 +1,7 @@
-//! The Library Manager's panes: the header, the sidebar of libraries, the
-//! library's pane with its cards and statistics, New Library, the error
-//! and message line, and the footer.
+//! Draws the parts of the Library Manager's window: the header, the list
+//! of libraries, the chosen library's pane with its cards and statistics,
+//! the New Library form, the error box and the message line, and the
+//! footer.
 use super::*;
 
 impl Manager {
@@ -116,7 +117,8 @@ impl Manager {
             .py(px(14.))
             .border_r_1()
             .border_color(theme.border_secondary())
-            // A further 3% of the contrast colour over the window's.
+            // The list's background is the contrast colour at 3% opacity
+            // over the window's background.
             .bg(theme.rail_raised())
             .flex()
             .flex_col()
@@ -187,7 +189,8 @@ impl Manager {
                 .gap(px(6.))
                 .child(
                     div()
-                        // `width: min(240px, 100%)`.
+                        // The rename field is as wide as its container, up
+                        // to 240px.
                         .flex_none()
                         .w(relative(1.))
                         .max_w(px(240.))
@@ -285,9 +288,9 @@ impl Manager {
                     .child(t("Missing on disk")),
             );
         }
-        // `Appearance`: the colour and icon (kept in this app's state, as
-        // production keeps them in its `config.json`), and the cover,
-        // chosen in the main window's cover dialog for the open library.
+        // The Appearance card holds the library's colour and icon, which
+        // are kept in this app's state, and the cover. The cover of the
+        // open library is chosen in the main window's cover dialog.
         let current = row.current;
         let label = |text: &'static str| {
             div()
@@ -534,13 +537,15 @@ impl Manager {
                     .rounded(px(theme::RADIUS_LG))
                     .border_1()
                     .border_color(theme.negative_at(45.))
-                    // `color-mix(negative 9%, control-surface)`
+                    // The error box's fill is the control surface with 9% of
+                    // the negative colour mixed in.
                     .bg(theme::blend(theme.control_surface(), theme.negative(), 0.09))
                     .flex()
                     .items_start()
                     .gap(px(8.))
                     .overflow_hidden()
-                    // `IconAlertTriangle`, 16px in the negative colour.
+                    // The warning triangle is 16px and has the negative
+                    // colour.
                     .child(
                         div()
                             .flex_none()

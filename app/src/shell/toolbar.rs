@@ -1,11 +1,11 @@
-//! This file draws the content of the window's titlebar (`.titlebarContent`
-//! in production's `AppShell.tsx`).
+//! This file draws the content of the window's titlebar, between the
+//! titlebar's left block and the part of it above the inspector.
 //!
-//! While the grid or a screen is shown, the content is the grid toolbar
-//! (`GridToolbar.tsx`): the Back and Forward buttons, the scope title, and
-//! then either the grid's controls (zoom, view options, filter, search) or
-//! the screen's own controls. While an item is open in the viewer, the
-//! content is the viewer toolbar instead.
+//! While the grid or a screen is shown, the content is the grid toolbar:
+//! the Back and Forward buttons, the scope title, and then either the
+//! grid's controls (zoom, view options, filter, search) or the screen's own
+//! controls. While an item is open in the viewer, the content is the viewer
+//! toolbar instead.
 use crate::backend::Screen;
 use crate::grid::layout;
 use crate::i18n::t;
@@ -40,8 +40,7 @@ pub struct Toolbar {
     /// running, and cleared when the transition is idle again. While it is
     /// true, the whole titlebar content is drawn at the transition's
     /// opacity, as the grid is: the viewer toolbar fades out, then the
-    /// destination's toolbar fades in. Production marks the same state
-    /// with `data-viewer-exit-transition`.
+    /// destination's toolbar fades in.
     viewer_exit: bool,
     /// For each screen that has its own titlebar controls, the view that
     /// draws them. While that screen is shown, the titlebar shows this view
@@ -62,8 +61,7 @@ pub struct Toolbar {
     view_button: Rc<Cell<Bounds<Pixels>>>,
     /// The view menu, and the subscription that observes it, from the time
     /// the menu opens until it has finished fading out. While this is set,
-    /// the "View options" button is drawn in its toggled state, as
-    /// production's `active={viewMenu.state != null}` does.
+    /// the "View options" button is drawn in its toggled state.
     view_menu: Option<(Entity<Menu>, Subscription)>,
     _subscriptions: Vec<Subscription>,
 }
@@ -219,10 +217,9 @@ impl Toolbar {
 }
 
 impl Toolbar {
-    /// Builds the scope title (production's `.scopeTitle`), drawn at
-    /// `opacity`. It is a path: the names of the destination's ancestors,
-    /// each a link to that ancestor and followed by "/", and then the
-    /// destination's own name as plain text.
+    /// Builds the scope title, drawn at `opacity`. It is a path: the names
+    /// of the destination's ancestors, each a link to that ancestor and
+    /// followed by "/", and then the destination's own name as plain text.
     ///
     /// While a search or a filter is limiting the items in the grid, the
     /// destination's own name is a link as well. Clicking it clears the
@@ -309,9 +306,9 @@ impl Toolbar {
         let separator = || div().mx(px(5.)).opacity(0.4).child("/");
         for (position, (index, label)) in crumbs.into_iter().enumerate() {
             // The name is translated into the app's current language here,
-            // each time the title is drawn, as production's
-            // `translateMessage(label)` does. A name that has no
-            // translation, such as a folder's, is shown as it is.
+            // each time the title is drawn, so that it follows a change of
+            // language. A name that has no translation, such as a folder's,
+            // is shown as it is.
             let label = crate::i18n::t(&label).to_owned();
             if position == last && results.is_none() {
                 path = path.child(if shortened {
@@ -325,9 +322,10 @@ impl Toolbar {
             path = path.child(ui::crumb(("scope-crumb", index), label, true, cx).on_click(
                 cx.listener(move |this, _, _, cx| {
                     if clears {
-                        // As production's `clearSearchResults` does: empty
-                        // the search field, clear the session's search
-                        // text, and show this destination with no filters.
+                        // Clicking the destination's own name leaves the
+                        // search results: it empties the search field,
+                        // clears the session's search text, and shows this
+                        // destination with no filters.
                         this.search.update(cx, |search, cx| search.clear(cx));
                         this.session.update(cx, |session, cx| {
                             session.set_search(String::new(), cx);
@@ -488,9 +486,9 @@ impl Toolbar {
             .relative()
             .size_full()
             .opacity(content)
-            // The padding is 8 px on the left and 16 px on the right. In
-            // production the titlebar has 8 px of padding on each side, and
-            // the toolbar adds 8 px more on its right.
+            // The padding is 8 px on the left and 16 px on the right, so the
+            // last control ends 16 px before the part of the titlebar that
+            // is above the inspector.
             .pl(px(8.))
             .pr(px(16.))
             .flex()
@@ -514,23 +512,21 @@ impl Toolbar {
             ));
         // A screen (Tags, Subscriptions or Duplicates) has no grid, so the
         // zoom, view options, filter and search controls do not apply to
-        // it. As in production, the titlebar shows those controls only
-        // while the grid is shown. While a screen is shown, the titlebar
-        // shows the controls the screen registered with
-        // `set_screen_controls` instead, or no controls if it registered
-        // none.
+        // it. The titlebar shows those controls only while the grid is
+        // shown. While a screen is shown, the titlebar shows the controls
+        // the screen registered with `set_screen_controls` instead, or no
+        // controls if it registered none.
         if let Some(screen) = screen {
             let controls = self
                 .screen_controls
                 .iter()
                 .find(|(owner, _)| *owner == screen)
                 .map(|(_, controls)| controls.clone());
-            // As production's `.titlebarToolbar` does, the screen's controls
-            // are given all of the row to the right of the Back and Forward
-            // buttons and are aligned to its right end, away from the scope
-            // title on the left. They are drawn at the transition's
-            // opacity, so they fade out and in with the screen they belong
-            // to, as the scope title does.
+            // The screen's controls are given all of the row to the right
+            // of the Back and Forward buttons and are aligned to its right
+            // end, away from the scope title on the left. They are drawn at
+            // the transition's opacity, so they fade out and in with the
+            // screen they belong to, as the scope title does.
             return toolbar
                 .child(
                     div()
@@ -568,10 +564,9 @@ impl Toolbar {
     /// options" button, the "Filter library" button and the search field.
     /// `width` is the row's width in this frame.
     ///
-    /// The controls are hidden when there is too little room for them, as
-    /// production's `.toolbar` container queries (`@container (max-width:
-    /// …)`) do. The zoom control is hidden when the row is 350 px wide or
-    /// less, and the search field when it is 240 px wide or less.
+    /// The controls are hidden when there is too little room for them. The
+    /// zoom control is hidden when the row is 350 px wide or less, and the
+    /// search field when it is 240 px wide or less.
     ///
     /// `view_menu_open` is true while the view menu is open, `bar_open`
     /// while the filter bar is open, and `filter_count` is the number of

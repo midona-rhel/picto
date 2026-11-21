@@ -1,11 +1,10 @@
-//! The Settings window. It corresponds to production's `Settings.tsx` and to
-//! the window that production's `openSettingsWindow` opens. It is a separate
-//! window that opens at 900×650 and cannot be made smaller than that. It
-//! draws its own close button, and on macOS it hides the traffic lights. On
-//! the left is the list of sections. On the right is a panel with a border
-//! and a shadow. The panel holds a header with the section's name and the
-//! close button, the chosen section below the header, and the Save & Close
-//! and Apply buttons below the section.
+//! The Settings window. It is a separate window that opens at 900×650 and
+//! cannot be made smaller than that. It draws its own close button, and on
+//! macOS it hides the traffic lights. On the left is the list of sections.
+//! On the right is a panel with a border and a shadow. The panel holds a
+//! header with the section's name and the close button, the chosen section
+//! below the header, and the Save & Close and Apply buttons below the
+//! section.
 use super::SettingsModel;
 use super::panels::{self, PANELS};
 use super::registry::Slot;
@@ -70,7 +69,8 @@ pub struct SettingsWindow {
     _subscriptions: Vec<Subscription>,
 }
 
-/// Opens the window, or returns `None` if the platform refused one.
+/// Opens the Settings window. Returns `None` if the system could not open a
+/// window.
 pub fn open(model: Entity<SettingsModel>, cx: &mut App) -> Option<WindowHandle<SettingsWindow>> {
     let mut bounds = Bounds::centered(None, size(px(900.), px(650.)), cx);
     bounds.origin = bounds.origin.map(|at| at.floor());
@@ -82,7 +82,7 @@ pub fn open(model: Entity<SettingsModel>, cx: &mut App) -> Option<WindowHandle<S
                 // The user moves the window by dragging the title above the
                 // list of sections or the header of the panel. Pressing a
                 // control inside either of them does not move the window.
-                // i18n: the window's title, English as settings.html's <title>
+                // i18n: the window's title, which is English in every language
                 ..ui::window_chrome::frameless("Settings", None)
             },
             move |window, cx| cx.new(|cx| SettingsWindow::new(model, window, cx)),
@@ -90,8 +90,7 @@ pub fn open(model: Entity<SettingsModel>, cx: &mut App) -> Option<WindowHandle<S
         .ok()?;
     let _ = handle.update(cx, |_, window, _| {
         // The Settings window draws its own close button, so on macOS the
-        // traffic lights are hidden, as production hides them with
-        // `setWindowButtonVisibility(false)`.
+        // traffic lights are hidden.
         ui::window_chrome::hide_window_buttons(window);
         ui::window_chrome::activate(window);
     });
@@ -121,8 +120,8 @@ impl SettingsWindow {
                 cx.notify();
             }),
         ];
-        // Every section's data is read when the window opens, as production
-        // preloads it, so choosing a section never shows it empty.
+        // The data of every section is read when the window opens, so that
+        // a section is not shown empty when the user chooses it.
         let session = model.read(cx).session.clone();
         let read = session
             .read(cx)
@@ -187,16 +186,14 @@ impl SettingsWindow {
     fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
         self.selected = index;
         self.search.update(cx, |search, cx| search.clear(cx));
-        // The scroll offset of the body is not reset, because production
-        // has one scrolling body for all the sections and keeps its offset
-        // too. If the new section is shorter than the offset, it is shown
-        // scrolled to its end.
+        // All the sections share one scrolling body, and its scroll offset
+        // is kept when the section changes. If the new section is shorter
+        // than the offset, it is shown scrolled to its end.
         cx.notify();
     }
 
     /// Shows the section with the id `id`, or does nothing when no section
-    /// has that id. Production's Settings window does this when it receives
-    /// the message `picto:settings:navigate`.
+    /// has that id.
     pub(super) fn show_panel(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some(index) = PANELS.iter().position(|panel| panel.id == id) {
             self.choose(index, cx);
@@ -206,8 +203,7 @@ impl SettingsWindow {
     /// Discards the draft and closes the window. Closing also puts back the
     /// saved theme and the saved choice for the frosted material of the
     /// sidebar and the inspector, because a change to either of them is
-    /// shown at once while the window is open, before it is saved. It
-    /// corresponds to production's `handleClose`.
+    /// shown at once while the window is open, before it is saved.
     pub(super) fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model.update(cx, |model, _| model.begin());
         let saved = &self.model.read(cx).saved.app;
@@ -218,8 +214,7 @@ impl SettingsWindow {
     }
 
     /// Saves the draft and then, if `close` is `true` and the save
-    /// succeeded, closes the window. It corresponds to production's
-    /// `handleSave`.
+    /// succeeded, closes the window.
     fn save(&mut self, close: bool, window: &mut Window, cx: &mut Context<Self>) {
         let saved = self.model.update(cx, |model, cx| model.save(cx));
         cx.spawn_in(window, async move |this, cx| {
@@ -232,11 +227,10 @@ impl SettingsWindow {
 
     /// Draws the row of one section in the list of sections. `index` is the
     /// section's index in `PANELS`, and `active` is whether it is the chosen
-    /// section. The row corresponds to production's `.navItem`. When the
-    /// pointer moves onto the row, the hover colour fades in behind it over
-    /// 100 ms, and it fades out when the pointer leaves. The row of the
-    /// chosen section has the active colour behind it instead, with no
-    /// fade.
+    /// section. When the pointer moves onto the row, the hover colour fades
+    /// in behind it over 100 ms, and it fades out when the pointer leaves.
+    /// The row of the chosen section has the active colour behind it
+    /// instead, with no fade.
     fn nav_item(
         &self,
         index: usize,
@@ -287,9 +281,8 @@ impl SettingsWindow {
             .child(t(panel.label))
             .on_hover(set_hover)
             .on_click(cx.listener(move |this, _, _, cx| this.choose(index, cx)));
-        // In production the row is a `<button>`, so Enter and Space choose
-        // the section while the row has keyboard focus. The row draws no
-        // focus ring.
+        // Enter and Space choose the section while the row has keyboard
+        // focus. The row draws no focus ring.
         focus.attach(
             item,
             ui::focus::Kind::Button,
@@ -299,9 +292,8 @@ impl SettingsWindow {
 
     /// Draws one section that the search found, as a card with the
     /// section's icon, label and description. Clicking the card chooses the
-    /// section. `first` is whether the card is the first in the list; every
-    /// other card has 8px of space above it. The card corresponds to
-    /// production's `.searchResult`.
+    /// section. `first` is whether the card is the first in the list. Every
+    /// other card has 8px of space above it.
     fn result(
         &self,
         index: usize,
@@ -313,9 +305,8 @@ impl SettingsWindow {
         let panel = &PANELS[index];
         let id = ElementId::from(("settings-result", index));
         let focus = ui::focus::control(&id, window, cx);
-        // The focus ring is that of production's
-        // `.searchResult:focus-visible`. It is a line 1px thick in
-        // `--color-primary-60`, 2px outside the card's edge.
+        // The focus ring is a line 1px thick in the theme's focus border
+        // colour, 2px outside the card's edge.
         let ring = focus.ring(
             ui::focus::Ring {
                 width: 1.,
@@ -570,13 +561,12 @@ impl Render for SettingsWindow {
                     div()
                         .mb(px(8.))
                         .text(theme::TEXT_SM)
-                        // The line height is 1.55 times the font size, which
-                        // is the `line-height` of Mantine's body text.
+                        // The heading has the line height of body text,
+                        // which is 1.55 times the font size.
                         .line_height(px(theme::TEXT_SM * 1.55))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_secondary())
-                        // Production shows this heading in capital letters
-                        // with `text-transform: uppercase`.
+                        // The heading is shown in capital letters.
                         .child(t("Categories").to_uppercase()),
                 );
                 for (at, index) in matched.iter().enumerate() {
@@ -663,9 +653,9 @@ impl Render for SettingsWindow {
             .rounded(px(theme::RADIUS_LG))
             .border_1()
             .border_color(theme.contrast(5.))
-            // The fill is production's `--settings-content-bg` laid over
-            // the window's background (`--settings-shell-bg`), as one opaque
-            // colour.
+            // The fill is the theme's contrast colour at 3% laid over the
+            // window's background, as one opaque colour
+            // (`Theme::rail_raised`).
             .bg(theme.rail_raised())
             .shadow(vec![
                 BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_15).into()).spread_radius(px(1.)),
@@ -676,8 +666,8 @@ impl Render for SettingsWindow {
             .child(footer);
 
         // Tab and Shift-Tab move keyboard focus through the window's
-        // controls, from the last one on to the first and from the first
-        // back to the last, as a browser moves it through a page.
+        // controls. Tab on the last control moves it to the first, and
+        // Shift-Tab on the first control moves it to the last.
         let root = ui::focus::scope(div(), &self.focus)
             .relative()
             .size_full()
@@ -685,9 +675,8 @@ impl Render for SettingsWindow {
             .gap(px(12.))
             .pr(px(8.))
             .overflow_hidden()
-            // The window's background is production's
-            // `--settings-shell-bg`: the theme's background colour mixed
-            // with 3% of its contrast colour.
+            // The window's background is the theme's background colour
+            // mixed with 3% of its contrast colour (`Theme::rail`).
             .bg(theme.rail())
             .text_color(theme.text())
             .font_family(theme::FONT_UI)

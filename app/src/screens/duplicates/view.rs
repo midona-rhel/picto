@@ -1,5 +1,6 @@
-//! Draws the Duplicates screen: the loading state, the empty state, the two
-//! files side by side, and the screen's controls in the titlebar.
+//! Draws the Duplicates screen: the loading state, the empty state, the row
+//! of decision buttons, the row with the similarity, the two files side by
+//! side, and the screen's controls in the titlebar.
 //!
 //! Each file is drawn as a column. From top to bottom the column has a row
 //! with the file's name and its Keep left or Keep right button, the
@@ -59,8 +60,8 @@ const TITLE_START: f32 = 80. - 8. - 2. * theme::ICON_BUTTON;
 const TITLE_CLEAR: f32 = 16.;
 /// The space in pixels between the groups of controls in the titlebar.
 const GROUP_GAP: f32 = 12.;
-/// The height of the row under the titlebar that holds the four decision
-/// buttons.
+/// The height in pixels of the row under the titlebar that holds the four
+/// decision buttons.
 const DECISION_ROW: f32 = 44.;
 /// The height in pixels of the row under the decision buttons, which shows
 /// the similarity and the pixel measurement.
@@ -85,9 +86,9 @@ fn rating_text(rating: Rating) -> String {
     }
 }
 
-/// The facts of the two files, in the order in which the Electron screen
-/// lists them: resolution, size, format, rating, number of tags, creation
-/// date, import date, collection and number of occurrences. The labels and
+/// The facts of the two files, in the order in which the screen lists
+/// them: resolution, size, format, rating, number of tags, creation date,
+/// import date, collection and number of occurrences. The labels and
 /// the formats are the inspector's (Dimensions, Type, Date Created, Date
 /// Imported). Both files always have the same rows, so the same fact is at
 /// the same height in both lists.
@@ -158,10 +159,9 @@ fn facts(shown: &Shown) -> Vec<Fact> {
             }),
         },
     ];
-    // The name of the collection that holds the file. The Electron screen
-    // shows this row only for a file that is in a collection. Here the row
-    // is shown for both files when either file is in a collection, and the
-    // other file's value is "None".
+    // The name of the collection that holds the file. The row is shown for
+    // both files when either file is in a collection, and the value of a
+    // file that is in no collection is "None".
     let group = |side: &Side| {
         side.details
             .as_ref()
@@ -272,9 +272,10 @@ impl DuplicatesScreen {
             || side.file.file_hash.clone(),
             |media| media.media_name.clone(),
         );
-        // Production puts the English word "left" or "right" into the
-        // translated text: `t("Keep {value0}")` for the tooltip, and
-        // `t("Keep ")` followed by the word for the button's label.
+        // The locale files have one key for the tooltip of both buttons,
+        // "Keep {value0}", and one for the label of both buttons, "Keep ".
+        // The word "left" or "right" that is put into them is English in
+        // every language.
         let which = if index == 0 { "left" } else { "right" };
         let keep = ui::action_button(("duplicate-keep", index), Look::Standard)
             .icon("check", 15.)
@@ -377,9 +378,9 @@ impl DuplicatesScreen {
         }
     }
 
-    /// Opens a file's context menu at `position`. Like the menu of the
-    /// Electron screen's `MediaCard`, it has two rows: one opens the file in
-    /// its default application, and one opens it in a detail window.
+    /// Opens a file's context menu at `position`. It has two rows: one
+    /// opens the file in its default application, and one opens it in a
+    /// detail window.
     fn open_file_menu(
         &mut self,
         index: usize,
@@ -411,14 +412,13 @@ impl DuplicatesScreen {
                 };
                 if key == rows::Action::OpenDefault.key() {
                     // The file is opened from the path at which the library
-                    // stores it, as production's `openDefaultAppForHash`
-                    // does.
+                    // stores it.
                     if let Some(media) = &side.media {
                         crate::desktop::open_default(std::path::Path::new(&media.file_path), cx);
                     }
                 } else if key == rows::Action::OpenInNewWindow.key() {
-                    // The detail window shows this one file, as production's
-                    // `openDetailWindow({ hash, width, height })` does.
+                    // The detail window shows this one file. It has no
+                    // other files to step to.
                     let Some(details) = &side.details else {
                         return;
                     };
@@ -548,7 +548,7 @@ impl DuplicatesScreen {
             }));
         if self.difference_shown() {
             // The difference picture is drawn on black over the rectangle of
-            // the picture, as production's `.differenceComposite` is.
+            // the picture.
             clipped = clipped.child(
                 place(div().bg(rgb(theme::DIFFERENCE_BACKGROUND))).children(
                     shown
@@ -615,9 +615,7 @@ impl DuplicatesScreen {
 
     /// Builds the screen's row of controls in the titlebar. `ui::sized`
     /// calls this with the row's bounds while the titlebar is being laid
-    /// out, so the row is built for its width in the same frame. The
-    /// buttons are the kind that a subscription's page has in the titlebar
-    /// (`ui::titlebar_button`).
+    /// out, so the row is built for its width in the same frame.
     ///
     /// The row has three parts. At its left is empty space under the
     /// screen's title, which the toolbar draws. Centred in the row are the
@@ -937,9 +935,9 @@ impl DuplicatesScreen {
             t("Show differences while held"),
             "dup.difference",
         )
-        // In the Electron app a click gives the button keyboard focus, and
-        // the difference stays on screen until something else is clicked.
-        // This flag reproduces that.
+        // After a click on the button the difference stays on screen until
+        // the next press of a mouse button anywhere in the window. This
+        // flag records the click.
         .on_click(cx.listener(|this, _, _, cx| {
             this.difference_pressed = true;
             cx.notify();
@@ -1032,10 +1030,11 @@ impl Render for DuplicatesScreen {
             });
         }
         // While a picture is being dragged, the screen listens to the
-        // pointer in the whole window until the button is released, as a
-        // browser's pointer capture does. While the difference is shown
-        // because of a click on Show Difference, the next press of a mouse
-        // button anywhere in the window stops showing it.
+        // pointer in the whole window until the button is released, so the
+        // drag goes on when the pointer leaves the picture's pane. While
+        // the difference is shown because of a click on Show Difference,
+        // the next press of a mouse button anywhere in the window stops
+        // showing it.
         if self.drag.is_some() || self.difference_pressed {
             let entity = cx.weak_entity();
             root = root.child(

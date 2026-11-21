@@ -1,11 +1,11 @@
-//! The AI tagger (`aiTaggerApi.ts`, `AiTaggerPanel.tsx`): the core's local
-//! models, read and managed through its `ai.*` commands, and the review
-//! panel that suggests tags for items and writes those accepted.
+//! The AI tagger. This module reads and manages the core's local models
+//! through the core's `ai.*` commands. It also holds the review panel, which
+//! suggests tags for items and writes the tags that the user accepts.
 //!
-//! Model downloads go to the network. With `PICTO_GPUI_HOLD_DOWNLOADS` set
-//! (debug builds), [`send`] writes each model command down and answers
-//! downloads itself instead of sending them, as `PICTO_GPUI_HOLD_RUNS` does
-//! for subscription runs.
+//! A model download uses the network. In a debug build with
+//! `PICTO_GPUI_HOLD_DOWNLOADS` set, [`send`] writes each model command to
+//! standard error and answers a download itself without sending it to the
+//! core. `PICTO_GPUI_HOLD_RUNS` does the same for subscription runs.
 use crate::session::Session;
 use futures::channel::oneshot;
 use picto_core::ai_runtime::AiRuntimeStatus;
@@ -19,9 +19,10 @@ mod view;
 
 pub use panel::AiTagger;
 
-/// `MODEL_SHORT_LABELS`: the names the Settings panel gives the models.
+/// Returns the short name that the Settings panel shows for the model `slug`,
+/// or `None` for a model that has no short name.
 pub fn short_label(slug: &str) -> Option<&'static str> {
-    // i18n: model names, as production writes them
+    // i18n: model names, which are the same in every language
     match slug {
         "wd14-swinv2-v3" => Some("WD14 SWN"),
         "z3d-e621-convnext" => Some("Z3D"),
@@ -31,8 +32,10 @@ pub fn short_label(slug: &str) -> Option<&'static str> {
     }
 }
 
-/// `fmtSize` in the AI Tagging panel: decimal gigabytes with trailing zeros
-/// dropped, else whole megabytes.
+/// Returns a model's size as the AI Tagging panel of Settings writes it. A
+/// size of a gigabyte or more is written in decimal gigabytes with at most two
+/// decimals and without trailing zeros. A smaller size is written in whole
+/// megabytes.
 pub fn model_size(bytes: u64) -> String {
     if bytes >= 1_000_000_000 {
         let text = format!("{:.2}", bytes as f64 / 1e9);
@@ -43,8 +46,9 @@ pub fn model_size(bytes: u64) -> String {
     }
 }
 
-/// Reads the runtime's models and thresholds (`ai.status`), with the
-/// progress a held download reports.
+/// Reads the models and the thresholds of the AI runtime with `ai.status`. For
+/// a download that is held (`PICTO_GPUI_HOLD_DOWNLOADS`), it fills in the
+/// progress that the variable names.
 pub fn status(
     session: &Session,
 ) -> impl std::future::Future<Output = Result<AiRuntimeStatus, String>> + use<> {
@@ -58,9 +62,10 @@ pub fn status(
     }
 }
 
-/// Sends a model command (`ai.models.download`, `.cancel`, `.delete`,
-/// `.optimize`) for `slug`, and hands back its answer. Held, a download is
-/// answered here and never reaches the core.
+/// Sends a model command (`ai.models.download`, `ai.models.cancel`,
+/// `ai.models.delete` or `ai.models.optimize`) for the model `slug`, and
+/// returns the receiver of its answer. While downloads are held, a download is
+/// answered here and is not sent to the core.
 pub fn send(
     session: &Session,
     command: &'static str,
@@ -87,7 +92,9 @@ pub fn send(
             receiver
         }
         "ai.models.cancel" if HELD.with(|held| held.borrow().contains_key(slug)) => {
-            // As the core ends a cancelled download: its command fails.
+            // The core ends a cancelled download by failing its
+            // `ai.models.download` command, so the held download gets the same
+            // error answer here.
             if let Some(download) = HELD.with(|held| held.borrow_mut().remove(slug)) {
                 let _ = download.send(Err("Download cancelled".into()));
             }
@@ -100,13 +107,15 @@ pub fn send(
 }
 
 thread_local! {
-    /// The downloads held, by model, each with the answer it is waiting on.
+    /// The held downloads, by model slug. Each entry holds the sender of the
+    /// answer that the download's caller waits for.
     static HELD: RefCell<HashMap<String, oneshot::Sender<Result<Value, String>>>> =
         RefCell::default();
 }
 
-/// A held download reports the share `PICTO_GPUI_HOLD_DOWNLOADS` names, as
-/// the core reports a download under way.
+/// Sets the download progress of every held model in `status` to the share
+/// that `PICTO_GPUI_HOLD_DOWNLOADS` names. It uses the fields in which the
+/// core reports a download that is under way.
 fn held_progress(status: &mut AiRuntimeStatus) {
     let Some(crate::seams::HeldDownload::Progress(share)) = crate::seams::hold_downloads() else {
         return;
@@ -128,7 +137,7 @@ mod tests {
     use super::{model_size, short_label};
 
     #[test]
-    fn sizes_are_written_as_production_writes_them() {
+    fn sizes_are_written_as_the_earlier_version_wrote_them() {
         assert_eq!(model_size(1_260_000_000), "1.26 GB");
         assert_eq!(model_size(2_000_000_000), "2 GB");
         assert_eq!(model_size(2_600_000_000), "2.6 GB");

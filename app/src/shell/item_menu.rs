@@ -1,8 +1,8 @@
-//! The item menus the shell shows: a tile's and empty grid space's
-//! (`GridScreen.tsx`), the viewer's (`useViewerEntityContextMenu.tsx`) and the
-//! inspector preview's. The rows come from [`crate::grid::menu`]; this
-//! describes what was right-clicked, as the Electron screens do, and performs
-//! the chosen row through the session and the library.
+//! The item menus that the shell shows: the menu of a grid tile, the menu of
+//! empty grid space, the viewer's menu and the menu of the inspector's
+//! preview. The rows come from [`crate::grid::menu`]. This module describes
+//! what was right-clicked, builds the menu from that description, and
+//! performs the chosen row through the session and the library.
 use super::menu_commands::shared_lifecycle;
 use super::{Shell, view_menu};
 use crate::grid::menu::{
@@ -20,66 +20,78 @@ use std::rc::Rc;
 mod actions;
 mod organizer;
 
-/// The item menus' state in the shell.
+/// Holds the state of the shell's item menus.
 #[derive(Default)]
 pub(super) struct ItemMenus {
-    /// What the open menu acts on, captured when it opened, and its rows'
-    /// actions.
+    /// The items that the open menu acts on, recorded when the menu opened.
+    /// The field `actions` below holds the actions of the menu's rows.
     target: Option<Target>,
     actions: Vec<Action>,
-    /// The tags "Copy Tags" took, for "Paste Tags" (production keeps them on
-    /// the window, beside the JSON it writes to the clipboard).
+    /// The names of the tags that "Copy Tags" copied last. "Paste Tags"
+    /// applies these, and does not read the clipboard.
     tag_clipboard: Vec<String>,
     confirm: ui::modal::Host<Confirmation>,
-    /// The group organizer, when grouping needs a decision.
+    /// The group organizer dialog, which is open while grouping needs a
+    /// decision from the user.
     organizer: ui::modal::Host<Entity<organizer::Organizer>>,
-    /// The media surface the open viewer menu was opened on (the media
-    /// view's or Quick Look's), whose Flash movie its rows control.
+    /// The media surface that the open viewer menu was opened on: the media
+    /// view's or Quick Look's. The menu's Flash rows control the Flash movie
+    /// of this surface.
     surface: Option<WeakEntity<MediaSurface>>,
-    /// The value of the row last chosen (an application's path).
+    /// The value of the row that was chosen last. For the row of an
+    /// application it is the application's path.
     chosen: Option<String>,
-    /// The menu open now, for rows that change it while it stays open.
+    /// The menu that is open now. Rows that are replaced or checked while
+    /// the menu stays open are changed through it.
     open: Option<WeakEntity<Menu>>,
-    /// The applications that open each type, looked up once per extension
-    /// as production caches them (`openWithOptionsByExtension`).
+    /// The applications that can open each file type, by the type's file
+    /// extension. They are looked up once for each extension.
     applications: std::collections::HashMap<String, Vec<crate::desktop::Application>>,
 }
 
-/// The items a menu acts on, decided when it opens.
+/// Holds the items that a menu acts on. It is filled when the menu opens.
 #[derive(Clone, Default)]
 pub(super) struct Target {
-    /// In the order the grid shows them; of the grid's selection, the ones
-    /// loaded.
+    /// The items, in the order in which the grid shows them. When the menu
+    /// acts on the grid's selection, these are only the selected items that
+    /// are loaded.
     items: Vec<RootSummary>,
-    /// The grid's selection, when the menu acts on it: what an edit
-    /// addresses, loaded or not, and how many items it holds. Otherwise
-    /// the menu acts on `items` alone (the viewer's item, a member's
-    /// collection, the preview's).
+    /// The grid's selection and the number of items in it, when the menu
+    /// acts on the selection. An edit addresses this selection, so it also
+    /// changes the selected items that are not loaded. When this is `None`,
+    /// the menu acts on `items` alone: the viewer's item, the collection of
+    /// a member, or the preview's item.
     selection: Option<(SelectionTarget, u64)>,
-    /// The one file the single-item rows act on: the cover of a grid tile,
-    /// the member the viewer shows, or the preview's.
+    /// The one file that the rows for a single item act on: the cover of a
+    /// grid tile, the member that the viewer shows, or the file that the
+    /// preview shows.
     file: Option<File>,
-    /// The folder the grid shows.
+    /// The folder that the grid shows.
     folder: Option<FolderId>,
-    /// A collection member's menu: `file` is the member, `items` its
-    /// collection.
+    /// True for the menu of a collection's member. Then `file` is the
+    /// member and `items` holds its collection.
     member: bool,
-    /// A menu of a collection's view (a member's, or the space between
-    /// them): its sort and ungroup rows act on that collection.
+    /// True for a menu of a collection's view: the menu of a member, or the
+    /// menu of the space between the members. The sort and ungroup rows of
+    /// such a menu act on that collection.
     group: bool,
-    /// The members a member's menu acts on, by their place in the
-    /// collection.
+    /// The members that a member's menu acts on, each given by its position
+    /// in the collection.
     members: Vec<usize>,
-    /// Quick Look opened it, which closes when the collection is gone.
+    /// True when the menu was opened in Quick Look. Edits to the collection
+    /// are then reported to Quick Look, which closes when the collection no
+    /// longer exists.
     quick_look: bool,
-    /// How many collections the selection holds, as the library counted
-    /// them, for a selection that reaches past the loaded items.
+    /// The number of collections in the selection, as the library counted
+    /// them. It is set for a selection that holds items that are not
+    /// loaded.
     collections: Option<u64>,
 }
 
 #[derive(Clone)]
 struct File {
-    /// The item it belongs to, whose details say where it is.
+    /// The item that the file belongs to. The item's details hold the
+    /// file's path.
     root: RootId,
     hash: String,
     mime: String,
@@ -90,8 +102,8 @@ impl Target {
     fn ids(&self) -> Vec<RootId> {
         self.items.iter().map(|item| item.root_id).collect()
     }
-    /// What an edit addresses: the grid's selection, which the library
-    /// resolves, or the items themselves.
+    /// Returns what an edit addresses: the grid's selection, which the
+    /// library resolves, or else the items themselves.
     pub(super) fn selection(&self) -> SelectionTarget {
         match &self.selection {
             Some((selection, _)) => selection.clone(),
@@ -101,7 +113,8 @@ impl Target {
         }
     }
 
-    /// How many items the menu acts on, loaded or not.
+    /// Returns the number of items that the menu acts on, whether they are
+    /// loaded or not.
     pub(super) fn count(&self) -> u64 {
         match &self.selection {
             Some((_, count)) => *count,
@@ -109,27 +122,31 @@ impl Target {
         }
     }
 
-    /// Whether every item the menu acts on is loaded, so that what the grid
-    /// holds of them (names, kinds) is all of them.
+    /// Returns whether every item that the menu acts on is loaded. The
+    /// names and kinds in `items` then cover all of them.
     fn loaded(&self) -> bool {
         self.count() == self.items.len() as u64
     }
 }
 
-/// A question asked before an edit (`ConfirmModal`).
+/// A question that the user answers in a confirmation dialog before an edit
+/// is made.
 struct Confirmation {
     title: SharedString,
     message: SharedString,
     label: SharedString,
     danger: bool,
     run: Run,
-    /// Run when the question is cancelled or closed.
+    /// Runs when the user cancels the question or closes the dialog.
     cancelled: Option<Run>,
 }
 
 pub(super) type Run = Rc<dyn Fn(&mut Shell, &mut Window, &mut Context<Shell>)>;
 
-/// `mediaLinkFor`: the link the Electron app serves a file at.
+/// Returns the link that "Copy Link" puts on the clipboard for a file: the
+/// file's content hash, followed by the extension of its type, or by `bin`
+/// for a type that is not listed here. Picto 0.6.19 and earlier copied links
+/// of the same form.
 pub(crate) fn media_link(hash: &str, mime: &str) -> String {
     let extension = match mime {
         "image/jpeg" => "jpg",
@@ -144,9 +161,11 @@ pub(crate) fn media_link(hash: &str, mime: &str) -> String {
 }
 
 impl Shell {
-    // ── Opening ─────────────────────────────────────────────────
+    // The functions from here to `last_folder_name` open the menus.
 
-    /// The grid's selection, loaded or not, with the one item's cover file.
+    /// Returns the grid's selection as the target of a menu, whether its
+    /// items are loaded or not. When exactly one item is selected and it is
+    /// loaded, the target also holds that item's cover file.
     fn selection_target(&self, cx: &App) -> Option<Target> {
         let session = self.session.read(cx);
         let selection = session.selection_target()?;
@@ -170,9 +189,10 @@ impl Shell {
         })
     }
 
-    /// Performs a row's action without its menu, for a shortcut or an
-    /// application menu row: on the item the viewer shows while it is open
-    /// (in the folder it was opened from), else on the selection.
+    /// Performs a row's action without opening a menu. A shortcut or a row
+    /// of the application menu calls this. While the viewer is open, the
+    /// action applies to the item that the viewer shows, in the folder that
+    /// the grid shows. Otherwise it applies to the selection.
     pub(super) fn act_on_selection(
         &mut self,
         action: Action,
@@ -196,8 +216,9 @@ impl Shell {
         }
     }
 
-    /// A tile was right-clicked: the selection's menu. The grid has already
-    /// made the tile the selection when it was outside it.
+    /// Opens the menu of the selection after a tile was right-clicked. If
+    /// the tile was not selected, the grid has already made it the
+    /// selection.
     pub(super) fn open_tile_menu(
         &mut self,
         position: Point<Pixels>,
@@ -210,8 +231,9 @@ impl Shell {
         let Some(target) = self.selection_target(cx) else {
             return;
         };
-        // How many items are selected, loaded or not: one item's rows only
-        // for one, even when another selected item is out of the window.
+        // This is the number of selected items, whether they are loaded or
+        // not. The rows for a single item are offered only when it is 1, so
+        // they are not offered when a second selected item is not loaded.
         let count = target.count() as usize;
         let items = &target.items;
         let collections = items
@@ -223,13 +245,14 @@ impl Shell {
         let media = single.is_some_and(|item| item.kind == RootKind::Media);
         let last_folder_name = self.last_folder_name(cx);
         let whole = self.session.read(cx).selects_whole();
-        // `selectionLoaded`: the loaded items are the whole selection, so
-        // they say how many collections it holds. Otherwise only the
-        // library knows, and the menu asks it once open.
+        // When the loaded items are the whole selection, they say how many
+        // collections it holds. Otherwise only the library knows, and the
+        // menu asks the library once it is open (`count_collections`).
         let loaded = !whole && target.loaded();
         let description = Description {
             surface: Surface::Grid,
-            // With the whole destination selected, all of it.
+            // When the whole destination is selected, this is the number of
+            // all its items.
             selection_count: count,
             query_selection: whole,
             ai_tag_enabled: Some(count > 0),
@@ -309,11 +332,13 @@ impl Shell {
         }
     }
 
-    /// Asks the library how many collections the selection holds, for a
-    /// selection that reaches past the loaded items, and puts the counted
-    /// Ungroup row (or none) in place of the uncounted one while the menu
-    /// is open; with none to merge, Group no longer says it merges.
-    /// `organize`: the menu offers Group and no loaded item is a collection.
+    /// Asks the library how many collections the selection holds. This is
+    /// done for a selection that holds items that are not loaded. If the
+    /// menu is still open when the answer arrives, the Ungroup row without
+    /// a count is replaced by one with the count, or removed when the count
+    /// is 0. `organize` says that the menu offers the group row and that no
+    /// loaded item is a collection. When it is set and the count is 0, the
+    /// row "Merge into One Group..." is replaced by the row "Group...".
     fn count_collections(
         &mut self,
         selection: SelectionTarget,
@@ -356,9 +381,11 @@ impl Shell {
         .detach();
     }
 
-    /// How "Open With Other" is offered for a media item: on macOS its
-    /// applications, once looked up for its type, and pending until then;
-    /// on Windows the system's chooser; nothing elsewhere.
+    /// Returns how "Open With Other" is offered for a media item. On macOS
+    /// it lists the applications that open the item's type once they have
+    /// been looked up, and is pending until then. On Windows it opens the
+    /// system's application chooser. It is not offered on Linux, nor for
+    /// `None` or an item without a content hash.
     fn open_with_for(&self, media: Option<&RootSummary>) -> OpenWith {
         let Some(item) = media.filter(|item| !item.content_hash.is_empty()) else {
             return OpenWith::None;
@@ -375,10 +402,11 @@ impl Shell {
         }
     }
 
-    /// Looks up the applications that open `file`'s type off the thread
-    /// that draws, keeps them for the type, and puts them in place of the
-    /// pending row if the menu is still open (no row when there are none,
-    /// or when the lookup failed).
+    /// Looks up the applications that open the type of `file` on a
+    /// background thread and keeps them for that type. If the menu is still
+    /// open, the pending row is replaced by the rows of the applications.
+    /// The pending row is removed when there are no applications or when
+    /// the file's path could not be read.
     fn look_up_applications(&mut self, file: File, menu: WeakEntity<Menu>, cx: &mut Context<Self>) {
         let key = type_key(&file.mime);
         let File { root, hash, .. } = file;
@@ -413,7 +441,7 @@ impl Shell {
         );
     }
 
-    /// Empty grid space was right-clicked (`openEmptyGridContextMenu`).
+    /// Opens the menu of empty grid space after it was right-clicked.
     pub(super) fn open_empty_menu(
         &mut self,
         position: Point<Pixels>,
@@ -424,7 +452,8 @@ impl Shell {
         let grid = self.grid_scope(cx);
         let folder = grid.folder();
         let can_import = grid.imports();
-        // `hasClipboardImport`: files or an image on the clipboard.
+        // The paste row is offered when this destination takes imports and
+        // the clipboard holds files or an image.
         let clipboard_import = can_import && super::import::can_paste(cx);
         let description = Description {
             scope: Some(grid.menu_kind()),
@@ -449,8 +478,10 @@ impl Shell {
         self.show_item_menu(built, target, true, position, window, cx);
     }
 
-    /// The item the viewer and the preview act on: the selected item, with
-    /// the member the viewer shows or the cover the preview shows.
+    /// Returns the item that the viewer and the preview act on, which is
+    /// the selected item, together with one of its files. With `member`
+    /// set, the file is the member that the viewer shows. Otherwise it is
+    /// the item's cover, which the preview shows.
     fn shown_item(&self, member: bool, cx: &App) -> Option<(RootSummary, File)> {
         let session = self.session.read(cx);
         let item = session.selected_item()?.clone();
@@ -479,7 +510,8 @@ impl Shell {
         Some((item, file))
     }
 
-    /// The viewer was right-clicked: the viewer's rows for the item it shows.
+    /// Opens the viewer's menu for the item that the viewer shows, after the
+    /// viewer was right-clicked.
     pub(super) fn open_viewer_menu(
         &mut self,
         request: &MenuRequested,
@@ -497,7 +529,8 @@ impl Shell {
             return;
         };
         if request.member {
-            // A member is named by its own media (`memberToGridItem`).
+            // The menu of a member uses the name of the member's own media,
+            // and not the collection's name.
             let session = self.session.read(cx);
             if let Some(media) = session
                 .selected_details()
@@ -506,10 +539,10 @@ impl Shell {
                 file.name = media.media_name.clone();
             }
         }
-        // A member's menu (`openMemberMenu`) describes the member, a media
-        // item, with no lifecycle of its own; its edits go to the
-        // collection. A member open by itself has `MediaView`'s menu for a
-        // file with no item to edit.
+        // The menu of a collection's member describes the member as a media
+        // item that has no lifecycle of its own, and its edits go to the
+        // collection. A member that is open by itself (`request.alone`) gets
+        // the menu of a file that has no item to edit.
         let member = request.member;
         let media = member || item.kind == RootKind::Media;
         let trash = !member && item.lifecycle == Lifecycle::Trash;
@@ -546,8 +579,8 @@ impl Shell {
                 paste_tags: true,
                 set_rating: true,
                 export: true,
-                // Production's viewer menu leaves Export Originals... with
-                // nothing to do; here it exports the shown item's files.
+                // In the viewer's menu, Export Originals... exports the files
+                // of the item that the viewer shows.
                 export_originals: true,
                 search_by_image: media,
                 regenerate: media,
@@ -560,7 +593,8 @@ impl Shell {
             ..Default::default()
         };
         if request.alone {
-            // No item to edit: the file's own rows only.
+            // There is no item to edit, so the menu has only the rows that
+            // act on the file.
             description.selection_count = 0;
             description.ai_tag_enabled = Some(image);
             description.status = None;
@@ -578,7 +612,9 @@ impl Shell {
                 ..Default::default()
             };
         } else if member {
-            // `openMemberMenu`: the editor's selection, or the one member.
+            // The menu acts on the members in `request.members`: the members
+            // selected in the collection's editor, or the one member that
+            // was right-clicked.
             let mimes: Vec<String> = {
                 let session = self.session.read(cx);
                 let details = session.selected_details();
@@ -615,8 +651,9 @@ impl Shell {
             description.handlers = rows::member_handlers(single, request.editor);
             description.sort_fields = Some(rows::COLLECTION_SORT.to_vec());
         }
-        // The current frame of a video or Flash movie can become the
-        // thumbnail.
+        // `capture` says whether the surface can capture the current frame
+        // of a video or Flash movie, which the menu then offers to set as
+        // the thumbnail.
         let playback = Playback {
             flash: surface.read(cx).flash_playback(),
             capture: surface.read(cx).can_capture(cx),
@@ -636,8 +673,8 @@ impl Shell {
             quick_look,
             ..Default::default()
         };
-        // A collection member's menu has the search field, as the grid's
-        // menus do (`contextMenu.openAt`).
+        // The menu of a collection's member has the search field, as the
+        // grid's menus have. The viewer's menu of any other item does not.
         self.show_item_menu(
             built,
             target,
@@ -648,8 +685,8 @@ impl Shell {
         );
     }
 
-    /// `openEmptyMenu`: the space between a collection's members, or
-    /// around its tiles in the editor.
+    /// Opens the menu of the space between a collection's members, or of
+    /// the space around the collection's tiles in its editor.
     fn open_collection_menu(
         &mut self,
         position: Point<Pixels>,
@@ -669,7 +706,8 @@ impl Shell {
         self.show_item_menu(rows::collection_menu(), target, true, position, window, cx);
     }
 
-    /// The inspector's preview was right-clicked.
+    /// Opens the menu of the inspector's preview after it was
+    /// right-clicked.
     pub(super) fn open_preview_menu(
         &mut self,
         position: Point<Pixels>,
@@ -712,9 +750,11 @@ impl Shell {
     ) -> Entity<Menu> {
         self.items.actions = rows::actions(&built);
         self.items.target = Some(target);
-        // The grid's menus hold the view panels. In pop-up windows their
-        // selects open lists of their own (`ui::select`), so these menus
-        // reach past the window's edge as the others do.
+        // The grid's menus hold the view panels, which are made the first
+        // time a row asks for one. A select of a panel that is in a pop-up
+        // window opens its list in a pop-up window of its own
+        // (`ui::select`), so these menus can extend past the window's edge
+        // as the other menus do.
         let mut panels = None;
         let entries = rows::entries(built, &mut |panel| {
             panels
@@ -729,8 +769,9 @@ impl Shell {
                 })
                 .entry(panel)
         });
-        // The viewer's menus give the keyboard back to the viewer or Quick
-        // Look that opened them; the others to the shell.
+        // When a viewer's menu closes, the keyboard focus goes back to the
+        // viewer or Quick Look that opened it. When another menu closes,
+        // the focus goes to the shell.
         let viewer_menu = self.items.surface.is_some();
         self.menu.returning(if viewer_menu {
             ui::menu::Return::Opener
@@ -759,7 +800,8 @@ impl Shell {
     }
 
     fn last_folder_name(&self, cx: &App) -> Option<String> {
-        // "Add to “…”" is the folder used last (`readRecentFolderIds`).
+        // The row "Add to “…”" names the folder that was used last, which
+        // is the first of the session's recent folders.
         let folder = *self.session.read(cx).recent_folders.first()?;
         self.session
             .read(cx)
@@ -771,7 +813,8 @@ impl Shell {
             .map(|entry| entry.label.clone())
     }
 
-    // ── Confirmation ────────────────────────────────────────────
+    // The functions from here on open and draw the confirmation dialog and
+    // the group organizer.
 
     #[allow(clippy::too_many_arguments)]
     pub(super) fn ask(
@@ -786,7 +829,9 @@ impl Shell {
         self.ask_with(title, message, label, danger, run, None, cx);
     }
 
-    /// The same, running `cancelled` when the question is turned down.
+    /// Opens a confirmation dialog, as `ask` does. `run` runs when the user
+    /// confirms, and `cancelled` runs when the user cancels the question or
+    /// closes the dialog.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn ask_with(
         &mut self,
@@ -806,8 +851,9 @@ impl Shell {
             run,
             cancelled,
         };
-        // Over a viewer the keyboard goes back to it, so its keys go on
-        // working; over the grid, to the grid.
+        // When the dialog closes over a viewer, the keyboard focus goes back
+        // to the viewer, so that the viewer's keys keep working. Over the
+        // grid, the focus goes back to the shell.
         let back = if self.viewing(cx) {
             ui::menu::Return::Opener
         } else {
@@ -816,7 +862,8 @@ impl Shell {
         self.items.confirm.open(confirmation, back, cx);
     }
 
-    /// Whether a question is waiting for an answer (`confirmModalAtom`).
+    /// Returns whether a confirmation dialog is open and has not started to
+    /// close.
     pub(super) fn asking(&mut self) -> bool {
         self.items
             .confirm
@@ -824,7 +871,8 @@ impl Shell {
             .is_some_and(|dialog| !dialog.presence.closing())
     }
 
-    /// Opens the group organizer on `request` (`groupOrganizerModalAtom`).
+    /// Opens the group organizer dialog on `request`. The dialog closes
+    /// when the organizer reports that the group has been made.
     pub(super) fn open_organizer(&mut self, request: organizer::Request, cx: &mut Context<Self>) {
         let session = self.session.clone();
         let content = cx.new(|cx| organizer::Organizer::new(session, request, cx));
@@ -841,8 +889,9 @@ impl Shell {
         }
     }
 
-    /// The open group organizer: the decision in its body, Cancel and the
-    /// grouping button in its footer.
+    /// Returns the open group organizer dialog as an element, or `None`
+    /// when it is not open. The organizer is the dialog's body, and the
+    /// Cancel button and the button that makes the group are in its footer.
     pub(super) fn group_organizer(
         &mut self,
         window: &mut Window,
@@ -894,8 +943,9 @@ impl Shell {
         )
     }
 
-    /// The open confirmation, drawn over everything. The keyboard goes back
-    /// to the grid as it leaves.
+    /// Returns the open confirmation dialog as an element, or `None` when
+    /// none is open. When the user confirms and no viewer is open, the
+    /// keyboard focus goes to the shell before the confirmed edit runs.
     pub(super) fn confirmation(
         &mut self,
         window: &mut Window,
@@ -915,7 +965,7 @@ impl Shell {
             }
         });
         let cancel = cx.listener(move |this, _: &(), window, cx| {
-            // Cancel takes the dialog away at once.
+            // Cancel removes the dialog at once, without a fade-out.
             this.items.confirm.close(cx);
             if let Some(refused) = &refused {
                 refused(this, window, cx);
@@ -946,13 +996,14 @@ impl Shell {
     }
 }
 
-/// What production caches applications by: the file's extension.
+/// Returns the key under which the applications that open a type are kept:
+/// the file extension of the type.
 fn type_key(mime: &str) -> String {
     picto_core::blob_store::mime_to_extension(mime).to_owned()
 }
 
-/// `resolveFilePath`: where the library keeps the item's file with this
-/// content.
+/// Returns the path at which the library keeps the file of the item `root`
+/// whose content hash is `hash`, or `None` when the item has no such file.
 fn file_path(
     library: &picto_library::Library,
     root: RootId,

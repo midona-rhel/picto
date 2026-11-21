@@ -1,32 +1,49 @@
-//! The audio view's visualizer (`AudioVisualizer.tsx`): a dark stage with
-//! the spectrum, oscilloscope or orbit of what is playing, and its soft
-//! reflection below. The numbers come from a port of the Web Audio
-//! analyser the production canvas reads (`fftSize` 256 for the spectrum and
-//! orbit, 1024 for the oscilloscope, smoothing 0.78, −100 to −30 dB), fed
-//! by the samples the sound card is playing.
+//! The audio visualizer, which an audio player draws in the place of a
+//! video's picture. It draws a dark background and, on it, one of three
+//! visualizations of the sound that is playing: the spectrum, the
+//! oscilloscope or the orbit. Below the visualization it draws a faint,
+//! blurred reflection of it.
 //!
-//! The canvas draws in device pixels; so does this, dividing by the scale
-//! factor (at most 2, as `sizeCanvas` caps it) when it paints.
+//! The numbers that are drawn are computed from the samples that the output
+//! device is playing, in the way the `AnalyserNode` of the Web Audio API
+//! computes them. The spectrum and the orbit use a Fourier transform of 256
+//! samples, and the oscilloscope uses 1024 samples. The magnitudes are
+//! smoothed over time with the factor 0.78, and levels from −100 dB to
+//! −30 dB are mapped onto the range that is drawn.
+//!
+//! Positions and sizes are computed in device pixels and are divided by the
+//! window's scale factor when they are painted. A scale factor above 2
+//! counts as 2.
 use super::audio::Analysis;
 use gpui::*;
 use rustfft::{FftPlanner, num_complex::Complex};
 
+/// The number of bars of the spectrum and of spokes of the orbit.
 const BAR_COUNT: usize = 64;
+/// How much of the previous smoothed magnitude is kept each time new
+/// samples have been played. The rest comes from the new magnitude.
 const SMOOTHING: f32 = 0.78;
+/// The level in decibels that `magnitude_byte` turns into 0.
 const MIN_DECIBELS: f32 = -100.;
+/// The level in decibels that `magnitude_byte` turns into 255.
 const MAX_DECIBELS: f32 = -30.;
 
-/// `AudioVisualizationMode`.
+/// The kind of audio visualization, which the user chooses in the settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
+    /// Nothing is drawn.
     None,
+    /// 64 vertical bars, one for each band of frequencies.
     Spectrum,
+    /// The waveform, drawn as a line.
     Oscilloscope,
+    /// 64 spokes around a circle, one for each band of frequencies.
     Orbit,
 }
 
 impl Mode {
-    /// The setting's stored value; anything unknown is the default.
+    /// Returns the mode for the value that the settings store. A value that
+    /// is not known gives the spectrum, which is the default.
     pub fn from_setting(value: &str) -> Self {
         match value {
             "none" => Self::None,
@@ -36,6 +53,8 @@ impl Mode {
         }
     }
 
+    /// Returns how many samples the mode reads each time: 1024 for the
+    /// oscilloscope, and 256 for the spectrum and the orbit.
     fn fft_size(self) -> usize {
         if self == Self::Oscilloscope {
             1024
@@ -45,11 +64,17 @@ impl Mode {
     }
 }
 
-/// The analyser's state between frames: the smoothed magnitudes.
+/// What the visualizer keeps from one frame to the next.
 pub struct Analyser {
+    /// The smoothed magnitude of each frequency bin.
     smoothed: Vec<f32>,
+    /// The count of `Analysis::written` at which the magnitudes were last
+    /// smoothed, or `None` before the first time.
     written: Option<u64>,
+    /// Makes the Fourier transforms, and keeps those it has made so that
+    /// they are used again.
     planner: FftPlanner<f32>,
+    /// The bytes that `read` returned last.
     data: Vec<u8>,
 }
 
@@ -64,14 +89,20 @@ impl Default for Analyser {
     }
 }
 
-/// The Blackman window the analyser applies before its transform.
+/// Returns the weight of the sample `index` out of `size` samples in the
+/// Blackman window. The samples are multiplied by these weights before the
+/// Fourier transform.
 pub fn blackman(index: usize, size: usize) -> f32 {
     let (a0, a1, a2) = (0.42, 0.5, 0.08);
     let x = index as f32 / size as f32;
     a0 - a1 * (std::f32::consts::TAU * x).cos() + a2 * (2. * std::f32::consts::TAU * x).cos()
 }
 
-/// `getByteFrequencyData`'s conversion of a smoothed magnitude.
+/// Returns a smoothed magnitude as a byte. The magnitude's level in
+/// decibels is mapped from the range −100 dB to −30 dB onto 0 to 255, and a
+/// level outside that range gives 0 or 255. A magnitude of 0 gives 0. The
+/// `AnalyserNode` of the Web Audio API converts its frequency data in the
+/// same way.
 pub fn magnitude_byte(magnitude: f32) -> u8 {
     let decibels = if magnitude > 0. {
         20. * magnitude.log10()
@@ -82,14 +113,19 @@ pub fn magnitude_byte(magnitude: f32) -> u8 {
     scaled.floor().clamp(0., 255.) as u8
 }
 
-/// `getByteTimeDomainData`'s conversion of a sample.
+/// Returns a sample as a byte: −1 gives 0, 0 gives 128 and 1 gives 255. A
+/// sample outside that range gives 0 or 255. The `AnalyserNode` of the Web
+/// Audio API converts its waveform data in the same way.
 pub fn sample_byte(sample: f32) -> u8 {
     (128. * (sample + 1.)).floor().clamp(0., 255.) as u8
 }
 
 impl Analyser {
-    /// The bytes the production canvas reads this frame: frequencies for the
-    /// spectrum and orbit, the waveform for the oscilloscope.
+    /// Returns the bytes to draw in this frame for `mode`. For the
+    /// oscilloscope they are the 1024 samples that were played last, each
+    /// as a byte (`sample_byte`). For the spectrum and the orbit they are
+    /// the smoothed magnitudes of the 128 frequency bins of the 256 samples
+    /// that were played last, each as a byte (`magnitude_byte`).
     pub fn read(&mut self, mode: Mode, analysis: &Analysis) -> &[u8] {
         let size = mode.fft_size();
         let samples = analysis.latest(size);
@@ -97,7 +133,10 @@ impl Analyser {
             self.data = samples.iter().map(|sample| sample_byte(*sample)).collect();
             return &self.data;
         }
-        // The analyser smooths once per new block of sound, not per read.
+        // The magnitudes are computed and smoothed only when new samples
+        // have been played since the last time, and not each time the
+        // player is drawn. Otherwise the amount of smoothing would depend
+        // on how often the player is drawn.
         let written = analysis.written();
         if self.smoothed.len() != size / 2 {
             self.smoothed = vec![0.; size / 2];
@@ -121,7 +160,11 @@ impl Analyser {
     }
 }
 
-/// `frequencyBin`: bars sample the bins on a curve that favours the lows.
+/// Returns the value, from 0 to 1, of the bar `index` of the 64 bars: the
+/// byte of one frequency bin of `data`, divided by 255. The bin is chosen
+/// along a curve, which is the bar's position from 0 to 1 raised to the
+/// power 1.7. So more of the bars show low frequencies than high ones.
+/// Returns 0 when `data` is empty.
 pub fn frequency_bin(data: &[u8], index: usize) -> f32 {
     if data.is_empty() {
         return 0.;
@@ -131,10 +174,12 @@ pub fn frequency_bin(data: &[u8], index: usize) -> f32 {
     data[bin] as f32 / 255.
 }
 
+/// Returns the opaque colour `hex`, written as `0xRRGGBB`.
 fn color(hex: u32) -> Rgba {
     rgb(hex)
 }
 
+/// Returns the colour that is the fraction `t` of the way from `a` to `b`.
 fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
     Rgba {
         r: a.r + (b.r - a.r) * t,
@@ -144,7 +189,9 @@ fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
     }
 }
 
-/// A colour on a gradient of evenly listed stops at `t` in 0..1.
+/// Returns the colour at the position `t`, from 0 to 1, of a gradient.
+/// `stops` lists the gradient's colours with their positions, in rising
+/// order of position.
 fn along(stops: &[(f32, Rgba)], t: f32) -> Rgba {
     let t = t.clamp(0., 1.);
     for pair in stops.windows(2) {
@@ -166,15 +213,19 @@ fn along(stops: &[(f32, Rgba)], t: f32) -> Rgba {
 
 use crate::theme::{VISUALIZER_CYAN as CYAN, VISUALIZER_PINK as PINK, VISUALIZER_VIOLET as VIOLET};
 
-/// The scene, in device pixels, mapped to window points when painted.
+/// Converts positions and sizes in device pixels to window coordinates, for
+/// painting in `window`.
 struct Canvas<'a> {
+    /// The top left corner of the visualizer's area, in window coordinates.
     origin: Point<Pixels>,
-    /// Device pixels per point.
+    /// The number of device pixels in one point.
     scale: f32,
     window: &'a mut Window,
 }
 
 impl Canvas<'_> {
+    /// Returns the window position of the point that is `x` and `y` device
+    /// pixels from the top left corner of the area.
     fn point(&self, x: f32, y: f32) -> Point<Pixels> {
         point(
             self.origin.x + px(x / self.scale),
@@ -182,6 +233,8 @@ impl Canvas<'_> {
         )
     }
 
+    /// Returns the window bounds of a rectangle that is given in device
+    /// pixels from the top left corner of the area.
     fn rect(&self, x: f32, y: f32, w: f32, h: f32) -> Bounds<Pixels> {
         Bounds::new(
             self.point(x, y),
@@ -190,13 +243,17 @@ impl Canvas<'_> {
     }
 }
 
-/// `drawStage`'s radial glow: violet at 18% in the middle, pink at 8% a
-/// third of the way out, clear at the edge.
+/// The colours of the round glow on the background, each with its position
+/// from the centre of the glow (0) to its edge (1): violet at 18% opacity
+/// in the centre, pink at 8% opacity at 0.34, and fully transparent at the
+/// edge.
 const GLOW: [(f32, u32); 3] = [(0., 0x735cff2e), (0.34, 0xff4fa314), (1., 0x05050b00)];
 
-/// `drawStage`: the night sky and the violet glow about the middle. GPUI
-/// draws two-stop linear gradients only, so the sky is two bands and the
-/// radial glow is a run of thin rings.
+/// Draws the background: a vertical gradient of three dark blues, and over
+/// it a round glow whose centre is at 54% of the height. GPUI draws only
+/// linear gradients of two colours. So the vertical gradient is drawn as
+/// two rectangles that meet at 58% of the height, and the round glow is
+/// drawn as 96 rings.
 fn draw_stage(canvas: &mut Canvas, width: f32, height: f32) {
     let split = height * 0.58;
     let top = canvas.rect(0., 0., width, split);
@@ -218,13 +275,16 @@ fn draw_stage(canvas: &mut Canvas, width: f32, height: f32) {
         ),
     ));
     let stops = GLOW.map(|(at, colour)| (at, rgba(colour)));
-    // On whole device pixels, so that each ring meets the next without a
-    // seam of partly covered pixels between them.
+    // The centre of the glow and the width of a ring are whole numbers of
+    // device pixels, so that each ring ends exactly where the next begins.
+    // Otherwise a line of partly covered pixels would show between two
+    // rings.
     let (centre_x, centre_y) = ((width / 2.).round(), (height * 0.54).round());
     let radius = (width * 0.58).max(height);
-    // Rings that do not overlap, each drawn once in the gradient's colour
-    // at its middle: discs laid one over another would keep the outer pink
-    // under the violet middle, where the gradient has none.
+    // The glow is drawn as rings that do not overlap. Each ring has the
+    // colour of the gradient at the middle of the ring. Discs drawn one
+    // over the other would not give the gradient, because the pink of the
+    // outer discs would show through the violet in the centre.
     const RINGS: usize = 96;
     let step = (radius / RINGS as f32).ceil();
     for ring in 0..RINGS {
@@ -242,15 +302,22 @@ fn draw_stage(canvas: &mut Canvas, width: f32, height: f32) {
     }
 }
 
-/// The geometry each mode draws, in device pixels, so the reflection can
-/// draw the same.
+/// What a mode draws, in device pixels. It is kept as data so that the
+/// reflection can draw the same shapes a second time.
 enum Shape {
-    /// Rounded bars: x, y, width, height, radius, colour.
+    /// Bars with rounded corners. Each has its left edge, its top edge, its
+    /// width, its height, its corner radius and its colour.
     Bars(Vec<(f32, f32, f32, f32, f32, Rgba)>),
-    /// Stroked polylines with their width and colour stops along x.
+    /// Lines, each through a series of points and with its own colour, and
+    /// the width that all of them are drawn with.
     Lines(Vec<(Vec<(f32, f32)>, Rgba)>, f32),
 }
 
+/// Returns the shape of the spectrum: 64 bars side by side across 96% of
+/// the width. Each bar is centred vertically at 42% of the height. It
+/// extends up and down from there by the value of its band of frequencies,
+/// at most 25% of the height in each direction. The bars' colours go from
+/// cyan at the left through violet to pink at the right.
 fn spectrum(data: &[u8], width: f32, height: f32) -> Shape {
     let gap = (width * 0.003).max(2.);
     let usable = width * 0.96;
@@ -258,8 +325,10 @@ fn spectrum(data: &[u8], width: f32, height: f32) -> Shape {
     let left = (width - usable) / 2.;
     let (middle, amplitude) = (height * 0.42, height * 0.25);
     let stops = [(0., color(CYAN)), (0.48, color(VIOLET)), (1., color(PINK))];
-    // The gradient runs from (0, middle − amplitude) to (width, middle +
-    // amplitude); each bar takes the colour where its middle projects.
+    // The colours follow a gradient along the line from (0, middle −
+    // amplitude) to (width, middle + amplitude). Each bar has one colour:
+    // the gradient's colour at the point of that line that is nearest to
+    // the bar's centre.
     let (dx, dy) = (width, 2. * amplitude);
     let length = dx * dx + dy * dy;
     Shape::Bars(
@@ -283,6 +352,9 @@ fn spectrum(data: &[u8], width: f32, height: f32) -> Shape {
     )
 }
 
+/// Returns the shape of the oscilloscope: the waveform as a line across
+/// 96% of the width, centred vertically at 42% of the height. A sample of
+/// the largest size is drawn 25% of the height away from that centre.
 fn oscilloscope(data: &[u8], width: f32, height: f32) -> Shape {
     let line = (height * 0.012).clamp(2., 4.);
     let left = width * 0.02;
@@ -297,8 +369,11 @@ fn oscilloscope(data: &[u8], width: f32, height: f32) -> Shape {
             (x, y)
         })
         .collect();
-    // The stroke's gradient runs from 12% to 88% of the width; each short
-    // run of the line takes the colour at its start.
+    // The line's colour follows a gradient from cyan at 12% of the width
+    // through violet to pink at 88% of the width. The line is drawn in
+    // pieces of 16 points, and each piece has the gradient's colour at its
+    // first point. Each piece also ends with the first point of the next
+    // piece, so that the pieces join.
     let stops = [(0., color(CYAN)), (0.5, color(VIOLET)), (1., color(PINK))];
     let runs = points
         .chunks(16)
@@ -315,13 +390,20 @@ fn oscilloscope(data: &[u8], width: f32, height: f32) -> Shape {
     Shape::Lines(runs, line)
 }
 
+/// Returns the shape of the orbit: 64 spokes that point outwards from a
+/// circle whose centre is at 42% of the height. The circle's radius is 17%
+/// of the width or of the height, whichever is smaller. A spoke is as long
+/// as the value of its band of frequencies, at most 22% of that smaller
+/// side.
 fn orbit(data: &[u8], width: f32, height: f32) -> Shape {
     let (centre_x, centre_y) = (width / 2., height * 0.42);
     let radius = width.min(height) * 0.17;
     let reach = width.min(height) * 0.22;
     let line = (radius * 0.055).clamp(2., 5.);
-    // The conic gradient starts at the top and goes round clockwise, as the
-    // spokes do.
+    // The first spoke points up and the others follow clockwise. The
+    // colours go round with them: cyan at the top, violet about a third of
+    // the way round, pink about two thirds of the way round, and cyan
+    // again at the top.
     let stops = [
         (0., color(CYAN)),
         (0.34, color(VIOLET)),
@@ -347,8 +429,11 @@ fn orbit(data: &[u8], width: f32, height: f32) -> Shape {
     Shape::Lines(spokes, line)
 }
 
-/// Paints a shape, mapped by `map` (for the reflection) and at `alpha`, with
-/// `blur` in device pixels (0 for none).
+/// Paints `shape` with its opacity multiplied by `alpha`. `map` returns the
+/// vertical position at which a vertical position of the shape is painted.
+/// The reflection uses it to turn the shape upside down. When `blur` is
+/// above 0 the shape is painted blurred, and `blur` is the size of the blur
+/// in device pixels.
 fn draw_shape(canvas: &mut Canvas, shape: &Shape, alpha: f32, blur: f32, map: impl Fn(f32) -> f32) {
     match shape {
         Shape::Bars(bars) => {
@@ -363,9 +448,13 @@ fn draw_shape(canvas: &mut Canvas, shape: &Shape, alpha: f32, blur: f32, map: im
                 let bounds = canvas.rect(*x, top, *w, bottom - top);
                 let radii = px(radius * squash.min(1.) / canvas.scale);
                 if blur > 0. {
-                    // A drop shadow is a blurred copy of its rectangle. The
-                    // rectangle itself is placed far away so it does not
-                    // hide the middle of its own shadow.
+                    // The only blurred thing GPUI paints is a drop shadow,
+                    // so a blurred bar is painted as the drop shadow of a
+                    // rectangle of the bar's size. The rectangle is placed
+                    // 100,000 px to the right, and its shadow is offset by
+                    // the same distance to the left, so the shadow is where
+                    // the bar is. The rectangle is that far away so that it
+                    // does not hide the middle of its own shadow.
                     let away = point(px(100_000.), px(0.));
                     canvas.window.paint_drop_shadows(
                         Bounds::new(bounds.origin + away, bounds.size),
@@ -386,8 +475,10 @@ fn draw_shape(canvas: &mut Canvas, shape: &Shape, alpha: f32, blur: f32, map: im
             }
         }
         Shape::Lines(lines, width) => {
-            // Paths cannot be blurred; a blurred stroke is drawn as a few
-            // faint copies spread over the blur.
+            // GPUI cannot blur a path. A blurred line is painted as three
+            // copies of the line, each at a third of the opacity: one in
+            // place, one moved up and one moved down by 0.66 times the
+            // blur.
             let copies: &[f32] = if blur > 0. { &[-0.66, 0., 0.66] } else { &[0.] };
             for spread in copies {
                 for (points, colour) in lines {
@@ -420,17 +511,21 @@ fn draw_shape(canvas: &mut Canvas, shape: &Shape, alpha: f32, blur: f32, map: im
     }
 }
 
+/// Returns the round cap that the ends of the lines are drawn with.
 fn lyon_cap() -> lyon_tessellation::LineCap {
     lyon_tessellation::LineCap::Round
 }
 
+/// Returns the round join that the corners of the lines are drawn with.
 fn lyon_join() -> lyon_tessellation::LineJoin {
     lyon_tessellation::LineJoin::Round
 }
 
-/// Draws the stage and, unless the mode is `none`, the visualization and
-/// its reflection. `data` is what [`Analyser::read`] returned, or nothing
-/// before any sound has played.
+/// Draws the visualizer in `bounds`: the background, the visualization of
+/// `mode` and its reflection. For `Mode::None` it draws nothing at all.
+/// `data` is what [`Analyser::read`] returned. When `data` is empty, which
+/// is the case before any sound has played, the visualization is drawn as
+/// it is for silence.
 pub fn paint(mode: Mode, data: &[u8], bounds: Bounds<Pixels>, window: &mut Window) {
     if mode == Mode::None {
         return;
@@ -459,8 +554,13 @@ pub fn paint(mode: Mode, data: &[u8], bounds: Bounds<Pixels>, window: &mut Windo
         Mode::Orbit => orbit(data, width, height),
         Mode::None => unreachable!(),
     };
-    // `drawReflection`: the same geometry turned over about 86% of the
-    // height, squashed to a third, below 58%, in two soft passes.
+    // The reflection is the same shape turned upside down and drawn at 34%
+    // of its height: what the shape has at the vertical position `y` is
+    // painted at `height * 0.86 - y * 0.34`. It is clipped to the part of
+    // the area below 58% of the height. It is painted twice: at 7% opacity
+    // with a blur of 3% of the height, and at 9% opacity with a blur of
+    // 1.2% of the height. Each blur is at least 8 and at most 30 device
+    // pixels.
     let clip = ContentMask {
         bounds: canvas.rect(0., height * 0.58, width, height * 0.42),
     };
@@ -498,7 +598,7 @@ mod tests {
         assert_eq!(sample_byte(0.), 128);
         assert_eq!(sample_byte(1.), 255);
         assert_eq!(sample_byte(-1.), 0);
-        // −30 dB is the top of the range, −100 dB the bottom.
+        // A magnitude at −30 dB gives 255, and one at −100 dB gives 0.
         assert_eq!(magnitude_byte(10f32.powf(-30. / 20.)), 255);
         assert_eq!(magnitude_byte(10f32.powf(-100. / 20.)), 0);
         assert_eq!(magnitude_byte(10f32.powf(-65. / 20.)), 127);
@@ -511,9 +611,9 @@ mod tests {
     fn bars_sample_low_bins_densely() {
         let data: Vec<u8> = (0..128).map(|i| i as u8).collect();
         assert_eq!(frequency_bin(&data, 0), 0.);
-        // The last bar reads the last bin.
+        // The last bar shows the last bin.
         assert_eq!(frequency_bin(&data, 63), 127. / 255.);
-        // The middle bar reads well below the middle bin.
+        // The middle bar shows a bin in the lower half of the bins.
         let middle = frequency_bin(&data, 31) * 255.;
         assert!(middle < 64., "{middle}");
         assert_eq!(frequency_bin(&[], 3), 0.);

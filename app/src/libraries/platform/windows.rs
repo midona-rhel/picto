@@ -46,10 +46,10 @@ pub fn picto_process() -> Result<Option<String>, String> {
 }
 
 /// Returns whether an executable name is a Picto's: `Picto.exe`, in any
-/// letter case. The Electron app has that name, and so has a packaged
-/// release build of this app, which is the Electron app's next version. A
-/// debug build is named `picto-gpui-spike.exe` and is not a Picto here, so
-/// several debug builds can run at once.
+/// letter case. A packaged release build of this app has that name, and so
+/// has an Electron-based Picto (version 0.6.19 or earlier). A debug build
+/// is named `picto-gpui-spike.exe` and is not a Picto here, so several
+/// debug builds can run at once.
 pub fn is_picto(name: &str) -> bool {
     name.eq_ignore_ascii_case("Picto.exe")
 }

@@ -1,7 +1,9 @@
-//! The sidebar (`Sidebar.tsx`): the library, the system destinations in the
-//! Electron order, then Folders and Smart Folders, over a tree filter. Rows
-//! take Cmd and Shift selection, open their context menus, and folders and
-//! smart folders are created, renamed in place and deleted here.
+//! The sidebar. From top to bottom it shows the library switcher, the system
+//! destinations, the Quick Access section, the Folders section and the Smart
+//! Folders section. Below them is a field that filters the folders and
+//! smart folders by name. Rows are selected with a click, a Cmd-click or a
+//! Shift-click, and a right-click on a row opens its context menu. Folders
+//! and smart folders are created, renamed in place and deleted here.
 use super::library::{LibraryPopover, Toggled};
 use crate::backend::Navigation;
 use crate::grid::thumbnails::Thumbnails;
@@ -49,15 +51,16 @@ impl Section {
             Section::SmartFolders => t("Smart Folders"),
         }
     }
-    /// The id the section is folded under, as `picto-sidebar-collapsed`
-    /// stores it.
+    /// Returns the id that stands for this section in the set of folded
+    /// sections and nodes (`Sidebar::collapsed`).
     fn id(self) -> &'static str {
         match self {
             Section::Folders => "folders",
             Section::SmartFolders => "smart_folders",
         }
     }
-    /// The start of its nodes' ids.
+    /// Returns the text that the id of every node in this section starts
+    /// with.
     fn prefix(self) -> &'static str {
         match self {
             Section::Folders => "folder:",
@@ -88,31 +91,35 @@ fn smart_folder_id(node: &str) -> Option<SmartFolderId> {
     node.strip_prefix("smart:")?.parse().ok().map(SmartFolderId)
 }
 
-/// The sidebar's key bindings.
+/// Registers the sidebar's key bindings.
 pub fn bind(cx: &mut App) {
     keyboard::bind(cx);
 }
 
-/// Asks the shell to show a context menu. The sidebar acts on what is chosen.
+/// The event with which the sidebar asks the shell to show a context menu.
+/// The sidebar itself carries out the row that the user chooses in the menu.
 pub struct ShowMenu(pub Entity<Menu>);
 
 impl EventEmitter<ShowMenu> for Sidebar {}
 
-/// Empty Trash was chosen; the shell confirms and deletes.
+/// The event that the sidebar emits when the user chooses "Empty Trash". The
+/// shell asks the user to confirm and then deletes the items.
 pub struct EmptyTrash;
 
 impl EventEmitter<EmptyTrash> for Sidebar {}
 
-/// What a double-click on a folder does (`sidebarDoubleClickAction`).
+/// What a double-click on the row of a folder or smart folder does. The
+/// setting `sidebar_double_click_action` chooses it.
 #[derive(Clone, Copy, PartialEq)]
 enum DoubleClick {
     Rename,
     Collapse,
 }
 
-/// `SidebarPreferences` in `state/navigation.ts`, as `AppShell.tsx` derives
-/// them from the app settings. The settings model is their one owner; the
-/// sidebar reads them each time it draws and writes through the model.
+/// The app settings that the sidebar draws by: which system rows and
+/// sections are shown, whether counts and tree guides are shown, and what a
+/// double-click does. The settings model owns these values. The sidebar
+/// reads them each time it draws and changes them through the model.
 struct Preferences {
     visible_system: HashSet<&'static str>,
     show_quick_access: bool,
@@ -153,8 +160,9 @@ impl Preferences {
     }
 }
 
-/// The system rows the visibility menu lists: id, label and glyph. All and
-/// Trash are always shown.
+/// The system rows that the visibility menu lists. Each entry holds the
+/// row's id, its label and the name of its glyph. The rows All and Trash are
+/// always shown (`ALWAYS_SHOWN`).
 // i18n: translated where drawn (menu rows)
 const SYSTEM_ROWS: [(&str, &str, &str); 10] = [
     ("system:active", "All", "menu-photo"),
@@ -173,24 +181,27 @@ const SYSTEM_ROWS: [(&str, &str, &str); 10] = [
     ("system:trash", "Trash", "menu-trash"),
 ];
 const ALWAYS_SHOWN: [&str; 2] = ["system:active", "system:trash"];
-/// The id Quick Access is folded under.
+/// The id that stands for the Quick Access section in the set of folded
+/// sections and nodes.
 const QUICK_ACCESS: &str = "quick_access";
 
-/// What a context menu was opened on.
+/// The thing on which a context menu was opened.
 #[derive(Clone)]
 enum Target {
     System,
     Node(String),
-    /// Several selected folders or smart folders.
+    /// The menu was opened on several selected folders or smart folders.
     Bulk(Vec<String>),
     Section,
-    /// A subfolder tile in the grid.
+    /// The menu was opened on a subfolder tile in the grid.
     Tile(String),
-    /// Several subfolder tiles selected in the grid.
+    /// The menu was opened on several subfolder tiles that are selected in
+    /// the grid.
     Tiles(Vec<String>),
 }
 
-/// A row being renamed in place.
+/// Holds the row that is being renamed in place: the node's id, the name it
+/// had when the rename started, and the text field.
 struct Renaming {
     node: String,
     original: String,
@@ -198,8 +209,9 @@ struct Renaming {
     _subscription: Subscription,
 }
 
-/// `nextSidebarSelection`: a click replaces the selection, Cmd-click toggles
-/// one row, and Shift-click adds the rows between.
+/// How a click changes the selection. A plain click replaces the selection
+/// with the clicked row, a Cmd-click adds the clicked row or removes it, and
+/// a Shift-click adds the given rows.
 #[derive(Clone, Copy)]
 enum Pick<'a> {
     Replace,
@@ -221,15 +233,16 @@ fn next_selection(current: &HashSet<String>, clicked: &str, pick: Pick) -> HashS
     }
 }
 
-/// The rows from `from` to `to` inclusive among the rows a section shows,
-/// when both are there.
+/// Returns the rows from `from` to `to`, both included, out of `rows`, which
+/// are the rows a section shows. The two may be given in either order.
+/// Returns `None` when one of them is not in `rows`.
 fn range_between<'a>(rows: &'a [String], from: &str, to: &str) -> Option<&'a [String]> {
     let from = rows.iter().position(|row| row == from)?;
     let to = rows.iter().position(|row| row == to)?;
     Some(&rows[from.min(to)..=from.max(to)])
 }
 
-/// The ids of a section's nodes that have children (`expandableNodeIds`).
+/// Returns the ids of the nodes of `section` that have children.
 fn expandable(entries: &[Navigation], ids: &[String], section: Section) -> Vec<String> {
     let mut parents = vec![false; entries.len()];
     for entry in entries {
@@ -247,79 +260,90 @@ pub struct Sidebar {
     session: Entity<Session>,
     thumbnails: Entity<Thumbnails>,
     filter: Entity<TextInput>,
-    /// Where the keyboard goes back to when a rename ends.
+    /// The focus handle that receives keyboard focus when a rename ends.
     home: FocusHandle,
-    /// Folded nodes and sections, by id, in the shape of the Electron
-    /// sidebar's `picto-sidebar-collapsed` set, kept across launches in the
-    /// app's state as `usePersistedSet` keeps it.
+    /// The ids of the folded nodes and sections. The set is kept across
+    /// launches in the app's state (`state.folded`).
     collapsed: HashSet<String>,
-    /// Rows chosen with Cmd or Shift, by id.
+    /// The ids of the selected rows of folders and smart folders.
     selection: HashSet<String>,
-    /// Where a Shift-click range starts.
+    /// The row that was clicked last. A Shift-click selects the rows from
+    /// this row to the clicked row.
     last_clicked: Option<String>,
-    /// The ids each section showed when last drawn, for Shift ranges.
+    /// The ids of the rows that each section showed when it was last drawn.
+    /// A Shift-click takes its range of rows from them.
     rendered: [Vec<String>; 2],
     /// The row whose context menu is open.
     context: Option<String>,
     renaming: Option<Renaming>,
-    /// The grid whose subfolder tile's menu is open: it renames the tile in
-    /// place.
+    /// The grid that holds the subfolder tile whose context menu is open.
+    /// The tile is renamed in place in that grid.
     tile_grid: Option<WeakEntity<crate::grid::GridView>>,
-    /// The row the keyboard is on while the rows have it.
+    /// The row that is drawn as focused while the rows have keyboard focus.
     keyboard_row: Option<String>,
-    /// The rows' keyboard focus.
+    /// The focus handle of the list of rows.
     rows_focus: FocusHandle,
-    /// The rows as last drawn, in order, for the keyboard.
+    /// The ids of the rows as they were last drawn, from top to bottom. The
+    /// keyboard moves through the rows in this order.
     shown_rows: Vec<String>,
     _rows_focus: Option<Subscription>,
-    /// Where a dragged folder or smart folder would land.
+    /// The row that a dragged folder or smart folder is over, and whether
+    /// the dragged node would be dropped before, inside or after that row.
     drop: Option<(String, DropPosition)>,
-    /// The row items dragged from the grid are over.
+    /// The row that the items dragged from the grid are over.
     grid_drop: Option<String>,
-    /// Items are being dragged from the grid.
+    /// Whether items are being dragged from the grid.
     grid_dragging: bool,
-    /// Where the rows that take drops were last drawn.
+    /// The bounds at which the rows that accept drops were last drawn.
     bounds: drag::RowBounds,
-    /// A left press on a folder or smart-folder row, and where.
+    /// The row of a folder or smart folder on which the left mouse button
+    /// was pressed, and the position of the press.
     press: Option<(String, Point<Pixels>)>,
-    /// The row being dragged.
+    /// The row that is being dragged.
     node_drag: Option<drag::NodeDrag>,
-    /// The click that ends a drag opens nothing.
+    /// Whether the next click is the release of the mouse button that ended
+    /// a drag. That click opens nothing.
     swallow_click: bool,
     _drags: Option<Subscription>,
     /// The open dialog.
     dialog: ui::modal::Host<dialogs::Dialog>,
-    /// The folder picker "Move to..." opens, the folders it moves, and
-    /// where the last context menu opened, which it opens at.
+    /// The folder picker that "Move to..." opens. `moving_folders` holds the
+    /// folders it moves. `menu_position` is where the last context menu
+    /// opened, and the picker opens at that position.
     folder_picker: Entity<crate::inspector::FolderPicker>,
     moving_folders: Vec<FolderId>,
     menu_position: Point<Pixels>,
-    /// The tag picker the auto-tags dialog's add button opens.
+    /// The tag picker that the add button of the auto-tags dialog opens.
     auto_tag_picker: Entity<crate::inspector::TagPicker>,
-    /// The smart-folder editor, while open.
+    /// The smart-folder editor and the subscription to its events, while the
+    /// editor is open.
     smart_editor: Option<(Entity<smart_folder::SmartFolderEditor>, Subscription)>,
-    /// The open context menu, whose checks follow what its rows toggle.
+    /// The open context menu. When a row of the visibility menu is chosen,
+    /// the sidebar updates that row's check mark in this menu.
     menu: Option<WeakEntity<Menu>>,
     _menu: Vec<Subscription>,
     scroll: ScrollHandle,
-    /// The library switcher's popover, and the switcher's bounds it opens
-    /// under.
+    /// The library switcher's popover. `switcher` holds the bounds of the
+    /// switcher, and the popover opens under them.
     library_popover: Entity<LibraryPopover>,
     switcher: Rc<Cell<Bounds<Pixels>>>,
     _subscriptions: Vec<Subscription>,
 }
 
-/// The library switcher's highlight and the pointer over it.
+/// Holds the state of the library switcher's highlight.
 #[derive(Default)]
 struct Switcher {
     hovered: bool,
-    /// The highlight shows while hovered or open.
+    /// Fades the highlight in while the pointer is over the switcher or the
+    /// library popover is open.
     lit: motion::Fade,
-    /// Open: the highlight takes the active surface.
+    /// Changes the highlight's colour from `surface_hover` to
+    /// `surface_active` while the library popover is open.
     open: motion::Fade,
 }
 
-/// The list scrolls this far before "Return to Top" appears.
+/// The distance in pixels that the list has to be scrolled before the
+/// "Return to Top" button appears.
 const RETURN_TO_TOP_AFTER: f32 = 360.;
 
 impl Sidebar {
@@ -341,7 +365,8 @@ impl Sidebar {
                 this.auto_tag_picked(event, cx)
             }),
             cx.observe(&filter, |_, _, cx| cx.notify()),
-            // The switcher shows whether its popover is open.
+            // The switcher is drawn differently while its popover is open,
+            // so the sidebar is redrawn when the popover opens or closes.
             cx.subscribe(&library_popover, |_, _, _: &Toggled, cx| cx.notify()),
             cx.subscribe(&session, |_, _, change: &Change, cx| {
                 if matches!(change, Change::Navigation | Change::Activity) {
@@ -394,8 +419,8 @@ impl Sidebar {
 }
 
 impl Sidebar {
-    /// Opens a node's section and the branches above it
-    /// (`pendingSidebarRevealNodeId`).
+    /// Expands the section that holds `node` and every branch above the
+    /// node, so that the node's row is shown.
     fn reveal(&mut self, node: &str, cx: &mut Context<Self>) {
         if let Some(section) = Section::of_node(node) {
             self.collapsed.remove(section.id());
@@ -419,14 +444,14 @@ impl Sidebar {
         self.keep_folds(cx);
     }
 
-    /// Keeps the folded sections and nodes in the app's state.
+    /// Saves the set of folded sections and nodes in the app's state.
     fn keep_folds(&self, cx: &mut App) {
         let mut folded = self.collapsed.iter().cloned().collect::<Vec<_>>();
         folded.sort();
         crate::state::update(cx, |state| state.folded = folded);
     }
 
-    // ── Rows ────────────────────────────────────────────────────────
+    // The functions below act on the rows of folders and smart folders.
 
     fn label_of(&self, node: &str, cx: &App) -> Option<String> {
         self.session
@@ -445,7 +470,8 @@ impl Sidebar {
         cx.notify();
     }
 
-    /// `setNodesExpanded`.
+    /// Expands the nodes `ids` when `expanded` is true, and folds them
+    /// otherwise.
     fn set_expanded(&mut self, ids: &[String], expanded: bool, cx: &mut Context<Self>) {
         for id in ids {
             if expanded {
@@ -458,9 +484,11 @@ impl Sidebar {
         cx.notify();
     }
 
-    /// `handleRowClick` for folders and smart folders: Cmd toggles the row,
-    /// Shift adds the rows from the last one clicked in the same section,
-    /// and a plain click selects the row alone and opens it.
+    /// Handles a click on the row of a folder or smart folder. A Cmd-click
+    /// or Ctrl-click adds the row to the selection or removes it. A
+    /// Shift-click adds the rows from the row clicked last to this row, when
+    /// both are in the same section. A plain click selects this row alone
+    /// and opens it.
     fn click_node(
         &mut self,
         index: usize,
@@ -491,8 +519,8 @@ impl Sidebar {
         cx.notify();
     }
 
-    /// Fetches the grid again when it shows `node`, or any destination
-    /// when `node` is `None`.
+    /// Reads the grid's items again when the grid shows `node`. When `node`
+    /// is `None`, it reads them again whatever the grid shows.
     fn reload_if_showing(&mut self, node: Option<&str>, cx: &mut Context<Self>) {
         self.session.update(cx, |session, cx| {
             let showing = session.nav.get(session.scope).map(Navigation::id);
@@ -518,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn selection_follows_the_electron_sidebar() {
+    fn selection_follows_the_earlier_versions_sidebar() {
         let current = set(&["folder:1", "folder:2"]);
         assert_eq!(
             next_selection(&current, "folder:3", Pick::Replace),
@@ -533,19 +561,21 @@ mod tests {
             set(&["folder:1", "folder:2", "folder:3"])
         );
         let rows = ["folder:1", "folder:4", "folder:5", "folder:6"].map(String::from);
-        // A range runs either way and keeps what was selected before.
+        // A range can be given from the lower row to the upper row, and the
+        // rows that were selected before stay selected.
         let range = range_between(&rows, "folder:6", "folder:4").unwrap();
         assert_eq!(range, &rows[1..4]);
         assert_eq!(
             next_selection(&set(&["folder:9"]), "folder:4", Pick::Range(range)),
             set(&["folder:9", "folder:4", "folder:5", "folder:6"])
         );
-        // A row the section no longer shows has no range.
+        // There is no range when one of the two rows is not among the rows
+        // that the section shows.
         assert!(range_between(&rows, "folder:7", "folder:4").is_none());
     }
 
     #[test]
-    fn node_ids_parse_as_production_writes_them() {
+    fn node_ids_parse_as_the_earlier_version_wrote_them() {
         assert_eq!(folder_id("folder:12"), Some(FolderId(12)));
         assert_eq!(folder_id("smart:12"), None);
         assert_eq!(smart_folder_id("smart:7"), Some(SmartFolderId(7)));

@@ -1,10 +1,11 @@
-//! `createAccountApiAdapter`: boorus whose login is the API key on the
-//! account's options page.
+//! The adapter for the boorus whose login is the API key that the
+//! account's options page shows.
 use super::scripts::ACCOUNT_API_SCRIPT;
 use super::*;
 
-/// `createAccountApiAdapter`: a booru's API key and user id, read from its
-/// account options once the page shows the account signed in.
+/// The adapter that keeps a booru's API key and user id as the login. Once
+/// the page shows that the user is signed in, it sends the window to the
+/// account's options page and reads the two values there.
 pub struct AccountApiAdapter {
     pub(super) site: Site,
     pub(super) options_navigation_attempts: Cell<u32>,
@@ -43,8 +44,9 @@ impl AccountApiAdapter {
         }
         let attempts = self.options_navigation_attempts.get();
         if flag("authenticated") && !flag("onOptions") && attempts < 5 {
-            // A challenge page can bounce the first hop back to the account
-            // page; keep trying rather than giving up.
+            // A browser check can send the window back to the account page
+            // instead of the options page, so the options page is requested
+            // up to five times.
             self.options_navigation_attempts.set(attempts + 1);
             return Outcome {
                 navigate: self.site.options_url.clone(),

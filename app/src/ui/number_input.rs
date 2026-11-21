@@ -18,8 +18,9 @@ struct State {
     _typed: Subscription,
 }
 
-/// `text` as a whole number within the bounds (`CompactNumberInput`'s
-/// `parse`), or `None`.
+/// Returns `text` as a whole number if it starts with one that lies from `min`
+/// to `max`, and `None` otherwise. Reading stops at the first character that
+/// is not a digit, so `12abc` is 12.
 pub fn parse(text: &str, min: i64, max: i64) -> Option<i64> {
     let digits = text.trim();
     let end = digits
@@ -32,10 +33,10 @@ pub fn parse(text: &str, min: i64, max: i64) -> Option<i64> {
         .filter(|value| (min..=max).contains(value))
 }
 
-/// `CompactNumberInput.tsx`: a 100px field with up and down steppers. A
-/// valid number reports as it is typed; leaving the field puts back the
-/// value if the text is not one, and Escape restores it. The steppers step
-/// by one within the bounds.
+/// A number field 100px wide with two buttons that step the value up and down
+/// by one, within the bounds. Each valid number is reported as it is typed.
+/// When the field loses the keyboard focus while its text is not a valid
+/// number, it shows the value again. Escape also shows the value again.
 #[derive(IntoElement)]
 pub struct NumberInput {
     id: ElementId,
@@ -43,8 +44,8 @@ pub struct NumberInput {
     min: i64,
     max: i64,
     disabled: bool,
-    /// `CompactNumberInput`'s `label`: the field's accessible name, and its
-    /// steppers' ("Increase …", "Decrease …").
+    /// The name that assistive technology gives the field. The step buttons
+    /// are named "Increase …" and "Decrease …" with this name.
     name: Option<SharedString>,
     on_commit: Option<CommitHandler>,
 }
@@ -62,13 +63,13 @@ pub fn number_input(id: impl Into<ElementId>, value: i64, min: i64, max: i64) ->
 }
 
 impl NumberInput {
-    /// Dims the field to half and its steppers to a fifth, and takes no
-    /// input (`GlassInput:disabled`, `.stepper button:disabled`).
+    /// Disables the field: it is drawn at half strength and its step buttons
+    /// at a fifth, and it takes no input.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
     }
-    /// What assistive technology calls the field (production's `label`).
+    /// Sets the name that assistive technology gives the field.
     pub fn name(mut self, name: impl Into<SharedString>) -> Self {
         self.name = Some(name.into());
         self
@@ -115,8 +116,8 @@ fn stepper(
     if disabled {
         return arrow.opacity(0.2).into_any_element();
     }
-    // `.stepper button`: a stop, fully shown with a 1px outline in the
-    // primary border colour while it has the keyboard.
+    // A step button is a Tab stop. While it has the keyboard focus it is drawn
+    // at full strength with a 1px ring in the primary border colour.
     let focus = super::focus::control(&ElementId::from((id, state.entity_id())), window, cx);
     let ring = focus.ring(
         super::focus::Ring {
@@ -142,13 +143,16 @@ fn stepper(
         .opacity(opacity)
         .cursor_pointer()
         .on_hover(set_hover)
-        // The field keeps the keyboard; the arrow only steps.
+        // A press on the step button does not move the keyboard focus out of
+        // the field. It only steps the value.
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, _, cx| step_by(&state, delta, cx))
         .into_any_element()
 }
 
-/// One step up or down from what the field holds.
+/// Changes the number in the field by `delta`, within the bounds, and reports
+/// the new value. When the field's text is not a valid number, it steps from
+/// the value the field was last given.
 fn step_by(state: &Entity<State>, delta: i64, cx: &mut App) {
     let (input, value, min, max, handler) = {
         let state = state.read(cx);
@@ -180,7 +184,8 @@ impl RenderOnce for NumberInput {
                 input.set_text(value.to_string(), cx);
                 input
             });
-            // Each edit that leaves a valid, different number reports it.
+            // Each edit after which the text is a valid number that differs
+            // from the value is reported.
             let typed = cx.observe(&input, |state: &mut State, input, cx| {
                 let text = input.read(cx).value();
                 if text == state.seen {
@@ -224,7 +229,8 @@ impl RenderOnce for NumberInput {
             None => (None, None),
         };
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
-        // Outside editing, the field shows the value it was given.
+        // While the field does not have the keyboard focus, it shows the value
+        // it was given.
         if !focused && input.read(cx).value() != value.to_string() {
             input.update(cx, |input, cx| input.set_text(value.to_string(), cx));
         }
@@ -250,7 +256,8 @@ impl RenderOnce for NumberInput {
                     .w_full()
                     .opacity(if self.disabled { 0.5 } else { 1. })
                     .child(field(self.id.clone(), &input, Look::Number))
-                    // Disabled, a cover takes the presses the field would.
+                    // When the field is disabled, an element over it stops
+                    // presses from reaching the field.
                     .children(self.disabled.then(|| {
                         div()
                             .id("disabled")
@@ -302,7 +309,7 @@ mod tests {
     fn only_whole_numbers_within_bounds_parse() {
         assert_eq!(parse("42", 0, 100), Some(42));
         assert_eq!(parse(" 7 ", 0, 100), Some(7));
-        // `parseInt` stops at the first character that is not a digit.
+        // Reading stops at the first character that is not a digit.
         assert_eq!(parse("12abc", 0, 100), Some(12));
         assert_eq!(parse("101", 0, 100), None);
         assert_eq!(parse("", 0, 100), None);

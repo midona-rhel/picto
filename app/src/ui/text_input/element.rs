@@ -625,7 +625,7 @@ impl Element for TextElement {
         // placeholder that was stored as its translation into another
         // language is also shown in the present language: `t_shared` finds
         // the English text that the translation belongs to and translates
-        // that, as production's `translateMessage` does.
+        // that.
         let placeholder = crate::i18n::t_shared(input.placeholder.clone());
         let kind = input.kind;
         let multiline = input.multiline;
@@ -663,11 +663,10 @@ impl Element for TextElement {
         let mut line = shape(display_text.clone(), text_color, window);
         // The text needs more than one line when it has a line break or is
         // wider than the element. A field that takes line breaks
-        // (`multiline`) records this in `TextInput::overflowing`
-        // (production's `measureOverflow`). While that is true and the
-        // field has the keyboard focus, the text is drawn wrapped, and
-        // `ui::field` draws an inspector field expanded over what is below
-        // it.
+        // (`multiline`) records this in `TextInput::overflowing`. While
+        // that is true and the field has the keyboard focus, the text is
+        // drawn wrapped, and `ui::field` draws an inspector field expanded
+        // over what is below it.
         let overflowing = !content.is_empty()
             && (content.contains(['\n', '\r']) || line.width > bounds.size.width);
         if multiline {
@@ -675,14 +674,12 @@ impl Element for TextElement {
         }
 
         // A field without the keyboard focus whose text is wider than the
-        // element shows the start of the text followed by an ellipsis (…),
-        // as the CSS `text-overflow: ellipsis` does. The text is cut at the
-        // last boundary between two characters at which the text before
-        // the boundary and the ellipsis together fit in the element. A field
-        // that draws its text in a face of its own (`TextInput::set_face`,
-        // for text that production edits in a `contentEditable` element)
-        // gets no ellipsis. Its text is clipped at the element's right
-        // edge.
+        // element shows the start of the text followed by an ellipsis (…).
+        // The text is cut at the last boundary between two characters at
+        // which the text before the boundary and the ellipsis together fit
+        // in the element. A field that draws its text in a face of its own
+        // (`TextInput::set_face`) gets no ellipsis. Its text is clipped at
+        // the element's right edge.
         if !focused && !caret_in_text_color && line.width > bounds.size.width && !content.is_empty()
         {
             let ellipsis = shape("…".into(), text_color, window).width;

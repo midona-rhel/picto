@@ -1,8 +1,8 @@
-//! This file holds the shortcut registry of production's
-//! `src/shared/lib/shortcuts.ts` as data: the id, label, group, description
-//! and default keys of every shortcut. It also holds the keyboard presets,
-//! and the functions that write a shortcut's keys as macOS shows them and as
-//! Windows and Linux show them.
+//! This file holds the shortcut registry as data: the id, label, group,
+//! description and default keys of every shortcut. The ids and the default
+//! keys are the ones that Picto 0.6.19 and earlier had. The file also holds
+//! the keyboard presets, and the functions that write a shortcut's keys as
+//! macOS shows them and as Windows and Linux show them.
 use std::collections::BTreeMap;
 
 pub struct ShortcutDef {
@@ -59,16 +59,15 @@ const RATING: &str = "Rating";
 const VIDEO: &str = "Video";
 const DUPLICATES: &str = "Duplicates";
 
-/// Every shortcut, in the same order as `SHORTCUT_DEFS` in production's
-/// `shortcuts.ts`.
+/// Every shortcut. Settings lists the shortcuts of a group in the order in
+/// which they are written here.
 pub const SHORTCUT_DEFS: &[ShortcutDef] = &[
     def("nav.allActive", "All Active", NAV, "Mod+1"),
     def("nav.inbox", "Inbox", NAV, "Mod+2"),
     def("nav.untagged", "Untagged", NAV, "Mod+3"),
     def("nav.trash", "Trash", NAV, "Mod+4"),
     def("nav.search", "Search", NAV, "Mod+F"),
-    // This app's Quick Search panel. Production registers these two
-    // shortcuts as deferred and has no panel for them.
+    // The next two shortcuts open the Quick Search panel.
     def("nav.commandPalette", "Quick Search", NAV, "Mod+T")
         .or("Mod+K")
         .about("Search actions, places, tags and items"),
@@ -247,8 +246,7 @@ pub const SHORTCUT_DEFS: &[ShortcutDef] = &[
     def("dup.nextPair", "Next Pair", DUPLICATES, "ArrowRight").about("Go to next duplicate pair"),
 ];
 
-/// The shortcut groups, in the order in which Settings lists them. This is
-/// the order of production's `getShortcutGroups`.
+/// The shortcut groups, in the order in which Settings lists them.
 const GROUP_ORDER: [&str; 9] = [
     NAV, FILE, EDIT, GROUPS, RATING, VIEW, INBOX, VIDEO, DUPLICATES,
 ];
@@ -338,7 +336,7 @@ fn resolve(def: &ShortcutDef, preset: KeyboardPreset, overrides: &Overrides) -> 
 }
 
 /// Returns the shortcut with this id, with the preset and the overrides
-/// applied. This is production's `getShortcut`.
+/// applied. Returns `None` when no shortcut has this id.
 pub fn shortcut(id: &str, preset: KeyboardPreset, overrides: &Overrides) -> Option<Shortcut> {
     SHORTCUT_DEFS
         .iter()
@@ -379,8 +377,7 @@ pub fn groups(preset: KeyboardPreset, overrides: &Overrides) -> Vec<Group> {
 
 /// Keeps the shortcuts whose label, group, description or first binding
 /// contains the query, ignoring case. The binding is compared as
-/// [`display`] writes it. A blank query keeps every shortcut. This is
-/// production's `filterGroups`.
+/// [`display`] writes it. A blank query keeps every shortcut.
 pub fn filter(groups: Vec<Group>, query: &str) -> Vec<Group> {
     if query.trim().is_empty() {
         return groups;
@@ -411,9 +408,9 @@ pub fn filter(groups: Vec<Group>, query: &str) -> Vec<Group> {
 }
 
 /// Returns the label of another shortcut that is already bound to `value`,
-/// or `None` when there is none. Delete and Remove from Folder share their
-/// key on purpose, so they are never reported as a conflict with each
-/// other. This is production's `findShortcutConflict`.
+/// or `None` when there is none. Delete and Remove from Folder have the
+/// same default keys, because only one of them applies at a time, so they
+/// are never reported as a conflict with each other.
 pub fn conflict(
     id: &str,
     value: &str,
@@ -435,16 +432,14 @@ pub fn conflict(
 }
 
 /// Returns each key of a shortcut as this platform writes it: with the
-/// Mac's symbols on macOS, and with words on other platforms. This is
-/// production's `formatKeysAsArray`.
+/// Mac's symbols on macOS, and with words on other platforms.
 pub fn parts(keys: &str) -> Vec<String> {
     parts_on(keys, cfg!(target_os = "macos"))
 }
 
 /// Returns a shortcut's keys as one string. On macOS the Mac's symbols are
 /// joined with nothing between them (`⌘⇧S`). On other platforms the words
-/// are joined with `+` (`Ctrl+Shift+S`). This is production's
-/// `formatKeysDisplay`.
+/// are joined with `+` (`Ctrl+Shift+S`).
 pub fn display(keys: &str) -> String {
     display_on(keys, cfg!(target_os = "macos"))
 }
@@ -456,10 +451,9 @@ pub fn display_on(keys: &str, mac: bool) -> String {
 }
 
 /// Does what [`parts`] does, as macOS writes the keys when `mac` is true
-/// (production's `MAC_SYMBOLS`) and as Windows and Linux write them when
-/// `mac` is false (production's `WIN_LABELS`). On Windows and Linux, `Mod`
-/// is the only modifier that is written under another name (`Ctrl`);
-/// `Shift`, `Alt` and `Ctrl` are written as they are.
+/// and as Windows and Linux write them when `mac` is false. On Windows and
+/// Linux, `Mod` is the only modifier that is written under another name
+/// (`Ctrl`). `Shift`, `Alt` and `Ctrl` are written as they are.
 pub fn parts_on(keys: &str, mac: bool) -> Vec<String> {
     if keys == "+" {
         return vec!["+".into()];
@@ -478,8 +472,8 @@ pub fn parts_on(keys: &str, mac: bool) -> Vec<String> {
         .collect()
 }
 
-/// Returns the symbol that macOS shows for one key. This is production's
-/// `MAC_SYMBOLS` table. A key that is not in the table is returned as it is.
+/// Returns the symbol that macOS shows for one key. A key that has no
+/// symbol here is returned as it is.
 fn mac_symbol(part: &str) -> &str {
     match part {
         "Mod" => "⌘",
@@ -502,9 +496,8 @@ fn mac_symbol(part: &str) -> &str {
     }
 }
 
-/// Returns the word that Windows and Linux show for one key. This is
-/// production's `WIN_LABELS` table. A key that is not in the table is
-/// returned as it is.
+/// Returns the word or the arrow that Windows and Linux show for one key. A
+/// key that has none here is returned as it is.
 fn label(part: &str) -> &str {
     match part {
         "Mod" => "Ctrl",
@@ -526,7 +519,7 @@ fn label(part: &str) -> &str {
 
 /// Converts a pressed key to the form in which the registry writes keys.
 /// Returns `None` when the key is a modifier on its own. `key` is GPUI's
-/// name for the key. This is production's `eventToShortcutString`.
+/// name for the key.
 pub fn from_keystroke(
     key: &str,
     command: bool,

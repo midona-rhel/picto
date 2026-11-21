@@ -1,21 +1,19 @@
 //! What the Library Manager's Rename…, Move… and Delete… do to a library's
-//! folder on disk. Move… and Delete… do what the Electron app's main process
-//! does (`libraryHostService.mjs`, `libraryFilesystem.mjs`).
+//! folder on disk.
 //!
-//! Delete… removes the folder and everything in it (`deleteLibrary`, which
-//! calls `fs.rm` recursively). The folder is not moved to the system's Trash.
+//! Delete… removes the folder and everything in it. The folder is not moved
+//! to the system's Trash.
 //!
-//! Move… puts the folder into another folder (`relocateLibrary`,
-//! `moveLibraryDirectory`). On the same volume this is a rename. Across
-//! volumes the folder is copied, every file of the copy is compared with its
-//! original, the copy is renamed to the library's name, and only then is the
-//! original removed.
+//! Move… puts the folder into another folder. On the same volume this is a
+//! rename. Across volumes the folder is copied, every file of the copy is
+//! compared with its original, the copy is renamed to the library's name,
+//! and only then is the original removed.
 //!
 //! Rename… gives the folder another name in the same parent folder.
 //!
-//! All three act only on a folder that `ownedLibraryPath` accepts: a real
-//! folder, not a link, whose name ends in `.library` and which holds a file
-//! named `library.sqlite`. Delete… refuses the library that is open in this
+//! All three act only on a folder that [`owned`] accepts: a real folder,
+//! not a link, whose name ends in `.library` and which holds a file named
+//! `library.sqlite`. Delete… refuses the library that is open in this
 //! app. For Rename… and Move…, the caller closes the library first if it is
 //! open. None of the three acts on a library that another process has locked.
 //! Each takes the core's lock on `.picto-library.lock` and keeps it until its
@@ -31,10 +29,10 @@ use picto_core::state::{LIBRARY_LOCK_FILE, LibraryLock};
 use std::path::{Path, PathBuf};
 
 /// Returns the canonical form of `path` if it is a library folder that this
-/// app may change on disk (`ownedLibraryPath` in the Electron app): a real
-/// folder, not a link, whose name ends in `.library` in any letter case and
-/// which holds a file named `library.sqlite`. Otherwise it returns the
-/// Electron app's error message for a path that is not a library.
+/// app may change on disk: a real folder, not a link, whose name ends in
+/// `.library` in any letter case and which holds a file named
+/// `library.sqlite`. Otherwise it returns the error message for a path that
+/// is not a library.
 pub fn owned(path: &Path) -> Result<PathBuf, String> {
     let refuse = || "Refusing to modify a path that is no longer a Picto library.".to_owned();
     let meta = path.symlink_metadata().map_err(|_| refuse())?;
@@ -131,8 +129,9 @@ pub fn delete(path: &Path, open: Option<&Path>) -> Result<(), String> {
     remove_held(&root, lock).map_err(|error| format!("{}: {error}", root.display()))
 }
 
-/// Rename…: the library's folder at `path` becomes `target`, which is in
-/// the same parent folder. The open library is closed by the caller first.
+/// Does the Library Manager's Rename…: renames the library's folder at
+/// `path` to `target`, which is in the same parent folder. If the library is
+/// open, the caller closes it before calling this.
 pub fn rename_to(path: &Path, target: &Path) -> Result<(), String> {
     let root = owned(path)?;
     let lock = hold(&root, None)?;
@@ -154,10 +153,10 @@ pub enum Moved {
 
 /// Works out where Move… would put the library at `path` when the user chooses
 /// `folder`: the path in `folder` with the library's own folder name. Returns
-/// `Moved::Unchanged` when the library is already at that path. Returns the
-/// Electron app's error message in two cases: when `folder` is a library
-/// folder or is inside one (a folder whose name ends in `.library`), and when
-/// something with the library's folder name already exists in `folder`.
+/// `Moved::Unchanged` when the library is already at that path. Returns an
+/// error message in two cases: when `folder` is a library folder or is
+/// inside one (a folder whose name ends in `.library`), and when something
+/// with the library's folder name already exists in `folder`.
 pub fn destination(path: &Path, folder: &Path) -> Result<Moved, String> {
     let inside_library = |folder: &Path| {
         folder.ancestors().any(|folder| {
@@ -183,8 +182,8 @@ pub fn destination(path: &Path, folder: &Path) -> Result<Moved, String> {
         return Ok(Moved::Unchanged);
     }
     if target.symlink_metadata().is_ok() {
-        // The Electron app shows this message under the title "Already
-        // Exists".
+        // Something in the chosen folder already has the library's folder
+        // name, so the library is not moved there.
         return Err(format!(
             "\"{}\" already exists at that location.",
             name.to_string_lossy()
@@ -217,18 +216,17 @@ pub fn move_to(path: &Path, target: &Path) -> Result<(), String> {
     }
 }
 
-/// Moves the library's folder `root` to `target` on another volume
-/// (`moveLibraryDirectory` in the Electron app). The folder is copied into the
-/// parent folder of `target` under the temporary name
-/// `.<name>.picto-moving-<process id>`. Every file of the copy is compared
-/// with its original. The copy is then renamed to `target`, and only after
-/// that is the original removed. If the copy fails or differs from the
+/// Moves the library's folder `root` to `target` on another volume. The
+/// folder is copied into the parent folder of `target` under the temporary
+/// name `.<name>.picto-moving-<process id>`. Every file of the copy is
+/// compared with its original. The copy is then renamed to `target`, and only
+/// after that is the original removed. If the copy fails or differs from the
 /// original, or if something has appeared at `target` in the meantime, the
 /// copy is removed and the original is left as it was. If the original cannot
 /// be removed after the copy has been renamed to `target`, the move still
 /// succeeds and the failure is written to the console. A library that holds a
-/// symbolic link is not moved this way: the Electron app copies the link as it
-/// is, but this app's `copy_tree` returns an error when it finds a link.
+/// symbolic link is not moved this way, because `application::copy_tree`
+/// returns an error when it finds a link.
 ///
 /// `lock` is the library's lock. It is held until the original has been
 /// removed, so no other instance can open and change the original while it
@@ -277,10 +275,10 @@ fn copy_without_lock_file(root: &Path, staging: &Path) -> Result<(), String> {
 }
 
 /// Checks that the folder `copy` holds exactly what the folder `original`
-/// holds (`verifyDirectoryCopy` in the Electron app): the same file names and
-/// folder names at every level, and the same bytes in every file. Returns an
-/// error if anything differs, and also if `original` holds something that is
-/// neither a file nor a folder, such as a symbolic link.
+/// holds: the same file names and folder names at every level, and the same
+/// bytes in every file. Returns an error if anything differs, and also if
+/// `original` holds something that is neither a file nor a folder, such as a
+/// symbolic link.
 pub fn same_tree(original: &Path, copy: &Path) -> Result<(), String> {
     same_tree_except(original, copy, None)
 }

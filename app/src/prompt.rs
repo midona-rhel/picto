@@ -1,24 +1,26 @@
-//! The system's file, folder and save dialogs, as the Electron main process
-//! opens them for the renderer (`picto:dialog:open`, `picto:dialog:save`).
-//! Each answers with the path chosen, or `None` when the dialog was
-//! cancelled or could not open.
+//! Opens the system's dialogs for choosing a file, choosing a folder and
+//! saving a file. Each function returns a receiver that gets the path the
+//! user chose, or `None` when the dialog was cancelled or could not be
+//! opened.
 //!
-//! The off-screen tool cannot drive a system dialog, so a test can answer
-//! the dialogs itself: [`answer_next`] queues answers, and each dialog asked
-//! for while one is queued takes it instead of opening. Nothing queues an
-//! answer outside the off-screen tool's `answer` line (`src/offscreen.rs`),
-//! and only test builds hold the queue.
+//! The off-screen tool cannot operate a system dialog, so a test can answer
+//! the dialogs itself. [`answer_next`] puts an answer in a queue. While the
+//! queue holds an answer, the next dialog takes that answer and does not
+//! open. Only the `answer` line of the off-screen tool (`src/offscreen.rs`)
+//! puts answers in the queue, and only a test build has the queue.
 use futures::channel::oneshot;
 use gpui::{App, PathPromptOptions};
 use std::path::{Path, PathBuf};
 
-/// Answers waiting for the next dialogs, oldest first. `None` cancels one.
+/// Holds the answers for the next dialogs, oldest first. `None` is the answer
+/// of a cancelled dialog.
 #[cfg(test)]
 static ANSWERS: std::sync::Mutex<std::collections::VecDeque<Option<PathBuf>>> =
     std::sync::Mutex::new(std::collections::VecDeque::new());
 
-/// Has the next dialog answer `path` (or be cancelled, for `None`) without
-/// opening. For the off-screen tool only.
+/// Puts `path` in the queue as the answer of the next dialog, which then does
+/// not open. With `None` that dialog answers as a cancelled dialog does. Only
+/// the off-screen tool calls this.
 #[cfg(test)]
 pub fn answer_next(path: Option<PathBuf>) {
     if let Ok(mut answers) = ANSWERS.lock() {
@@ -36,7 +38,8 @@ fn queued() -> Option<Option<PathBuf>> {
     None
 }
 
-/// What a dialog hands back: the path, or nothing.
+/// The receiver that a dialog function returns. It gets the path the user
+/// chose, or `None` when the user chose nothing.
 pub type Answer = oneshot::Receiver<Option<PathBuf>>;
 
 fn answered(path: Option<PathBuf>) -> Answer {
@@ -45,18 +48,19 @@ fn answered(path: Option<PathBuf>) -> Answer {
     receiver
 }
 
-/// `properties: ['openDirectory']`: one folder.
+/// Asks the user to choose one folder.
 pub fn folder(prompt: &str, cx: &App) -> Answer {
     choose(false, true, prompt, cx)
 }
 
-/// `properties: ['openFile']`: one file.
+/// Asks the user to choose one file.
 pub fn file(prompt: &str, cx: &App) -> Answer {
     choose(true, false, prompt, cx)
 }
 
-/// `properties: ['openFile', 'openDirectory']`: one file or folder, as
-/// Open Library… asks (a `.library` is a package, a file, on macOS).
+/// Asks the user to choose one file or one folder. Open Library… uses this,
+/// because on macOS a `.library` is a package, which the dialog offers as a
+/// file, and elsewhere it is a folder.
 pub fn file_or_folder(prompt: &str, cx: &App) -> Answer {
     choose(true, true, prompt, cx)
 }
@@ -84,9 +88,9 @@ fn choose(files: bool, directories: bool, prompt: &str, cx: &App) -> Answer {
     receiver
 }
 
-/// `dialog.showSaveDialog`: where to write a new file, offered as
-/// `suggested` in `directory`. A name chosen without `extension` gets it, as
-/// the save dialog's file type filter adds it in production.
+/// Asks the user where to write a new file. The dialog opens in `directory`
+/// with `suggested` as the file's name. When the name the user chose does not
+/// end in `extension`, the extension is added to it.
 pub fn save(directory: &Path, suggested: &str, extension: &str, cx: &App) -> Answer {
     let extension = extension.to_owned();
     if let Some(path) = queued() {
@@ -106,7 +110,8 @@ pub fn save(directory: &Path, suggested: &str, extension: &str, cx: &App) -> Ans
     receiver
 }
 
-/// `path`, ending in `.extension` (whatever its case) or given it.
+/// Returns `path` unchanged when it ends in `.extension`, in upper or lower
+/// case, and with `.extension` added to it otherwise.
 fn with_extension(path: PathBuf, extension: &str) -> PathBuf {
     let has = path
         .extension()
@@ -120,7 +125,8 @@ fn with_extension(path: PathBuf, extension: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Where a save dialog opens: the user's home folder, else the working one.
+/// Returns the folder a save dialog opens in: the user's home folder, or the
+/// working folder when the home folder is not known.
 pub fn home() -> PathBuf {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .map(PathBuf::from)

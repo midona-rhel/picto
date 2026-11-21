@@ -1,10 +1,11 @@
-//! Quick Look (`GridQuickLook.tsx`, `QuickLook.tsx`, `QuickLookHost.tsx`): a
-//! peek at the selected item over the whole window, titlebar included, on
-//! the app background. The media sits 48px from the top and bottom and 16px
-//! from the sides; a close button in the top-right corner and the
-//! previous / count / next strip along the bottom. It follows the
-//! selection: stepping moves the grid's selection, which keeps it in view.
-//! It has the viewer's keys (`Viewer`), so Space, Enter and Escape close it.
+//! Quick Look: a preview of the selected item that covers the whole window,
+//! the titlebar included, on the app's background colour. The media is 48px
+//! from the top and the bottom of the window and 16px from the sides. A
+//! close button is in the top-right corner, and the strip with the previous
+//! button, the count and the next button is along the bottom. Quick Look
+//! follows the selection: a step moves the grid's selection, and the grid
+//! scrolls to keep the selected item in view. It uses the viewer's key
+//! bindings (the `Viewer` key context), so Space, Enter and Escape close it.
 use super::{
     Close, Media, MenuRequested, NextItem, PreviousItem, browsing_recent, collection_selected,
     group, point_at_member, record_view, show_selection, step_within, strip,
@@ -16,38 +17,45 @@ use crate::{theme, ui};
 use gpui::{prelude::FluentBuilder as _, *};
 use picto_library::{RootId, RootKind};
 
-/// Quick Look opened or closed, so the shell shows or drops it.
+/// Emitted when Quick Look opens or closes, so that the shell adds it to the
+/// window or removes it.
 pub struct Toggled;
 
-/// `.imageArea`'s margin: 48px above and below, 16px at the sides.
+/// The distance of the media from the top and from the bottom of the window.
+/// `AREA_SIDE` is its distance from the left and the right side.
 const AREA_VERTICAL: f32 = 48.;
 const AREA_SIDE: f32 = 16.;
-/// `.imageArea`'s `border-radius: 8px`.
+/// The corner radius of the area that the media is shown in.
 const AREA_RADIUS: f32 = 8.;
-/// `.closeButton`: 32px, 12px from the top-right corner.
+/// The width and the height of the close button. `CLOSE_INSET` is its
+/// distance from the top and from the right edge of the window.
 const CLOSE_SIZE: f32 = 32.;
 const CLOSE_INSET: f32 = 12.;
 
 pub struct QuickLook {
     session: Entity<Session>,
     surface: Entity<MediaSurface>,
-    /// A collection's members (`GroupQuickLookContent`).
+    /// Shows the members of a collection, when the selected item is a
+    /// collection.
     group: Entity<group::GroupReader>,
     focus: FocusHandle,
     open: bool,
-    /// Where the keyboard was before Quick Look opened, to give it back.
+    /// The element that had keyboard focus before Quick Look opened. Focus
+    /// returns to it when Quick Look closes.
     return_focus: Option<FocusHandle>,
-    /// The item last recorded as viewed while open.
+    /// The item that was last recorded as viewed while Quick Look was open.
     recorded: Option<RootId>,
-    /// A member of the open collection's editor, peeked at by itself
-    /// (`quickLookIndex`): Quick Look steps through the members.
+    /// Set when Quick Look was opened from the collection's editor on one
+    /// member of the collection: the member's index. Quick Look then steps
+    /// through the collection's members.
     member: Option<usize>,
-    /// A member of the collection Quick Look shows, opened by itself with a
-    /// double-click (`viewerIndex`): Escape goes back to the collection,
-    /// the arrows step through its members.
+    /// Set when the user double-clicked a member of the collection that
+    /// Quick Look shows, which opens that member by itself: the member's
+    /// index. Escape then goes back to the collection, and the arrow keys
+    /// step through its members.
     opened: Option<usize>,
-    /// Why the last edit of a collection shown here failed, and which
-    /// collection (`GroupSurface`'s inline error).
+    /// Why the last change to a collection shown here failed, and which
+    /// collection that was.
     error: Option<(RootId, SharedString)>,
     _subscriptions: Vec<Subscription>,
 }
@@ -57,7 +65,7 @@ impl EventEmitter<MenuRequested> for QuickLook {}
 
 impl QuickLook {
     pub fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        // No navigator in Quick Look.
+        // Quick Look shows no navigator.
         let surface = cx.new(|cx| MediaSurface::for_host(false, false, cx));
         let group = cx.new(|_| group::GroupReader::new(session.clone()));
         let subscriptions = vec![
@@ -84,8 +92,9 @@ impl QuickLook {
                 }
                 match change {
                     Change::Selection => {
-                        // The item it followed is gone, or the selection is
-                        // no longer one item: nothing to peek at.
+                        // Quick Look closes when the item it followed is gone,
+                        // or when the selection is no longer exactly one item,
+                        // because there is then nothing to preview.
                         let single = {
                             let session = this.session.read(cx);
                             session.selection_count() == 1 && session.selected_item().is_some()
@@ -94,7 +103,8 @@ impl QuickLook {
                             this.close(window, cx);
                             return;
                         }
-                        // Another item: a member opened by itself closes.
+                        // The selection is now another item, so a member that
+                        // was opened by itself is closed.
                         this.opened = None;
                         show_selection(&this.session, &this.surface, cx);
                         this.present(cx);
@@ -123,7 +133,8 @@ impl QuickLook {
         }
     }
 
-    /// The media surface, for the viewer's context menu.
+    /// Returns the media surface. The shell needs it to build the viewer's
+    /// context menu.
     pub fn surface(&self) -> Entity<MediaSurface> {
         self.surface.clone()
     }
@@ -132,9 +143,9 @@ impl QuickLook {
         self.open
     }
 
-    /// An edit of the collection `root` (a sort, members taken out) has
-    /// been answered: its failure shows over the members, as the media
-    /// view's does, and one that went through takes the last away.
+    /// Records the result of a change to the collection `root` (a sort, or
+    /// the removal of members). A failure is shown above the members, as in
+    /// the media view. A success removes the message of an earlier failure.
     pub fn collection_edited(
         &mut self,
         root: RootId,
@@ -145,7 +156,8 @@ impl QuickLook {
         cx.notify();
     }
 
-    /// Opens on the selected item, which must be the only one selected.
+    /// Opens Quick Look on the selected item. Does nothing unless exactly
+    /// one item is selected.
     pub fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let single = {
             let session = self.session.read(cx);
@@ -154,13 +166,13 @@ impl QuickLook {
         if self.open || !single {
             return;
         }
-        // A scroll still coasting in the grid must not go on to scroll
-        // what Quick Look shows.
+        // A scroll in the grid that is still moving after a trackpad flick
+        // must not go on to scroll what Quick Look shows.
         crate::ui::momentum::suppress();
         self.open = true;
         self.return_focus = window.focused(cx);
         window.focus(&self.focus, cx);
-        // Each opening starts fitted, as a fresh `QuickLookContent` does.
+        // The media is fitted to the area each time Quick Look opens.
         self.surface.update(cx, |surface, _| surface.refit());
         show_selection(&self.session, &self.surface, cx);
         self.present(cx);
@@ -168,8 +180,9 @@ impl QuickLook {
         cx.notify();
     }
 
-    /// Opens on the member at `member` of the selected collection, as the
-    /// collection's editor peeks at one; nothing is recorded as viewed.
+    /// Opens Quick Look on the member at index `member` of the selected
+    /// collection. The collection's editor uses this. Nothing is recorded as
+    /// viewed.
     pub fn open_member(&mut self, member: usize, window: &mut Window, cx: &mut Context<Self>) {
         if self.open || !collection_selected(self.session.read(cx)) {
             return;
@@ -184,7 +197,7 @@ impl QuickLook {
         cx.notify();
     }
 
-    /// The members of the collection a member is peeked from.
+    /// Returns the number of members of the selected collection.
     fn member_count(&self, cx: &App) -> usize {
         self.session
             .read(cx)
@@ -196,8 +209,8 @@ impl QuickLook {
         if !self.open {
             return;
         }
-        // A scroll still coasting after a trackpad flick must not go on to
-        // scroll the grid that Quick Look was covering.
+        // A scroll that is still moving after a trackpad flick must not go on
+        // to scroll the grid that Quick Look was covering.
         crate::ui::momentum::suppress();
         self.open = false;
         self.member = None;
@@ -213,8 +226,10 @@ impl QuickLook {
         cx.notify();
     }
 
-    /// Opens the selected item's file once its details are there, and
-    /// records it as viewed (not while browsing Recently Viewed).
+    /// Opens the selected item's file once its details have arrived, and
+    /// records the item as viewed, except while the grid shows Recently
+    /// Viewed. A collection is shown as its members. While one member is
+    /// shown by itself, that member's file is opened instead.
     fn present(&mut self, cx: &mut Context<Self>) {
         if let Some(member) = self.member.or(self.opened) {
             let media = {
@@ -258,8 +273,9 @@ impl QuickLook {
         }
     }
 
-    /// Escape, Space and Enter: a member opened by itself goes back to its
-    /// collection; otherwise Quick Look closes.
+    /// Handles Escape, Space and Enter. A member that was opened by itself
+    /// is closed, and its collection is shown again. Otherwise Quick Look
+    /// closes.
     fn close_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.opened.take().is_some() {
             self.present(cx);
@@ -269,8 +285,10 @@ impl QuickLook {
         self.close(window, cx);
     }
 
-    /// The arrow keys: through the members of one opened by itself, as
-    /// `MediaView` steps, stopping at either end; otherwise as the strip.
+    /// Handles the arrow keys. While a member is opened by itself, they step
+    /// through the collection's members and stop at the first and at the
+    /// last. Otherwise they do what the strip's previous and next buttons
+    /// do.
     fn arrow(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(opened) = self.opened {
             if let Ok(target) = step_within(opened, delta, self.member_count(cx)) {
@@ -283,11 +301,12 @@ impl QuickLook {
         self.step(delta, window, cx);
     }
 
-    /// `navigate`: steps through the results by moving the grid's selection;
-    /// a step past either end does nothing.
+    /// Goes to the previous or the next result by moving the grid's
+    /// selection. A step past the first or the last result does nothing.
     fn step(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
-        // Through the members of the collection a member is peeked from,
-        // stopping at either end.
+        // When Quick Look was opened on a member from the collection's
+        // editor, the step goes through the collection's members and stops
+        // at the first and at the last.
         if let Some(member) = self.member {
             if let Ok(target) = step_within(member, delta, self.member_count(cx)) {
                 self.member = Some(target);
@@ -306,8 +325,9 @@ impl QuickLook {
         if step_within(index, delta, total).is_err() {
             return;
         }
-        // The grid's move reads the item's window first when it is not
-        // held; what is shown stays until it arrives.
+        // When the item to move to is not loaded, the shell first reads the
+        // window of results that holds it. What is shown stays on screen
+        // until that window has arrived.
         if delta < 0 {
             window.dispatch_action(Box::new(crate::shell::Previous), cx);
         } else {
@@ -333,7 +353,8 @@ impl Render for QuickLook {
                 )
             }
         };
-        // The failure shows only over the collection it was about.
+        // The failure is shown only above the collection that the failed
+        // change was made to.
         let error = self
             .error
             .as_ref()
@@ -345,16 +366,17 @@ impl Render for QuickLook {
             .top(px(AREA_VERTICAL))
             .bottom(px(AREA_VERTICAL))
             .overflow_hidden();
-        // A member opened by itself shows in the collection's frame.
+        // A member that is opened by itself is shown in the same frame as its
+        // collection.
         let frame = if collection {
-            // `GroupQuickLook.module.css`: `clamp(32px, 16vw, 280px)` at
-            // the sides.
+            // The space at each side of a collection is 16% of the window's
+            // width, but at least 32px and at most 280px.
             let side = (f32::from(window.viewport_size().width) * 0.16).clamp(32., 280.);
             frame.left(px(side)).right(px(side))
         } else {
-            // TODO: the rounded corners clip only the area's rectangle;
-            // GPUI clips to rectangles, so a zoomed image shows square
-            // corners where production rounds them.
+            // TODO: round the corners of a zoomed image. GPUI clips to
+            // rectangles only, so an image that is zoomed past the edges of
+            // the area has square corners.
             frame
                 .left(px(AREA_SIDE))
                 .right(px(AREA_SIDE))
@@ -371,10 +393,12 @@ impl Render for QuickLook {
                 .disabled(!enabled)
                 .on_click(cx.listener(move |this, _, window, cx| this.step(delta, window, cx)))
         };
-        // Quick Look's keys are the viewer's; Space closes it, even over
-        // pages.
+        // Quick Look uses the viewer's key bindings. It does not ask for the
+        // keys that scroll a document's pages, so Space closes it even while
+        // a paged document is shown.
         let context = self.surface.read(cx).key_context("Viewer", false);
-        // A dialog over the window, holding the keyboard.
+        // For assistive technology, Quick Look is a modal dialog. It has
+        // keyboard focus while it is open.
         let quick_look = div()
             .id("quick-look")
             .role(Role::Dialog)
@@ -387,13 +411,13 @@ impl Render for QuickLook {
             .absolute()
             .inset_0()
             .bg(theme.background())
-            // Space, Enter and Escape: the viewer's close keys.
+            // Space, Enter and Escape are the viewer's close keys.
             .on_action(cx.listener(|this, _: &Close, window, cx| this.close_key(window, cx)))
             .on_action(cx.listener(|this, _: &PreviousItem, window, cx| this.arrow(-1, window, cx)))
             .on_action(cx.listener(|this, _: &NextItem, window, cx| this.arrow(1, window, cx)))
-            // The viewer's context menu (`useViewerEntityContextMenu`), which
-            // the shell shows; a member peeked at by itself has `QuickLook`'s
-            // menu for a file with no item to edit.
+            // A right-click asks for the viewer's context menu, which the shell
+            // shows. For a member that is shown by itself, the menu is the one
+            // for a file that has no item to edit.
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {

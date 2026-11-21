@@ -1,5 +1,6 @@
-//! The destinations that are screens of their own rather than a grid. Each
-//! is one view in one file; the shell shows the one the session names.
+//! The screens that the shell shows in place of the grid: Duplicates,
+//! Subscriptions and Tags. Each screen is one view in its own folder. The
+//! shell shows the screen that the session's destination names.
 pub mod duplicates;
 pub mod subscriptions;
 pub mod tags;

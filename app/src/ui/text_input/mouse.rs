@@ -1,12 +1,14 @@
 // Adapted from gpui 0.2.2 examples/input.rs (Apache-2.0).
-//! Pressing, dragging and secondary clicks in a field.
+//! This file handles presses of the pointer, drags and secondary clicks in
+//! a text field.
 use std::ops::Range;
 
 use super::editing::{self, Platform};
 use super::*;
 use gpui::{MouseDownEvent, MouseUpEvent, Pixels, Point};
-/// What a press selects as the pointer drags: characters, or the whole
-/// words or lines a double- or triple-click started with.
+/// The unit by which a press selects while the pointer is dragged: single
+/// characters after a single click, whole words after a double-click, and
+/// whole lines after a triple-click.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum Granularity {
     Character,
@@ -15,11 +17,16 @@ pub(super) enum Granularity {
 }
 
 impl TextInput {
-    /// What a double- or triple-click selects around a character.
+    /// Returns the range that a click of `granularity` selects around the
+    /// character at the byte offset `at`. A single click selects nothing and
+    /// a double-click selects the word. A triple-click selects the paragraph
+    /// in a field that takes line breaks, and the whole text in any other
+    /// field.
     fn unit_at(&self, granularity: Granularity, at: usize) -> Range<usize> {
         match granularity {
             Granularity::Character => at..at,
-            // A password field's words cannot be seen: all of it.
+            // The words of a password field cannot be seen, so the whole
+            // text is selected.
             Granularity::Word if self.masked => 0..self.content.len(),
             Granularity::Word => editing::word_at(
                 &self.content,
@@ -56,9 +63,10 @@ impl TextInput {
         self.drag_origin = unit;
     }
 
-    /// A press on the field's frame around the text (its padding), which
-    /// in production is part of the field: it places the caret as a press
-    /// on the nearest text would.
+    /// Handles a press on the frame that `ui::field` draws around the text,
+    /// which is the field's padding. The press places the caret as a press
+    /// on the nearest part of the text would. A press inside the bounds of
+    /// the text is ignored here, because the text handles it itself.
     pub fn press_outside(
         &mut self,
         event: &MouseDownEvent,
@@ -74,9 +82,10 @@ impl TextInput {
         self.on_mouse_down(event, window, cx);
     }
 
-    /// The pointer moved with the button held after a press in the field:
-    /// the selection follows it by character, or by whole words or lines
-    /// after a double- or triple-click.
+    /// Extends the selection to `position`. It is called when the pointer
+    /// moves with its button held after a press in the field. The selection
+    /// grows by characters, or by whole words or lines after a double-click
+    /// or a triple-click.
     pub(super) fn drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         self.drag_point = Some(position);
         let (offset, upstream) = self.hit(position);
@@ -103,8 +112,10 @@ impl TextInput {
         self.autoscroll(cx);
     }
 
-    /// While the pointer is held past the field's edge, the selection goes
-    /// on following it, and the text scrolls, every 50 ms.
+    /// Starts a timer that runs while the pointer is held past the field's
+    /// edge. Every 50 ms it extends the selection to the pointer again,
+    /// which scrolls the text. The timer stops when the pointer is inside
+    /// the field again or its button is released.
     fn autoscroll(&mut self, cx: &mut Context<Self>) {
         if !self.outside() {
             self.autoscroll = None;
@@ -138,7 +149,10 @@ impl TextInput {
         }));
     }
 
-    /// Whether the held pointer is past the edge the text scrolls along.
+    /// Returns whether the pointer, with its button held, is past an edge
+    /// of the field in the direction in which the text scrolls. That is
+    /// above or below the field when the text is drawn wrapped, and left or
+    /// right of it when the text is drawn on one line.
     fn outside(&self) -> bool {
         let (Some(point), Some(bounds)) = (self.drag_point, self.last_bounds) else {
             return false;
@@ -171,10 +185,11 @@ impl TextInput {
         self.autoscroll = None;
     }
 
-    /// A secondary click takes focus and, on a Mac, selects the word under
-    /// the pointer unless it is inside the selection; elsewhere it moves
-    /// the caret there. Production shows no menu of its own in a field, so
-    /// the click goes on to whatever holds the field.
+    /// Handles a secondary click. The field takes the keyboard focus. A
+    /// click inside the selection changes nothing else. Otherwise, on a Mac
+    /// the word under the pointer is selected, and on Windows and Linux the
+    /// caret is moved to the pointer. The field shows no menu of its own,
+    /// and the click is passed on to the view that holds the field.
     pub(super) fn on_secondary_mouse_down(
         &mut self,
         event: &MouseDownEvent,

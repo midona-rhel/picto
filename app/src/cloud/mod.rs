@@ -1,19 +1,21 @@
-//! Cloud sync, as production has it: a library publishes verified
-//! snapshots of itself, and its originals, into the folder of a Google
-//! Drive or Dropbox desktop app already installed on this device, which
-//! carries them to the provider. Picto signs in to nothing: the desktop app
-//! owns the account and the network. The core owns the sync (`core/src/
-//! cloud/`, its commands `cloud.*` and its snapshot worker); this app only
-//! asks it, as production's renderer does.
+//! Cloud sync. A library publishes verified snapshots of itself, and its
+//! original files, into the folder of a Google Drive or Dropbox desktop app
+//! that is installed on this device. That desktop app uploads them to the
+//! provider. Picto signs in to nothing: the desktop app holds the account and
+//! uses the network. The core does the sync (`core/src/cloud/`, its `cloud.*`
+//! commands and its snapshot worker). This app only sends the core commands
+//! and shows what the core answers.
 //!
-//! - [`Cloud`] (`model.rs`): the open library's sync state, read as
-//!   production's `CloudSyncBar`, `cloudSettle` and Settings read it.
-//! - [`bar`]: the sync bar along the bottom of the main window and the
-//!   blocking progress dialog while a joined library restores its media.
-//! - Here: the providers' folders this device has (`cloud.providers.detect`,
-//!   `cloud.provider.validate`) and the libraries found in them
-//!   (`cloud.libraries.discover`), which need no library open, and how sync
-//!   is presented (`librarySyncPresentation.ts`).
+//! [`Cloud`] (`model.rs`) holds the sync state of the open library.
+//!
+//! [`bar`] draws the sync bar along the bottom of the main window, and the
+//! progress dialog that blocks the window while a library joined from the
+//! cloud restores its media.
+//!
+//! This file finds the provider folders on this device ([`detect`],
+//! [`validate`]) and the libraries in them ([`discover`]). No library has to
+//! be open for that. It also decides how the state of a sync is shown
+//! ([`present`]).
 pub mod bar;
 mod model;
 
@@ -25,7 +27,8 @@ pub use picto_core::cloud::CloudSyncStatus as Status;
 
 use crate::i18n::t;
 
-/// The provider's name as production writes it.
+/// Returns the provider's name as the interface shows it, "Google Drive" or
+/// "Dropbox", in the interface's language.
 pub fn provider_name(provider: &str) -> &'static str {
     if provider == "google_drive" {
         t("Google Drive")
@@ -34,7 +37,7 @@ pub fn provider_name(provider: &str) -> &'static str {
     }
 }
 
-/// The provider's glyph (`IconBrandGoogleDrive`, `IconBrandDropbox`).
+/// Returns the name of the provider's icon.
 pub fn provider_icon(provider: &str) -> &'static str {
     if provider == "google_drive" {
         "cloud-brand-google-drive"
@@ -43,17 +46,17 @@ pub fn provider_icon(provider: &str) -> &'static str {
     }
 }
 
-/// A library found in a provider's folder, with the folder it is in
-/// (`CloudLibraryChoice`).
+/// A library that was found in a provider's folder, together with that folder.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Choice {
     pub root: Root,
     pub library: CloudLibraryOption,
 }
 
-/// The retention the Cloud section shows: daily, weekly and yearly
-/// snapshots and the days deleted files are kept, production's defaults
-/// where the stored value is missing.
+/// Returns the retention that the Cloud section shows: the values stored under
+/// `daily`, `weekly` and `yearly` for the snapshots, and the number of days
+/// for which deleted files are kept. Where the configuration holds no value,
+/// the default is used: 30, 26, 5 and 7.
 pub fn retention(configuration: &Configuration) -> [i64; 4] {
     let days = |key: &str, fallback: i64| {
         configuration
@@ -70,15 +73,16 @@ pub fn retention(configuration: &Configuration) -> [i64; 4] {
     ]
 }
 
-/// The provider folders this device has (`cloud.providers.detect`).
+/// Returns the provider folders that this device has. The core's command
+/// `cloud.providers.detect` calls the same core function.
 ///
-/// While an automation seam is active (a check, a test build), only the
-/// folders the core's own variables name (`PICTO_GOOGLE_DRIVE_ROOT`,
-/// `PICTO_DROPBOX_ROOT`) are listed, read here, and the user's own desktop
-/// apps are never looked at: no check lists or writes a real account's
-/// folder. The core's validation still looks for installed apps under the
-/// home folder, so a check that connects runs with `HOME` (`USERPROFILE`)
-/// pointed elsewhere (README, "Cloud").
+/// While an automation seam is active (in a check or a test build), it returns
+/// only the folders that the variables `PICTO_GOOGLE_DRIVE_ROOT` and
+/// `PICTO_DROPBOX_ROOT` name, and it does not look at the user's own desktop
+/// apps. So no check lists or writes the folder of a real account. The core's
+/// validation still looks for installed apps under the home folder, so a check
+/// that connects a library must run with `HOME` (`USERPROFILE` on Windows) set
+/// to another folder (`app/README.md`, "Cloud").
 pub fn detect() -> Vec<Root> {
     if crate::seams::automation().is_some() {
         return named_roots();
@@ -86,8 +90,8 @@ pub fn detect() -> Vec<Root> {
     picto_core::cloud::provider::detect_roots()
 }
 
-/// The folders `PICTO_GOOGLE_DRIVE_ROOT` and `PICTO_DROPBOX_ROOT` name, as
-/// the core lists them.
+/// Returns the folders that `PICTO_GOOGLE_DRIVE_ROOT` and `PICTO_DROPBOX_ROOT`
+/// name, each in the form in which the core lists a provider folder.
 fn named_roots() -> Vec<Root> {
     [
         // i18n: the account labels the core gives these folders
@@ -107,8 +111,10 @@ fn named_roots() -> Vec<Root> {
     .collect()
 }
 
-/// `cloud.provider.validate`: the installed provider folder `path` is, or
-/// why it is not one. Under automation only the named folders are taken.
+/// Returns the installed provider folder that `path` is, or an error that says
+/// why `path` is not one. The core's command `cloud.provider.validate` calls
+/// the same core function. While an automation seam is active, only the
+/// folders that `named_roots` returns are accepted.
 pub fn validate(provider: &str, path: &std::path::Path) -> Result<Root, String> {
     if crate::seams::automation().is_some() {
         let chosen = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -129,8 +135,9 @@ pub fn validate(provider: &str, path: &std::path::Path) -> Result<Root, String> 
     picto_core::cloud::provider::validate_root(provider, path)
 }
 
-/// `cloud.libraries.discover`: the Picto libraries in a provider's folder,
-/// newest first. Reads only the folder's `picto/*/library.json`.
+/// Returns the Picto libraries in a provider's folder, newest first. The
+/// core's command `cloud.libraries.discover` calls the same core function. It
+/// reads only the files `picto/*/library.json` in that folder.
 pub fn discover(root: &Root) -> Result<Vec<Choice>, String> {
     let libraries = futures::executor::block_on(picto_core::cloud::discover_libraries(
         &root.provider,
@@ -145,7 +152,8 @@ pub fn discover(root: &Root) -> Result<Vec<Choice>, String> {
         .collect())
 }
 
-/// How a library's sync shows (`CloudSyncPresentation`).
+/// How the state of a library's sync is shown: whether a sync is running, the
+/// label and its tone, and the progress.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Presentation {
     pub active: bool,
@@ -154,8 +162,8 @@ pub struct Presentation {
     pub completed: i64,
     pub total: Option<i64>,
     pub remaining: Option<i64>,
-    /// What the time estimate is measured against; it starts again when
-    /// this changes.
+    /// Identifies the work that the time estimate measures. When it changes,
+    /// the estimate starts again.
     pub work_key: Option<String>,
 }
 
@@ -167,7 +175,11 @@ pub enum Tone {
     Negative,
 }
 
-/// `presentCloudSync`.
+/// Returns how `status` is shown. Without a status the label is "Unavailable".
+/// A sync is active while the state is `reconciling`. The progress is exact
+/// when the status has a total number of units. Otherwise the remaining work
+/// of an active sync is the number of pending changes plus the number of
+/// pending files.
 pub fn present(status: Option<&Status>) -> Presentation {
     let Some(status) = status else {
         return Presentation {
@@ -226,14 +238,19 @@ pub fn present(status: Option<&Status>) -> Presentation {
     }
 }
 
-/// When a sync measured its remaining work (`SyncRateSample`).
+/// The remaining work of a sync at one moment. The time estimate is computed
+/// from several of these.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sample {
     pub at: std::time::Instant,
     pub remaining: i64,
 }
 
-/// `estimateRemainingSeconds`: from the rate the remaining work fell at.
+/// Returns the estimated number of seconds until `remaining` units are done,
+/// or `None` if there is no estimate yet. The rate is taken from two samples:
+/// the latest one, and the earliest one that had more remaining work. The
+/// estimate is `remaining` divided by the work done between them per second.
+/// At least one second must lie between the two samples.
 pub fn estimate_remaining(samples: &[Sample], remaining: i64) -> Option<u64> {
     if remaining <= 0 || samples.len() < 2 {
         return None;
@@ -250,8 +267,11 @@ pub fn estimate_remaining(samples: &[Sample], remaining: i64) -> Option<u64> {
     Some(((remaining as f64) / (completed / elapsed)).ceil().max(1.) as u64)
 }
 
-/// The samples once `presentation` is taken in at `now`, and the estimate
-/// (`LibraryManager`'s rate tracking).
+/// Adds the remaining work of `presentation` at the time `now` to `samples`,
+/// and returns the estimated number of remaining seconds. The samples start
+/// again when the sync is not active, when the presentation's `work_key`
+/// differs from `key`, or when the remaining work has grown. Samples older
+/// than 30 seconds are removed, and at most 12 samples are kept.
 pub fn track(samples: &mut Vec<Sample>, key: &mut Option<String>, presentation: &Presentation, now: std::time::Instant) -> Option<u64> {
     let (Some(remaining), true) = (presentation.remaining, presentation.active) else {
         samples.clear();
@@ -280,7 +300,9 @@ pub fn track(samples: &mut Vec<Sample>, key: &mut Option<String>, presentation: 
     estimate_remaining(samples, remaining)
 }
 
-/// `formatRemainingTime`.
+/// Returns the estimate as text: "Less than a minute remaining" below 60
+/// seconds, minutes below an hour, and hours with minutes otherwise. Returns
+/// `None` when there is no estimate.
 pub fn remaining_time(seconds: Option<u64>) -> Option<String> {
     let seconds = seconds?;
     Some(if seconds < 60 {
@@ -298,7 +320,9 @@ pub fn remaining_time(seconds: Option<u64>) -> Option<String> {
     })
 }
 
-/// `formatLastSync`: how long ago, or the date and time after a day.
+/// Returns the time of the last sync as text: "Never" when there was none, how
+/// long ago it was when that is less than a day, and the date and the time
+/// otherwise. A value that is not an RFC 3339 time is returned unchanged.
 pub fn last_sync(value: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> String {
     let Some(value) = value else {
         return t("Never").to_owned();

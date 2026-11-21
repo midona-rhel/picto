@@ -1,12 +1,13 @@
-//! Floating panels: everything laid over the window beside the control
-//! that opened it (the library switcher, a day picker's calendar, a
-//! select's list, a tag field's suggestions, the smart-folder dialog's icon
-//! and colour popovers, the inspector's list of sources, the tag and folder
-//! pickers' panel). One rule places them ([`place`]) and one element
-//! ([`Floating`]) lays them over the window on their layer, with the
-//! backdrop or outside press that closes them and, when they take the
-//! keyboard, Escape and a Tab that stays inside. [`Popover`] is the glass
-//! panel the library switcher opens, built on them.
+//! Places and draws floating panels, which are everything that is laid over
+//! the window beside the control that opened it: the library switcher, a
+//! date field's calendar, a select's list, a tag field's suggestions, the
+//! icon and colour popovers of the smart folder dialog, the inspector's list
+//! of sources, and the panel of the tag and folder pickers. [`place`] is the
+//! one function that places them. [`Floating`] is the one element that lays
+//! them over the window on their layer. It closes a panel on a press on its
+//! backdrop or outside it. For a panel that takes the keyboard it also
+//! closes the panel on Escape and keeps Tab inside the panel. [`Popover`] is
+//! the glass panel that the library switcher opens, and it uses both.
 use super::text_input;
 use crate::theme::Text as _;
 use crate::{motion, theme};
@@ -20,36 +21,44 @@ pub fn bind(cx: &mut App) {
     keys::bind(cx, "Popover", &[Key::Escape]);
 }
 
-/// Which side of its anchor a panel opens on.
+/// Says on which side of its anchor a panel opens.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Side {
-    /// Under the anchor, their left edges lined up.
+    /// The panel opens under the anchor, with its left edge at the anchor's
+    /// left edge.
     Below,
-    /// Above the anchor, their left edges lined up.
+    /// The panel opens above the anchor, with its left edge at the anchor's
+    /// left edge.
     Above,
-    /// Left of the anchor, their tops lined up.
+    /// The panel opens to the left of the anchor, with its top at the
+    /// anchor's top.
     Left,
-    /// On the anchor: their top-left corners together, or centred on it.
+    /// The panel opens over the anchor: with its top-left corner at the
+    /// anchor's top-left corner, or, with `centred`, with its centre at the
+    /// anchor's centre.
     Over { centred: bool },
 }
 
-/// When a panel below (or above) its anchor goes to the other side.
+/// Says when a panel that opens below its anchor is put above it instead,
+/// and when one that opens above is put below.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Flip {
     Never,
-    /// When the panel does not fit between the anchor's edge and the
-    /// window's margin on its own side, as `DatePickerButton` measures it
-    /// (from the anchor's edge, leaving out the gap). A panel that fits is
-    /// left where it is.
+    /// The panel goes to the other side when it does not fit between the
+    /// anchor's edge and the window's margin on its own side. The gap
+    /// between the anchor and the panel is not counted in this test. A panel
+    /// that fits is left where it opened and is not moved up or down to keep
+    /// the margin.
     WhenNoRoom,
-    /// When `needs` does not fit below and there is more room above than
-    /// below (`CmSelect`'s `flipUp`), for a panel that prefers below.
+    /// A panel that opens below goes above when `needs` does not fit below
+    /// the anchor and there is more room above than below. A panel that
+    /// opens above goes below by the same test with the sides exchanged.
     ToRoomierSide {
         needs: f32,
     },
 }
 
-/// How a panel is placed by its anchor.
+/// Says how a panel is placed beside its anchor.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Placement {
     pub side: Side,
@@ -59,18 +68,20 @@ pub struct Placement {
     pub margin: f32,
     pub flip: Flip,
     /// Whether the panel is moved inward to keep `margin` from the window's
-    /// edges. A panel too big for the window keeps the margin at its left
-    /// and top. Production leaves a select's list and a tag field's
-    /// suggestions where they fall.
+    /// edges. A panel that is too big for the window keeps the margin at its
+    /// left and at its top. A select's list and a tag field's suggestions
+    /// are not moved inward (`unclamped`).
     pub clamp: bool,
-    /// How much of the window's top the panel keeps clear of besides the
-    /// margin (the titlebar, for a panel dragged about).
+    /// The height at the top of the window that the panel stays out of, in
+    /// addition to the margin. A panel that the user can drag uses this to
+    /// stay below the titlebar.
     pub top: f32,
 }
 
 impl Placement {
-    /// On `side`, `gap` from the anchor and kept `margin` inside the
-    /// window, never flipped.
+    /// Returns a placement on `side`, `gap` away from the anchor, that keeps
+    /// the panel `margin` inside the window and never puts it on the other
+    /// side.
     pub const fn new(side: Side, gap: f32, margin: f32) -> Self {
         Self {
             side,
@@ -85,21 +96,24 @@ impl Placement {
         self.flip = flip;
         self
     }
-    /// Left where it falls, however near the window's edges.
+    /// Makes the panel stay where it opens, however near the window's edges
+    /// that is.
     pub const fn unclamped(mut self) -> Self {
         self.clamp = false;
         self
     }
-    /// Kept clear of the window's top `top` deep, besides the margin.
+    /// Makes the panel stay out of the top `top` pixels of the window, in
+    /// addition to the margin.
     pub const fn below_top(mut self, top: f32) -> Self {
         self.top = top;
         self
     }
 }
 
-/// The top-left corner, in window coordinates, of a panel of `panel`'s
-/// size placed by `anchor` (a control's bounds, or a point as bounds of no
-/// size) in a window of `window`'s size.
+/// Returns the top-left corner, in window coordinates, of a panel of the
+/// size `panel` that is placed beside `anchor` in a window of the size
+/// `window`. `anchor` is the bounds of a control, or a point given as bounds
+/// of no size.
 pub fn place(
     anchor: Bounds<Pixels>,
     panel: Size<f32>,
@@ -122,7 +136,8 @@ pub fn place(
         Side::Left => left - gap - panel.width,
         Side::Over { centred: true } => left + (right - left - panel.width) / 2.,
     };
-    // Whether the panel fits where it opened and stays put.
+    // Whether the panel fits where it opened. Such a panel is not moved up or
+    // down afterwards.
     let mut settled = false;
     let mut y = match side {
         Side::Below | Side::Above => {
@@ -158,37 +173,41 @@ pub fn place(
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 
-/// What closes a floating panel from outside it.
+/// Says what outside a floating panel closes it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Dismissal {
-    /// Nothing outside it.
+    /// Nothing outside the panel closes it.
     Never,
-    /// A press outside the panel, which still reaches what was pressed, as
-    /// a window listener lets it. A press on `keep` (the control that
-    /// opened the panel, which toggles it itself) is left alone.
+    /// A press outside the panel closes it, and still reaches what was
+    /// pressed. A press inside the bounds given here does not close the
+    /// panel. They are the bounds of the control that opened the panel,
+    /// which opens and closes it itself.
     Outside(Bounds<Pixels>),
-    /// A clear backdrop over the whole window (for a panel placed
-    /// [`Floating::at`] a corner): a press on it, and with `right` a right
-    /// press, closes the panel and reaches nothing else, and nothing under
-    /// it scrolls.
+    /// A transparent backdrop covers the whole window behind the panel. Only
+    /// a panel placed with [`Floating::at`] has one. A press on the backdrop
+    /// with the left button, and with `right` also a press with the right
+    /// button, closes the panel. The press reaches nothing else, and nothing
+    /// under the backdrop scrolls.
     Backdrop { right: bool },
 }
 
-/// Where a floating panel is drawn.
+/// Says where a floating panel is drawn.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Position {
-    /// Where the element is laid out, moved back inside the window by GPUI
-    /// should it leave it.
+    /// The panel is drawn where the element is laid out. GPUI moves it back
+    /// inside the window if it would reach outside.
     InPlace,
-    /// At this corner, moved back inside the window by GPUI should it
-    /// leave it.
+    /// The panel is drawn with its top-left corner at this point. GPUI moves
+    /// it back inside the window if it would reach outside.
     Anchored(Point<f32>),
-    /// At exactly this corner, in a layer over the whole window.
+    /// The panel is drawn with its top-left corner at exactly this point, in
+    /// a layer that covers the whole window.
     At(Point<f32>),
 }
 
-/// A panel laid over the window on `layer` (`ui::layer`), drawn where it
-/// is laid out until it is given a corner.
+/// A panel that is laid over the window on the layer `layer` (see
+/// `ui::layer`). It is drawn where it is laid out, unless `at` or `anchored`
+/// gives it a corner.
 #[derive(IntoElement)]
 pub struct Floating {
     id: ElementId,
@@ -215,25 +234,30 @@ pub fn floating(id: impl Into<ElementId>, layer: usize) -> Floating {
 }
 
 impl Floating {
-    /// At `corner`, which [`place`] has kept inside the window.
+    /// Draws the panel with its top-left corner at exactly `corner`. The
+    /// caller gets `corner` from [`place`], which keeps the panel inside the
+    /// window.
     pub fn at(mut self, corner: Point<f32>) -> Self {
         self.position = Position::At(corner);
         self
     }
-    /// At `corner`, for a panel whose height is known only once it lays
-    /// out: GPUI moves it back inside the window should it leave it.
+    /// Draws the panel with its top-left corner at `corner`. This is for a
+    /// panel whose height is known only after it is laid out: GPUI moves the
+    /// panel back inside the window if it would reach outside.
     pub fn anchored(mut self, corner: Point<f32>) -> Self {
         self.position = Position::Anchored(corner);
         self
     }
-    /// The [`Dismissal::Backdrop`] is a dialog's dimmed one
-    /// (`--modal-backdrop`, fading in as a dialog's does) rather than
-    /// clear: for a panel opened centred over the window as a dialog is.
+    /// Makes the backdrop of [`Dismissal::Backdrop`] dark, like the backdrop
+    /// of a dialog, instead of transparent. It fades in as a dialog's
+    /// backdrop does. This is for a panel that opens in the centre of the
+    /// window, as a dialog does.
     pub fn dimmed(mut self, dimmed: bool) -> Self {
         self.dimmed = dimmed;
         self
     }
-    /// What closes the panel from outside it, and what closing does.
+    /// Sets what outside the panel closes it, and the function that is
+    /// called to close it.
     pub fn dismiss(
         mut self,
         dismiss: Dismissal,
@@ -243,9 +267,11 @@ impl Floating {
         self.on_dismiss = Some(Rc::new(handler));
         self
     }
-    /// The panel holds `focus`, which its owner gives the keyboard to
-    /// (directly or through a field inside): Escape closes it, even from
-    /// its own text field, and Tab and Shift-Tab stay among its controls.
+    /// Makes the panel one that takes the keyboard. `focus` is the handle
+    /// that the owner gives the keyboard focus to, directly or through a
+    /// field inside the panel. Escape then closes the panel, also while a
+    /// text field inside it has the focus, and Tab and Shift-Tab move only
+    /// among the panel's controls.
     pub fn keyboard(mut self, focus: &FocusHandle) -> Self {
         self.keyboard = Some(focus.clone());
         self
@@ -272,8 +298,10 @@ impl RenderOnce for Floating {
                 let cancel = handler.clone();
                 panel = panel
                     .on_action(move |_: &Dismiss, window, cx| handler(window, cx))
-                    // Escape closes the panel even from its text field,
-                    // before the field would take it to cancel the edit.
+                    // Escape closes the panel also while a text field inside
+                    // it has the focus. The panel handles the key in the
+                    // capture phase, before the field would use it to cancel
+                    // the edit.
                     .capture_action(move |_: &text_input::Cancel, window, cx| {
                         cancel(window, cx);
                         cx.stop_propagation();
@@ -307,8 +335,9 @@ impl RenderOnce for Floating {
             ),
             Position::At(corner) => {
                 let mut layer = match (self.dismiss, self.on_dismiss.is_some()) {
-                    // A dialog's backdrop, clear unless dimmed, which takes
-                    // every press and scroll beneath it.
+                    // The layer is the backdrop that dialogs use, transparent
+                    // unless `dimmed` is set. It takes every press and every
+                    // scroll, so that nothing under it receives them.
                     (Dismissal::Backdrop { .. }, true) => {
                         let strength = if self.dimmed {
                             let opened = *window
@@ -363,15 +392,16 @@ impl RenderOnce for Floating {
     }
 }
 
-/// The scale a popover is drawn at, `elapsed` after it opened: 0.96 growing
-/// to 1 over `--duration-menu-in` on `--ease-scale-in`.
+/// Returns the scale a popover is drawn at when `elapsed` has passed since
+/// it opened. The scale grows from 0.96 to 1 over `motion::MENU_IN` on the
+/// curve `motion::EASE_SCALE_IN`.
 fn scale(elapsed: std::time::Duration) -> f32 {
     motion::menu_in(elapsed)
 }
 
-/// One showing of a floating panel that takes the keyboard: when it
-/// opened, and where the keyboard was before, to hand it back when the
-/// panel closes.
+/// Holds what is remembered while a floating panel that takes the keyboard
+/// is open: the time it opened, and what had the keyboard focus before, so
+/// that the focus can go back there when the panel closes.
 pub struct Opening {
     since: Instant,
     restore: Option<FocusHandle>,
@@ -385,45 +415,48 @@ impl Opening {
         }
     }
 
-    /// Gives the keyboard back to where it was, unless something outside
-    /// the panel has taken it since.
+    /// Gives the keyboard focus back to what had it before the panel opened,
+    /// unless something outside the panel has taken the focus since.
     pub fn finish(self, focus: &FocusHandle, window: &mut Window, cx: &mut App) {
         let still_there = focus.contains_focused(window, cx);
         super::menu::host::give_back(self.restore, still_there, window, cx);
     }
 }
 
-/// A panel's width in this window: `width`, or less to keep `margin` each
-/// side, so the owner can lay out its rows.
+/// Returns the width a panel has in this window: `width`, or less when the
+/// window is too narrow for `width` with `margin` on each side. The owner
+/// needs the width to lay out the panel's rows.
 pub fn width(width: f32, margin: f32, window: &Window) -> f32 {
     width
         .min(f32::from(window.viewport_size().width) - 2. * margin)
         .max(0.)
 }
 
-/// A glass popover by the control that summons it, as
-/// `LibrarySwitcherPopover` is. It closes on a press anywhere outside it and
-/// its control, which still reaches what was pressed, and on Escape even
-/// while its own text field has the keyboard.
+/// A glass popover beside the control that opens it. The library switcher is
+/// one. It closes on a press anywhere outside itself and its control, and
+/// the press still reaches what was pressed. It also closes on Escape, also
+/// while a text field inside it has the keyboard focus.
 #[derive(IntoElement)]
 pub struct Popover {
     id: ElementId,
     focus: FocusHandle,
     since: Instant,
-    /// The control the popover belongs to, in window coordinates.
+    /// The bounds of the control that the popover belongs to, in window
+    /// coordinates.
     control: Bounds<Pixels>,
     placement: Placement,
-    /// The size the popover is placed by: its width, and the height it is
-    /// kept inside the window by.
+    /// The size that the popover is placed with: its width, and the height
+    /// that `place` uses to keep it inside the window.
     size: Size<f32>,
     max_height: f32,
     on_dismiss: Handler,
     children: Vec<AnyElement>,
 }
 
-/// A popover by `control`, `size.width` wide (less in a narrow window) and
-/// up to `max_height` tall. `focus` is the handle the owner gives the
-/// keyboard to; Escape within it, or a press outside, calls `on_dismiss`.
+/// Returns a popover beside `control` that is `size.width` wide (less in a
+/// narrow window) and at most `max_height` tall. `focus` is the handle that
+/// the owner gives the keyboard focus to. Escape while the focus is inside
+/// the popover, or a press outside it, calls `on_dismiss`.
 #[allow(clippy::too_many_arguments)]
 pub fn popover(
     id: impl Into<ElementId>,
@@ -468,10 +501,9 @@ impl RenderOnce for Popover {
         if scale < 1. {
             window.request_animation_frame();
         }
-        // `.floatingGlassSurface::after`: the glass with its edges, behind
-        // the rows. GPUI cannot scale the panel's contents, so the opening
-        // scale is carried by this surface alone, grown from the top-left
-        // corner as `transform-origin` puts it.
+        // The glass surface is drawn behind the rows. GPUI cannot scale the
+        // panel's contents, so only this surface is scaled while the popover
+        // opens. It grows from the top-left corner.
         let surface = super::glass_panel(
             ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "surface".into()),
             theme::RADIUS_LG,
@@ -501,7 +533,7 @@ impl RenderOnce for Popover {
                     .text_color(theme.text())
                     .child(surface)
                     .child(
-                        // `.content`: the rows, clipped to the panel's corners.
+                        // The rows are clipped to the panel's rounded corners.
                         div()
                             .relative()
                             .flex()
@@ -535,8 +567,9 @@ mod tests {
         (point.x, point.y)
     }
 
-    /// The library switcher: 8px under its control, kept 8px inside the
-    /// window, its top no lower than 430px above the window's bottom.
+    /// The placement of the library switcher: 8px under its control and kept
+    /// 8px inside the window. Its panel is 300 × 422, so its top is at least
+    /// 430px above the window's bottom.
     const LIBRARY: Placement = Placement::new(Side::Below, 8., 8.);
     const LIBRARY_PANEL: (f32, f32) = (300., 422.);
 
@@ -552,60 +585,63 @@ mod tests {
     fn a_panel_moves_inward_to_keep_its_margin() {
         let (w, h) = LIBRARY_PANEL;
         let control = at(16., 64., 200., 36.);
-        // Too short a window for the whole panel under the control: it
-        // rises, but never above the margin.
+        // The window is too short for the whole panel under the control. The
+        // panel is moved up, but not above the top margin.
         let short = place(control, size(w, h), window(1200., 500.), LIBRARY);
         assert_eq!(short.y, 70.);
         let shorter = place(control, size(w, h), window(1200., 300.), LIBRARY);
         assert_eq!(shorter.y, 8.);
-        // A control near the right edge pulls the panel left.
+        // For a control near the right edge, the panel is moved left.
         let right = at(1000., 64., 100., 36.);
         assert_eq!(
             place(right, size(w, h), window(1200., 800.), LIBRARY).x,
             892.
         );
-        // Wider than the window: the left margin is kept.
+        // A panel that is wider than the window keeps the left margin.
         assert_eq!(
             place(control, size(w, h), window(250., 800.), LIBRARY).x,
             8.
         );
     }
 
-    /// `DatePickerButton`'s calendar: 5px under its button, above it
-    /// without room below.
+    /// The placement of a date field's calendar: 5px under its button, and
+    /// above the button when there is no room below.
     const CALENDAR: Placement = Placement::new(Side::Below, 5., 8.).flip(Flip::WhenNoRoom);
 
     #[test]
     fn a_calendar_flips_above_only_when_it_does_not_fit_below() {
         let calendar = size(278., 340.);
         let viewport = window(1000., 800.);
-        // Kept 8px inside the right edge, 5px below the button.
+        // The calendar is kept 8px inside the right edge, and is 5px below
+        // the button.
         let button = at(900., 100., 140., 26.);
         assert_eq!(
             corner(place(button, calendar, viewport, CALENDAR)),
             (1000. - 278. - 8., 131.)
         );
-        // Low in the window: above the button.
+        // A button low in the window gets its calendar above it.
         let low = at(20., 700., 140., 26.);
         assert_eq!(
             corner(place(low, calendar, viewport, CALENDAR)),
             (20., 700. - 340. - 5.)
         );
-        // It fits when its height fits under the button, the gap left out,
-        // and then stays where it opened.
+        // The calendar fits when its height, without the gap, fits under the
+        // button. It then stays where it opened.
         let snug = at(20., 800. - 8. - 340. - 26., 140., 26.);
         assert_eq!(
             place(snug, calendar, viewport, CALENDAR).y,
             800. - 8. - 340. + 5.
         );
-        // A smaller popover (the rules' colour, 230×286) fits below there.
+        // A smaller popover of 230 × 286 fits below a button at a height
+        // where the calendar goes above.
         let middle = at(20., 480., 140., 26.);
         assert_eq!(
             corner(place(middle, size(230., 286.), viewport, CALENDAR)),
             (20., 511.)
         );
         assert_eq!(place(middle, calendar, viewport, CALENDAR).y, 480. - 345.);
-        // No room either way: the top margin.
+        // With no room below and none above, the calendar starts at the top
+        // margin.
         let tall = at(20., 200., 140., 26.);
         assert_eq!(place(tall, calendar, window(1000., 400.), CALENDAR).y, 8.);
     }
@@ -618,23 +654,25 @@ mod tests {
                 .unclamped()
         };
         let list = size(130., 92.);
-        // Three choices need 86px; 400px below is plenty.
+        // Three choices need 86px, and there is 400px below.
         let high = at(500., 100., 130., 26.);
         assert_eq!(
             corner(place(high, list, window(1000., 534.), select(86.))),
             (500., 130.)
         );
-        // 50px below is too little, and more is above: the list's bottom
-        // 4px over the button.
+        // 50px below is too little and there is more room above, so the list
+        // opens above, with its bottom 4px over the button.
         let low = at(500., 500., 130., 26.);
         assert_eq!(
             place(low, list, window(1000., 584.), select(86.)).y,
             500. - 4. - 92.
         );
-        // Too little either way: below wins unless above is larger.
+        // With too little room on both sides, the list opens below unless
+        // there is more room above.
         let short = at(500., 20., 130., 26.);
         assert_eq!(place(short, list, window(1000., 120.), select(164.)).y, 50.);
-        // Never moved sideways, even past the window's edge.
+        // The list is never moved sideways, also when it reaches past the
+        // window's edge.
         let edge = at(950., 100., 130., 26.);
         assert_eq!(place(edge, list, window(1000., 534.), select(86.)).x, 950.);
     }
@@ -643,10 +681,13 @@ mod tests {
     fn a_panel_opens_left_of_a_point_or_centred() {
         let beside = Placement::new(Side::Left, 12., 12.);
         let view = window(1200., 800.);
-        // The inspector's edge at x = 900, a button's top at y = 300.
+        // The anchor is at the inspector's edge, x = 900, and at the top of
+        // a button, y = 300.
         let placed = place(spot(900., 300.), size(540., 480.), view, beside);
         assert_eq!(corner(placed), (348., 300.));
-        // Too low: it rises to 12px above the bottom; too far left: 12px in.
+        // A panel that would reach below the window is moved up to 12px
+        // above the bottom. A panel that would reach past the left edge
+        // starts 12px inside it.
         assert_eq!(
             place(spot(900., 700.), size(340., 480.), view, beside).y,
             308.
@@ -669,7 +710,8 @@ mod tests {
         let view = window(1200., 800.);
         let placed = place(spot(420., 600.), size(340., 480.), view, above);
         assert_eq!(corner(placed), (420., 116.));
-        // Too near the top or the right edge, it stays 12px inside.
+        // A panel that would reach past the top or the right edge is kept
+        // 12px inside the window.
         let placed = place(spot(1000., 300.), size(340., 480.), view, above);
         assert_eq!(corner(placed), (848., 12.));
     }
@@ -682,7 +724,8 @@ mod tests {
         assert_eq!(corner(up), (300., 64.));
         let away = place(spot(-50., 900.), size(540., 480.), view, dragged);
         assert_eq!(corner(away), (12., 308.));
-        // A window too short for the panel: the titlebar still wins.
+        // In a window that is too short for the panel, the panel still
+        // starts below the titlebar.
         let short = place(
             spot(300., 300.),
             size(540., 480.),
@@ -697,7 +740,7 @@ mod tests {
         assert_eq!(scale(Duration::ZERO), 0.96);
         assert_eq!(scale(Duration::from_millis(70)), 1.);
         let early = scale(Duration::from_millis(10));
-        // `--ease-scale-in` covers most of the way at once.
+        // `motion::EASE_SCALE_IN` covers most of the change at the start.
         assert!(early > 0.98 && early < 1., "{early}");
     }
 }

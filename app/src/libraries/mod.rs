@@ -1,23 +1,22 @@
-//! Opens libraries. A disposable copy is opened as before. A library the
-//! user keeps is opened under the rules of [`admission`] (README, "Opening
-//! libraries"). This module also keeps the Electron app's list of libraries
-//! (`libraryHistory`, `pinnedLibraries`, `lastLibrary`) and the user's
-//! consent for each library. It keeps both in this app's own state, never
-//! in the Electron app's `config.json`.
+//! Opens libraries. A disposable copy is opened when `application::guard`
+//! accepts it. A library the user keeps is opened under the rules of
+//! [`admission`] (`app/README.md`, "Opening a library you keep"). This
+//! module also keeps the list of libraries (`libraryHistory`,
+//! `pinnedLibraries` and `lastLibrary` in the state file) and the user's
+//! consent for each library. Both are kept in this app's own state file.
 //!
 //! - [`admission`] holds the rules. Its functions have no side effects,
 //!   and its checks of the system can be replaced in tests.
-//! - [`platform`] finds out whether the Electron app is running, and
-//!   returns a file's identity.
+//! - [`platform`] finds out whether another Picto is running, and returns
+//!   a file's identity.
 //! - [`host`] owns the main window's content, which is the gate or a
 //!   library's shell. It opens, switches and closes libraries, and shows
-//!   the consent dialog and the notice that blocks the window while the
-//!   Electron app is running.
+//!   the consent dialog and the notice that blocks the window while
+//!   another Picto is running.
 //! - [`manager`] is the Library Manager window.
-//! - [`files`] does Delete… and Move… on disk, as the Electron app's main
-//!   process does.
-//! - [`seed`] fills the list on the first run, reading the Electron app's
-//!   `config.json` once.
+//! - [`files`] does Delete… and Move… on disk.
+//! - [`seed`] fills the list on the first run. It reads, once, the
+//!   `config.json` that Picto 0.6.19 or earlier wrote.
 pub mod admission;
 pub mod files;
 pub mod host;
@@ -93,7 +92,8 @@ pub enum Kind {
     /// A disposable copy. It has the marker file, it is in a temporary folder,
     /// and it is detached when it is opened.
     Copy,
-    /// A library the user keeps. It is opened as the Electron app opens it.
+    /// A library the user keeps. It is opened as it is: it is not detached,
+    /// and no file of a copy is written into it.
     Real,
 }
 
@@ -185,8 +185,8 @@ pub fn confine(root: &Path, path: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// Returns a library's name as the Electron app shows it (`getLibraryName`):
-/// the name of its folder without `.library`.
+/// Returns the name that the app shows for the library at `path`: the name
+/// of its folder without `.library`.
 pub fn name(path: &str) -> String {
     crate::shell::library::split(path).0
 }
@@ -268,20 +268,20 @@ pub fn clear_history(cx: &mut gpui::App) {
     host::host(cx).update(cx, |_, cx| cx.notify());
 }
 
-/// The operations on the list of libraries, ported from the Electron app's
-/// `globalConfig.mjs`.
+/// The operations on the list of libraries: the history, the pinned
+/// libraries, the last library, and each library's colour and icon.
 pub mod history {
-    /// `addLibraryToHistory`: puts `path` first in the history, removes any
-    /// earlier entry for it, and makes it the last library.
+    /// Puts `path` first in the history, removes any earlier entry for it,
+    /// and makes it the last library.
     pub fn add(history: &mut Vec<String>, last: &mut Option<String>, path: &str) {
         history.retain(|known| known != path);
         history.insert(0, path.to_owned());
         *last = Some(path.to_owned());
     }
 
-    /// `removeLibraryFromHistory`: removes `path` from the history and from
-    /// the pinned libraries (Quick Access). If it was the last library, the
-    /// last library becomes the first one that remains in the history.
+    /// Removes `path` from the history and from the pinned libraries (Quick
+    /// Access). If it was the last library, the last library becomes the
+    /// first one that remains in the history.
     pub fn remove(
         history: &mut Vec<String>,
         pinned: &mut Vec<String>,
@@ -295,9 +295,9 @@ pub mod history {
         }
     }
 
-    /// Clear History: removes every library except the open one (`current`)
-    /// from the history and from the pinned libraries. If the open library was
-    /// not in the history, it is added to it.
+    /// Does the work of Clear History: removes every library except the open
+    /// one (`current`) from the history and from the pinned libraries. If the
+    /// open library was not in the history, it is added to it.
     pub fn clear(history: &mut Vec<String>, pinned: &mut Vec<String>, current: Option<&str>) {
         history.retain(|known| Some(known.as_str()) == current);
         pinned.retain(|known| Some(known.as_str()) == current);
@@ -308,8 +308,8 @@ pub mod history {
         }
     }
 
-    /// `togglePinned`: unpins `path` if it is pinned; otherwise adds it at the
-    /// end of the pinned libraries.
+    /// Unpins `path` if it is pinned. Otherwise adds it at the end of the
+    /// pinned libraries.
     pub fn toggle_pinned(pinned: &mut Vec<String>, path: &str) {
         if pinned.iter().any(|known| known == path) {
             pinned.retain(|known| known != path);
@@ -318,9 +318,8 @@ pub mod history {
         }
     }
 
-    /// `updateLibraryPath`: replaces the path `from` with `to` in the history
-    /// and in the pinned libraries, at the same positions, and in the last
-    /// library.
+    /// Replaces the path `from` with `to` in the history and in the pinned
+    /// libraries, at the same positions, and in the last library.
     pub fn rename(
         history: &mut [String],
         pinned: &mut [String],
@@ -338,9 +337,9 @@ pub mod history {
         }
     }
 
-    /// The `libraryMeta` part of `updateLibraryPath`: moves the colour and
-    /// icon stored for the path `from` to the path `to`, so a library that was
-    /// renamed, moved or located keeps them.
+    /// Moves the colour and icon stored for the path `from` (`libraryMeta` in
+    /// the state file) to the path `to`, so a library that was renamed, moved
+    /// or located keeps them.
     pub fn rename_look(
         looks: &mut std::collections::BTreeMap<String, crate::state::LibraryLook>,
         from: &str,
@@ -351,10 +350,9 @@ pub mod history {
         }
     }
 
-    /// Returns the paths for the rows of the Recent Libraries submenu
-    /// (`buildRecentLibrariesMenu`) in two lists: first the pinned libraries
-    /// that are in the history, then the libraries of the history that are not
-    /// pinned.
+    /// Returns the paths for the rows of the Recent Libraries submenu in two
+    /// lists: first the pinned libraries that are in the history, then the
+    /// libraries of the history that are not pinned.
     pub fn recent_rows(history: &[String], pinned: &[String]) -> (Vec<String>, Vec<String>) {
         let first = pinned
             .iter()
@@ -370,8 +368,8 @@ pub mod history {
     }
 }
 
-/// The checks of `createLibrary`: returns the path of the new library's
-/// folder, `<name>.library` in `parent`, or the Electron app's error message
+/// Checks the name and the place of a new library. Returns the path of the
+/// new library's folder, `<name>.library` in `parent`, or an error message
 /// when the name or the place is not allowed.
 pub fn new_library_path(name: &str, parent: &Path) -> Result<PathBuf, String> {
     use crate::i18n::en;
@@ -382,8 +380,7 @@ pub fn new_library_path(name: &str, parent: &Path) -> Result<PathBuf, String> {
     if name.contains(['/', '\\']) {
         return Err(en("Library name cannot contain slashes").to_owned());
     }
-    // `isInsideLibraryPackage`: a library may not be created inside another
-    // library's folder.
+    // A library may not be created inside another library's folder.
     if parent.ancestors().any(|folder| {
         folder
             .file_name()
@@ -394,8 +391,8 @@ pub fn new_library_path(name: &str, parent: &Path) -> Result<PathBuf, String> {
     }
     let path = parent.join(format!("{name}.library"));
     if path.exists() {
-        // The Electron app opens the library that is already there. This app
-        // only creates new libraries, so it returns an error.
+        // New Library only creates a library. It does not open one that is
+        // already there, so this is an error.
         return Err(en(
             "A library with that name already exists in the selected folder. Choose another location or open the existing library.",
         )
@@ -404,16 +401,16 @@ pub fn new_library_path(name: &str, parent: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// `locatedLibraryPath`: returns the library that the folder dialog of Locate…
-/// found. This is the chosen folder itself, or the folder named `name` inside
-/// it, whichever holds `library.sqlite`. Returns `None` when neither does.
+/// Returns the library that the folder dialog of Locate… found. This is the
+/// chosen folder itself, or the folder named `name` inside it, whichever
+/// holds `library.sqlite`. Returns `None` when neither does.
 pub fn located(chosen: &Path, name: &std::ffi::OsStr) -> Option<PathBuf> {
     [chosen.to_path_buf(), chosen.join(name)]
         .into_iter()
         .find(|candidate| candidate.join("library.sqlite").is_file())
 }
 
-/// The checks of `renameLibrary`: returns the path of the renamed folder,
+/// Checks the new name of a library. Returns the path of the renamed folder,
 /// `<name>.library` in the same parent folder as the old one, or an error
 /// message when the name is not allowed or a library with that name is already
 /// there.
@@ -429,8 +426,8 @@ pub fn renamed_path(path: &Path, name: &str) -> Result<PathBuf, String> {
     let parent = path.parent().unwrap_or(Path::new("/"));
     let renamed = parent.join(format!("{name}.library"));
     if renamed != path && renamed.exists() {
-        // The Electron app's main process writes this message in English,
-        // without a translation key.
+        // The locale files have no key for this message, so it is shown in
+        // English in every language.
         return Err(format!(
             "A library named \"{name}\" already exists at that location"
         ));
@@ -445,7 +442,7 @@ mod tests {
     use admission::Decision;
 
     #[test]
-    fn the_history_is_kept_as_production_keeps_it() {
+    fn the_history_is_kept_as_the_earlier_version_kept_it() {
         let (mut list, mut pinned, mut last) = (Vec::new(), Vec::new(), None);
         history::add(&mut list, &mut last, "/a/One.library");
         history::add(&mut list, &mut last, "/a/Two.library");
@@ -483,7 +480,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_library_is_named_and_placed_as_production_requires() {
+    fn a_new_library_is_named_and_placed_as_the_earlier_version_required() {
         let folder = tempfile::tempdir().unwrap();
         assert_eq!(
             new_library_path(" Art ", folder.path()).unwrap(),
@@ -687,8 +684,8 @@ mod tests {
     }
 
     /// Locate… finds the library when the chosen folder is the library, or
-    /// when the library of the same name is inside the chosen folder, as
-    /// `locatedLibraryPath` does. In any other case it finds nothing.
+    /// when the library of the same name is inside the chosen folder. In any
+    /// other case it finds nothing.
     #[test]
     fn locate_finds_the_library_chosen_or_the_one_inside_the_folder() {
         let folder = tempfile::tempdir().unwrap();

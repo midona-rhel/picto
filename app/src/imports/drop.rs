@@ -1,30 +1,32 @@
-//! What a drop from a web browser or another application carries besides
-//! files on disk, and how production imports it: `preload.cjs`'s `drop`
-//! handler reads the drag's in-memory files and its addresses, and
-//! `dropImport.mjs` (`picto:drop:materialize`) writes each in-memory file
-//! that is an image to a temporary file, which the import deletes once it
-//! has it, with the drop's web addresses as its sources.
+//! Handles what a drop from a web browser or another application carries
+//! besides files on disk. The platform reads the drag's in-memory files
+//! and its addresses. Each in-memory file that is an image is written to
+//! a temporary file, which the import deletes once it has read it, and
+//! the web addresses of the drop are recorded as the image's sources.
 //!
-//! As in production, an address is never fetched: a drop that brings no
-//! file is refused ("Links cannot be imported"). Production fetched dropped
-//! links until it chose not to ("Reject link-only browser drops").
+//! An address is never fetched. A drop that brings no file is refused
+//! with the message "Links cannot be imported".
 use gpui::{ExternalDropData, ExternalDropFile};
 use std::path::{Path, PathBuf};
 
-// Production's main process writes these in English, without a key.
-/// Production's error for a drop that holds no file.
+// The four messages below are in English in every language.
+/// The error for a drop that holds no file.
 pub const LINKS_ONLY: &str =
     crate::i18n::en("Links cannot be imported. Drop an image file instead.");
-/// Production's error when no in-memory file of the drop could be written.
+/// The error when no in-memory file of the drop could be written.
 pub const NO_IMAGE: &str =
     crate::i18n::en("The dropped browser item did not contain an importable image.");
+/// The error for an in-memory file whose bytes are not an image.
 const NOT_AN_IMAGE: &str =
     crate::i18n::en("The dropped browser item did not contain valid image data.");
+/// The error for an in-memory file that has no bytes.
 const EMPTY: &str = crate::i18n::en("The dropped browser item did not contain media data.");
 
-/// `readUrls`: the web addresses the drop names, in production's order (a
-/// `DownloadURL`'s address, the dragged image's `src`, the address list,
-/// then the text), trimmed, each once, `http` and `https` only.
+/// Returns the web addresses that the drop names, in this order: the
+/// address of each download entry, the `src` of the dragged image in the
+/// HTML, the lines of the address lists, and then the lines of the text.
+/// Each address is trimmed and listed once, and only `http` and `https`
+/// addresses are kept.
 pub fn source_urls(data: &ExternalDropData) -> Vec<String> {
     let mut candidates = Vec::new();
     for download in &data.download_urls {
@@ -42,7 +44,7 @@ pub fn source_urls(data: &ExternalDropData) -> Vec<String> {
     for candidate in candidates {
         let candidate = candidate.trim();
         let lower = candidate.to_ascii_lowercase();
-        // i18n: schemes, not shown
+        // i18n: schemes, which are not shown
         let web = lower.starts_with("http://") || lower.starts_with("https://");
         if web && !urls.iter().any(|url| url == candidate) {
             urls.push(candidate.to_owned());
@@ -51,8 +53,8 @@ pub fn source_urls(data: &ExternalDropData) -> Vec<String> {
     urls
 }
 
-/// The `src` of the first `<img>` in `html` that has one
-/// (`/<img[^>]+src=["']([^"']+)/i`).
+/// Returns the `src` of the first `<img>` tag in `html` that has a quoted,
+/// non-empty one.
 fn image_source(html: &str) -> Option<&str> {
     let lower = html.to_ascii_lowercase();
     let mut from = 0;
@@ -78,7 +80,9 @@ fn image_source(html: &str) -> Option<&str> {
     None
 }
 
-/// `detectImageMimeType`: the image type the bytes are, by their start.
+/// Returns the media type of the image that `bytes` hold, which is read
+/// from their first bytes. Returns `None` when they are not an image of a
+/// known type.
 pub fn image_type(bytes: &[u8]) -> Option<&'static str> {
     let starts = |prefix: &[u8]| bytes.starts_with(prefix);
     if starts(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) {
@@ -105,8 +109,8 @@ pub fn image_type(bytes: &[u8]) -> Option<&'static str> {
     if bytes.get(4..8) == Some(b"ftyp") && matches!(bytes.get(8..12), Some(b"avif" | b"avis")) {
         return Some("image/avif");
     }
-    // `/^(?:﻿|\s)*(?:<\?xml[^>]*>\s*)?<svg\b/i` over the first 1,024
-    // bytes.
+    // An SVG starts with `<svg` after an optional byte order mark,
+    // whitespace and XML declaration. Only the first 1,024 bytes are read.
     let head = String::from_utf8_lossy(&bytes[..bytes.len().min(1024)]);
     let mut text = head
         .trim_start_matches(|character: char| character == '\u{feff}' || character.is_whitespace());
@@ -124,8 +128,9 @@ pub fn image_type(bytes: &[u8]) -> Option<&'static str> {
     (lower.as_deref() == Some("<svg") && boundary).then_some("image/svg+xml")
 }
 
-/// `safeExtension`: the name's own extension when it is an image's, else
-/// the detected type's.
+/// Returns the extension for a written file: the extension of `name`
+/// when that is an image extension, otherwise the extension of the
+/// detected type `mime`.
 fn extension(name: Option<&str>, mime: &str) -> &'static str {
     const KNOWN: &[(&str, &str)] = &[
         ("image/avif", ".avif"),
@@ -158,7 +163,7 @@ fn extension(name: Option<&str>, mime: &str) -> &'static str {
         .map_or(".bin", |(_, extension)| extension)
 }
 
-/// A name no other staged file of this process has used.
+/// Returns a name that no other file written by this process has used.
 fn unique_id() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNT: AtomicU64 = AtomicU64::new(0);
@@ -172,8 +177,8 @@ fn unique_id() -> String {
     )
 }
 
-/// `materializeDroppedMedia`: writes an in-memory file to `directory` as
-/// `<id><extension>` when its bytes are an image, and refuses it otherwise.
+/// Writes an in-memory file to `directory` as `<id><extension>` when its
+/// bytes are an image. Returns an error for any other file.
 pub fn materialize(file: &ExternalDropFile, directory: &Path) -> Result<PathBuf, String> {
     if file.bytes.is_empty() {
         return Err(EMPTY.into());
@@ -189,16 +194,18 @@ pub fn materialize(file: &ExternalDropFile, directory: &Path) -> Result<PathBuf,
     Ok(path)
 }
 
-/// What a drop comes to, before anything is imported.
+/// What a drop holds once its in-memory files are written, before
+/// anything is imported.
 #[derive(Debug, PartialEq)]
 pub enum Staged {
-    /// Files on disk only: imported as dropped files are.
+    /// Only files on disk, which are imported as dropped files are.
     Paths(Vec<PathBuf>),
-    /// Production's notification "Could not import dropped media", with
-    /// this message.
+    /// The drop is refused. The string is the message of the notification
+    /// "Could not import dropped media".
     Refused(String),
-    /// Files on disk, and the in-memory files written to `staged` (deleted
-    /// by the import once it has them), which take `sources`.
+    /// Files on disk in `paths`, and the in-memory files that were written
+    /// to the paths in `staged`. The import deletes the files in `staged`
+    /// once it has read them and records `sources` as their sources.
     Browser {
         paths: Vec<PathBuf>,
         staged: Vec<PathBuf>,
@@ -206,9 +213,10 @@ pub enum Staged {
     },
 }
 
-/// The drop handler's rules: a drop with no file is refused; each
-/// in-memory file is written to `directory` (one that is not an image is
-/// skipped, and when none could be written the last error is given).
+/// Decides what a drop holds. A drop with no file is refused. Each
+/// in-memory file is written to `directory`; one that is not an image is
+/// skipped. When the drop has no file on disk and no in-memory file could
+/// be written, the drop is refused with the last error.
 pub fn stage(paths: Vec<PathBuf>, data: Option<&ExternalDropData>, directory: &Path) -> Staged {
     let files = data.map_or(&[][..], |data| &data.files[..]);
     if paths.is_empty() && files.is_empty() {
@@ -235,15 +243,17 @@ pub fn stage(paths: Vec<PathBuf>, data: Option<&ExternalDropData>, directory: &P
     }
 }
 
-// This app's own: production receives no promised files.
-/// The reason given when no promised file arrived and the source said none.
+// The message and the wait below are for files that a drop promises.
+/// The reason that is shown when no promised file arrived and the source
+/// gave no reason.
 pub const NOT_DELIVERED: &str = crate::i18n::en("The dropped files did not arrive.");
-/// How long the files a drop promised may take to arrive in all (a large
-/// video exported from Photos takes a while).
+/// How long all the files that a drop promised may take to arrive. A
+/// large video that Photos exports takes several minutes.
 const PROMISE_WAIT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
-/// The reports of the files a drop promised: `count` of them, or fewer when
-/// the platform stopped reporting or the wait ran out.
+/// Returns the platform's reports of the files that a drop promised.
+/// There are `count` of them, or fewer when the platform stopped
+/// reporting or [`PROMISE_WAIT`] passed.
 pub async fn await_promised(
     mut arrival: futures::channel::mpsc::UnboundedReceiver<gpui::PromisedFile>,
     count: usize,
@@ -264,11 +274,12 @@ pub async fn await_promised(
     reports
 }
 
-/// What the files a drop promised came to, given the platform's `reports`
-/// for the `count` promised: the files written whole into `folder`, in
-/// order. Everything else in the folder (a file that failed part-way, one
-/// that never reported, a folder) is removed, so only whole files are ever
-/// imported; when none is left the folder goes too and the reason is given.
+/// Returns the promised files that were written completely into `folder`,
+/// in the order of the platform's `reports` for the `count` promised
+/// files. Everything else in the folder is removed: a file that failed
+/// before it was complete, a file that was never reported, and any folder.
+/// Only complete files are therefore imported. When no file is left, the
+/// folder is removed too and the error gives the reason.
 pub fn settle_promised(
     folder: &Path,
     reports: Vec<gpui::PromisedFile>,
@@ -316,7 +327,7 @@ pub fn settle_promised(
     Ok(arrived)
 }
 
-/// Removes a drop's folder of promised files and whatever arrived in it.
+/// Removes the folder of a drop's promised files and everything in it.
 pub fn discard_promised(folder: &Path) {
     if let Err(error) = std::fs::remove_dir_all(folder)
         && error.kind() != std::io::ErrorKind::NotFound
@@ -448,10 +459,10 @@ mod tests {
         );
     }
 
-    /// The macOS platform's reading of a drag, on a pasteboard of the
-    /// test's own (never the system's drag or general pasteboard): a
-    /// browser's dragged image gives its data, address and HTML; a dragged
-    /// file gives no data, since its path arrives with the drop.
+    /// Tests how the macOS platform reads a drag. The test uses a pasteboard
+    /// of its own and never the system's drag or general pasteboard. A
+    /// browser's dragged image gives its data, address and HTML. A dragged
+    /// file gives no data, because its path arrives with the drop.
     #[cfg(target_os = "macos")]
     #[test]
     fn the_macos_drag_pasteboard_gives_image_data_and_addresses() {
@@ -461,8 +472,8 @@ mod tests {
         use objc2_foundation::{NSArray, NSData, NSString};
         let class = AnyClass::get(c"NSPasteboard").expect("AppKit");
         let item_class = AnyClass::get(c"NSPasteboardItem").expect("AppKit");
-        // SAFETY: NSPasteboard's and NSPasteboardItem's documented
-        // selectors, with the argument types they take.
+        // SAFETY: these are NSPasteboard's and NSPasteboardItem's documented
+        // selectors, called with the argument types they take.
         unsafe {
             let board: Retained<AnyObject> = msg_send![class, pasteboardWithUniqueName];
             let _: isize = msg_send![&*board, clearContents];
@@ -504,11 +515,11 @@ mod tests {
         }
     }
 
-    /// The Windows platform's reading of a drop of virtual files (what
-    /// Outlook, a browser and Photos drag) from a data object made here:
-    /// each file is written into the drop's own folder under its name,
-    /// from global memory or a stream, folders left out; one shorter than
-    /// its descriptor says is removed and never imported.
+    /// Tests how the Windows platform reads a drop of virtual files, which is
+    /// what Outlook, a browser and Photos drag. The data object is made in the
+    /// test. Each file is written into the drop's own folder under its name,
+    /// from global memory or from a stream, and folders are left out. A file
+    /// that is shorter than its descriptor says is removed and not imported.
     #[cfg(windows)]
     #[test]
     fn a_windows_drop_of_virtual_files_is_written_whole_into_the_drops_folder() {
@@ -559,7 +570,8 @@ mod tests {
         );
     }
 
-    /// The Windows platform's reading of `HTML Format`, on data made here.
+    /// Tests how the Windows platform reads the `HTML Format` of a drag, on
+    /// data that is made in the test.
     #[cfg(windows)]
     #[test]
     fn the_windows_drag_gives_the_html_fragment() {
@@ -582,8 +594,9 @@ mod tests {
         assert_eq!(source_urls(&data), vec!["https://e.test/a.png"]);
     }
 
-    /// The X11 and Wayland platforms' choice of what to read from a drag
-    /// and what it comes to, on data made here (Firefox's HTML is UTF-16).
+    /// Tests which types the X11 and Wayland platforms read from a drag and
+    /// what they make of them, on data that is made in the test. The HTML is
+    /// UTF-16, as Firefox writes it.
     #[cfg(target_os = "linux")]
     #[test]
     fn the_linux_drag_reads_one_image_the_addresses_html_and_text() {
@@ -625,8 +638,9 @@ mod tests {
         );
     }
 
-    /// A promised file that failed part-way, or never reported, is never
-    /// imported and is removed; when none arrived the drop's folder goes.
+    /// A promised file that failed before it was complete, or that was never
+    /// reported, is removed and not imported. When no file arrived, the
+    /// drop's folder is removed.
     #[test]
     fn only_promised_files_written_whole_are_imported_and_the_rest_removed() {
         let scratch = tempfile::tempdir().expect("folder");
@@ -670,11 +684,12 @@ mod tests {
         assert!(!folder.exists());
     }
 
-    /// The X11 platform's receiving of a file a drag offers to save (XDS,
-    /// what browsers and archive managers drag), from a source made here
-    /// on the display (Xvfb in CI): the file it writes at the address given
-    /// arrives whole and the drop is finished; one that fails part-way
-    /// leaves nothing to import and no folder.
+    /// Tests how the X11 platform receives a file that a drag offers to save
+    /// (XDS, which browsers and archive managers use). The source is made in
+    /// the test on the display, which is Xvfb in CI. A file that the source
+    /// writes at the given address arrives complete and the drop is finished.
+    /// A file that fails before it is complete leaves nothing to import and
+    /// no folder.
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "needs an X display"]

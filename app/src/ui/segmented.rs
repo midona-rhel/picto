@@ -1,8 +1,9 @@
-//! Segmented controls: one choice of a few, side by side on a track. The
-//! glyph ones sit on the control surface: the filter pickers' match rule
-//! (`FilterLogicTabs`), the view menu's sort direction (`.dirPill`) and the
-//! pickers' view tabs (`OverlayShell`'s `.viewTabs`); the labelled ones are
-//! tab strips (`.subscriptionTabs`, the batch rename dialog's `.tabs`).
+//! Segmented controls: a few choices side by side on a track, of which one is
+//! chosen. The controls that show glyphs are on the control surface colour:
+//! the match rule of the filter pickers, the sort direction in the view menu,
+//! and the view tabs of the pickers. The controls that show labels are tab
+//! strips: the tabs of a subscription's detail screen and the tabs of the
+//! batch rename dialog.
 use super::tooltip::{self, Tip};
 use crate::theme;
 use crate::theme::Text as _;
@@ -14,25 +15,30 @@ type SelectHandler = Rc<dyn Fn(usize, &mut Window, &mut App) + 'static>;
 /// Which of the controls to draw.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Look {
-    /// `FilterLogicTabs.module.css`: 24px buttons 2px apart, the hovered one
-    /// on the subtle overlay, the chosen one on the active surface.
+    /// The match rule of the filter pickers: 24px buttons, 2px apart. The
+    /// button under the pointer has the subtle overlay as its background, and
+    /// the chosen one has the active surface colour.
     Logic,
-    /// `.dirPill`: 26×24 buttons 1px apart at 40% until chosen, the chosen
-    /// one at full strength on `--color-contrast-12`.
+    /// The sort direction in the view menu: buttons 26px wide and 24px high,
+    /// 1px apart. A button's glyph is drawn at 40% strength until the button
+    /// is chosen. The chosen button has its glyph at full strength and
+    /// `Theme::contrast(12.)` as its background.
     Direction,
-    /// `OverlayShell.module.css` `.viewTabs`: 28×24 tabs side by side, the
-    /// chosen one on the active surface, with no hover of their own.
+    /// The view tabs of the pickers: tabs 28px wide and 24px high, with no gap
+    /// between them. The chosen one has the active surface colour. A tab does
+    /// not change under the pointer.
     View,
-    /// `.subscriptionTabs`: labelled tabs on a faint track, the chosen one
-    /// raised on the active surface with a soft shadow. A tab's label is
-    /// the tertiary text colour, the secondary under the pointer, and the
-    /// primary when chosen.
+    /// Tabs with labels on a faint track. The chosen tab has the active
+    /// surface colour and a soft shadow. A tab's label is in the tertiary text
+    /// colour, in the secondary text colour under the pointer, and in the
+    /// primary text colour when the tab is chosen.
     Tabs,
-    /// `BatchRenameModal.module.css`'s `.tabs`: the tabs share the strip's
-    /// width, 28px tall on a 2px black-20% track with 7px corners; a tab is
-    /// the secondary text colour, on the hover surface in the primary
-    /// colour under the pointer, and on the active surface (no shadow) when
-    /// chosen.
+    /// The tabs of the batch rename dialog. The tabs share the strip's width
+    /// equally and are 28px high. The track is black at 20%, with 2px of
+    /// padding and 7px corners. A tab's label is in the secondary text colour.
+    /// Under the pointer the tab has the hover surface colour and its label
+    /// the primary text colour. The chosen tab has the active surface colour
+    /// and no shadow.
     FilledTabs,
 }
 
@@ -59,8 +65,9 @@ impl Look {
     }
 }
 
-/// One choice: its 14px glyph and what it is called, which its tooltip
-/// says where the control has tooltips; a tab shows its label instead.
+/// One choice: the name of its 14px glyph, and its label. A control with
+/// glyphs shows the label in the choice's tooltip, if the control has
+/// tooltips. A tab shows its label and no glyph.
 pub struct Segment {
     pub icon: &'static str,
     pub label: SharedString,
@@ -73,7 +80,8 @@ pub fn segment(icon: &'static str, label: impl Into<SharedString>) -> Segment {
     }
 }
 
-/// A labelled tab, for [`Look::Tabs`] and [`Look::FilledTabs`].
+/// Returns a tab with the label `label`, for [`Look::Tabs`] and
+/// [`Look::FilledTabs`].
 pub fn tab(label: impl Into<SharedString>) -> Segment {
     segment("", label)
 }
@@ -85,8 +93,7 @@ pub struct Segmented {
     segments: Vec<Segment>,
     selected: Option<usize>,
     tips: bool,
-    /// The group's accessible name (production's `aria-label` on its
-    /// `role="group"` or `role="tablist"`).
+    /// The name that assistive technology gives the group of choices.
     name: Option<SharedString>,
     on_select: Option<SelectHandler>,
 }
@@ -102,8 +109,9 @@ pub fn segmented(
         look,
         segments,
         selected,
-        // `FilterLogicTabs` wraps each button in a `KbdTooltip`; the
-        // direction pill has only accessible labels, a tab its label.
+        // The match rule and the view tabs show each choice's label in a
+        // tooltip. The sort direction has labels only for assistive
+        // technology, and a tab shows its label itself.
         tips: matches!(look, Look::Logic | Look::View),
         name: None,
         on_select: None,
@@ -111,7 +119,7 @@ pub fn segmented(
 }
 
 impl Segmented {
-    /// What assistive technology calls the group of choices.
+    /// Sets the name that assistive technology gives the group of choices.
     pub fn name(mut self, name: impl Into<SharedString>) -> Self {
         self.name = Some(name.into());
         self
@@ -127,8 +135,9 @@ impl RenderOnce for Segmented {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
         let (width, height) = self.look.button();
-        // Tabs are a tab list whose chosen tab is selected; the glyph pills
-        // a group of buttons, the chosen one pressed (`FilterLogicTabs`).
+        // For assistive technology, tabs are a tab list in which the chosen
+        // tab is selected. The controls with glyphs are a group of buttons in
+        // which the chosen button is pressed.
         let tabs = self.look.labelled();
         let count = self.segments.len();
         let mut root = div()
@@ -159,8 +168,8 @@ impl RenderOnce for Segmented {
                 std::sync::Arc::new(self.id.clone()),
                 format!("segment-{index}").into(),
             );
-            // Each segment is a `<button>`: its own stop, Enter and Space
-            // choose it, and it draws no ring.
+            // Each segment is its own Tab stop. Enter and Space choose it. It
+            // draws no focus ring.
             let focus = super::focus::control(&id, window, cx);
             let mut button = div()
                 .id(id)

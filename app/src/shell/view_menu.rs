@@ -1,7 +1,9 @@
-//! The view menu the titlebar's "View options" button opens
-//! (`GridViewMenu.tsx`): the layout and the sort, then the display toggles
-//! and the two rails. Each choice changes the destination's view at once
-//! and saves it to its `view_pref` row.
+//! The view menu, which the titlebar's "View options" button opens. It has
+//! two panels. The layout panel holds the layout select and the sort
+//! controls. The display panel holds the switches that say what a tile
+//! shows, and the two switches that show or hide the sidebar and the
+//! inspector. Each choice changes the view of the open destination at once
+//! and is saved to that destination's `view_pref` row.
 use crate::grid::layout::ViewMode;
 use crate::grid::menu::Panel;
 use crate::grid::prefs::{self, fixed_order};
@@ -19,13 +21,15 @@ use picto_library::predicate::{SortDirection, SortField};
 use picto_library::query::ItemScope;
 use serde_json::json;
 
-/// A rail's toggle in the menu was used.
+/// The event a panel emits when the user uses its "Show Sidebar" or its
+/// "Show Inspector" switch.
 pub enum RailToggled {
     Sidebar,
     Inspector,
 }
 
-/// One of the view panels (`ViewPanel`, `DisplayPanel`).
+/// One of the two view panels: the layout panel or the display panel, as
+/// `part` says.
 pub struct ViewOptions {
     session: Entity<Session>,
     part: Panel,
@@ -36,14 +40,16 @@ pub struct ViewOptions {
 
 impl EventEmitter<RailToggled> for ViewOptions {}
 
-/// The menu's usual width.
+/// The width of the layout panel's menu entry, in pixels.
 const WIDTH: f32 = 270.;
-/// `.panel`: 4px above and below, rows 6px apart.
+/// A panel has 4px of padding above and below its rows (`PADDING`), and its
+/// rows are 6px apart (`GAP`).
 const PADDING: f32 = 4.;
 const GAP: f32 = 6.;
-/// `.toggleRow`
+/// The height of a row that has a switch, in pixels.
 const TOGGLE_ROW: f32 = 28.;
-/// `.sep`: one pixel with 2px above and below.
+/// The height of the separator between the display switches and the two
+/// switches of the rails: a 1px line with 2px of margin above and below it.
 const SEPARATOR: f32 = 5.;
 
 fn is_folder(scope: &ItemScope) -> bool {
@@ -53,19 +59,23 @@ fn is_folder(scope: &ItemScope) -> bool {
     )
 }
 
-/// The display panel's toggles for a destination, and whether the folder's
-/// subfolder toggle is among them.
+/// Returns the number of switches in the display panel: seven that every
+/// destination has, "Show Subfolder Content" when the destination is a
+/// folder, and the two that show or hide the sidebar and the inspector.
 fn toggle_count(folder: bool) -> usize {
     7 + folder as usize + 2
 }
 
-/// `.toggleRow`'s 24px gap and the 32px switch after the label, and the
-/// 6px (`.customItem`) and 4px (the menu) either side of a panel.
+/// `TOGGLE_GAP` is the gap between the label of a switch's row and the
+/// switch, and `SWITCH` is the width of the switch. `PANEL_INSET` is the
+/// padding at the left and right of a panel together: on each side 6px from
+/// the panel's menu entry and 4px from the menu.
 const TOGGLE_GAP: f32 = 24.;
 const SWITCH: f32 = 32.;
 const PANEL_INSET: f32 = 2. * 6. + 2. * 4.;
 
-/// The display panel's labels for a destination, in order.
+/// Returns the labels of the display panel's switches for a destination, in
+/// the order of the rows.
 fn display_labels(folder: bool) -> Vec<&'static str> {
     let mut labels = vec![
         en("Show Name"),
@@ -83,19 +93,21 @@ fn display_labels(folder: bool) -> Vec<&'static str> {
     labels
 }
 
-/// The display panel's width where it sets its own (the "Display"
-/// submenu, `width: auto`): its widest label, the gap and the switch, inside
-/// the panel's and the menu's padding.
+/// Returns the width of the display panel's menu entry, which is the width
+/// of the "Display" submenu of the grid's context menu. It is the width of
+/// the widest label, the gap and the switch, plus the padding of the panel
+/// and of the menu, rounded up to a whole pixel.
 fn display_width(widest_label: f32) -> f32 {
     (PANEL_INSET + widest_label + TOGGLE_GAP + SWITCH).ceil()
 }
 
-/// `.dirPill`: 24px buttons inside 2px of padding, taller than the select
-/// beside it.
+/// The height of the sort direction control, in pixels: 24px buttons inside
+/// 2px of padding. It is taller than the select beside it.
 const DIRECTION_PILL: f32 = 28.;
 
-/// A panel's height in its menu row. The sort row is as tall as the
-/// direction pill, which a random sort does not show.
+/// Returns the height of a panel's menu entry. The sort row is as tall as
+/// the direction control. With a random sort the direction control is not
+/// shown, and the sort row is as tall as its select.
 fn height(part: Panel, scope: &ItemScope, random: bool) -> f32 {
     match part {
         Panel::Layout if fixed_order(scope) => 2. * PADDING + theme::CONTROL_SM,
@@ -109,13 +121,15 @@ fn height(part: Panel, scope: &ItemScope, random: bool) -> f32 {
         }
         Panel::Display => {
             let toggles = toggle_count(is_folder(scope)) as f32;
-            // The toggles and the separator, each 6px from the next.
+            // The rows are the switches and the separator, with a 6px gap
+            // between each row and the next.
             2. * PADDING + toggles * TOGGLE_ROW + SEPARATOR + toggles * GAP
         }
     }
 }
 
-/// `LAYOUT_OPTIONS` as a select's choices, each with its layout's glyph.
+/// Returns the layouts (`prefs::LAYOUTS`) as the choices of a select, each
+/// with the icon of its layout.
 pub fn layout_choices() -> Vec<ui::select::Choice> {
     prefs::LAYOUTS
         .iter()
@@ -130,15 +144,15 @@ pub fn layout_choices() -> Vec<ui::select::Choice> {
         .collect()
 }
 
-/// The two view panels for the current destination, which the titlebar's
-/// view menu shows one above the other and the grid's context menu shows
-/// inline and inside "Display".
+/// The two view panels for the current destination. The titlebar's view
+/// menu shows one above the other. The grid's context menu shows the layout
+/// panel among its rows and the display panel inside its "Display" submenu.
 pub struct Panels {
     pub layout: Entity<ViewOptions>,
     pub display: Entity<ViewOptions>,
     scope: ItemScope,
     random: bool,
-    /// The display panel's own width, for the "Display" submenu.
+    /// The width of the display panel's menu entry (`display_width`).
     display_width: f32,
 }
 
@@ -186,10 +200,12 @@ impl Panels {
         }
     }
 
-    /// A panel as a menu entry, at its height for the destination.
+    /// Returns the panel `part` as a menu entry, with the height it has for
+    /// the destination.
     pub fn entry(&self, part: Panel) -> menu::Entry {
-        // The menu's own width holds the panels at its top level; a
-        // submenu takes the width the display panel sets.
+        // The layout panel's entry is `WIDTH` wide. The display panel's
+        // entry is as wide as its rows need, so that the "Display" submenu,
+        // which holds only that entry, is no wider than that.
         let (view, width) = match part {
             Panel::Layout => (self.layout.clone(), WIDTH),
             Panel::Display => (self.display.clone(), self.display_width),
@@ -204,8 +220,8 @@ impl Panels {
     }
 }
 
-/// The view menu (`buildViewMenuEntries`) for the current destination,
-/// with its two panels.
+/// Builds the view menu for the current destination at `position`, and
+/// returns it together with its two panels.
 pub fn build(
     session: &Entity<Session>,
     position: Point<Pixels>,
@@ -220,12 +236,13 @@ pub fn build(
         menu::Entry::Separator,
         panels.entry(Panel::Display),
     ];
-    // A pop-up menu like the others: its selects open lists of their own.
+    // The menu has no search row. The selects in its panels open their own
+    // lists of choices.
     let menu = cx.new(|cx| Menu::new(entries, position, cx).search(false));
     (menu, panels)
 }
 
-/// A toggle label's width in the menu's text.
+/// Returns the width of a switch's label in the menu's font and text size.
 fn label_width(label: &'static str, window: &Window) -> f32 {
     crate::ui::text_width(label, font(theme::FONT_UI), theme::TEXT_MD, window)
 }
@@ -248,8 +265,9 @@ impl ViewOptions {
                     .map_or(ItemScope::All, |entry| entry.scope.clone()),
             )
         };
-        // A label longer than the room left (German, Finnish) is cut with an
-        // ellipsis rather than pushing the controls out of the menu.
+        // A label that is longer than the room beside the controls, as some
+        // German and Finnish labels are, is cut off with an ellipsis.
+        // Otherwise it would push the controls out of the menu.
         let label = |text: &'static str| {
             div()
                 .min_w_0()
@@ -354,8 +372,11 @@ impl ViewOptions {
                     .map_or(ItemScope::All, |entry| entry.scope.clone()),
             )
         };
-        // Label, value, the patch that flips it (or a rail), whether it
-        // fetches again, and whether it is disabled.
+        // Each entry of `toggles` is one switch: its label, whether it is
+        // on, what using it does, and whether it is disabled. `Flip::View`
+        // holds the patch of the view preferences and whether the results
+        // are read again. `Flip::Rail` holds the event that asks the shell
+        // to show or hide a rail.
         enum Flip {
             View(serde_json::Value, bool),
             Rail(fn() -> RailToggled),
@@ -444,13 +465,16 @@ impl ViewOptions {
                 });
             });
             let (row_act, switch_act) = (act.clone(), act);
-            // A disabled row is dimmed as a whole (`.toggleRowDisabled`);
-            // its switch is not dimmed again.
+            // A disabled row is drawn at 35% opacity as a whole. Its switch
+            // is therefore not marked as disabled, which would dim it a
+            // second time. It only gets no handler.
             let mut toggle = ui::toggle(("view-toggle", index), on).name(label.to_owned());
             if !disabled {
                 toggle = toggle.on_toggle(move |_, cx| switch_act(cx));
             }
-            // The row's click is its switch's, which carries its name.
+            // A click anywhere on the row does what the switch does. For
+            // assistive technology the row is presentational, and the switch
+            // carries the row's name.
             let mut element = div()
                 .id(("view-toggle-row", index))
                 .a11y_presentational()
@@ -513,8 +537,8 @@ mod tests {
 
     #[test]
     fn the_display_submenu_is_as_wide_as_its_widest_row() {
-        // `width: auto`: 103.33px of label, the 24px gap, the 32px switch,
-        // 6px and 4px either side.
+        // The width is 103.33px of label, the 24px gap, the 32px switch, and
+        // 6px and 4px on each side, rounded up.
         assert_eq!(display_width(103.33), 180.);
         assert_eq!(display_labels(false).len(), 9);
         assert!(display_labels(true).contains(&"Show Subfolder Content"));
@@ -522,17 +546,18 @@ mod tests {
 
     #[test]
     fn panel_heights_follow_their_rows() {
-        // Layout, then the sort beside the 28px direction pill, 6px apart,
-        // 4px above and below; a random sort has no pill.
+        // The layout row, then the sort row, which is as tall as the 28px
+        // direction control, with 6px between the rows and 4px above and
+        // below them. With a random sort there is no direction control.
         let all = ItemScope::All;
         assert_eq!(height(Panel::Layout, &all, false), 4. + 26. + 6. + 28. + 4.);
         assert_eq!(height(Panel::Layout, &all, true), 4. + 26. + 6. + 26. + 4.);
-        // A folder has no sort, and one more toggle.
+        // A folder has no sort row, and one more switch.
         let folder = ItemScope::FolderTree {
             folder_id: FolderId(1),
         };
         assert_eq!(height(Panel::Layout, &folder, false), 4. + 26. + 4.);
-        // Seven toggles, the separator and the two rails.
+        // Seven switches, the separator and the two switches of the rails.
         assert_eq!(
             height(Panel::Display, &all, false),
             8. + 9. * 28. + 5. + 9. * 6.

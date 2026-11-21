@@ -1,10 +1,10 @@
-//! The open library's sync state: its configuration (`cloud.configuration.get`)
-//! and status (`cloud.status.get`), read when the library opens, when the
-//! core says `cloud` or `tasks` changed, and on a timer as production's
-//! `CloudSyncBar` polls: every 250 ms while a sync runs (its progress is
-//! written without publishing), every 15 s while sync is configured, not at
-//! all while it is off. Changes of state are announced as `cloudSettle`
-//! announces them.
+//! The sync state of the open library: its configuration
+//! (`cloud.configuration.get`) and its status (`cloud.status.get`). Both are
+//! read when the library opens, when the core reports that `cloud` or `tasks`
+//! changed, and on a timer. The timer fires every 250 ms while a sync runs,
+//! because the core writes a sync's progress without reporting a change. It
+//! fires every 15 s while sync is configured, and there is no timer while sync
+//! is off. When the state changes, a notification is shown ([`settle`]).
 use super::{Configuration, Status};
 use crate::application::{self, Event};
 use crate::i18n::{en, t};
@@ -12,7 +12,8 @@ use crate::session::Session;
 use gpui::*;
 use std::time::{Duration, Instant};
 
-/// While a sync runs, and while one is configured.
+/// The time between two reads while a sync runs. `SLOW` is the time between
+/// two reads while sync is configured and no sync runs.
 const FAST: Duration = Duration::from_millis(250);
 const SLOW: Duration = Duration::from_secs(15);
 
@@ -20,10 +21,12 @@ pub struct Cloud {
     session: Entity<Session>,
     pub configuration: Option<Configuration>,
     pub status: Option<Status>,
-    /// When the current sync was first seen running, for the "update
-    /// complete" announcement (`reconnectStartedAt`).
+    /// The time at which the current sync was first seen running. The "Cloud
+    /// update complete" notification is shown only for a sync that ran for at
+    /// least five seconds.
     started: Option<Instant>,
-    /// A read under way, and whether another was asked for meanwhile.
+    /// Whether a read is under way. `again` says whether another read was
+    /// asked for meanwhile.
     reading: bool,
     again: bool,
     poll: Option<Task<()>>,
@@ -53,14 +56,15 @@ impl Cloud {
         this
     }
 
-    /// Whether the library syncs to a provider's folder.
+    /// Returns whether the library syncs to a provider's folder.
     pub fn configured(&self) -> bool {
         self.configuration
             .as_ref()
             .is_some_and(|configuration| configuration.root_path.is_some())
     }
 
-    /// Reads the configuration and status again.
+    /// Reads the configuration and the status again. If a read is already
+    /// under way, one more read follows it.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         if self.reading {
             self.again = true;
@@ -93,7 +97,8 @@ impl Cloud {
         .detach();
     }
 
-    /// Takes a status in, announcing what changed as `cloudSettle` does.
+    /// Stores a new status, and shows the notifications for what changed since
+    /// the previous status ([`settle`]).
     fn take(&mut self, next: Status, cx: &mut Context<Self>) {
         if let Some(before) = self.status.take() {
             for popup in settle(&before, &next, &mut self.started, Instant::now()) {
@@ -104,8 +109,8 @@ impl Cloud {
         self.schedule(cx);
     }
 
-    /// Reads again after `FAST` while a sync runs, after `SLOW` while sync
-    /// is on, and not at all while it is off.
+    /// Starts the timer for the next read: `FAST` while a sync runs, `SLOW`
+    /// while sync is on. While sync is off, no timer is started.
     fn schedule(&mut self, cx: &mut Context<Self>) {
         let delay = match self.status.as_ref().map(|status| status.state.as_str()) {
             Some("reconciling") => Some(FAST),
@@ -120,8 +125,8 @@ impl Cloud {
         });
     }
 
-    /// Sends a cloud command to the library's application, reads the state
-    /// again once it answered, and hands `done` the answer.
+    /// Sends a cloud command to the library's application. When the answer has
+    /// arrived, it reads the state again and calls `done` with the answer.
     pub fn run(
         &mut self,
         command: &str,
@@ -139,14 +144,14 @@ impl Cloud {
     }
 }
 
-/// What `cloudSettle` announces.
+/// A notification about a change of the sync's state.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Popup {
     /// Changes from the cloud are being applied.
     Found,
-    /// Sync failed, with the core's words.
+    /// The sync failed. The text is the core's error message.
     Attention(String),
-    /// A sync that took a while finished.
+    /// A sync that ran for at least five seconds has finished.
     Complete,
 }
 
@@ -156,7 +161,8 @@ impl Popup {
         match self {
             Popup::Found => notify::show(
                 Tone::Info,
-                // Production writes the message without a key.
+                // The locale files have no key for the message, so it is shown
+                // in English in every language.
                 Options::new(t("Cloud changes found"), en("Picto is updating your library."))
                     .action(t("View progress"), |_, cx| view_progress(cx)),
                 cx,
@@ -176,7 +182,9 @@ impl Popup {
     }
 }
 
-/// View progress / View details: the log window (`picto:open-diagnostics`).
+/// Brings the app's window to the front and shows the diagnostics
+/// (`Shell::show_diagnostics`). The View progress and View details buttons of
+/// the notifications call it.
 fn view_progress(cx: &mut App) {
     crate::app_menu::bring_forward(cx);
     crate::libraries::host::update_shell(cx, |shell, window, cx| {
@@ -184,10 +192,11 @@ fn view_progress(cx: &mut App) {
     });
 }
 
-/// `cloudSettle`'s rules: a sync that starts by itself (not one restoring
-/// a joined library's media, which shows its own dialog) is announced, an
-/// error is announced once per message, and a sync that ran at least five
-/// seconds says when it is done.
+/// Returns the notifications for the change from `before` to `next`. A sync
+/// that starts is announced, unless it is a blocking sync: that one restores
+/// the media of a joined library and has its own dialog. An error is announced
+/// when the state becomes `error` or the error message changes. A sync that
+/// ran for at least five seconds is announced when it has finished.
 pub fn settle(
     before: &Status,
     next: &Status,

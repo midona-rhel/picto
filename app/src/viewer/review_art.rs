@@ -1,53 +1,58 @@
-//! The bitmaps of the Inbox review controls (`InboxReviewControls.module.css`)
-//! that GPUI cannot draw itself: each half's light (`.glow`: two radial
-//! gradients, three inset shadows and a sideways fade mask, clipped to the
-//! half's rounded shape), drawn at every step of the press flash's
-//! brightness, and the drop shadows under each glyph (`.action svg`'s
-//! `filter`), drawn at every step between the resting and the lit shadows.
-//! The glyphs themselves are drawn over them as SVGs. All are computed once
-//! per display scale, as straight-alpha BGRA, which is what GPUI's images
-//! take.
+//! The bitmaps of the Inbox review controls that GPUI cannot draw itself.
+//! The first kind is the glow of each half of the pill: two radial
+//! gradients, three inset shadows and a fade towards the divider, clipped to
+//! the half's rounded shape. It is drawn at every step of brightness that
+//! the flash of a press goes through. The second kind is the two drop
+//! shadows under each glyph, drawn at every step between the resting shadows
+//! and the lit ones. The glyphs themselves are drawn over the bitmaps as SVG
+//! icons. All bitmaps are computed once for each display scale, as
+//! straight-alpha BGRA, which is the pixel format that GPUI's images take.
 use gpui::RenderImage;
 use image::{ImageBuffer, Rgba};
 use std::sync::Arc;
 
 type Buffer = ImageBuffer<Rgba<u8>, Vec<u8>>;
 
-/// `.action`: each half of the pill, 64×54.
+/// The width of each half of the pill. `HEIGHT` is the height of the pill.
 pub const HALF_WIDTH: f32 = 64.;
 pub const HEIGHT: f32 = 54.;
-/// `.glow`'s `inset: 1px`.
+/// The distance between a half's edge and its glow, on every side.
 pub const GLOW_INSET: f32 = 1.;
-/// `<IconCheck size={28}>` / `<IconX size={28}>`, centred in the half.
+/// The size of the check mark and of the cross. Each is centred in its half.
 pub const GLYPH: f32 = 28.;
-/// Room around the glyph for its widest shadow (8px blur).
+/// The room left around the glyph for its widest shadow, which has a blur
+/// radius of 8px.
 pub const SHADOW_MARGIN: f32 = 16.;
-/// How many brightness steps the flash is drawn at, from `brightness(1)` to
-/// `brightness(2)`.
+/// How many steps of brightness the flash is drawn at, from the normal
+/// brightness to twice the normal brightness.
 pub const FLASH_STEPS: usize = 16;
-/// How many steps the glyph's shadow is drawn at between rest and lit.
+/// How many steps the glyph's shadow is drawn at, from the resting shadow to
+/// the lit one.
 pub const SHADOW_STEPS: usize = 9;
 
-/// Which half: the accept half's light rises at 58% across and fades to the
-/// right, the reject half's at 42% and fades to the left.
+/// One half of the pill. The glow of the accept half is centred at 58% of
+/// the half's width and fades out towards the right. The glow of the reject
+/// half is centred at 42% and fades out towards the left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Half {
     Accept,
     Reject,
 }
 
-/// Everything drawn for one display scale.
+/// All the bitmaps drawn for one display scale.
 pub struct Art {
     pub scale: f32,
-    /// By half, then by flash step (0 is `brightness(1)`).
+    /// The glow, indexed by half and then by flash step. Step 0 is the
+    /// normal brightness.
     pub glow: [Vec<Arc<RenderImage>>; 2],
-    /// By half, then by step from the resting shadow (0) to the lit one.
+    /// The glyph's shadow, indexed by half and then by step, from the
+    /// resting shadow (step 0) to the lit one.
     pub shadow: [Vec<Arc<RenderImage>>; 2],
 }
 
 impl Art {
-    /// Draws every bitmap for the display `scale`. `colors` are the two
-    /// halves' `--glow` colours.
+    /// Draws every bitmap for the display `scale`. `colors` are the glow
+    /// colours of the accept half and of the reject half.
     pub fn draw(scale: f32, colors: [[f32; 3]; 2]) -> Self {
         let half = |index: usize| {
             if index == 0 {
@@ -81,12 +86,14 @@ impl Art {
     }
 }
 
-/// The flash step for a `brightness()` amount between 1 and 2.
+/// Returns the flash step for a brightness between 1, which is the normal
+/// brightness, and 2, which is twice the normal brightness.
 pub fn flash_step(brightness: f32) -> usize {
     (((brightness - 1.) * (FLASH_STEPS - 1) as f32).round() as usize).min(FLASH_STEPS - 1)
 }
 
-/// The shadow step for how far the glyph's shadow is lit, 0 to 1.
+/// Returns the shadow step for `lit`, which says how far the glyph's shadow
+/// is from the resting shadow (0) to the lit one (1).
 pub fn shadow_step(lit: f32) -> usize {
     ((lit.clamp(0., 1.) * (SHADOW_STEPS - 1) as f32).round() as usize).min(SHADOW_STEPS - 1)
 }
@@ -97,7 +104,7 @@ fn wrap(buffer: Buffer) -> Arc<RenderImage> {
     )]))
 }
 
-/// A premultiplied RGBA canvas in device pixels.
+/// A grid of premultiplied RGBA pixels, one for each device pixel.
 struct Canvas {
     width: usize,
     height: usize,
@@ -113,7 +120,8 @@ impl Canvas {
         }
     }
 
-    /// Lays a layer of colour `rgb` at the alphas `alpha` over the canvas.
+    /// Draws a layer over the canvas. The layer has the colour `rgb`
+    /// everywhere, and `alpha` gives its opacity at each pixel.
     fn lay(&mut self, rgb: [f32; 3], alpha: &[f32]) {
         for (pixel, &a) in self.pixels.iter_mut().zip(alpha) {
             for channel in 0..3 {
@@ -123,7 +131,8 @@ impl Canvas {
         }
     }
 
-    /// Lays premultiplied pixels under the canvas.
+    /// Draws the premultiplied pixels of `below` under what the canvas
+    /// already holds.
     fn under(&mut self, below: &Canvas) {
         for (pixel, low) in self.pixels.iter_mut().zip(&below.pixels) {
             let keep = 1. - pixel[3];
@@ -133,7 +142,8 @@ impl Canvas {
         }
     }
 
-    /// Scales every pixel's alpha (and so its premultiplied colour).
+    /// Multiplies each pixel's alpha, and with it the pixel's premultiplied
+    /// colour, by the value that `alpha` holds for that pixel.
     fn mask(&mut self, alpha: &[f32]) {
         for (pixel, &a) in self.pixels.iter_mut().zip(alpha) {
             for channel in pixel.iter_mut() {
@@ -142,8 +152,10 @@ impl Canvas {
         }
     }
 
-    /// Straight-alpha BGRA bytes, the colour at `brightness()` (CSS
-    /// multiplies the unpremultiplied colour and clamps it).
+    /// Returns the canvas as straight-alpha BGRA bytes, with each colour
+    /// channel multiplied by `brightness`. The colour is multiplied after
+    /// the alpha has been divided out of it, and the result is limited to
+    /// the range from 0 to 1.
     fn encode(&self, brightness: f32) -> Buffer {
         let mut bytes = Vec::with_capacity(self.width * self.height * 4);
         for pixel in &self.pixels {
@@ -168,7 +180,7 @@ impl Canvas {
     }
 }
 
-/// A rounded rectangle with a radius per corner (top-left, top-right,
+/// A rounded rectangle with one radius for each corner (top-left, top-right,
 /// bottom-right, bottom-left), in points.
 #[derive(Clone, Copy)]
 struct Rounded {
@@ -180,7 +192,8 @@ struct Rounded {
 }
 
 impl Rounded {
-    /// Signed distance from the edge: negative inside.
+    /// Returns the signed distance of the point from the shape's edge. It is
+    /// negative inside the shape.
     fn distance(&self, x: f32, y: f32) -> f32 {
         let (half_w, half_h) = (self.width / 2., self.height / 2.);
         let (px, py) = (x - self.left - half_w, y - self.top - half_h);
@@ -198,13 +211,15 @@ impl Rounded {
         outside + qx.max(qy).min(0.) - radius
     }
 
-    /// How much of the device pixel centred at (`x`, `y`) points is inside.
+    /// Returns how much of the device pixel whose centre is at (`x`, `y`)
+    /// points is inside the shape, from 0 to 1.
     fn coverage(&self, x: f32, y: f32, scale: f32) -> f32 {
         (0.5 - self.distance(x, y) * scale).clamp(0., 1.)
     }
 
-    /// The shape moved by (`dx`, `dy`) and grown by `grow` on every side,
-    /// its radii with it (CSS spreads a shadow's corners the same way).
+    /// Returns the shape moved by (`dx`, `dy`) and enlarged by `grow` on
+    /// every side. The radius of each rounded corner is enlarged by `grow`
+    /// too, and a square corner stays square.
     fn moved(self, dx: f32, dy: f32, grow: f32) -> Self {
         Self {
             left: self.left + dx - grow,
@@ -222,9 +237,10 @@ impl Rounded {
     }
 }
 
-/// A Gaussian blur of `values` (`width` × `height`) with a standard deviation
-/// of `sigma` device pixels, run separably; outside the grid counts as
-/// `outside`.
+/// Returns `values`, a grid of `width` × `height`, blurred with a Gaussian
+/// whose standard deviation is `sigma` device pixels. The blur is run as a
+/// horizontal pass and then a vertical pass. A position outside the grid
+/// counts as having the value `outside`.
 fn blur(values: &[f32], width: usize, height: usize, sigma: f32, outside: f32) -> Vec<f32> {
     if sigma <= 0. {
         return values.to_vec();
@@ -266,7 +282,9 @@ fn blur(values: &[f32], width: usize, height: usize, sigma: f32, outside: f32) -
     pass(&pass(values, true), false)
 }
 
-/// A grid of a value per device pixel of a box of `width` × `height` points.
+/// Returns a grid with one value for each device pixel of a box that is
+/// `width` × `height` device pixels. `value` is called with the centre of
+/// each pixel, in points.
 fn sample(width: usize, height: usize, scale: f32, value: impl Fn(f32, f32) -> f32) -> Vec<f32> {
     let mut out = Vec::with_capacity(width * height);
     for y in 0..height {
@@ -277,8 +295,10 @@ fn sample(width: usize, height: usize, scale: f32, value: impl Fn(f32, f32) -> f
     out
 }
 
-/// A CSS radial gradient's alpha at normalized distance `t` from its
-/// centre, through `stops` of (position, alpha); transparent past the last.
+/// Returns the alpha of a radial gradient at the distance `t` from its
+/// centre, where 1 is the gradient's radius. `stops` are pairs of position
+/// and alpha. The alpha is interpolated between two stops, and past the last
+/// stop it is the alpha of that stop.
 fn radial_alpha(t: f32, stops: &[(f32, f32)]) -> f32 {
     let Some(&(first, first_alpha)) = stops.first() else {
         return 0.;
@@ -295,13 +315,14 @@ fn radial_alpha(t: f32, stops: &[(f32, f32)]) -> f32 {
     stops.last().map_or(0., |stop| stop.1)
 }
 
-/// One half's `.glow`, at `brightness(1)`.
+/// Draws the glow of one half at the normal brightness.
 fn glow(half: Half, color: [f32; 3], scale: f32) -> Canvas {
     let (box_w, box_h) = (HALF_WIDTH - 2. * GLOW_INSET, HEIGHT - 2. * GLOW_INSET);
     let width = (box_w * scale).round() as usize;
     let height = (box_h * scale).round() as usize;
-    // `border-radius: inherit` from the half's `999px 0 0 999px` (or its
-    // mirror), which the box's height clamps to half of it.
+    // The glow has the half's shape: fully rounded on the outer side and
+    // square on the side of the divider. The radius is half of the box's
+    // height.
     let round = box_h / 2.;
     let shape = Rounded {
         left: 0.,
@@ -318,8 +339,10 @@ fn glow(half: Half, color: [f32; 3], scale: f32) -> Canvas {
         Half::Reject => 0.42,
     };
     let mut canvas = Canvas::new(width, height);
-    // `radial-gradient(ellipse 50% 55% at var(--glow-x) 50%, 0.28 0%,
-    // transparent 75%)`, the lower layer.
+    // The lower layer is a radial gradient in the shape of an ellipse. Its
+    // radii are 50% of the box's width and 55% of its height, and its centre
+    // is at `across` of the width and half of the height. Its alpha goes
+    // from 0.28 at the centre to 0 at 75% of the radius.
     let core = sample(width, height, scale, |x, y| {
         let (dx, dy) = (
             (x - across * box_w) / (0.5 * box_w),
@@ -328,8 +351,11 @@ fn glow(half: Half, color: [f32; 3], scale: f32) -> Canvas {
         radial_alpha((dx * dx + dy * dy).sqrt(), &[(0., 0.28), (0.75, 0.)])
     });
     canvas.lay(color, &core);
-    // `radial-gradient(ellipse 110% 95% at var(--glow-x) 118%, 0.9 0%,
-    // 0.45 38%, 0.12 64%, transparent 80%)`: the wash from the bottom edge.
+    // The upper layer is a radial gradient whose centre is below the bottom
+    // edge. Its radii are 110% of the box's width and 95% of its height, and
+    // its centre is at `across` of the width and 118% of the height. Its
+    // alpha goes from 0.9 at the centre through 0.45 at 38% and 0.12 at 64%
+    // to 0 at 80% of the radius.
     let wash = sample(width, height, scale, |x, y| {
         let (dx, dy) = (
             (x - across * box_w) / (1.1 * box_w),
@@ -341,9 +367,11 @@ fn glow(half: Half, color: [f32; 3], scale: f32) -> Canvas {
         )
     });
     canvas.lay(color, &wash);
-    // The inset shadows, the last listed lowest: `inset 0 1px 0 rgba(255,
-    // 255, 255, 0.06)`, `inset 0 0 8px rgba(glow, 0.22)` and `inset 0 -3px
-    // 7px -3px rgba(glow, 0.95)`.
+    // The three inset shadows, each drawn over the one before: a white line
+    // of 6% opacity along the top edge, a shadow in the glow colour of 22%
+    // opacity with an 8px blur, and a shadow in the glow colour of 95%
+    // opacity along the bottom edge (moved up by 3px, 7px blur, spread of
+    // -3px).
     let white = [1., 1., 1.];
     for (rgb, alpha, dy, blur_radius, spread) in [
         (white, 0.06, 1., 0., 0.),
@@ -354,8 +382,9 @@ fn glow(half: Half, color: [f32; 3], scale: f32) -> Canvas {
         let layer = shadow.iter().map(|value| value * alpha).collect::<Vec<_>>();
         canvas.lay(rgb, &layer);
     }
-    // Clipped to the rounded half, and faded toward the divider by
-    // `mask-image: linear-gradient(to right|left, #000 70%, transparent)`.
+    // The glow is clipped to the half's rounded shape. It also fades out
+    // towards the divider: it has its full strength over the outer 70% of
+    // the width and falls to nothing at the divider.
     let clip = sample(width, height, scale, |x, y| {
         let across = match half {
             Half::Accept => x / box_w,
@@ -372,10 +401,11 @@ fn glow(half: Half, color: [f32; 3], scale: f32) -> Canvas {
     canvas
 }
 
-/// The strength (0 to 1) of an inset box shadow inside `shape`: everything
-/// outside the shape moved by `dy` and shrunk by `spread` (grown when it is
-/// negative), blurred by the CSS blur radius (a standard deviation of half
-/// of it).
+/// Returns the strength (0 to 1), at each device pixel, of an inset shadow
+/// inside `shape`. The shadow is everything outside the shape after the
+/// shape has been moved down by `dy` and shrunk by `spread` on every side
+/// (enlarged when `spread` is negative), blurred with a Gaussian whose
+/// standard deviation is half of `blur_radius`.
 fn inset_shadow(
     shape: Rounded,
     dy: f32,
@@ -386,8 +416,10 @@ fn inset_shadow(
     scale: f32,
 ) -> Vec<f32> {
     let hole = shape.moved(0., dy, -spread);
-    // Worked out on a border wide enough to hold the moved hole and the
-    // blur's reach, beyond which everything is outside the hole.
+    // The shadow is computed on a grid that is larger than the box by a
+    // border on every side. The border is wide enough to hold the moved
+    // shape and the reach of the blur. Everything beyond the border is
+    // outside the shape.
     let pad = (blur_radius * 1.5 + dy.abs() + spread.abs() + 1.).ceil();
     let border = (pad * scale).round() as usize;
     let (wide, tall) = (width + 2 * border, height + 2 * border);
@@ -403,15 +435,16 @@ fn inset_shadow(
     out
 }
 
-/// How much of the device pixel at (`x`, `y`) points the glyph's strokes
-/// cover. The glyph is drawn in a 24-unit box scaled to `GLYPH` points at
-/// (`left`, `top`), with Tabler's 2-unit round-capped strokes.
+/// Returns how much of the device pixel at (`x`, `y`) points the glyph's
+/// strokes cover. The glyph is defined in a box of 24 units, which is scaled
+/// to `GLYPH` points and placed at (`left`, `top`). Its strokes are 2 units
+/// wide and have round ends, as the icons of the Tabler set do.
 fn glyph_alpha(half: Half, left: f32, top: f32, x: f32, y: f32, scale: f32) -> f32 {
     let unit = GLYPH / 24.;
     let strokes: &[[(f32, f32); 2]] = match half {
-        // `M5 12l5 5l10 -10`
+        // The check mark, which is the SVG path `M5 12l5 5l10 -10`.
         Half::Accept => &[[(5., 12.), (10., 17.)], [(10., 17.), (20., 7.)]],
-        // `M18 6l-12 12`, `M6 6l12 12`
+        // The cross, which is the SVG paths `M18 6l-12 12` and `M6 6l12 12`.
         Half::Reject => &[[(18., 6.), (6., 18.)], [(6., 6.), (18., 18.)]],
     };
     let (ux, uy) = ((x - left) / unit, (y - top) / unit);
@@ -426,12 +459,14 @@ fn glyph_alpha(half: Half, left: f32, top: f32, x: f32, y: f32, scale: f32) -> f
     ((1. - distance) * unit * scale + 0.5).clamp(0., 1.)
 }
 
-/// What lies under one half's glyph: its two drop shadows, `lit` of the
-/// way from the resting `drop-shadow(0 1px 2px rgba(0, 0, 0, 0.58))
-/// drop-shadow(0 0 7px rgba(255, 255, 255, 0.08))` to the lit
-/// `drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5)) drop-shadow(0 0 8px
-/// rgba(glow, 0.75))`. The second shadows the glyph with the first under
-/// it. The box is the glyph's with `SHADOW_MARGIN` round it.
+/// Draws what lies under the glyph of one half: its two drop shadows, at
+/// `lit` of the way from the resting shadows to the lit ones. The first
+/// shadow is black, 1px below the glyph, with a 2px blur. Its opacity goes
+/// from 0.58 at rest to 0.5 when lit. The second shadow is not moved. It
+/// goes from white at 8% opacity with a 7px blur at rest to the glow colour
+/// at 75% opacity with an 8px blur when lit. The second shadow is cast by
+/// the glyph together with the first shadow. The bitmap is the glyph's box
+/// with `SHADOW_MARGIN` added on every side.
 fn glyph_shadow(half: Half, color: [f32; 3], lit: f32, scale: f32) -> Canvas {
     let side = GLYPH + 2. * SHADOW_MARGIN;
     let size = (side * scale).round() as usize;
@@ -439,7 +474,7 @@ fn glyph_shadow(half: Half, color: [f32; 3], lit: f32, scale: f32) -> Canvas {
     let glyph = sample(size, size, scale, |x, y| {
         glyph_alpha(half, SHADOW_MARGIN, SHADOW_MARGIN, x, y, scale)
     });
-    // The first shadow: the glyph's shape a point lower, blurred.
+    // The first shadow is the glyph's shape one point lower, blurred.
     let lowered = sample(size, size, scale, |x, y| {
         glyph_alpha(half, SHADOW_MARGIN, SHADOW_MARGIN + 1., x, y, scale)
     });
@@ -447,14 +482,16 @@ fn glyph_shadow(half: Half, color: [f32; 3], lit: f32, scale: f32) -> Canvas {
         .iter()
         .map(|value| value * lerp(0.58, 0.5))
         .collect::<Vec<_>>();
-    // The second shadows the glyph and the first together.
+    // The second shadow is cast by the glyph and the first shadow together.
     let together = glyph
         .iter()
         .zip(&dark)
         .map(|(g, d)| g + d * (1. - g))
         .collect::<Vec<_>>();
     let spread = blur(&together, size, size, lerp(7., 8.) / 2. * scale, 0.);
-    // Its colour moves from white at 8% to the glow at 75%, premultiplied.
+    // The colour of the second shadow goes from white at 8% opacity to the
+    // glow colour at 75% opacity. The two are mixed premultiplied, and the
+    // mix is divided by its opacity to get the colour.
     let white_strength = 0.08 * (1. - lit);
     let glow_strength = 0.75 * lit;
     let strength = white_strength + glow_strength;
@@ -501,7 +538,8 @@ mod tests {
             height: 52.,
             radii: [26., 0., 0., 26.],
         };
-        // The outer corner is cut away; the inner one is square.
+        // The outer corner is rounded off, so the point there is outside the
+        // shape. The inner corner is square, so the point there is inside.
         assert_eq!(accept.coverage(0.5, 0.5, 2.), 0.);
         assert_eq!(accept.coverage(61.75, 0.25, 2.), 1.);
         assert_eq!(accept.coverage(31., 26., 2.), 1.);
@@ -520,7 +558,8 @@ mod tests {
 
     #[test]
     fn glyph_strokes_are_covered_on_their_line() {
-        // The check's corner, at (10, 17) of 24, in a 28-point box.
+        // The corner of the check mark is at (10, 17) of the 24 units, in a
+        // box of 28 points.
         let unit = 28. / 24.;
         assert_eq!(
             glyph_alpha(Half::Accept, 0., 0., 10. * unit, 17. * unit, 2.),

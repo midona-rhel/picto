@@ -1,6 +1,6 @@
-//! The top level of the Subscriptions screen (production's
-//! `SubscriptionsGrid.tsx`), which shows one tile for each subscription. It
-//! is what the screen shows while no subscription's page is open.
+//! The top level of the Subscriptions screen, which shows one tile for each
+//! subscription. It is what the screen shows while no subscription's page is
+//! open.
 //!
 //! The tiles are positioned by the grid's layout (`grid::layout`) and are
 //! drawn to look like the grid's tiles. A tile shows the subscription's
@@ -114,9 +114,8 @@ pub(super) fn cover(
 
 /// Draws the panel that the screen shows when the open subscription is no
 /// longer in the library, in the place where that subscription's page
-/// would be. It is production's `EmptyState` with the Subscriptions
-/// screen's welcome text: the heading "Subscribe to artists and tags" and
-/// one sentence that says what a subscription does.
+/// would be. The panel holds the heading "Subscribe to artists and tags"
+/// and one sentence that says what a subscription does.
 pub(super) fn empty_state(cx: &App) -> Div {
     let theme = theme::theme(cx);
     div()
@@ -334,8 +333,8 @@ impl SubscriptionsScreen {
         Some(bar)
     }
 
-    /// Draws the row of one gallery download (production's `.galleryJob`).
-    /// From left to right the row has:
+    /// Draws the row of one gallery download. From left to right the row
+    /// has:
     ///
     /// - A download icon.
     /// - The download's name with a status text to its right, and a 2 px
@@ -356,7 +355,6 @@ impl SubscriptionsScreen {
         // The progress that the run in progress has reported for this
         // download, if it has reported any: the number of images
         // downloaded and, once the site has given it, the total number.
-        // Production keeps this in `progressBySubscriptionId`.
         let progress = self.gallery_progress.get(&job.id).copied();
         let downloaded = progress.map_or(0, |progress| progress.downloaded);
         let total = progress.and_then(|progress| progress.total);

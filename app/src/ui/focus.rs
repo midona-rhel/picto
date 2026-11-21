@@ -1,24 +1,22 @@
-//! Keyboard focus for the shared controls. It behaves as Chromium's keyboard
-//! focus does for production's buttons, check boxes, selects, sliders and
-//! fields.
+//! This module gives the shared controls keyboard focus: the buttons, check
+//! boxes, selects and sliders. The keys do what they do for the same kinds
+//! of control on a web page.
 //!
 //! Each shared control is a tab stop, which is a control that the Tab key
 //! can move keyboard focus to ([`control`]). A dialog, the Settings window
 //! and a popover are each a scope ([`scope`]). Inside a scope, Tab moves
 //! keyboard focus to the next tab stop and Shift-Tab moves it to the
-//! previous one, in the order in which the controls are drawn, which is
-//! production's DOM order. After the last tab stop Tab goes to the first,
-//! and before the first Shift-Tab goes to the last, so keyboard focus never
-//! moves to a control behind a dialog. Enter and Space press the button that
-//! has keyboard focus. Space ticks the check box that has keyboard focus.
-//! The arrow keys change the select or the slider that has keyboard focus.
+//! previous one, in the order in which the controls are drawn. After the
+//! last tab stop Tab goes to the first, and before the first Shift-Tab goes
+//! to the last, so keyboard focus never moves to a control behind a dialog.
+//! Enter and Space press the button that has keyboard focus. Space ticks
+//! the check box that has keyboard focus. The arrow keys change the select
+//! or the slider that has keyboard focus.
 //!
 //! A control draws its focus ring only when the Tab key moved keyboard focus
-//! to it, and not after a click, as the CSS selector `:focus-visible` does.
-//! A click on a control does not move keyboard focus, so the window's
-//! keyboard shortcuts keep working after the click. The next Tab does start
-//! from the control that was clicked, as Chromium's sequential focus
-//! navigation starting point does.
+//! to it, and not after a click. A click on a control does not move keyboard
+//! focus, so the window's keyboard shortcuts keep working after the click.
+//! The next Tab does start from the control that was clicked.
 use crate::theme;
 use gpui::*;
 use std::cell::Cell;
@@ -28,17 +26,17 @@ use std::rc::Rc;
 actions!(
     focus,
     [
-        /// Bound to Tab. Moves keyboard focus to the next tab stop in the
-        /// scope.
+        /// Moves keyboard focus to the next tab stop in the scope. It is
+        /// bound to Tab.
         Next,
-        /// Bound to Shift-Tab. Moves keyboard focus to the previous tab stop
-        /// in the scope.
+        /// Moves keyboard focus to the previous tab stop in the scope. It is
+        /// bound to Shift-Tab.
         Previous,
-        /// Presses the control that has keyboard focus. Bound to Enter and
-        /// Space on a button, and to Space on a check box or a select.
+        /// Presses the control that has keyboard focus. It is bound to Enter
+        /// and Space on a button, and to Space on a check box or a select.
         Press,
-        /// Bound to Enter on a select. Opens the select's list, or, when the
-        /// list is open, closes it and chooses the highlighted choice.
+        /// Opens the select's list, or, when the list is open, closes it and
+        /// chooses the highlighted choice. It is bound to Enter on a select.
         Choose,
         Up,
         Down,
@@ -48,8 +46,8 @@ actions!(
         End,
         PageUp,
         PageDown,
-        /// Bound to Escape on a control that can have something open, such
-        /// as a select with its list. Closes what is open.
+        /// Closes what a control has open, such as the list of a select. It
+        /// is bound to Escape on a select.
         Cancel,
     ]
 );
@@ -71,14 +69,14 @@ pub fn bind(cx: &mut App) {
     let select = Some(Kind::Select.context());
     let slider = Some(Kind::Slider.context());
     bindings.extend([
-        // Enter and Space press a button, as they press an HTML `<button>`.
+        // Enter and Space press a button.
         KeyBinding::new("enter", Press, button),
         KeyBinding::new("space", Press, button),
-        // Only Space presses a check box, as with an HTML
-        // `<input type="checkbox">`.
+        // Only Space presses a check box. Enter does not.
         KeyBinding::new("space", Press, check),
-        // The keys of production's `CmSelect`. Space is bound because
-        // `CmSelect` is a `<button>`, and Space clicks a `<button>`.
+        // These are the keys of a select. Enter opens its list or chooses
+        // the highlighted choice, and Space presses the select as it presses
+        // a button.
         KeyBinding::new("enter", Choose, select),
         KeyBinding::new("space", Press, select),
         KeyBinding::new("up", Up, select),
@@ -86,7 +84,8 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("home", Home, select),
         KeyBinding::new("end", End, select),
         KeyBinding::new("escape", Cancel, select),
-        // The keys of an HTML `<input type="range">`.
+        // These are the keys of a slider. Left and Down lower its value, and
+        // Right and Up raise it.
         KeyBinding::new("left", Left, slider),
         KeyBinding::new("down", Down, slider),
         KeyBinding::new("right", Right, slider),
@@ -127,11 +126,10 @@ impl Kind {
     }
 }
 
-/// The focus ring: a line drawn around a control that has keyboard focus, as
-/// a CSS `outline` is. The line is `width` pixels thick. Its inner edge is
-/// `offset` pixels outside the control's edge, or inside the control's edge
-/// when `offset` is negative. Its corners are rounded to follow the
-/// control's corners.
+/// The focus ring: a line drawn around a control that has keyboard focus.
+/// The line is `width` pixels thick. Its inner edge is `offset` pixels
+/// outside the control's edge, or inside the control's edge when `offset` is
+/// negative. Its corners are rounded to follow the control's corners.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ring {
     pub width: f32,
@@ -140,9 +138,9 @@ pub struct Ring {
 }
 
 impl Ring {
-    /// The ring that `.btn:focus-visible` in `actionButton.module.css`
-    /// draws. It is `2px solid var(--color-primary-60)` and it starts 1px
-    /// outside the button's edge.
+    /// Returns the focus ring of a text button (`ui::action_button`). It is
+    /// a line 2px thick in the theme's focus border colour
+    /// (`Theme::border_focus`), and it starts 1px outside the button's edge.
     pub fn button(theme: &theme::Theme) -> Self {
         Self {
             width: 2.,
@@ -154,9 +152,10 @@ impl Ring {
     /// Returns two numbers for a control whose corners have the radius
     /// `radius`. The first is how far, in pixels, the ring's outer edge is
     /// outside the control's edge. The second is the radius of the ring's
-    /// outer corners. Both match how Chromium draws an outline around a box
-    /// with rounded corners. A control with square corners gets a ring with
-    /// square corners.
+    /// outer corners, which is `radius` plus the first number, so that the
+    /// ring keeps the same distance from the control all the way round a
+    /// corner. A control with square corners gets a ring with square
+    /// corners.
     pub fn outer(&self, radius: f32) -> (f32, f32) {
         let out = self.offset + self.width;
         let corner = if radius > 0. {
@@ -169,9 +168,9 @@ impl Ring {
 
     /// Returns the ring as an element to add as a child of the control.
     /// `border` is the thickness of the control's border. A child element
-    /// is positioned from the inner edge of its parent's border, but a CSS
-    /// outline is measured from the outer edge, so the ring is moved out by
-    /// `border` as well.
+    /// is positioned from the inner edge of its parent's border, but the
+    /// ring's `offset` is measured from the outer edge, so the ring is moved
+    /// out by `border` as well.
     fn element(self, radius: f32, border: f32) -> Div {
         let (out, corner) = self.outer(radius);
         let out = out + border;
@@ -346,8 +345,7 @@ impl Control {
 }
 
 /// Makes `element` a tab stop that Enter and Space press and that draws no
-/// focus ring. Use it for a control that production draws as a plain
-/// `<button>` without a focus ring.
+/// focus ring.
 pub fn button<E>(
     element: E,
     id: &ElementId,
@@ -361,11 +359,11 @@ where
     control(id, window, cx).attach(element, Kind::Button, press)
 }
 
-/// Wraps a view's own `<button>` so that it becomes a tab stop. Use it where
-/// the view builds the element in code that has no `Window` to pass to
-/// [`button`]. The returned [`Stop`] does what [`button`] does at the time
-/// it is rendered, when it is given the window. `id` must be the id of
-/// `element`.
+/// Wraps a button that a view builds itself so that the button becomes a tab
+/// stop. Use it where the view builds the element in code that has no
+/// `Window` to pass to [`button`]. The returned [`Stop`] does what
+/// [`button`] does at the time it is rendered, when it is given the window.
+/// `id` must be the id of `element`.
 pub fn stop(
     id: impl Into<ElementId>,
     element: Stateful<Div>,
@@ -483,10 +481,9 @@ pub fn step(scope: &FocusHandle, forward: bool, window: &mut Window, cx: &mut Ap
 }
 
 /// Scrolls `scroll` by the smallest amount that brings the control that the
-/// Tab key has just moved keyboard focus to into view, as a browser scrolls
-/// a focused element into view. It does this only when that control is
-/// inside `area`, which is the focus handle that the scroller's element
-/// tracks. A scroller calls this each time it draws.
+/// Tab key has just moved keyboard focus to into view. It does this only
+/// when that control is inside `area`, which is the focus handle that the
+/// scroller's element tracks. A scroller calls this each time it draws.
 pub fn follow(scroll: &ScrollHandle, area: &FocusHandle, window: &mut Window, cx: &mut App) {
     let id = window.window_handle().window_id();
     let Some(Some(control)) = cx
@@ -533,13 +530,12 @@ fn revealed(height: (f32, f32), down: (f32, f32), offset: f32, max: f32) -> f32 
     moved.clamp(-max, 0.)
 }
 
-/// Returns the value that a slider has after `key` is pressed, as an HTML
-/// `<input type="range">` behaves. An arrow key changes `value` by `step`.
-/// Page Up and Page Down change it by a tenth of the range from `min` to
-/// `max`, or by `step` when `step` is larger than that. Home sets it to
-/// `min` and End sets it to `max`. The result is rounded to a whole number
-/// of steps from `min` and is kept between `min` and `max`. A `step` of
-/// zero or less counts as 1.
+/// Returns the value that a slider has after `key` is pressed. An arrow key
+/// changes `value` by `step`. Page Up and Page Down change it by a tenth of
+/// the range from `min` to `max`, or by `step` when `step` is larger than
+/// that. Home sets it to `min` and End sets it to `max`. The result is
+/// rounded to a whole number of steps from `min` and is kept between `min`
+/// and `max`. A `step` of zero or less counts as 1.
 pub fn slider_key(key: SliderKey, value: f64, min: f64, max: f64, step: f64) -> f64 {
     let step = if step > 0. { step } else { 1. };
     let page = ((max - min) / 10.).max(step);
@@ -568,8 +564,8 @@ pub enum SliderKey {
     End,
 }
 
-/// A name for each focus handle. The off-screen tool uses the names for its
-/// `focused` line, which prints the control that has keyboard focus.
+/// Keeps a name for each focus handle. The off-screen tool uses the names
+/// for its `focused` line, which prints the control that has keyboard focus.
 #[cfg(test)]
 pub mod names {
     use gpui::{App, ElementId, FocusHandle, Global, SharedString, Window};
@@ -629,7 +625,7 @@ mod tests {
             offset: 1.,
             color: rgba(0x3297ff99),
         };
-        // For the 6px corners of `.btn`, the outline's outer edge is 3px
+        // For a button with 6px corners, the ring's outer edge is 3px
         // outside the button and its outer corners have a radius of 9px.
         assert_eq!(ring.outer(6.), (3., 9.));
         // A control with square corners gets a ring with square corners.

@@ -1,12 +1,12 @@
-//! The Library Manager's questions: Delete…, the consent to change a
-//! library on disk, and Remove from List. Each is held by a
-//! [`ui::modal::Host`], which plays its exit and gives the keyboard back to
-//! what opened it.
+//! Draws the Library Manager's questions: Delete…, the consent to change a
+//! library on disk, and Remove from List. Each is kept in a
+//! [`ui::modal::Host`], which removes the dialog after it has faded out and
+//! gives the keyboard focus back to what had it before the dialog opened.
 use super::*;
 
 impl Manager {
-    /// `deleteLibrary`'s question, as production's message box words it,
-    /// naming the full path.
+    /// Draws the Delete… question. Its message names the library and the
+    /// full path of its folder.
     pub(super) fn deletion(
         &mut self,
         window: &mut Window,
@@ -26,7 +26,8 @@ impl Manager {
         let deleted = path.clone();
         let accept =
             cx.listener(move |this: &mut Self, _: &(), _, cx| this.delete(deleted.clone(), cx));
-        // Production's main process writes these in English, without keys.
+        // The locale files have no key for this message, so it is shown in
+        // English in every language.
         let message = format!(
             "Delete library \"{name}\"?\n\nThis will permanently delete all files in:\n{path}\n\nThis cannot be undone."
         );
@@ -48,8 +49,9 @@ impl Manager {
         )
     }
 
-    /// The consent question, asked here before Rename, Show in File
-    /// Manager, Move… or Delete… on a library the user has not agreed to.
+    /// Draws the consent question. It is asked before Rename, Show in File
+    /// Manager, Move… or Delete… on a library that the user has not yet
+    /// agreed to.
     pub(super) fn consent(
         &mut self,
         window: &mut Window,
@@ -69,8 +71,9 @@ impl Manager {
             if let Some((identity, root, act)) = this.asking.content().cloned() {
                 this.asking.dismiss(cx);
                 host::agree(&identity, cx);
-                // After the question has let the keyboard go, so a rename's
-                // field keeps it.
+                // The action runs after the question has given up the
+                // keyboard focus. Otherwise the question would take the
+                // focus away from the rename field that Rename opens.
                 cx.defer_in(window, move |this, window, cx| {
                     this.perform(root.to_string_lossy().into_owned(), act, window, cx)
                 });

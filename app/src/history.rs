@@ -1,7 +1,7 @@
-//! The library's undo history in the user's words, as production's
-//! `historyMessages.ts` and `historyRuntime.ts` show it: "Undone — Moved 3
-//! items to Trash" after an undo, and a notification with an Undo button
-//! after a broad or destructive change.
+//! Describes the entries of the library's undo history in words and shows
+//! them to the user: "Undone — Moved 3 items to Trash" after an undo, and a
+//! notification with an Undo button after a change that affects many things
+//! or deletes something.
 use crate::i18n::format::grouped;
 use crate::i18n::t;
 use crate::session::Session;
@@ -10,8 +10,10 @@ use gpui::{App, Entity};
 use picto_library::Library;
 use picto_library::history::HistoryEntrySummary;
 
-/// `ANNOUNCED_MUTATIONS`: routine edits are visible where they happen; these
-/// broad or destructive ones say what they did and offer Undo.
+/// The commands whose changes are announced with a notification that says
+/// what was done and offers Undo. These commands change many things at once
+/// or delete something. The result of any other edit is visible where the
+/// edit is made, so it is not announced.
 pub const ANNOUNCED: &[&str] = &[
     "collections.detach",
     "collections.organize",
@@ -27,13 +29,14 @@ pub const ANNOUNCED: &[&str] = &[
     "tags.group.delete",
 ];
 
-/// `describeHistoryEntry`: the change in words, or the library's own label
-/// for a command not worded here.
+/// Returns the change of a history entry in words. For a command that has
+/// no wording here, it returns the label the library stored with the entry.
 pub fn describe(entry: &HistoryEntrySummary) -> String {
     let count = entry.count;
-    // Production writes counts in the interface's language here
-    // (`toLocaleString(getLocale())`), except for deletes and rejects,
-    // which it writes in the system's.
+    // Counts are grouped as the interface's language groups numbers,
+    // except in the messages for deleting and rejecting, where they are
+    // grouped as the system's language does. Picto 0.6.19 and earlier
+    // worded these messages the same way.
     let n = || in_language(count);
     let one = count == 1;
     let detail = entry.detail.as_deref();
@@ -168,7 +171,8 @@ pub fn describe(entry: &HistoryEntrySummary) -> String {
     }
 }
 
-/// `items.set_rating`'s words, `stars` from the entry's detail.
+/// Returns the words for a change of rating. `stars` is the new rating as
+/// text, taken from the entry's detail.
 fn rating(count: u64, stars: Option<&str>) -> String {
     let stars = stars
         .and_then(|stars| stars.parse::<u32>().ok())
@@ -184,20 +188,22 @@ fn rating(count: u64, stars: Option<&str>) -> String {
     }
 }
 
-/// `count.toLocaleString(getLocale())`: grouped as the interface's
+/// Returns the count as text, with its digits grouped as the interface's
 /// language groups numbers.
 fn in_language(count: u64) -> String {
     crate::i18n::format::grouped_in(crate::i18n::current(), count as i128)
 }
 
-/// The newest undo entry's id, read before a change, so that
-/// [`announced`] does not mistake an older entry for the change's.
+/// Returns the id of the newest undo entry. It is read before a change, so
+/// that [`announced`] can tell the entry the change recorded from an older
+/// entry of the same command.
 pub fn newest(library: &Library) -> Option<u64> {
     library.history().state().undo.map(|entry| entry.entry_id)
 }
 
-/// `announceUndoableMutation`: the entry a change of `command` recorded, if
-/// it is one that is announced and it recorded one after `before`.
+/// Returns the entry that a change made by `command` recorded. Returns
+/// `None` when the command is not one of [`ANNOUNCED`], or when the newest
+/// undo entry is of another command or is the entry `before`.
 pub fn announced(
     library: &Library,
     command: &str,
@@ -210,7 +216,8 @@ pub fn announced(
     (entry.command == command && Some(entry.entry_id) != before).then_some(entry)
 }
 
-/// Shows an announced change, with an Undo button.
+/// Shows a notification that describes the entry's change, with an Undo
+/// button.
 pub fn announce(entry: &HistoryEntrySummary, session: Entity<Session>, cx: &mut App) {
     notify::show(
         notify::Tone::Success,
@@ -221,15 +228,16 @@ pub fn announce(entry: &HistoryEntrySummary, session: Entity<Session>, cx: &mut 
     );
 }
 
-/// What an undo or redo did: the entry it replayed, and whether the
+/// Holds what an undo or redo did: the entry it replayed, and whether the
 /// opposite step is now possible.
 pub struct Stepped {
     pub entry: HistoryEntrySummary,
     pub reversible: bool,
 }
 
-/// `history.undo` / `history.redo`: replays the newest entry, or says there
-/// is nothing to replay, in the application's words.
+/// Undoes the newest undo entry when `undo` is true, and redoes the newest
+/// redo entry otherwise. Returns an error message for the user when there is
+/// no such entry or when the library fails to replay it.
 pub fn step(library: &Library, undo: bool) -> Result<Stepped, String> {
     let nothing = || {
         if undo {
@@ -255,8 +263,8 @@ pub fn step(library: &Library, undo: bool) -> Result<Stepped, String> {
     })
 }
 
-/// `showHistoryResult`: "Undone" or "Redone" and what, with a button for
-/// the opposite step while there is one.
+/// Shows a notification titled "Undone" or "Redone" that describes the
+/// entry. It has a button for the opposite step when that step is possible.
 pub fn show_step(stepped: &Stepped, undo: bool, session: Entity<Session>, cx: &mut App) {
     let mut options = notify::Options::new(
         if undo { t("Undone") } else { t("Redone") },
@@ -285,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn changes_are_described_as_production_words_them() {
+    fn changes_are_described_as_the_earlier_version_worded_them() {
         let say = |command, count, detail| describe(&entry(command, count, detail));
         assert_eq!(
             say("items.set_lifecycle", 3, Some("trash")),

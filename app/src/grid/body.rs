@@ -75,11 +75,10 @@ impl GridView {
                 let actions = if copy.import {
                     // The "Import Files" and "Import Folder" buttons open a
                     // file chooser or a folder chooser and import what is
-                    // chosen into the destination shown, as production's
-                    // `chooseAndImportFiles` and `chooseAndImportFolder`
-                    // do. Both buttons are disabled while
-                    // `imports::blocked` gives a reason that an import
-                    // cannot start, such as an import that is running.
+                    // chosen into the destination shown. Both buttons are
+                    // disabled while `imports::blocked` gives a reason
+                    // that an import cannot start, such as an import that
+                    // is running.
                     let destination = {
                         let session = self.session.read(cx);
                         session
@@ -158,9 +157,9 @@ impl GridView {
                 if let Some(marker) = self.reorder_marker(&prefs) {
                     content = content.child(marker);
                 }
-                // The rectangle of a rubber band selection (production's
-                // `.marquee`) is drawn over the tiles. It has square
-                // corners, a fill at 12% opacity and a 1 px border.
+                // The rectangle of a rubber band selection is drawn over
+                // the tiles. It has square corners, a fill at 12% opacity
+                // and a 1 px border.
                 if let Some(rect) = self.marquee.as_ref().and_then(|marquee| marquee.rect) {
                     content = content.child(
                         div()
@@ -271,8 +270,7 @@ impl GridView {
         // (which becomes a drag once the pointer has moved far enough), the
         // grid has to receive the pointer's moves and the button's release
         // even when the pointer is outside the grid. `capture_pointer` adds
-        // a listener for the whole window that passes them on, which is
-        // what pointer capture does in a browser.
+        // a listener for the whole window that passes them on to the grid.
         if self.marquee.is_some() {
             root = root.child(capture_pointer(
                 cx.entity().downgrade(),
@@ -289,11 +287,10 @@ impl GridView {
         }
         // When "Mouse wheel" in Settings › Controls is set to "Adjust
         // thumbnail size", a scroll event over the tiles zooms the grid
-        // instead of scrolling it, as production's `onGridWheel` does. The
-        // setting is read each time a scroll event arrives, so a change to
-        // it applies to the next event. The listener handles the event in
-        // the capture phase and stops it, so the list of tiles does not
-        // scroll as well.
+        // instead of scrolling it. The setting is read each time a scroll
+        // event arrives, so a change to it applies to the next event. The
+        // listener handles the event in the capture phase and stops it, so
+        // the list of tiles does not scroll as well.
         if scrolls {
             let entity = cx.entity().downgrade();
             root = root.child(
@@ -307,10 +304,10 @@ impl GridView {
                             {
                                 return;
                             }
-                            // `wheel_zoom` takes the distance with the
-                            // browser's sign, positive for scrolling down.
-                            // GPUI's sign is the opposite, so it is negated.
-                            // A mouse wheel reports lines and a trackpad
+                            // `wheel_zoom` takes a distance that is
+                            // positive for scrolling down. GPUI's sign is
+                            // the opposite, so the distance is negated. A
+                            // mouse wheel reports lines and a trackpad
                             // reports pixels.
                             let (delta_y, notch) = match event.delta {
                                 ScrollDelta::Lines(lines) => (-lines.y, true),

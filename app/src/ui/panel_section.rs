@@ -6,16 +6,16 @@ type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type MenuHandler = Box<dyn Fn(&Point<Pixels>, &mut Window, &mut App) + 'static>;
 
 struct State {
-    /// On while the section is open: the chevron's quarter turn and fade
-    /// out, 200 ms.
+    /// On while the section is open. It drives the chevron's quarter turn and
+    /// its fading out, which take 200 ms.
     open: motion::Fade,
     section: motion::Fade,
     header: motion::Fade,
 }
 
-/// A collapsible inspector section (`InspectorSection.tsx`): a rule, a bold
-/// tertiary title that turns primary under the pointer, and a chevron that
-/// shows only while the section is closed.
+/// A collapsible section of the inspector: a line above it, a bold title in
+/// the tertiary text colour that changes to the primary text colour under the
+/// pointer, and a chevron that is shown only while the section is closed.
 #[derive(IntoElement)]
 pub struct PanelSection {
     id: ElementId,
@@ -51,8 +51,8 @@ impl PanelSection {
         self.on_toggle = Some(Box::new(handler));
         self
     }
-    /// A right-click anywhere in the section (`onContextMenu`), with where
-    /// it was.
+    /// Sets the handler for a right-click anywhere in the section. It is
+    /// called with the position of the click.
     pub fn on_menu(
         mut self,
         handler: impl Fn(&Point<Pixels>, &mut Window, &mut App) + 'static,
@@ -60,12 +60,14 @@ impl PanelSection {
         self.on_menu = Some(Box::new(handler));
         self
     }
-    /// The first thing in its rail: no rule or space above it.
+    /// Sets whether the section is the first thing in its panel. The first
+    /// section has no line and no space above it.
     pub fn leading(mut self, leading: bool) -> Self {
         self.leading = leading;
         self
     }
-    /// What the section shows while open; `None` shows the header alone.
+    /// Sets what the section shows while it is open. With `None` only the
+    /// header is shown.
     pub fn content(mut self, content: Option<AnyElement>) -> Self {
         self.content = content;
         self
@@ -97,11 +99,15 @@ impl RenderOnce for PanelSection {
         if animating {
             window.request_animation_frame();
         }
-        // Closed: 30%, 50% with the pointer in the section, 55% on the header.
+        // While the section is closed the chevron is at 30%, at 50% while the
+        // pointer is in the section, and at 55% while the pointer is over the
+        // header.
         let chevron = (1. - open) * (0.3 + 0.2 * over_section + 0.05 * over_header);
         let (section_state, header_state) = (state.clone(), state);
         let title = self.title.clone();
-        // A heading that folds the section, expanded while it is open.
+        // Assistive technology is told that the header is a heading, and
+        // whether the section is open. A click on the header closes the
+        // section or opens it.
         let mut header = super::a11y::heading(div().id("header"), title.clone(), 2)
             .aria_expanded(expanded)
             .h(px(theme::CONTROL_SM))

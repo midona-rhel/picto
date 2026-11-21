@@ -1,12 +1,15 @@
-//! Sample arithmetic for the audio path: fitting decoded audio to the output
-//! device's channels and rate, and changing speed without changing pitch, as
-//! a media element's `playbackRate` does (`preservesPitch` is on by default).
-//! All of it is streaming: chunks go in as they are decoded, and what can be
-//! produced comes out.
+//! The arithmetic on audio samples that playback needs: fitting decoded
+//! audio to the number of channels and to the sample rate of the output
+//! device, and changing the speed of audio without changing its pitch. Each
+//! of the three works on a stream: it is given the chunks of samples as
+//! they are decoded, and it returns the output that can be produced so far.
 
-/// Spreads `input` (interleaved, `from` channels) over `to` channels: mono
-/// goes to both sides, the first two channels of anything wider are kept as
-/// left and right, and extra output channels stay silent.
+/// Returns `input`, which holds interleaved frames of `from` channels, as
+/// interleaved frames of `to` channels. A mono input is copied to the first
+/// two output channels. A mono output is the mean of the first two input
+/// channels. In every other case the first two input channels become the
+/// first two output channels and the other input channels are dropped.
+/// Output channels after the second are silent.
 pub fn map_channels(input: &[f32], from: usize, to: usize) -> Vec<f32> {
     if from == to || from == 0 {
         return input.to_vec();
@@ -30,18 +33,27 @@ pub fn map_channels(input: &[f32], from: usize, to: usize) -> Vec<f32> {
     output
 }
 
-/// Linear-interpolating sample-rate conversion, carried across chunks.
+/// Converts audio from one sample rate to another by linear interpolation
+/// between neighbouring frames. It keeps the last frame of each chunk, so
+/// that it can interpolate between that frame and the first frame of the
+/// next chunk.
 pub struct Resampler {
     channels: usize,
-    /// Input frames per output frame.
+    /// How many input frames one output frame advances by: the input
+    /// sample rate divided by the output sample rate.
     step: f64,
-    /// Where the next output frame falls, in input frames from the start of
-    /// `previous` (the last frame of the chunk before).
+    /// The position of the next output frame, in input frames. It is
+    /// counted from `previous` when there is one, and from the first frame
+    /// of the next chunk otherwise.
     position: f64,
+    /// The last frame of the chunk before, or `None` before the first
+    /// chunk.
     previous: Option<Vec<f32>>,
 }
 
 impl Resampler {
+    /// Returns a resampler for interleaved audio of `channels` channels
+    /// that converts from the sample rate `from` to the sample rate `to`.
     pub fn new(channels: usize, from: u32, to: u32) -> Self {
         Self {
             channels,
@@ -51,16 +63,22 @@ impl Resampler {
         }
     }
 
+    /// Returns true when the two sample rates are equal. `process` then
+    /// returns its input unchanged.
     pub fn passes_through(&self) -> bool {
         self.step == 1.
     }
 
+    /// Converts the chunk `input` and returns the output frames that lie
+    /// before the last frame of the chunk. That frame is kept for the next
+    /// call.
     pub fn process(&mut self, input: &[f32]) -> Vec<f32> {
         if self.passes_through() || input.is_empty() {
             return input.to_vec();
         }
         let channels = self.channels;
-        // The source is the previous chunk's last frame followed by this one.
+        // The frames to interpolate between are the last frame of the chunk
+        // before, when there is one, followed by the frames of this chunk.
         let offset = usize::from(self.previous.is_some());
         let frames = input.len() / channels + offset;
         let at = |frame: usize, channel: usize| -> f32 {
@@ -80,43 +98,65 @@ impl Resampler {
             }
             self.position += self.step;
         }
-        // Keep the last frame; positions count from it next time.
+        // The last frame of this chunk is kept, and `position` is changed
+        // so that it is counted from that frame.
         self.previous = Some(input[input.len() - channels..].to_vec());
         self.position -= (frames - 1) as f64;
         output
     }
 }
 
-/// WSOLA time stretching: output is built from overlapping windows of the
-/// input taken `rate` times faster than they are laid down, each nudged
-/// within a small tolerance to where it best continues the previous one, so
-/// speech and music keep their pitch.
+/// Changes the speed of audio without changing its pitch, with the WSOLA
+/// method (waveform similarity overlap-add). The output is made of segments
+/// of the input, each one window long. Each segment is written to the
+/// output half a window after the one before, so the segments overlap, and
+/// they are added together. Each segment is taken from the input `rate`
+/// times half a window after the one before. The place it is taken from is
+/// moved by up to a quarter of a window, to where the input is most similar
+/// to the input that followed the previous segment. The waveform then
+/// continues from one segment into the next, so the pitch is kept.
 pub struct Stretch {
     channels: usize,
     rate: f64,
+    /// The length of a segment, in frames.
     window: usize,
+    /// How far after the previous segment each segment is written to the
+    /// output, in frames: half a window.
     hop: usize,
+    /// The most that the place a segment is taken from may be moved in
+    /// either direction, in frames: a quarter of a window.
     tolerance: usize,
+    /// The weight of each frame of a segment.
     hann: Vec<f32>,
-    /// Interleaved input not yet needed no more, starting at absolute input
-    /// frame `origin`.
+    /// The interleaved input that a later segment may still be taken from.
+    /// Its first frame is frame `origin` of the whole input.
     input: Vec<f32>,
+    /// The number of frames that have been dropped from the start of
+    /// `input`.
     origin: usize,
-    /// Segments laid down so far.
+    /// The number of segments written so far.
     segment: u64,
-    /// Where the previous segment was taken from, in absolute input frames.
+    /// The frame of the whole input at which the previous segment starts,
+    /// or `None` before the first segment.
     previous: Option<usize>,
-    /// The overlap-add accumulator, one window long.
+    /// One window of output that is not complete yet: the sum of the
+    /// segments written so far that reach into it.
     accumulator: Vec<f32>,
 }
 
 impl Stretch {
-    /// `sample_rate` sets the window: 40 ms, half of it laid down per step,
-    /// with a quarter window either way to search.
+    /// Returns a stretcher for interleaved audio of `channels` channels at
+    /// the sample rate `sample_rate` that plays `rate` times as fast. The
+    /// window is 40 ms long, at least 64 frames and an even number of
+    /// frames. Each segment is written half a window after the one before,
+    /// and the place it is taken from may be moved by up to a quarter of a
+    /// window in either direction.
     pub fn new(channels: usize, sample_rate: u32, rate: f32) -> Self {
         let window = ((sample_rate as f64 * 0.04) as usize).max(64) & !1;
         let hop = window / 2;
-        // A periodic Hann window: overlapped by half, its copies sum to one.
+        // The weights of a segment's frames are a periodic Hann window. Two
+        // copies of it that overlap by half a window add up to 1 at every
+        // frame, so the added segments are as loud as the input.
         let hann = (0..window)
             .map(|i| {
                 let phase = std::f64::consts::TAU * i as f64 / window as f64;
@@ -138,20 +178,26 @@ impl Stretch {
         }
     }
 
+    /// Returns true when the rate is 1. `process` then returns its input
+    /// unchanged.
     pub fn passes_through(&self) -> bool {
         self.rate == 1.
     }
 
+    /// Returns the number of input frames received so far, including those
+    /// that have been dropped.
     fn frames(&self) -> usize {
         self.origin + self.input.len() / self.channels
     }
 
-    /// The mono value of absolute input frame `frame`.
+    /// Returns the sum of the channels of frame `frame` of the whole input.
     fn mono(&self, frame: usize) -> f32 {
         let start = (frame - self.origin) * self.channels;
         self.input[start..start + self.channels].iter().sum::<f32>()
     }
 
+    /// Takes the chunk `input` and returns the output that can be produced
+    /// so far.
     pub fn process(&mut self, input: &[f32]) -> Vec<f32> {
         if self.passes_through() {
             return input.to_vec();
@@ -162,7 +208,9 @@ impl Stretch {
         output
     }
 
-    /// Ends the stream: what is still held comes out, padded with silence.
+    /// Ends the stream and returns the rest of the output. Silence is added
+    /// after the input, so that the segments that reach the end of the
+    /// input can be written.
     pub fn finish(&mut self) -> Vec<f32> {
         if self.passes_through() {
             return Vec::new();
@@ -175,13 +223,21 @@ impl Stretch {
         output
     }
 
+    /// Writes segments to `output` for as long as enough input has arrived
+    /// for the next segment.
     fn run(&mut self, output: &mut Vec<f32>) {
         let channels = self.channels;
         loop {
             let nominal = (self.segment as f64 * self.hop as f64 * self.rate).round() as usize;
             let low = nominal.saturating_sub(self.tolerance).max(self.origin);
             let high = nominal + self.tolerance;
-            // The previous segment's natural continuation, to match.
+            // `natural` is the input frame half a window after the start of
+            // the previous segment. The input from there on is what followed
+            // the previous segment in the input. Of the starts from `low` to
+            // `high`, the new segment gets the one at which the input is
+            // most similar to it, measured by the sum of the products of
+            // the samples over half a window. Every second start and every
+            // second sample are compared.
             let natural = self.previous.map(|previous| previous + self.hop);
             let needed = (high + self.window).max(natural.map_or(0, |n| n + self.hop));
             if self.frames() < needed {
@@ -203,8 +259,11 @@ impl Stretch {
                     best.1
                 }
             };
-            // Lay the windowed segment over the accumulator; its first half
-            // is then complete.
+            // The segment, weighted by the Hann window, is added to the
+            // accumulator. No later segment reaches into the first half of
+            // the accumulator, so that half is written to the output. The
+            // second half then moves to the front, and the space behind it
+            // is cleared for the next segment.
             let base = (start - self.origin) * channels;
             for frame in 0..self.window {
                 let weight = self.hann[frame];
@@ -219,7 +278,9 @@ impl Stretch {
             self.accumulator[tail..].fill(0.);
             self.previous = Some(start);
             self.segment += 1;
-            // Let go of input no later segment can reach.
+            // The input that no later segment can be taken from or compared
+            // with is dropped: everything before the earliest start of the
+            // next segment, or before the next `natural` if that is earlier.
             let next = (self.segment as f64 * self.hop as f64 * self.rate).round() as usize;
             let keep = next.saturating_sub(self.tolerance).min(start + self.hop);
             if keep > self.origin {
@@ -235,6 +296,8 @@ impl Stretch {
 mod tests {
     use super::{Resampler, Stretch, map_channels};
 
+    /// Returns `seconds` of a stereo sine tone of `frequency` Hz at the
+    /// sample rate `rate`, with the same samples in both channels.
     fn sine(frequency: f32, rate: u32, seconds: f32) -> Vec<f32> {
         (0..(rate as f32 * seconds) as usize)
             .flat_map(|i| {
@@ -244,7 +307,9 @@ mod tests {
             .collect()
     }
 
-    /// Upward zero crossings per second of the left channel.
+    /// Returns the frequency of the left channel of the interleaved stereo
+    /// `samples`, measured as the number of times a second that the signal
+    /// goes from below zero to zero or above.
     fn frequency(samples: &[f32], rate: u32) -> f32 {
         let left: Vec<f32> = samples.iter().step_by(2).copied().collect();
         let crossings = left
@@ -291,7 +356,8 @@ mod tests {
                 (seconds - expected).abs() < 0.1,
                 "rate {rate}: {seconds} s, expected {expected} s"
             );
-            // Away from the padded ends the tone is still 440 Hz.
+            // The middle half of the output, which is away from the silence
+            // that was added at the end, is still a tone of 440 Hz.
             let middle = &output[output.len() / 4 & !1..output.len() * 3 / 4 & !1];
             let measured = frequency(middle, 48_000);
             assert!((measured - 440.).abs() < 10., "rate {rate}: {measured} Hz");

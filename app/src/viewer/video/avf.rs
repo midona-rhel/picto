@@ -1,13 +1,16 @@
-//! macOS video through AVFoundation: an `AVPlayer` decodes (in hardware for
-//! H.264 and HEVC), plays the sound, keeps picture and sound in step, seeks
-//! and changes speed with the pitch kept; an `AVPlayerItemVideoOutput`
-//! vends each picture as a CoreVideo pixel buffer, which GPUI's `surface`
-//! element draws without copying.
+//! The video backend for macOS, which plays a file with AVFoundation. An
+//! `AVPlayer` decodes the file (in hardware for H.264 and HEVC), plays its
+//! sound, keeps the picture and the sound in step, seeks, and changes the
+//! playback rate without changing the pitch. An `AVPlayerItemVideoOutput`
+//! delivers each frame as a CoreVideo pixel buffer, which GPUI's `surface`
+//! element draws without copying it.
 //!
-//! GPUI's surface shader takes only bi-planar full-range 4:2:0 buffers and
-//! converts them with the BT.601 matrix. Most video is BT.709, so the item
-//! gets a video composition whose compositor writes BT.601; the composition
-//! also applies a track's rotation, which the output alone would not.
+//! GPUI's shader for a surface accepts only buffers in the bi-planar
+//! full-range 4:2:0 format, and it converts them to RGB with the BT.601
+//! matrix. Most video is encoded with the BT.709 matrix. So the player item
+//! gets a video composition that makes AVFoundation write its frames with
+//! the BT.601 matrix. The composition also applies the rotation of a video
+//! track, which the video output does not do without one.
 use super::backend::{Backend, Frame, Status};
 use super::model::snap_fps;
 use block2::RcBlock;
@@ -32,29 +35,45 @@ use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
-/// A composition handed over from the queue AVFoundation completes on.
+/// A video composition that is passed from the queue on which AVFoundation
+/// calls the completion handler to the main thread.
 struct Composition(Retained<AVMutableVideoComposition>);
-// SAFETY: the composition is configured before it is handed over and only
-// read afterwards; AVFoundation's video compositions are safe to pass
+// SAFETY: the composition is configured before it is passed on and is only
+// read afterwards, and AVFoundation's video compositions may be passed
 // between threads.
 unsafe impl Send for Composition {}
 
+/// The backend that plays a video file with AVFoundation.
 pub struct AvPlayer {
+    /// The AVFoundation player.
     player: Retained<NativePlayer>,
+    /// The player item, which stands for the file in the player.
     item: Retained<AVPlayerItem>,
+    /// The video output, from which the frames are taken.
     output: Retained<AVPlayerItemVideoOutput>,
+    /// The video composition, from the moment AVFoundation has made it
+    /// until `compose` sets it on the item.
     composition: Arc<Mutex<Option<Composition>>>,
+    /// True once the video composition has been set on the item.
     composed: bool,
-    /// Whether a paused item has been asked for its first frame.
+    /// True once the item has become ready to play. At that moment, if
+    /// playback was paused, the player sought to the start so that
+    /// AVFoundation delivers the first frame.
     primed: bool,
+    /// True after `play`, until `pause` or the end of the media.
     playing: bool,
+    /// The playback rate that was set last. `play` starts playback at this
+    /// rate.
     rate: f32,
-    /// Display times of recent frames, to measure the frame rate as
-    /// `useFrameTime` does.
+    /// The display times, in seconds, of the frames that were taken last,
+    /// at most 11 of them. The frame rate is measured from them.
     frame_times: Vec<f64>,
+    /// The measured frame rate, or `None` until it has been measured.
     fps: Option<f64>,
 }
 
+/// Returns `time` in seconds. Returns `None` when the time is not valid,
+/// is indefinite or infinite, or does not give a finite number.
 fn seconds(time: CMTime) -> Option<f64> {
     if !time.flags.contains(CMTimeFlags::Valid)
         || time.flags.intersects(CMTimeFlags::ImpliedValueFlagsMask)
@@ -65,15 +84,20 @@ fn seconds(time: CMTime) -> Option<f64> {
     seconds.is_finite().then_some(seconds)
 }
 
-/// A CoreFoundation string constant as the `NSString` it is bridged to.
+/// Returns a CoreFoundation string constant as an `NSString`.
 fn ns(string: &CFString) -> &NSString {
-    // SAFETY: CFString and NSString are toll-free bridged.
+    // SAFETY: `CFString` and `NSString` are toll-free bridged, so a pointer
+    // to one is a valid pointer to the other.
     unsafe { &*(string as *const CFString as *const NSString) }
 }
 
 impl AvPlayer {
+    /// Opens the file `path`: creates the player, its item and its video
+    /// output, and asks AVFoundation for the video composition. Returns an
+    /// error when it is not called on the main thread, or when the path is
+    /// not valid UTF-8.
     pub fn open(path: &Path) -> Result<Self, String> {
-        // The player lives on the main thread, as AVPlayer expects.
+        // An `AVPlayer` must be created and used on the main thread.
         let mtm = MainThreadMarker::new().ok_or("AVFoundation playback needs the main thread")?;
         let path = path.to_str().ok_or("The file's path is not valid UTF-8")?;
         unsafe {
@@ -97,9 +121,12 @@ impl AvPlayer {
             item.addOutput(&output);
             let player = NativePlayer::playerWithPlayerItem(Some(&item), mtm);
             player.setActionAtItemEnd(AVPlayerActionAtItemEnd::Pause);
-            // The asset's own composition (its tracks, sizes and rotation),
-            // told to write BT.601, arrives once AVFoundation has read the
-            // tracks; it is set on the item at the next frame.
+            // AVFoundation makes the video composition from the asset's
+            // tracks, their sizes and their rotation, and calls the handler
+            // with it once it has read the tracks. The handler sets the
+            // composition to write its frames with the BT.601 matrix and
+            // stores it. `compose` sets it on the item the next time the
+            // player asks for the status.
             let composition = Arc::new(Mutex::new(None));
             let slot = composition.clone();
             let handler = RcBlock::new(
@@ -132,7 +159,9 @@ impl AvPlayer {
         }
     }
 
-    /// Sets the composition once it has arrived.
+    /// Sets the video composition on the item once AVFoundation has made
+    /// it. It does nothing before that, and nothing after the composition
+    /// has been set.
     fn compose(&mut self) {
         if self.composed {
             return;
@@ -143,8 +172,12 @@ impl AvPlayer {
         }
     }
 
-    /// Measures the frame rate from the display times of consecutive
-    /// frames, snapped to a common rate.
+    /// Records `time`, the display time in seconds of a frame that was
+    /// taken, and measures the frame rate once the times of 11 consecutive
+    /// frames are recorded. The frame rate is the median of the rates
+    /// between each two consecutive times, changed to a common frame rate
+    /// by `snap_fps`. A time that is not later than the one before, as
+    /// after a seek back, discards the times recorded so far.
     fn measure(&mut self, time: f64) {
         if let Some(last) = self.frame_times.last()
             && time <= *last
@@ -207,9 +240,10 @@ impl Backend for AvPlayer {
     fn status(&mut self) -> Status {
         self.compose();
         unsafe {
-            // A paused item hands its output no picture until it moves; a
-            // seek to the start, once it is ready, brings the first frame,
-            // which then shows instead of nothing.
+            // AVFoundation delivers no frame for a paused item until the
+            // position changes. So when the item has become ready to play
+            // and playback is paused, the player seeks to the start. The
+            // first frame then arrives and is drawn.
             if !self.primed && self.item.status() == AVPlayerItemStatus::ReadyToPlay {
                 self.primed = true;
                 if !self.playing {
@@ -237,7 +271,10 @@ impl Backend for AvPlayer {
                     Some(seconds(range.start)? + seconds(range.duration)?)
                 })
                 .fold(0f64, f64::max);
-            // The item pauses itself at its end.
+            // The player was set to pause at the end of the item
+            // (`AVPlayerActionAtItemEnd::Pause`). The media has ended when
+            // the player's rate is 0 and the position is within 0.05 s of
+            // the length.
             let ended = duration > 0. && self.player.rate() == 0. && position >= duration - 0.05;
             if ended {
                 self.playing = false;
@@ -271,15 +308,17 @@ impl Backend for AvPlayer {
             if let Some(shown) = seconds(shown) {
                 self.measure(shown);
             }
-            // GPUI fails the whole frame on any other format, so a buffer the
-            // output did not convert is never handed over.
+            // GPUI fails to draw the whole frame of the window when a
+            // surface has any other pixel format. So a buffer that the
+            // output delivered in another format is not returned.
             if CVPixelBufferGetPixelFormatType(&buffer)
                 != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
             {
                 return None;
             }
             let raw = NonNull::new(Retained::into_raw(buffer))?;
-            // SAFETY: the copy gave us one reference, which moves over.
+            // SAFETY: `copyPixelBufferForItemTime` returned one owned
+            // reference to the buffer, and `CFRetained` takes it over.
             let buffer: CFRetained<CVPixelBuffer> = CFRetained::from_raw(raw);
             Some(Frame::Surface(buffer))
         }

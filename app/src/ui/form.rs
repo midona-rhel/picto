@@ -1,13 +1,12 @@
-//! The pieces dialogs and settings lay their forms out with
-//! (`GlassModal.module.css`'s `.field`, `.fieldRow`, `.stack`, and the help,
-//! error and warning text that goes with them). Each place adds its own
-//! spacing around them.
+//! The parts that dialogs and Settings lay their forms out with: a field with
+//! its label, a row of controls, a column, a separator, and the help, error
+//! and warning texts. Each caller adds its own spacing around them.
 use crate::theme;
 use crate::theme::Text as _;
 use gpui::*;
 
-/// `.separator` (the export dialogs) and `.rowSep` (Settings): a 1px rule
-/// with 12px above and below.
+/// Returns a 1px line with 12px above it and below it. The export dialogs and
+/// Settings use it.
 pub fn separator(theme: theme::Theme) -> Div {
     div()
         .h(px(1.))
@@ -16,8 +15,8 @@ pub fn separator(theme: theme::Theme) -> Div {
         .bg(theme.border_secondary())
 }
 
-/// A dialog's help text (`.pickerHint`, `.inlineLabel`, `.settingHint`):
-/// small secondary text. Each place adds its own spacing.
+/// Returns a help text of a dialog: small text in the secondary text colour.
+/// Each caller adds its own spacing.
 pub fn help_text(theme: theme::Theme, text: impl Into<SharedString>) -> Div {
     div()
         .text(theme::TEXT_SM)
@@ -25,7 +24,8 @@ pub fn help_text(theme: theme::Theme, text: impl Into<SharedString>) -> Div {
         .child(text.into())
 }
 
-/// `.fieldLabel`: 13px on 20px, the primary text colour, regular weight.
+/// Returns a field's label: 13px text with a 20px line height, in the primary
+/// text colour and the regular weight.
 pub fn label(theme: &theme::Theme, text: impl Into<SharedString>) -> Div {
     div()
         .text(theme::TEXT_MD)
@@ -35,7 +35,7 @@ pub fn label(theme: &theme::Theme, text: impl Into<SharedString>) -> Div {
         .child(text.into())
 }
 
-/// `.field`: a label over its control, 6px apart.
+/// Returns a field: a label and, 6px below it, its control.
 pub fn field(
     theme: &theme::Theme,
     text: impl Into<SharedString>,
@@ -49,18 +49,19 @@ pub fn field(
         .child(control)
 }
 
-/// `.fieldRow` and `.row`: controls in a row, 8px apart.
+/// Returns a row for controls, which are 8px apart.
 pub fn row() -> Div {
     div().flex().items_center().gap(px(8.))
 }
 
-/// `.stack`: a column 16px apart.
+/// Returns a column whose children are 16px apart.
 pub fn stack() -> Div {
     div().flex().flex_col().gap(px(16.))
 }
 
-/// `.error`: an edit or search that failed, as a dialog or screen shows it
-/// above its content. Each place adds its own margins.
+/// Returns the box that tells the user that an edit or a search failed. A
+/// dialog or a screen shows it above its content. Each caller adds its own
+/// margins.
 pub fn error_banner(theme: theme::Theme, message: impl Into<SharedString>) -> Div {
     div()
         .px(px(12.))
@@ -74,8 +75,8 @@ pub fn error_banner(theme: theme::Theme, message: impl Into<SharedString>) -> Di
         .child(message.into())
 }
 
-/// `.warningBox`: a note in a dialog that something about its subject needs
-/// attention, on a faint warning tint.
+/// Returns a box for a warning in a dialog. Its background and border are
+/// faintly tinted with the warning colour.
 pub fn warning_box(theme: theme::Theme, message: impl Into<SharedString>) -> Div {
     let warning = rgb(theme::WARNING);
     div()

@@ -1,9 +1,11 @@
-//! Design tokens. `src/shared/styles/tokens.css` is the source: a theme is one
-//! background, one contrast colour and one text colour, and every surface,
-//! border and overlay is the contrast colour at some strength. Views take
-//! their colours from here; only colour tables that are data (the theme
-//! swatches, the colour editor's presets) sit with the code that lists
-//! them. A size that belongs to one component stays with it.
+//! The colours, fonts and sizes that the views of the interface share. A
+//! theme is one background colour, one contrast colour, one text colour and
+//! one primary colour. Every surface, border and overlay is the contrast
+//! colour at some opacity, or the contrast colour mixed into the background.
+//! Views take their colours from this file. The exceptions are tables of
+//! colours that are data (the theme swatches in Settings, the presets of the
+//! colour editor), which are kept with the code that lists them. A size that
+//! only one component uses is kept in that component's file.
 use gpui::*;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -12,17 +14,19 @@ pub struct Theme {
     contrast: u32,
     text: u32,
     primary: u32,
-    /// `data-mantine-color-scheme="light"`: the light themes' stronger
-    /// borders, white control surfaces, glass and softer shadows.
+    /// Whether this is a light theme. A light theme has more opaque
+    /// borders, white control surfaces, its own glass fill and backdrop
+    /// blur, and lighter shadows.
     light: bool,
 }
 
 impl Global for Theme {}
 
-/// `--color-negative`, the same in every theme.
+/// The red of destructive actions, errors and excluded choices, which is
+/// the same in every theme.
 const NEGATIVE: u32 = 0xff4757;
 
-/// `:root` in `tokens.css`.
+/// The Dark theme.
 pub const DARK: Theme = Theme {
     background: 0x18191c,
     contrast: 0xf8f9fb,
@@ -30,22 +34,22 @@ pub const DARK: Theme = Theme {
     primary: 0x3297ff,
     light: false,
 };
-/// `:root[data-theme="blue"]`
+/// The Blue theme: the Dark theme with a dark blue background.
 const BLUE: Theme = Theme {
     background: 0x0d1630,
     ..DARK
 };
-/// `:root[data-theme="purple"]`
+/// The Purple theme: the Dark theme with a dark purple background.
 const PURPLE: Theme = Theme {
     background: 0x1c1424,
     ..DARK
 };
-/// `:root[data-theme="gray"]`
+/// The Gray theme: the Dark theme with a lighter gray background.
 const GRAY: Theme = Theme {
     background: 0x37383c,
     ..DARK
 };
-/// `:root[data-mantine-color-scheme="light"]`
+/// The Light theme.
 pub const LIGHT: Theme = Theme {
     background: 0xffffff,
     contrast: 0x2c2f32,
@@ -53,7 +57,7 @@ pub const LIGHT: Theme = Theme {
     primary: 0x2563eb,
     light: true,
 };
-/// `:root[data-mantine-color-scheme="light"][data-theme="lightgray"]`
+/// The Light Gray theme: the Light theme with a light gray background.
 const LIGHT_GRAY: Theme = Theme {
     background: 0xe3e4e6,
     ..LIGHT
@@ -63,9 +67,11 @@ pub fn theme(cx: &App) -> Theme {
     *cx.global::<Theme>()
 }
 
-/// `resolveTheme`: the theme a stored `colorScheme` names. "auto" follows
-/// the system's appearance; an unknown name, and the native transparency
-/// themes this app cannot draw, are Dark.
+/// Returns the theme that a stored `colorScheme` setting names. "auto" is
+/// Dark when the system's appearance is dark and Light otherwise. An unknown
+/// name is Dark. Settings written by Picto 0.6.19 and earlier can also name
+/// a theme with a transparent window; this app does not draw those and
+/// shows Dark for them.
 pub fn named(name: &str, system_dark: bool) -> Theme {
     match name {
         "auto" if system_dark => DARK,
@@ -78,8 +84,8 @@ pub fn named(name: &str, system_dark: bool) -> Theme {
     }
 }
 
-/// Shows `name`'s theme in every window, repainting each view, if it is
-/// not the one shown.
+/// Makes the theme that `name` names the current theme and redraws every
+/// window. Does nothing when that theme already is the current one.
 pub fn show(name: &str, cx: &mut App) {
     let system_dark = matches!(
         cx.window_appearance(),
@@ -88,17 +94,18 @@ pub fn show(name: &str, cx: &mut App) {
     let next = named(name, system_dark);
     if !cx.has_global::<Theme>() || *cx.global::<Theme>() != next {
         cx.set_global(next);
-        // Cached views paint again only when the window refreshes.
+        // A cached view is painted again only when its window is refreshed.
         cx.refresh_windows();
     }
 }
 
-/// `color-mix(in srgb, <color> <percent>%, transparent)`.
+/// Returns `color` (0xRRGGBB) at an opacity of `percent` percent.
 fn translucent(color: u32, percent: f32) -> Rgba {
     rgba(color << 8 | (percent / 100. * 255.).round() as u32)
 }
 
-/// `color-mix(in srgb, <color> <percent>%, <base>)`.
+/// Returns the opaque colour that is `percent` percent `color` and the
+/// rest `base`, mixed channel by channel.
 fn mixed(color: u32, percent: f32, base: u32) -> Rgba {
     let channel = |shift: u32| {
         let (top, bottom) = (
@@ -111,29 +118,34 @@ fn mixed(color: u32, percent: f32, base: u32) -> Rgba {
 }
 
 impl Theme {
-    /// Whether this is a light theme (`data-mantine-color-scheme="light"`).
+    /// Returns whether this is a light theme.
     pub fn is_light(&self) -> bool {
         self.light
     }
 
-    /// `--color-bg-app`
+    /// The background colour of the app's windows.
     pub fn background(&self) -> Rgba {
         rgb(self.background)
     }
-    /// `--color-rail-surface`, the sidebar and inspector.
+    /// The background of the sidebar and the inspector: the contrast
+    /// colour mixed 3% into the background.
     pub fn rail(&self) -> Rgba {
         mixed(self.contrast, 3., self.background)
     }
-    /// `--color-contrast-03` laid over the rail, as one opaque colour: the
-    /// Settings content panel. GPUI paints a box shadow under the whole
-    /// element rather than only outside it, so a translucent fill over a
-    /// shadow would darken.
+    /// The fill of a panel that lies on the rail colour, such as the
+    /// content panel of Settings. It is the contrast colour at 3% opacity
+    /// over the rail colour, computed as one opaque colour. It has to be
+    /// opaque because GPUI paints a box shadow under the whole element and
+    /// not only outside it, so the shadow would darken a translucent fill.
     pub fn rail_raised(&self) -> Rgba {
-        // 3% over 3%: 1 - 0.97².
+        // 3% over 3% leaves 0.97² of the background, so the share of the
+        // contrast colour is 1 - 0.97² = 5.91%.
         mixed(self.contrast, 5.91, self.background)
     }
-    /// `--color-surface-1`: the rail surface, or a 6% contrast wash in the
-    /// light themes.
+    /// A fill for an area that stands out a little from the background,
+    /// such as the picture frames of the cover dialog. In the dark themes
+    /// it is the rail colour. In the light themes it is the contrast colour
+    /// at 6% opacity.
     pub fn surface_1(&self) -> Rgba {
         if self.light {
             translucent(self.contrast, 6.)
@@ -141,19 +153,24 @@ impl Theme {
             self.rail()
         }
     }
-    /// `--color-surface-2`, placeholders.
+    /// A fill for an area that stands out more than `surface_1`, such as
+    /// the place of a picture that has not loaded: the contrast colour
+    /// mixed 5% into the background.
     pub fn surface_2(&self) -> Rgba {
         mixed(self.contrast, 5., self.background)
     }
-    /// `--color-surface-hover`
+    /// The fill of a row or control under the pointer: the contrast colour
+    /// at 5% opacity.
     pub fn surface_hover(&self) -> Rgba {
         translucent(self.contrast, 5.)
     }
-    /// `--color-surface-active`
+    /// The fill of a row or control that is pressed or selected: the
+    /// contrast colour at 10% opacity.
     pub fn surface_active(&self) -> Rgba {
         translucent(self.contrast, 10.)
     }
-    /// `--color-control-surface`, text fields.
+    /// The fill of text fields and similar controls: white at 50% opacity
+    /// in the light themes, black at 20% in the dark themes.
     pub fn control_surface(&self) -> Rgba {
         if self.light {
             rgba(0xffffff80)
@@ -161,49 +178,56 @@ impl Theme {
             rgba(0x00000033)
         }
     }
-    /// `--color-hover-overlay`
+    /// A fill for a control under the pointer that is more visible than
+    /// `surface_hover`: the contrast colour at 8% opacity.
     pub fn hover_overlay(&self) -> Rgba {
         translucent(self.contrast, 8.)
     }
-    /// `--color-text-primary`
+    /// The colour of primary text.
     pub fn text(&self) -> Rgba {
         rgb(self.text)
     }
-    /// `--color-text-secondary`
+    /// The colour of secondary text: the text colour at 70% opacity.
     pub fn text_secondary(&self) -> Rgba {
         translucent(self.text, 70.)
     }
-    /// `--color-text-tertiary`
+    /// The colour of tertiary text: the text colour at 60% opacity.
     pub fn text_tertiary(&self) -> Rgba {
         translucent(self.text, 60.)
     }
-    /// `--color-border-primary`
+    /// The colour of the borders of controls: the contrast colour at 15%
+    /// opacity in the light themes and 10% in the dark themes.
     pub fn border(&self) -> Rgba {
         translucent(self.contrast, if self.light { 15. } else { 10. })
     }
-    /// `--color-border-secondary`, rail edges and separators.
+    /// The colour of the edges of the sidebar and the inspector and of
+    /// separators: the contrast colour at 10% opacity in the light themes
+    /// and 8% in the dark themes.
     pub fn border_secondary(&self) -> Rgba {
         translucent(self.contrast, if self.light { 10. } else { 8. })
     }
-    /// `color-mix(in srgb, var(--color-text-primary) NN%, transparent)`.
+    /// Returns the text colour at an opacity of `percent` percent.
     pub fn text_at(&self, percent: f32) -> Rgba {
         translucent(self.text, percent)
     }
-    /// `--color-contrast-NN`
+    /// Returns the contrast colour at an opacity of `percent` percent.
     pub fn contrast(&self, percent: f32) -> Rgba {
         translucent(self.contrast, percent)
     }
-    /// `--color-primary`, selection and focus.
+    /// The primary colour, which marks what is selected and what has the
+    /// keyboard focus.
     pub fn primary(&self) -> Rgba {
         rgb(self.primary)
     }
-    /// `::selection`: `--color-primary-30`.
+    /// The fill behind selected text: the primary colour at 30% opacity.
     pub fn selection(&self) -> Rgba {
         translucent(self.primary, 30.)
     }
-    /// `--glass-bg`: floating surfaces. GPUI's DirectX renderer (Windows)
-    /// draws no backdrop blur, so there the glass is the more opaque fill a
-    /// panel takes where nothing blurs what is behind it.
+    /// The fill of a floating panel that blurs what is behind it: the
+    /// background colour at 90% opacity in the light themes and 92% in the
+    /// dark themes. GPUI's DirectX renderer (Windows) draws no backdrop
+    /// blur, so on Windows the fill is made more opaque
+    /// (`ui::fill_without_blur`).
     pub fn glass(&self) -> Rgba {
         let glass = translucent(self.background, if self.light { 90. } else { 92. });
         if cfg!(target_os = "windows") {
@@ -212,10 +236,10 @@ impl Theme {
             glass
         }
     }
-    /// The glass of a menu: more of what is behind shows through it than
-    /// through `--glass-bg` (the owner's choice; production's menus take
-    /// `--glass-bg` like every floating surface, which over a blur reads as
-    /// nearly opaque).
+    /// The fill of a menu: the background colour at 76% opacity in the
+    /// light themes and 78% in the dark themes. It is less opaque than
+    /// `glass`, so more of what is behind a menu shows through it. On
+    /// Windows it is made more opaque, as `glass` is.
     pub fn menu_glass(&self) -> Rgba {
         let glass = translucent(self.background, if self.light { 76. } else { 78. });
         if cfg!(target_os = "windows") {
@@ -224,14 +248,14 @@ impl Theme {
             glass
         }
     }
-    /// `LibraryAvatar`: `color-mix(currentColor 10%, control-surface)` with
-    /// the secondary text colour.
+    /// The fill of a library's avatar: the secondary text colour mixed 10%
+    /// into the control surface.
     pub fn avatar_surface(&self) -> Rgba {
         blend(self.control_surface(), self.text_secondary(), 0.1)
     }
-    /// `--glass-blur`: what a glass panel does to what is behind it,
-    /// `blur(13px) brightness(0.7)`, or `blur(25px) brightness(3)` in the
-    /// light themes.
+    /// The backdrop filter of a glass panel, applied to what is behind the
+    /// panel: a blur of 13px at 70% brightness in the dark themes, and a
+    /// blur of 25px at 300% brightness in the light themes.
     pub fn glass_blur(&self) -> BackdropFilter {
         let (radius, brightness) = if self.light { (25., 3.) } else { (13., 0.7) };
         BackdropFilter {
@@ -239,7 +263,8 @@ impl Theme {
             ..BackdropFilter::blur(px(radius))
         }
     }
-    /// `--glass-border-top`
+    /// The top edge of a glass panel: opaque white in the light themes and
+    /// white at 25% opacity in the dark themes.
     pub fn glass_border_top(&self) -> Rgba {
         if self.light {
             rgba(0xffffffff)
@@ -247,23 +272,29 @@ impl Theme {
             rgba(0xffffff40)
         }
     }
-    /// `--color-border-focus`: `--color-primary-60`.
+    /// The border of a control that has the keyboard focus: the primary
+    /// colour at 60% opacity.
     pub fn border_focus(&self) -> Rgba {
         translucent(self.primary, 60.)
     }
-    /// `--sidebar-tree-guide-color`: a quarter of the secondary text colour.
+    /// The colour of the vertical guide lines in a tree of folders: the
+    /// text colour at 17.5% opacity, a quarter of the opacity of secondary
+    /// text.
     pub fn tree_guide(&self) -> Rgba {
         translucent(self.text, 17.5)
     }
-    /// `--color-negative`: the destructive row of a menu.
+    /// The colour of destructive actions and errors, such as the row of a
+    /// menu that deletes something.
     pub fn negative(&self) -> Rgba {
         rgb(NEGATIVE)
     }
-    /// `color-mix(in srgb, var(--color-negative) NN%, transparent)`
+    /// Returns the colour of destructive actions at an opacity of
+    /// `percent` percent.
     pub fn negative_at(&self, percent: f32) -> Rgba {
         translucent(NEGATIVE, percent)
     }
-    /// `--glass-border-side`
+    /// The left and right edges of a glass panel: white at 50% opacity in
+    /// the light themes and 15% in the dark themes.
     pub fn glass_border(&self) -> Rgba {
         if self.light {
             rgba(0xffffff80)
@@ -271,32 +302,37 @@ impl Theme {
             rgba(0xffffff26)
         }
     }
-    /// `--color-subtle-overlay`: `--color-contrast-10`.
+    /// The fill of some icon buttons under the pointer: the contrast
+    /// colour at 10% opacity.
     pub fn subtle_overlay(&self) -> Rgba {
         translucent(self.contrast, 10.)
     }
-    /// `--color-pressed-overlay`: `--color-contrast-20`.
+    /// The fill of some icon buttons while they are pressed, and the ring
+    /// of a compact check box: the contrast colour at 20% opacity.
     pub fn pressed_overlay(&self) -> Rgba {
         translucent(self.contrast, 20.)
     }
-    /// `--color-footer-surface`: table headers, tab tracks and dialog footers.
+    /// The fill of table headers, of the track behind a row of tabs and of
+    /// the footers of dialogs: the contrast colour at 3% opacity.
     pub fn footer_surface(&self) -> Rgba {
         translucent(self.contrast, 3.)
     }
-    /// `color-mix(in srgb, var(--color-bg-app) 90%, var(--color-text-primary) 10%)`:
-    /// the select button's fill.
+    /// The fill of a select control: the text colour mixed 10% into the
+    /// background.
     pub fn select_surface(&self) -> Rgba {
         mixed(self.text, 10., self.background)
     }
-    /// `--color-primary-NN`
+    /// Returns the primary colour at an opacity of `percent` percent.
     pub fn primary_at(&self, percent: f32) -> Rgba {
         translucent(self.primary, percent)
     }
-    /// `--color-on-primary`: text on a primary surface.
+    /// The colour of text and icons on a fill of the primary colour:
+    /// white.
     pub fn on_primary(&self) -> Rgba {
         rgb(0xffffff)
     }
-    /// `--glass-border-bottom`
+    /// The bottom edge of a glass panel: white at 25% opacity in the light
+    /// themes and 10% in the dark themes.
     pub fn glass_border_bottom(&self) -> Rgba {
         if self.light {
             rgba(0xffffff40)
@@ -304,13 +340,14 @@ impl Theme {
             rgba(0xffffff1a)
         }
     }
-    /// Chromium's `::placeholder` colour (`darkGray`), for inputs the app
-    /// does not give a placeholder colour of its own.
+    /// The colour of the placeholder of a text field in a popover: a
+    /// medium gray, the same in every theme. The other text fields draw
+    /// their placeholder in the tertiary text colour.
     pub fn placeholder(&self) -> Rgba {
         rgb(0xa9a9a9)
     }
-    /// `color-mix(in srgb, var(--color-control-surface) 50%, transparent)`:
-    /// the footer of the library switcher.
+    /// The fill of the footer of the library switcher: the control surface
+    /// at half its opacity.
     pub fn control_surface_half(&self) -> Rgba {
         if self.light {
             rgba(0xffffff40)
@@ -318,51 +355,53 @@ impl Theme {
             rgba(0x0000001a)
         }
     }
-    /// `--color-text-disabled`
+    /// The colour of disabled text: the text colour at 22% opacity.
     pub fn text_disabled(&self) -> Rgba {
         translucent(self.text, 22.)
     }
-    /// `.shortcutConflict`: `var(--color-warning, #FFA500)`. No theme
-    /// defines `--color-warning`, and this rule's fallback differs from the
-    /// subscription styles' (`WARNING`).
+    /// The border of a shortcut field in Settings whose keys are already
+    /// bound to another shortcut: orange, the same in every theme. It is a
+    /// different orange from `WARNING`.
     pub fn shortcut_conflict(&self) -> Rgba {
         rgb(0xffa500)
     }
 }
 
-// Each surface's `backdrop-filter`. The glass panels' own, `--glass-blur`,
-// changes with the theme: `Theme::glass_blur`.
+// The backdrop blurs of the surfaces that do not use `Theme::glass_blur`.
+// They are the same in every theme.
 
-/// `KbdTooltip` and the settings swatches' tips: `blur(16px)`.
+/// The backdrop blur of a tooltip: 16px.
 pub fn tooltip_blur() -> BackdropFilter {
     BackdropFilter::blur(px(16.))
 }
-/// `DetailWindow.module.css` `.toolbar`: `blur(12px)`.
+/// The backdrop blur of the toolbar of a detail window: 12px.
 pub fn detail_toolbar_blur() -> BackdropFilter {
     BackdropFilter::blur(px(12.))
 }
-/// `Inspector.module.css` `.previewTypeLabel`: `blur(5px)`.
+/// The backdrop blur of the format badge on the inspector's preview: 5px.
 pub fn preview_label_blur() -> BackdropFilter {
     BackdropFilter::blur(px(5.))
 }
 
-/// `.btnDanger`'s label colour.
+/// The colour of the label of a button for a destructive action.
 pub const DANGER_TEXT: u32 = 0xff9aa4;
-/// The error banner's text (`TagManagerScreen.module.css` `.error`).
+/// The colour of the text of an error message shown in a form.
 pub const ERROR_TEXT: u32 = 0xffb4b4;
-/// `GlassModal` `.backdrop`: black at 55%.
+/// The colour that covers the window behind a modal dialog: black at 55%
+/// opacity.
 pub const MODAL_BACKDROP: u32 = 0x0000008c;
-/// `PictoPackModal`'s glyph tile: `var(--surface-raised, rgba(255,255,255,.06))`,
-/// whose variable no theme defines, so always the fallback.
+/// The fill of the square behind the icon in the export and import dialog
+/// for Picto packs: white at 6% opacity, the same in every theme.
 pub const PACK_GLYPH_TILE: u32 = 0xffffff0f;
 
-/// `color` with no alpha: what a CSS transition from `transparent` toward
-/// it starts from, keeping its hue (see [`blend`]).
+/// Returns `color` fully transparent. A fade that starts from this colour
+/// and ends at `color` keeps the hue of `color` all the way (see [`blend`]).
 pub fn clear(color: Rgba) -> Rgba {
     Rgba { a: 0., ..color }
 }
 
-/// `#rrggbb` as a number; the `#` may be left out.
+/// Parses a colour written as `#rrggbb` into a number. The `#` may be left
+/// out.
 pub fn parse_hex(text: &str) -> Option<u32> {
     let digits = text.strip_prefix('#').unwrap_or(text);
     (digits.len() == 6 && digits.chars().all(|digit| digit.is_ascii_hexdigit()))
@@ -370,12 +409,14 @@ pub fn parse_hex(text: &str) -> Option<u32> {
         .flatten()
 }
 
-/// `#RRGGBB` with its `#`, as the colour editor's field takes a code.
+/// Parses a colour written as `#RRGGBB`. The `#` is required, as it is in
+/// the code field of the colour editor.
 pub fn parse_hex_code(text: &str) -> Option<u32> {
     text.starts_with('#').then(|| parse_hex(text)).flatten()
 }
 
-/// A colour as the settings store one: `#rgb`, `#rrggbb` or `rgb(r, g, b)`.
+/// Parses a colour in one of the forms the settings store: `#rgb`,
+/// `#rrggbb` or `rgb(r, g, b)`.
 pub fn parse_css_color(value: &str) -> Option<u32> {
     let value = value.trim();
     if let Some(hex) = value.strip_prefix('#') {
@@ -399,8 +440,9 @@ pub fn parse_css_color(value: &str) -> Option<u32> {
     }
 }
 
-/// The colour `amount` of the way from `from` to `to`, as a CSS colour
-/// transition passes through it (interpolated with alpha premultiplied).
+/// Returns the colour that is `amount` (0 to 1) of the way from `from` to
+/// `to`. The colour channels are multiplied by the opacity before they are
+/// interpolated, so a fade from a transparent colour keeps the hue of `to`.
 pub fn blend(from: Rgba, to: Rgba, amount: f32) -> Rgba {
     let amount = amount.clamp(0., 1.);
     let a = from.a + (to.a - from.a) * amount;
@@ -423,7 +465,8 @@ pub fn blend(from: Rgba, to: Rgba, amount: f32) -> Rgba {
 }
 
 impl Theme {
-    /// `--shadow-panel`
+    /// The shadow of a floating panel: a soft shadow 12px below it and a
+    /// ring of 1px around it.
     pub fn panel_shadow(&self) -> Vec<BoxShadow> {
         let (shade, ring) = self.panel_shadow_colors();
         vec![
@@ -432,7 +475,8 @@ impl Theme {
         ]
     }
 
-    /// `--shadow-panel-small`
+    /// The shadow of a small floating panel: a soft shadow 3px below it and
+    /// a ring of 1px around it.
     pub fn panel_shadow_small(&self) -> Vec<BoxShadow> {
         let (shade, ring) = self.panel_shadow_colors();
         vec![
@@ -441,8 +485,9 @@ impl Theme {
         ]
     }
 
-    /// The panel shadows' black: 30% and a 50% ring, 15% for both in the
-    /// light themes.
+    /// Returns the colours of the shadow and of the ring of the panel
+    /// shadows. In the dark themes the shadow is black at 30% opacity and
+    /// the ring black at 50%. In the light themes both are black at 15%.
     fn panel_shadow_colors(&self) -> (u32, u32) {
         if self.light {
             (0x00000026, 0x00000026)
@@ -452,7 +497,9 @@ impl Theme {
     }
 }
 
-/// `LibraryAvatar.module.css` `.avatar::after`: its inset shadows.
+/// The inset shadows drawn over a library's avatar: dark ones at its top
+/// and left and light ones at its bottom and right, which make it look
+/// pressed in, and a faint white ring.
 pub fn avatar_bevel() -> Vec<BoxShadow> {
     let inset = |x: f32, y: f32, blur: f32, color: u32| {
         BoxShadow::new(px(x), px(y), rgba(color).into())
@@ -470,7 +517,8 @@ pub fn avatar_bevel() -> Vec<BoxShadow> {
     ]
 }
 
-/// `font-variant-numeric: tabular-nums slashed-zero`
+/// The font features for numbers in columns: every digit has the same
+/// width, and the zero has a slash.
 pub fn tabular_figures() -> FontFeatures {
     FontFeatures(std::sync::Arc::new(vec![
         ("tnum".into(), 1),
@@ -478,191 +526,215 @@ pub fn tabular_figures() -> FontFeatures {
     ]))
 }
 
-// A tag group's colour, the same in `TagChip.tsx`'s `NS_COLORS` and
-// `tagGroupPresentation.ts`'s presets (which knows fewer groups).
-/// `creator` and `studio`.
+// The colours of the tag groups. `tags.rs` chooses among them by the name
+// of a tag's group, for the tag's chip and for the group's preset colour.
+/// The colour of the groups `creator` and `studio`.
 pub const TAG_CREATOR: u32 = 0xff6667;
-/// `character` and `person`.
+/// The colour of the groups `character` and `person`.
 pub const TAG_CHARACTER: u32 = 0x30d159;
 pub const TAG_SERIES: u32 = 0xc499ff;
 pub const TAG_SPECIES: u32 = 0x00aaff;
 pub const TAG_RATING: u32 = 0xffd60a;
-/// `system`: `NS_COLORS` only.
+/// The colour of the group `system`.
 pub const TAG_SYSTEM: u32 = 0xff9f0a;
-/// Every other group, `general` among them.
+/// The colour of every other group, including `general`.
 pub const TAG_GENERAL: u32 = 0xbdbec0;
 
-/// A folder chip without a colour of its own.
+/// The colour of the chip of a folder that has no colour of its own.
 pub const FOLDER_DEFAULT: u32 = 0x868e96;
 
-/// The smart-folder dialog's `.colorSwatch` highlight:
-/// `inset 0 1px 0 rgba(255, 255, 255, 0.18)`.
+/// The colour of the 1px highlight along the inner top edge of the colour
+/// swatch in the smart folder dialog: white at 18% opacity.
 pub const COLOR_SWATCH_HIGHLIGHT: u32 = 0xffffff2e;
 
-/// The audio visualizer's gradient (`AudioVisualizer.tsx`): cyan, violet
-/// and pink.
+/// The three colours of the audio visualizer's gradient: cyan, violet and
+/// pink.
 pub const VISUALIZER_CYAN: u32 = 0x31d7ff;
 pub const VISUALIZER_VIOLET: u32 = 0x735cff;
 pub const VISUALIZER_PINK: u32 = 0xff4fa3;
 
-/// A set star in `StarRating.module.css`.
+/// The colour of a star of a rating that is set.
 pub const RATING: u32 = 0xff9f0a;
 
-/// `--color-warning`, `--color-danger` and `--color-success`, which no theme
-/// defines: the fallbacks the subscription styles give them.
+/// The colours of a status that is a warning, a failure or a success, as
+/// status badges and status texts show them. They are the same in every
+/// theme.
 pub const WARNING: u32 = 0xe8a33d;
 pub const DANGER: u32 = 0xef8b8b;
 pub const SUCCESS: u32 = 0x5fb56b;
-/// The subscription tables' warm failure text (`.qFailureText`).
+/// The colour of the text of a failure in the tables of the Subscriptions
+/// screen: a light orange.
 pub const FAILURE_TEXT: u32 = 0xf0ad91;
 
-/// `TaskDialog.module.css`: a task's glyph and fill by its tone (`.kind`,
-/// `.fill`), the warning text, the danger choice and the dimmed backdrop.
+/// The colours of the task dialog (the dialog of an import), which are the
+/// same in every theme. A task's icon, the square behind the icon and the
+/// fill of its progress bar depend on whether the task is working, done or
+/// has a warning. This one is the icon of a task that is working.
 pub const TASK_WORKING_GLYPH: u32 = 0x8cc4ff;
 pub const TASK_DONE_GLYPH: u32 = 0x7be39b;
-/// `rgba(52, 199, 89, 0.18)`
+/// The square behind the icon of a task that is done: green at 18%
+/// opacity.
 pub const TASK_DONE_TILE: u32 = 0x34c7592e;
-/// `#34c759`
+/// The fill of the progress bar of a task that is done: green.
 pub const TASK_DONE_FILL: u32 = 0x34c759;
 pub const TASK_WARNING_GLYPH: u32 = 0xffb4a0;
-/// `rgba(255, 120, 90, 0.16)`
+/// The square behind the icon of a task that has a warning: orange at 16%
+/// opacity.
 pub const TASK_WARNING_TILE: u32 = 0xff785a29;
-/// `.choice[data-selected][data-danger]`: `rgba(255, 71, 87, 0.5)` and `0.08`.
+/// The border and the fill of a selected choice that is destructive: red
+/// at 50% and at 8% opacity.
 pub const TASK_DANGER_BORDER: u32 = 0xff475780;
 pub const TASK_DANGER_FILL: u32 = 0xff475714;
-/// `.choice[data-danger] .choiceMark`
+/// The colour of the mark of a choice that is destructive.
 pub const TASK_DANGER_MARK: u32 = 0xff8a95;
 
-/// `GRID_SELECTION_COLOR`: the grid's selection stroke and name pill, the
-/// same in every theme.
+/// The colour of the border around a selected tile of the grid and of the
+/// fill behind its name. It is the same in every theme.
 pub const GRID_SELECTION: u32 = 0x3297ff;
 
-// Grid badges are fixed, not themed (`gridAppearance.ts`).
+// The colours of the badges on the grid's tiles are the same in every
+// theme.
 pub const BADGE_BACKGROUND: u32 = 0x00000080;
 pub const BADGE_BORDER: u32 = 0x00000033;
 pub const BADGE_TEXT: u32 = 0xffffffcc;
 
-// The viewer's overlays are fixed, not themed (`MediaView.module.css`).
-/// `.boundaryLeft` / `.boundaryRight`: `rgba(0, 0, 0, 0.6)`.
+// The colours of what the viewer draws over a picture are the same in
+// every theme.
+/// The fill behind the notice the viewer shows at the first and the last
+/// item: black at 60% opacity.
 pub const VIEWER_NOTICE_BACKGROUND: u32 = 0x00000099;
-/// `.transparencyGrid` (`ImageCrossfadeFrame.module.css`): white, with
-/// `#d9d9d9` squares 8 image pixels wide.
+/// The two colours of the checkerboard that the viewer draws behind a
+/// picture with transparency: white and light gray.
 pub const TRANSPARENCY_GRID_LIGHT: u32 = 0xffffff;
 pub const TRANSPARENCY_GRID_DARK: u32 = 0xd9d9d9;
-/// `.navigator`: `rgba(0, 0, 0, 0.4)`, bordered `rgba(255, 255, 255, 0.15)`.
+/// The fill and the border of the navigator, the small picture of the
+/// whole image that the viewer shows while the image is zoomed in: black at
+/// 40% opacity and white at 15%.
 pub const NAVIGATOR_BACKGROUND: u32 = 0x00000066;
 pub const NAVIGATOR_BORDER: u32 = 0xffffff26;
-/// `.navigatorViewport`: border `rgba(248, 249, 251, 0.9)`, fill
-/// `rgba(248, 249, 251, 0.06)`, and the `rgba(0, 0, 0, 0.58)` shade around it.
+/// The rectangle in the navigator that marks the visible part of the
+/// image: its border (near-white at 90% opacity), its fill (near-white at
+/// 6%), and the shade over the rest of the navigator (black at 58%).
 pub const NAVIGATOR_VIEWPORT_BORDER: u32 = 0xf8f9fbe6;
 pub const NAVIGATOR_VIEWPORT_FILL: u32 = 0xf8f9fb0f;
 pub const NAVIGATOR_SHADE: u32 = 0x00000094;
-/// Quick Look's close button: `color: #f8f9fb` (`QuickLookHost.module.css`).
+/// The colour of the icon of Quick Look's close button.
 pub const QUICK_LOOK_GLYPH: u32 = 0xf8f9fb;
-/// The detail window's toolbar: `rgba(0, 0, 0, 0.55)` (`DetailWindow.module.css`).
+/// The fill of the toolbar of a detail window: black at 55% opacity.
 pub const DETAIL_TOOLBAR_BACKGROUND: u32 = 0x0000008c;
 
-// The Inbox review pill's colours are fixed, not themed
-// (`InboxReviewControls.module.css`); alpha rounded to the nearest byte.
-/// `.action`'s `--glow`: `54, 220, 119` for Accept and `255, 75, 84` for
-/// Reject.
+// The colours of the Accept and Reject control of the Inbox review are the
+// same in every theme.
+/// The colours of the glow of the Accept button (green) and of the Reject
+/// button (red).
 pub const REVIEW_ACCEPT_GLOW: u32 = 0x36dc77;
 pub const REVIEW_REJECT_GLOW: u32 = 0xff4b54;
-/// The glyph while lit: `rgba(226, 255, 237, 0.98)` / `rgba(255, 230, 231,
-/// 0.98)`.
+/// The colours of the icons of the Accept and the Reject button while the
+/// button glows: a pale green and a pale red, each at 98% opacity.
 pub const REVIEW_ACCEPT_TINT: u32 = 0xe2ffedfa;
 pub const REVIEW_REJECT_TINT: u32 = 0xffe6e7fa;
-/// `.divider`: `transparent`, `rgba(255, 255, 255, 0.25)` at 20%,
-/// `rgba(255, 255, 255, 0.16)` at 80%, `transparent`, and its
-/// `box-shadow: 1px 0 rgba(0, 0, 0, 0.18)`. The ends are white at no
-/// strength, as the gradient's premultiplied `transparent` blends.
+/// The colours of the vertical line between the Accept and the Reject
+/// button. The line is a gradient: transparent at its ends, white at 25%
+/// opacity a fifth of the way down and white at 16% four fifths of the way
+/// down. A line of black at 18% opacity lies 1px to its right. The ends are
+/// white at no opacity, not black at no opacity, so that the gradient does
+/// not pass through gray.
 pub const REVIEW_DIVIDER_EDGE: u32 = 0xffffff00;
 pub const REVIEW_DIVIDER_TOP: u32 = 0xffffff40;
 pub const REVIEW_DIVIDER_BOTTOM: u32 = 0xffffff29;
 pub const REVIEW_DIVIDER_SHADE: u32 = 0x0000002e;
-/// `.action:focus-visible`'s outline: `rgba(255, 255, 255, 0.75)`.
+/// The outline of the Accept or Reject button that has the keyboard
+/// focus: white at 75% opacity.
 pub const REVIEW_FOCUS_RING: u32 = 0xffffffbf;
 
-// The media player's controls are fixed white on black, not themed
-// (`VideoPlayer.module.css`); alpha rounded to the nearest byte.
-/// `.root`: `#000` behind video.
+// The media player's controls are white on black in every theme.
+/// The colour behind a video: black.
 pub const MEDIA_BACKGROUND: u32 = 0x000000ff;
-/// `.controls`: `linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent)`.
+/// The colour at the bottom of the gradient behind the player's controls:
+/// black at 60% opacity. The gradient is transparent at its top.
 pub const MEDIA_CONTROLS_SHADE: u32 = 0x00000099;
-/// `.icBtn` glyph `rgba(255,255,255,0.8)`, hovered or active `0.95`.
+/// The icon of a button of the player: white at 80% opacity, and at 95%
+/// while the button is under the pointer or active.
 pub const MEDIA_GLYPH: u32 = 0xffffffcc;
 pub const MEDIA_GLYPH_STRONG: u32 = 0xfffffff2;
-/// `.icBtn:hover` `rgba(255,255,255,0.15)`, `:active` `0.25`.
+/// The fill of a button of the player under the pointer (white at 15%
+/// opacity) and while pressed (white at 25%).
 pub const MEDIA_BUTTON_HOVER: u32 = 0xffffff26;
 pub const MEDIA_BUTTON_ACTIVE: u32 = 0xffffff40;
-/// `.timeDisplay`, `.volumePercent`, `.rateMenuItem`: `rgba(255,255,255,0.7)`.
+/// The text of the player's time, of the volume in percent and of the
+/// rows of the speed menu: white at 70% opacity.
 pub const MEDIA_TEXT: u32 = 0xffffffb3;
-/// `.separator` and `.progressBuffered`: `rgba(255,255,255,0.2)`;
-/// `.waveformBase` the same.
+/// The separators between the player's controls, the buffered part of the
+/// progress bar and the unplayed part of the waveform: white at 20%
+/// opacity.
 pub const MEDIA_FAINT: u32 = 0xffffff33;
-/// `.progressTrack` and `.volumeTrack`: `rgba(255,255,255,0.15)`.
+/// The tracks of the progress bar and of the volume slider: white at 15%
+/// opacity.
 pub const MEDIA_TRACK: u32 = 0xffffff26;
-/// `.progressFill`, `.volumeFill`, `.waveformImage`, `.waveformCursor`:
-/// `rgba(255,255,255,0.95)`.
+/// The filled parts of the progress bar and of the volume slider, the
+/// played part of the waveform and the waveform's cursor: white at 95%
+/// opacity.
 pub const MEDIA_FILL: u32 = 0xfffffff2;
-/// `.progressHoverTime` and `.volumePopup`: `rgba(0,0,0,0.8)`.
+/// The fill of the time shown above the progress bar under the pointer
+/// and of the volume popup: black at 80% opacity.
 pub const MEDIA_POPUP: u32 = 0x000000cc;
-/// `.rateMenu`: `rgba(0,0,0,0.9)`.
+/// The fill of the speed menu: black at 90% opacity.
 pub const MEDIA_MENU: u32 = 0x000000e6;
-/// `.volumePopup` and `.rateMenu` border: `rgba(255,255,255,0.1)`; a rate
-/// row's hover the same.
+/// The border of the volume popup and of the speed menu, and the fill of
+/// a row of the speed menu under the pointer: white at 10% opacity.
 pub const MEDIA_POPUP_BORDER: u32 = 0xffffff1a;
-/// `.volumeHud`: `rgba(0,0,0,0.7)`.
+/// The fill of the volume indicator that appears over the video when the
+/// volume changes: black at 70% opacity.
 pub const MEDIA_HUD: u32 = 0x000000b3;
-/// `.marquee` in `CanvasGrid.module.css`: the rubber band's fill,
-/// rgba(51, 154, 240, 0.12), and its 1px edge at 0.5.
+/// The fill and the 1px border of the rectangle the user drags to select
+/// tiles: blue at 12% opacity and at 50%.
 pub const MARQUEE_FILL: u32 = 0x339af01f;
 pub const MARQUEE_BORDER: u32 = 0x339af080;
-/// `CanvasGrid.tsx`'s reorder drop indicator: a 2px line and a triangle
-/// at its top, #228be6.
+/// The colour of the mark that shows where dragged tiles will be dropped
+/// when the grid is reordered: a 2px line with a triangle at its top, in
+/// blue.
 pub const REORDER_INDICATOR: u32 = 0x228be6;
-/// `.inlineError` in `GroupSurface.module.css`: rgba(255, 71, 87, 0.08)
-/// behind #ff9aa4.
+/// The fill and the text colour of an error message shown in the view of
+/// a collection: red at 8% opacity behind light red text.
 pub const GROUP_ERROR_BACKGROUND: u32 = 0xff475714;
 pub const GROUP_ERROR_TEXT: u32 = 0xff9aa4;
-/// `HoverPreviewPortal.tsx`: the backdrop, rgba(0, 0, 0, 0.6), and the
-/// image's shadow colour, rgba(0, 0, 0, 0.7).
+/// The colours of the large preview of a tile: the colour that covers the
+/// window behind it (black at 60% opacity) and the colour of the picture's
+/// shadow (black at 70%).
 pub const PREVIEW_BACKDROP: u32 = 0x00000099;
 pub const PREVIEW_SHADOW: u32 = 0x000000b3;
-/// `drawBase.ts`: an audio tile's tint in the dark theme,
-/// rgba(247, 248, 248, 0.05). The radial gradient laid over it runs from
-/// 0.05 at the top centre to 0.03 at a full tile's distance; a linear
-/// gradient from 0.05 to 0.04 stands in for it.
+/// The fill of the tile of an audio file: near-white at 5% opacity. Over
+/// it lies a linear gradient from the same colour at the top to
+/// `AUDIO_TINT_FAR`, near-white at 4% opacity, at the bottom.
 pub const AUDIO_TINT: u32 = 0xf7f8f80d;
 pub const AUDIO_TINT_FAR: u32 = 0xf7f8f80a;
-/// `--color-black-20`
+/// Black at 20% opacity, for shadows and dark fills.
 pub const BLACK_20: u32 = 0x00000033;
-/// `--color-black-30`
+/// Black at 30% opacity, for shadows.
 pub const BLACK_30: u32 = 0x0000004d;
-/// `--color-black-10`, rgba(0, 0, 0, 0.1): thin dark rings and soft
-/// shadows (the bottom edge of `EmptyState`'s inner frame, a ticked check
-/// box, the inspector preview's edge).
+/// Black at 10% opacity, for thin dark rings and soft shadows (the bottom
+/// edge of the inner frame of an empty state, the ring of a ticked check
+/// box, the edge of the inspector's preview).
 pub const BLACK_10: u32 = 0x0000001a;
-// Black at the other strengths component shadows are written in.
-/// rgba(0, 0, 0, 0.15): the subscription dialog's and the settings card's
-/// soft shadows.
+// Black at the other opacities that the shadows of components use.
+/// Black at 15% opacity: the ring around the content panel of Settings.
 pub const BLACK_15: u32 = 0x00000026;
-/// rgba(0, 0, 0, 0.18): a field's dropdown (`0 1px 3px`) and the source
-/// list (`0 4px 10px`).
+/// Black at 18% opacity: the near shadow of a field's dropdown and the
+/// shadow of the inspector's list of sources.
 pub const BLACK_18: u32 = 0x0000002e;
-/// rgba(0, 0, 0, 0.22): a field's dropdown (`0 8px 20px`).
+/// Black at 22% opacity: the far shadow of a field's dropdown.
 pub const BLACK_22: u32 = 0x00000038;
-/// rgba(0, 0, 0, 0.25): a slider thumb's shadow, and the subscription
-/// dialog's ring.
+/// Black at 25% opacity: the shadow of a slider's thumb and the fill of
+/// a text field in a row of a form.
 pub const BLACK_25: u32 = 0x00000040;
-/// `CanvasGrid`'s magnifier corner: rgba(0, 0, 0, 0.4) under a glyph of
-/// rgba(255, 255, 255, 0.7).
+/// The magnifier button in the corner of a tile of the grid: its fill,
+/// black at 40% opacity, and its icon, white at 70%.
 pub const GRID_MAGNIFIER_BACKGROUND: u32 = 0x00000066;
 pub const GRID_MAGNIFIER_GLYPH: u32 = 0xffffffb3;
 
-/// A subfolder tile's card (`SubfolderGrid.module.css` `--folder-card*`):
-/// its fill from top to bottom, its top edge, its sides, and the two edges
-/// stacked behind it.
+/// Holds the colours of the card of a subfolder's tile in the grid: its
+/// fill as a gradient from top to bottom, its top edge, its side edges, and
+/// the top edges of the two cards drawn behind it (`middle` and `back`).
 #[derive(Clone, Copy)]
 pub struct FolderCard {
     pub fill: (u32, u32),
@@ -672,8 +744,9 @@ pub struct FolderCard {
     pub back: u32,
 }
 
-/// The dark themes: `radial-gradient(… rgb(255 255 255 / 15%), … / 5%)`,
-/// drawn as a linear one from the top (GPUI draws no radial gradients).
+/// The card of a subfolder's tile in the dark themes. Its fill is a linear
+/// gradient from white at 15% opacity at the top to white at 5% at the
+/// bottom.
 pub const FOLDER_CARD_DARK: FolderCard = FolderCard {
     fill: (0xffffff26, 0xffffff0d),
     top: 0xffffff26,
@@ -682,7 +755,8 @@ pub const FOLDER_CARD_DARK: FolderCard = FolderCard {
     back: 0xffffff1a,
 };
 
-/// `[data-mantine-color-scheme="light"]`: black washes.
+/// The card of a subfolder's tile in the light themes. Its fill is black
+/// at 10% opacity.
 pub const FOLDER_CARD_LIGHT: FolderCard = FolderCard {
     fill: (0x0000001a, 0x0000001a),
     top: 0x00000033,
@@ -690,127 +764,139 @@ pub const FOLDER_CARD_LIGHT: FolderCard = FolderCard {
     middle: 0x00000033,
     back: 0x0000001a,
 };
-/// The grid's selected name pill and the inspector preview's format badge:
-/// white text, the same in every theme.
+/// The colour of the name of a selected tile of the grid and of the format
+/// badge on the inspector's preview: white, the same in every theme.
 pub const BADGE_STRONG_TEXT: u32 = 0xffffff;
-/// `.differenceComposite`: duplicate review's difference picture is drawn
-/// on black.
+/// The colour behind the picture of the differences between two
+/// duplicates on the Duplicates screen: black.
 pub const DIFFERENCE_BACKGROUND: u32 = 0x000000;
-/// `DatePickerButton.module.css` `.daySelected`:
-/// `inset 0 1px 0 rgba(255, 255, 255, 0.45)`.
+/// The colour of the 1px highlight along the inner top edge of the
+/// selected day in the date picker: white at 45% opacity.
 pub const DATE_SELECTED_HIGHLIGHT: u32 = 0xffffff73;
-/// `ToggleSwitch.module.css`: the off track, rgba(128, 128, 128, 0.25), and
-/// the white knob.
+/// The colours of a toggle switch: its track while it is off, gray at 25%
+/// opacity, and its knob, white.
 pub const TOGGLE_TRACK_OFF: u32 = 0x80808040;
 pub const TOGGLE_KNOB: u32 = 0xffffff;
-/// The ring of a colour swatch beside a smart folder's colour field:
-/// rgba(255, 255, 255, 0.22).
+/// The border of the colour swatch in the smart folder dialog: white at
+/// 22% opacity.
 pub const COLOR_SWATCH_RING: u32 = 0xffffff38;
-/// Settings' "Auto" theme swatch: `linear-gradient(135deg, #f0f0f0 50%,
-/// #1a1a1e 50%)`.
+/// The two colours of the swatch of the "Auto" theme in Settings, which is
+/// split diagonally into a light half and a dark half.
 pub const THEME_SWATCH_AUTO: (u32, u32) = (0xf0f0f0, 0x1a1a1e);
 
-// `ColorFilterEditor.module.css`, fixed, not themed.
-/// `.cursor`: a white ring with a `0 0 0 1px rgba(0, 0, 0, .65)` halo.
+// The colours of the colour editor are the same in every theme.
+/// The marker of the chosen colour in the colour editor's square of
+/// saturation and brightness: a white ring with a 1px ring of black at 65%
+/// opacity around it.
 pub const COLOR_CURSOR_RING: u32 = 0xffffff;
 pub const COLOR_CURSOR_HALO: u32 = 0x000000a6;
-/// `.hue::-webkit-slider-thumb`: a `rgba(255,255,255,.9)` line over a
-/// `rgba(0,0,0,.6)` one.
+/// The thumb of the hue slider: a line of white at 90% opacity over a
+/// line of black at 60%.
 pub const COLOR_HUE_THUMB_LIGHT: u32 = 0xffffffe6;
 pub const COLOR_HUE_THUMB_DARK: u32 = 0x00000099;
-/// `.preset`: `border: 1px solid rgba(128,128,128,.3)`.
+/// The border of a preset colour: gray at 30% opacity.
 pub const COLOR_PRESET_RING: u32 = 0x8080804d;
-/// `.none`: `#ccc`, struck through in `#6a6a6a`.
+/// The preset that stands for no colour: a light gray fill with a darker
+/// gray line through it.
 pub const COLOR_NONE_FILL: u32 = 0xcccccc;
 pub const COLOR_NONE_STROKE: u32 = 0x6a6a6a;
 
-// The font viewer's preview papers (`FontViewer.module.css`), fixed, not
-// themed.
-/// `.root[data-preview-theme]`: each paper's `--font-page-bg` and
-/// `--font-page-fg`.
+// The colours of the font viewer are the same in every theme.
+/// The background colour and the text colour of each paper that the font
+/// viewer can show a font's preview on.
 pub const FONT_PAPER_LIGHT: (u32, u32) = (0xf7f8f8, 0x242529);
 pub const FONT_PAPER_DARK: (u32, u32) = (0x18191c, 0xf8f9fb);
 pub const FONT_PAPER_PURPLE: (u32, u32) = (0x2b2140, 0xfbf7ff);
 pub const FONT_PAPER_YELLOW: (u32, u32) = (0xf5df91, 0x312b1d);
-/// The paper swatches (`.theme`): `.light`, `.dark`, `.purple` and
-/// `.yellow`'s backgrounds and, where they set one, their colour; `.auto`
-/// is the light and dark swatches split diagonally, in `#888`.
+/// The colours of the buttons that choose the paper. A constant with one
+/// value is the button's fill. A constant with two values is the button's
+/// fill and the colour of its label. The button for the automatic paper is
+/// the light and the dark fill split diagonally, with a gray label
+/// (`FONT_SWATCH_AUTO_TEXT`).
 pub const FONT_SWATCH_LIGHT: (u32, u32) = (0xf7f8f8, 0x35363a);
 pub const FONT_SWATCH_DARK: u32 = 0x25262a;
 pub const FONT_SWATCH_PURPLE: u32 = 0x6e4ea2;
 pub const FONT_SWATCH_YELLOW: (u32, u32) = (0xd3a82e, 0x3a3017);
 pub const FONT_SWATCH_AUTO_TEXT: u32 = 0x888888;
-/// `.theme`: `color: rgba(255,255,255,.82)` and
-/// `box-shadow: inset 0 0 0 1px rgba(255,255,255,.12)`.
+/// The colour of the label of a paper button that sets no colour of its
+/// own, white at 82% opacity, and the 1px ring inside every paper button,
+/// white at 12%.
 pub const FONT_SWATCH_TEXT: u32 = 0xffffffd1;
 pub const FONT_SWATCH_RING: u32 = 0xffffff1f;
-/// `.glyphGrid span:hover`: `0 8px 22px rgba(0,0,0,.35)`.
+/// The colour of the shadow of a glyph under the pointer in the font
+/// viewer's table of glyphs: black at 35% opacity.
 pub const FONT_GLYPH_SHADOW: u32 = 0x00000059;
 
-// The document viewers' page colours are fixed, not themed.
-/// `DocumentViewerShell.module.css` `.viewport`: `rgb(42, 42, 46)`.
+// The colours of the document viewers' pages are the same in every theme.
+/// The colour behind the pages of a document: a dark gray.
 pub const DOCUMENT_BACKDROP: u32 = 0x2a2a2e;
-/// A page's paper, `#fff`.
+/// The colour of a page: white.
 pub const DOCUMENT_PAPER: u32 = 0xffffff;
-/// `TextDocumentViewer.module.css` `.page`: text `#1f2023`, links
-/// `#2773c9`, quotes `#5b5e65` behind a `#c7c9cd` rule, code on `#eef0f2`.
+/// The colours of a page of a text document: its text, its links, the
+/// text of a quotation, the vertical line to the left of a quotation, and
+/// the fill behind code.
 pub const DOCUMENT_TEXT: u32 = 0x1f2023;
 pub const DOCUMENT_LINK: u32 = 0x2773c9;
 pub const DOCUMENT_QUOTE: u32 = 0x5b5e65;
 pub const DOCUMENT_QUOTE_RULE: u32 = 0xc7c9cd;
 pub const DOCUMENT_CODE: u32 = 0xeef0f2;
-/// `ArchiveDocumentViewer.module.css` `.bookPage`: text `#222`.
+/// The colour of the text of a page of a book.
 pub const BOOK_TEXT: u32 = 0x222222;
-/// `.bookPage`'s `Georgia, serif`.
+/// The font family of the text of a page of a book.
 pub const FONT_BOOK: &str = "Georgia";
 
-/// `PdfViewer.module.css` `.page` and the text page:
-/// `0 8px 28px rgba(0, 0, 0, 0.34)`.
+/// The shadow of a page of a PDF and of a page of a text document: black
+/// at 34% opacity, 8px below the page, with a blur of 28px.
 pub fn page_shadow() -> Vec<BoxShadow> {
     vec![BoxShadow::new(px(0.), px(8.), rgba(0x00000057).into()).blur_radius(px(28.))]
 }
 
-/// The comic, DjVu and book pages: `0 4px 18px rgba(0, 0, 0, .32)`.
+/// The shadow of a page of a comic, a DjVu document or a book: black at
+/// 32% opacity, 4px below the page, with a blur of 18px.
 pub fn sheet_shadow() -> Vec<BoxShadow> {
     vec![BoxShadow::new(px(0.), px(4.), rgba(0x00000052).into()).blur_radius(px(18.))]
 }
 
-// A notification's status glyphs are fixed colours, not themed
-// (`NotificationHost.module.css`); the information glyph takes
-// `--color-primary`.
-/// `.success .statusIcon`
+// The colours of a notification's status icon are the same in every
+// theme. The icon of an informational notification is drawn in the theme's
+// primary colour.
+/// The status icon of a notification of a success.
 pub const NOTIFICATION_SUCCESS: u32 = 0x30d159;
-/// `.warning .statusIcon`
+/// The status icon of a notification of a warning.
 pub const NOTIFICATION_WARNING: u32 = 0xff9f0a;
-/// `.error .statusIcon`
+/// The status icon of a notification of an error.
 pub const NOTIFICATION_ERROR: u32 = 0xff453a;
-/// `.notification`'s `top`: below the titlebar.
+/// The distance from the top of the window to the top of a notification,
+/// in pixels. It places the notification below the titlebar.
 pub const NOTIFICATION_TOP: f32 = 76.;
-/// `.notification`'s `height`.
+/// The height of a notification, in pixels.
 pub const NOTIFICATION_HEIGHT: f32 = 36.;
 
-/// `WindowControls.module.css` `.btn.destructiveClose:hover` and `:active`:
-/// the system's red behind the close cross.
+/// The fill of the window's close button under the pointer and while it
+/// is pressed, where the app draws the window's buttons itself: the red
+/// that Windows uses for its close button.
 pub const CAPTION_CLOSE_HOVER: u32 = 0xe81123ff;
 pub const CAPTION_CLOSE_PRESS: u32 = 0xc50f1fff;
 
-// ── Typography ──────────────────────────────────────────────────
-/// `--font-family-ui`. Its first name, SF Pro Text, is not an installed
-/// family, so Chromium draws the system font; this is the same face.
+// The fonts, the text sizes and the line heights.
+/// The font family of the interface's text. `.SystemUIFont` is GPUI's name
+/// for the system's interface font.
 pub const FONT_UI: &str = ".SystemUIFont";
-/// `Picto Inspector Roboto`
+/// The font family of the text in the inspector and in the text fields of
+/// the sidebar and the inspector.
 pub const FONT_INSPECTOR: &str = "Roboto";
 pub const FONT_INSPECTOR_MONO: &str = "Fira Mono";
-/// `--font-family-mono`: SF Mono is not an installed family, so Chromium
-/// falls through to Fira Mono, which the app bundles.
+/// The monospaced font family. The app bundles Fira Mono
+/// (`assets/FiraMono.ttf`).
 pub const FONT_MONO: &str = "Fira Mono";
-/// CSS `line-height: normal` for 13px UI text. Chromium rounds a font's
-/// ascent and descent to whole pixels, so the line is 15px, not 1.18em; a
-/// fractional line box would put centred text half a pixel off.
+/// The line height of 13px interface text, in pixels. It is a whole
+/// number because a line of a fractional height would put centred text
+/// half a pixel off.
 pub const LINE_HEIGHT: f32 = 15.;
-/// Text at one of the UI sizes, on the line Chromium gives it. Its
-/// `line-height: normal` is the font's ascent and descent each rounded to a
-/// whole pixel, which for the UI fonts at these sizes is the size plus two.
+/// Sets the size of an element's text to one of the interface's text
+/// sizes, and the line height to the size plus two pixels. For the
+/// interface's fonts at these sizes, that is the font's ascent plus its
+/// descent, each rounded to a whole pixel.
 pub trait Text: Styled + Sized {
     fn text(self, size: f32) -> Self {
         self.text_size(px(size)).line_height(px(size + 2.))
@@ -819,77 +905,84 @@ pub trait Text: Styled + Sized {
 
 impl<T: Styled> Text for T {}
 
-/// `--font-size-xs`
+/// The smallest text size, in pixels.
 pub const TEXT_XS: f32 = 10.;
-/// `--font-size-caption`
+/// The text size of captions, in pixels.
 pub const TEXT_CAPTION: f32 = 11.;
-/// `--font-size-sm`
+/// The small text size, in pixels.
 pub const TEXT_SM: f32 = 12.;
-/// `--font-size-md`
+/// The medium text size, in pixels.
 pub const TEXT_MD: f32 = 13.;
-/// `--font-size-lg`
+/// The large text size, in pixels.
 pub const TEXT_LG: f32 = 14.;
-/// `--line-height-md`
+/// The line height of a line of text in a dialog or form, in pixels.
 pub const LINE_HEIGHT_MD: f32 = 20.;
-/// Mantine's body `line-height` (`--mantine-line-height`), which text with
-/// no line height of its own inherits: 13px text sits on a 20.15px line.
+/// The line height of running text as a multiple of its size, for text
+/// that is given no other line height: 13px text has a line of 20.15px.
 pub const LINE_HEIGHT_BODY: f32 = 1.55;
-/// `--font-size-xl`
+/// The largest text size, in pixels.
 pub const TEXT_XL: f32 = 16.;
 
-// ── Shape and size ──────────────────────────────────────────────
-/// `--radius-sm`
+// The corner radii and the sizes of controls and of parts of the window.
+/// The small corner radius, in pixels.
 pub const RADIUS_SM: f32 = 4.;
 /// The 5px radius of the search field and the sidebar's small buttons.
 pub const RADIUS_CONTROL: f32 = 5.;
-/// `--radius-md`
+/// The medium corner radius, in pixels. Most controls have it.
 pub const RADIUS_MD: f32 = 6.;
-/// `--radius-lg`
+/// The large corner radius, in pixels, which panels and dialogs have.
 pub const RADIUS_LG: f32 = 8.;
-/// `--control-height-sm`
+/// The height of a small control, in pixels.
 pub const CONTROL_SM: f32 = 26.;
-/// `--control-height-md`
+/// The height of a medium control, in pixels.
 pub const CONTROL_MD: f32 = 28.;
-/// `--control-height-lg`
+/// The height of a large control, in pixels.
 pub const CONTROL_LG: f32 = 32.;
-/// `--action-button-height`
+/// The height of an action button, in pixels.
 pub const ACTION_BUTTON: f32 = 30.;
-/// `--icon-button-size`
+/// The width and height of an icon button, in pixels.
 pub const ICON_BUTTON: f32 = 24.;
-/// The macOS window's corner radius, which its rim follows.
+/// The corner radius of a window on macOS, in pixels. The edge the app
+/// draws around a window has the same radius.
 pub const WINDOW_RADIUS: f32 = 10.;
-/// `--titlebar-height`
+/// The height of the titlebar, in pixels.
 pub const TITLEBAR_HEIGHT: f32 = 48.;
-/// `--sidebar-width` (`SIDEBAR_DEFAULT_WIDTH`) and the limits its edge drags
-/// between (`SIDEBAR_MIN_WIDTH`, `SIDEBAR_MAX_WIDTH`).
+/// The width of the sidebar until the user changes it, and the smallest
+/// and largest width its edge can be dragged to, in pixels.
 pub const SIDEBAR_WIDTH: f32 = 300.;
 pub const SIDEBAR_MIN: f32 = 220.;
 pub const SIDEBAR_MAX: f32 = 500.;
-/// `INSPECTOR_DEFAULT_WIDTH` and the limits its edge drags between.
+/// The width of the inspector until the user changes it, and the smallest
+/// and largest width its edge can be dragged to, in pixels.
 pub const INSPECTOR_WIDTH: f32 = 320.;
 pub const INSPECTOR_MIN: f32 = 260.;
 pub const INSPECTOR_MAX: f32 = 550.;
-/// `--sidebar-row-height`
+/// The height of a row of the sidebar, in pixels.
 pub const SIDEBAR_ROW: f32 = 27.;
-/// `--sidebar-indent`
+/// The indent of each level of the sidebar's trees, in pixels.
 pub const SIDEBAR_INDENT: f32 = 20.;
-/// `--sidebar-content-inset`: the left edge rows and section labels share.
+/// The distance from the sidebar's left edge to the content of its rows,
+/// in pixels. The positions of the section labels are derived from it too.
 pub const SIDEBAR_INSET: f32 = 16.;
-/// `--sidebar-section-control-inset`: section labels sit this far in.
+/// The horizontal padding of a section label of the sidebar, in pixels.
+/// The label's left margin is smaller by the same amount, so the padding
+/// does not move the label's text.
 pub const SIDEBAR_SECTION_INSET: f32 = 5.;
-/// `--sidebar-list-right-padding`, beside the scrollbar gutter.
+/// The space to the right of the sidebar's rows, in pixels, in addition
+/// to the scrollbar's gutter.
 pub const SIDEBAR_LIST_PADDING: f32 = 8.;
-/// `--sidebar-glyph-column`
+/// The width of the column that holds a sidebar row's icon, in pixels.
 pub const SIDEBAR_GLYPH_COLUMN: f32 = 26.;
-/// `--sidebar-disclosure-column`
+/// The width of the column that holds the arrow which folds and unfolds
+/// a sidebar row, in pixels.
 pub const SIDEBAR_DISCLOSURE: f32 = 14.;
-/// `Sidebar.module.css` `.renameInput`: the in-place rename field's height
-/// and corner radius.
+/// The height and the corner radius of the text field that renames a
+/// sidebar row in place, in pixels.
 pub const SIDEBAR_RENAME_HEIGHT: f32 = 20.;
 pub const SIDEBAR_RENAME_RADIUS: f32 = 3.;
-/// The sidebar's glyph size (`IC` in `Sidebar.tsx`).
+/// The size of a sidebar row's icon, in pixels.
 pub const SIDEBAR_ICON: f32 = 19.;
-/// `GRID_TILE_RADIUS`
+/// The corner radius of a tile of the grid, in pixels.
 pub const TILE_RADIUS: f32 = 4.;
 
 #[cfg(test)]
@@ -902,8 +995,9 @@ mod tests {
 
     #[test]
     fn a_blend_from_transparent_keeps_the_target_hue() {
-        // CSS interpolates premultiplied, so fading in from `transparent`
-        // never passes through grey.
+        // `blend` multiplies the colour channels by the opacity before it
+        // interpolates, so a fade from transparent black to a colour has
+        // that colour's hue all the way and never passes through gray.
         let clear = Rgba {
             r: 0.,
             g: 0.,
@@ -920,8 +1014,9 @@ mod tests {
         assert_eq!(blend(DARK.border(), DARK.primary(), 1.), DARK.primary());
     }
 
-    /// The glass as this system draws it: the CSS value, made more opaque
-    /// on Windows, which cannot blur behind it.
+    /// Returns the glass fill as the system the test runs on draws it:
+    /// the given colour, made more opaque on Windows, where nothing is
+    /// blurred behind the glass.
     fn glass_here(css: gpui::Rgba) -> gpui::Rgba {
         if cfg!(target_os = "windows") {
             crate::ui::fill_without_blur(css)
@@ -932,7 +1027,7 @@ mod tests {
 
     #[test]
     fn derived_surfaces_match_the_resolved_css() {
-        // "Inspector surface over the dark base resolves to rgb(31 32 35)."
+        // The rail of the Dark theme is rgb(31, 32, 35).
         assert_eq!(DARK.rail(), rgb(0x1f2023));
         assert_eq!(DARK.surface_2(), rgb(0x232427));
         assert_eq!(DARK.border(), rgba(0xf8f9fb1a));
@@ -949,7 +1044,8 @@ mod tests {
         assert_eq!(named("gray", false), GRAY);
         assert_eq!(named("blue", false), BLUE);
         assert_eq!(named("purple", false), PURPLE);
-        // Unknown names and the native transparency themes are Dark.
+        // An unknown name, and the name of a theme with a transparent
+        // window, give Dark.
         assert_eq!(named("vibrancy", false), DARK);
         assert_eq!(named("nonsense", false), DARK);
     }

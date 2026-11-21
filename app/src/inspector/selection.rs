@@ -1,7 +1,7 @@
-//! The inspector with several items selected (the multi-select state of
-//! `Inspector.tsx`): a stack of the last covers chosen, how many are
-//! selected, the notes, sources, folders and tags they all share, a rating
-//! that applies to all of them, and their media count and size.
+//! Draws the inspector when several items are selected. It shows a stack of
+//! the covers that were selected last, how many items are selected, the
+//! notes, sources, folders and tags that all of them share, a rating that
+//! applies to all of them, and their media count and size.
 use super::stack::{self, Pose, Stack};
 use super::turned::{self, Shape, Turned};
 use super::{Inspector, Mode, PREVIEW, Rate, fitted};
@@ -22,12 +22,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// A new selection's summary that takes longer than this gives way to the
-/// loading state (`useSelectionSummary`'s 250 ms timer); until then the rail
-/// keeps what it showed.
+/// How long the rail waits for the summary of a new selection before it
+/// shows the loading state. Until then it keeps what it showed.
 const LOADING_AFTER: Duration = Duration::from_millis(250);
 
-/// A stack card may be leaving while six others show.
+/// The names under which the thumbnail cache keeps the covers of the stack
+/// decoded. There are seven, because one card can be fading out while six
+/// others are shown.
 const STACK_PINS: [&str; stack::CARDS + 1] = [
     "inspector-stack-0",
     "inspector-stack-1",
@@ -38,12 +39,13 @@ const STACK_PINS: [&str; stack::CARDS + 1] = [
     "inspector-stack-6",
 ];
 
-/// The summary on display and the selection it describes.
+/// Holds the summary that the rail shows and the selection it describes.
 pub(super) struct Shown {
     pub(super) ids: Vec<RootId>,
-    /// What an edit of the selection shown addresses, loaded or not.
+    /// The items that an edit made in the rail applies to: the whole
+    /// selection that is shown, also the items the grid has not loaded.
     pub(super) target: SelectionTarget,
-    /// `None` when reading the summary failed.
+    /// The summary. It is `None` when reading it failed.
     pub(super) summary: Option<SelectionSummary>,
     /// The key the notes field was set with for this selection.
     key: u64,
@@ -51,30 +53,34 @@ pub(super) struct Shown {
 
 pub(super) struct SelectionState {
     pub(super) notes: Entity<TextInput>,
-    /// The selected items in the order they were chosen, which decides the
-    /// covers the stack shows.
+    /// The selected items in the order in which they were selected. This
+    /// order decides which covers the stack shows.
     order: Vec<RootId>,
     pub(super) shown: Option<Shown>,
-    /// The selection whose summary is on its way.
+    /// The selection whose summary has been asked for and has not arrived.
     asked: Option<Vec<RootId>>,
-    /// The selection shown loading, since when, once its summary has taken
-    /// longer than [`LOADING_AFTER`].
+    /// The selection for which the loading state is shown, and the time the
+    /// loading state began. It is set when the summary has taken longer than
+    /// [`LOADING_AFTER`].
     loading: Option<(Vec<RootId>, Instant)>,
     waiting: Option<Task<()>>,
     stack: Stack,
-    /// Each stacked cover's size, kept while it leaves the selection.
+    /// The width and height of each cover in the stack. They are kept so
+    /// that a card can still be drawn while it fades out, after its item has
+    /// left the selection.
     sizes: HashMap<String, Option<(u32, u32)>>,
-    /// The turned cards drawn so far, by cover, with the shape and rail
-    /// colour they were drawn for.
+    /// The turned cards that have been drawn, by the cover's hash, each with
+    /// the shape and the rail colour it was drawn for.
     turned: HashMap<String, (Shape, [u8; 3], Turned)>,
-    /// Covers whose turned card is being drawn.
+    /// The hashes of the covers whose turned card is being drawn.
     turning: HashSet<String>,
     keys: u64,
 }
 
-/// The selection in the order it was chosen: what was selected before keeps
-/// its place, and what was added follows in grid order with the item last
-/// chosen at the end.
+/// Returns the selected items in the order in which they were selected. The
+/// items of `previous` that are still selected keep their order. The newly
+/// selected items follow in the grid's order, except that the item selected
+/// last, `focus`, comes at the end.
 fn chosen_order(previous: &[RootId], selected: &[RootId], focus: Option<RootId>) -> Vec<RootId> {
     let selected_set = selected.iter().copied().collect::<HashSet<_>>();
     let mut order = previous
@@ -120,14 +126,15 @@ impl SelectionState {
         }
     }
 
-    /// Whether the summary on display is the current selection's.
+    /// Returns true if the summary that is shown is for the current
+    /// selection.
     pub(super) fn ready(&self) -> bool {
         self.shown
             .as_ref()
             .is_some_and(|shown| shown.ids == self.order)
     }
 
-    /// Whether the current selection is shown loading.
+    /// Returns true if the loading state is shown for the current selection.
     pub(super) fn loading(&self) -> bool {
         !self.ready()
             && self
@@ -136,16 +143,17 @@ impl SelectionState {
                 .is_some_and(|(ids, _)| *ids == self.order)
     }
 
-    /// Whether the rail can show the current selection: its summary, or
-    /// the loading state.
+    /// Returns true if the rail can draw the current selection, either with
+    /// its summary or in the loading state.
     pub(super) fn showable(&self) -> bool {
         self.ready() || self.loading()
     }
 }
 
 impl Inspector {
-    /// Follows the grid's selection, and asks for the summary of a new
-    /// multiple selection. The summary shown so far stays until it arrives.
+    /// Records the grid's new selection, and asks for the summary if several
+    /// items are now selected. The summary shown so far stays until the new
+    /// one arrives.
     pub(super) fn selection_changed(&mut self, cx: &mut Context<Self>) {
         let (selected, focus) = {
             let session = self.session.read(cx);
@@ -159,7 +167,7 @@ impl Inspector {
     }
 
     /// Asks for the summary of the current selection if the rail is to show
-    /// it and it is neither shown nor on its way.
+    /// it, and it is not shown yet and has not been asked for.
     pub(super) fn ensure_summary(&mut self, cx: &mut Context<Self>) {
         if !self.holds()
             && self.wanted(cx) == Mode::Selection
@@ -170,17 +178,17 @@ impl Inspector {
         }
     }
 
-    /// Reads the selection's summary again after it was edited from outside
-    /// the rail, such as by a rating key.
+    /// Reads the summary of the selection again after something outside the
+    /// rail edited the selection, for example a rating key.
     pub fn selection_edited(&mut self, cx: &mut Context<Self>) {
         if self.wanted(cx) == Mode::Selection {
             self.read_summary(cx);
         }
     }
 
-    /// Reads the summary of the current selection (`selection_summary`, as
-    /// `getTargetSelectionSummary` does), and shows it if the selection is
-    /// still the same when it arrives.
+    /// Reads the summary of the current selection with the library's
+    /// `selection_summary`, and shows it if the selection is still the same
+    /// when it arrives.
     fn read_summary(&mut self, cx: &mut Context<Self>) {
         let ids = self.selection.order.clone();
         let target =
@@ -193,8 +201,8 @@ impl Inspector {
         self.read_summary_of(ids, target, cx);
     }
 
-    /// Reads the summary shown again after an edit, even when the rail is
-    /// pinned to it and the grid has another selection.
+    /// Reads the summary that is shown again after an edit. This also works
+    /// when the rail is pinned to it and the grid has another selection.
     pub(super) fn reread_summary(&mut self, cx: &mut Context<Self>) {
         if let Some(shown) = &self.selection.shown {
             let (ids, target) = (shown.ids.clone(), shown.target.clone());
@@ -202,7 +210,9 @@ impl Inspector {
         }
     }
 
-    /// The source addresses every selected item shares, or none.
+    /// Returns the source addresses that every selected item has, which is
+    /// an empty list when the items share none. Returns `None` if no summary
+    /// is shown.
     pub(super) fn selection_sources(&self) -> Option<Vec<String>> {
         let summary = self.selection.shown.as_ref()?.summary.as_ref()?;
         Some(summary.shared_source_urls.clone().unwrap_or_default())
@@ -218,8 +228,9 @@ impl Inspector {
         let refreshing = |shown: &Option<Shown>, ids: &[RootId]| {
             shown.as_ref().is_some_and(|shown| shown.ids == ids)
         };
-        // A summary read again stays up meanwhile; a new selection's shows
-        // the loading state if it is slow.
+        // When the summary that is shown is read again, it stays on screen
+        // until the new one arrives. For a new selection the loading state
+        // is shown if the summary takes longer than `LOADING_AFTER`.
         if !refreshing(&self.selection.shown, &ids) {
             let waited = ids.clone();
             self.selection.waiting = Some(cx.spawn(async move |this, cx| {
@@ -283,8 +294,8 @@ impl Inspector {
         .detach();
     }
 
-    /// Applies an edit to every item in the selection shown, then reads its
-    /// summary again.
+    /// Applies an edit to every item of the selection that is shown, and
+    /// then reads its summary again.
     fn edit_selection_as(
         &mut self,
         report: Report,
@@ -301,7 +312,8 @@ impl Inspector {
         else {
             return;
         };
-        // The focused item was edited with the rest.
+        // The details of the focused item are read again, because it was
+        // edited together with the others.
         crate::session::edit_then(
             &self.session,
             report,
@@ -320,8 +332,9 @@ impl Inspector {
         );
     }
 
-    /// Notes typed for the whole selection. Items that already have notes
-    /// would lose them, which the Electron app confirms first.
+    /// Saves notes that were typed for the whole selection. If some of the
+    /// items already have notes, the new notes would replace them, so the
+    /// user is asked to confirm first.
     pub(super) fn commit_selection_notes(
         &mut self,
         key: u64,
@@ -347,8 +360,8 @@ impl Inspector {
                     )
                 });
         if has_notes && notes != shared {
-            // The field shows the notes the items share until the change is
-            // confirmed (`confirmSelectionOverwrite`).
+            // The field shows the notes that the items share again until the
+            // user confirms the change.
             let count = shown
                 .summary
                 .as_ref()
@@ -366,7 +379,8 @@ impl Inspector {
         if self.selection.stack.is_empty() {
             return;
         }
-        // The stack starts over the next time several items are selected.
+        // The stack is emptied, so that it starts again without cards the
+        // next time several items are selected.
         self.selection.stack = Stack::default();
         self.selection.sizes.clear();
         self.selection.turning.clear();
@@ -381,9 +395,10 @@ impl Inspector {
         });
     }
 
-    /// `StackedPreview`: up to six covers, the newest on top and the older
-    /// ones under a rail-coloured shade, the turned ones drawn turned
-    /// (`turned.rs`).
+    /// Draws the stack of up to six covers. The cover selected last is on
+    /// top. The covers under it have a shade in the rail colour over them.
+    /// A card that is turned is drawn from the bitmaps that `turned.rs`
+    /// makes. Returns `None` if there is no card to draw.
     fn stack(
         &mut self,
         sample: &[String],
@@ -431,7 +446,7 @@ impl Inspector {
                 cache.pin(holder, thumbnail);
             }
         });
-        // `.stackContainer`: 80% of the rail, 200px tall.
+        // The stack's area is 80% of the rail's width and 200px high.
         let mut container = div().relative().w(relative(0.8)).h(px(PREVIEW));
         let device = window.scale_factor();
         let rail = {
@@ -439,7 +454,8 @@ impl Inspector {
             let byte = |value: f32| (value * 255.).round() as u8;
             [byte(rail.b), byte(rail.g), byte(rail.r)]
         };
-        // Turned cards no longer in the stack give back their bitmaps.
+        // The bitmaps of turned cards that are no longer in the stack are
+        // released.
         let present = cards
             .iter()
             .map(|card| card.hash.clone())
@@ -459,7 +475,7 @@ impl Inspector {
         }
         for ((card, thumbnail), size) in cards.into_iter().zip(thumbnails).zip(sizes) {
             let resource = Resource::Path(thumbnail.clone().into());
-            // `.previewImage`: the thumbnail at its own size, at most 200px.
+            // The thumbnail is shown at its own size, at most 200px each way.
             let natural = self
                 .thumbnails
                 .read(cx)
@@ -481,7 +497,8 @@ impl Inspector {
                 };
                 self.turned_card(&card.hash, &resource, shape, rail, cx)
             };
-            // `.stackItem`
+            // Each card is centred in an area of the stack's size, moved by the
+            // card's offset.
             let item = div()
                 .absolute()
                 .top(px(card.offset.1))
@@ -492,8 +509,9 @@ impl Inspector {
                 .justify_center()
                 .opacity(card.opacity);
             let item = match turned {
-                // The turned card, scaled from its resting size while it
-                // enters.
+                // The card is drawn from its turned bitmap. The bitmap has the
+                // size of the card when it is not moving, so it is scaled
+                // while the card enters.
                 Some((image, mask, (card_width, card_height))) => {
                     let grow = card.scale / card.pose.scale();
                     item.child(
@@ -512,12 +530,12 @@ impl Inspector {
                             ),
                     )
                 }
-                // A straight card, or a turned one while its bitmap is being
-                // drawn.
+                // A card that is not turned is drawn here, and so is a turned
+                // card whose bitmap is not drawn yet.
                 None => {
                     let (width, height) = (width * card.scale, height * card.scale);
                     item.child(
-                        // `.previewFrame` with `.previewGlass`'s shadow.
+                        // The frame has rounded corners and a shadow around it.
                         div()
                             .relative()
                             .w(px(width.round()))
@@ -535,7 +553,7 @@ impl Inspector {
                                     .rounded(px(theme::RADIUS_MD))
                                     .object_fit(ObjectFit::Cover),
                             )
-                            // `.stackShade`
+                            // The shade is a layer in the rail colour over the cover.
                             .child(
                                 div()
                                     .absolute()
@@ -543,7 +561,8 @@ impl Inspector {
                                     .rounded(px(theme::RADIUS_MD))
                                     .bg(shade),
                             )
-                            // The glass edge: a 1px ring over the image.
+                            // A 1px ring, black at 10%, is drawn over the edge of
+                            // the image.
                             .child(
                                 div()
                                     .absolute()
@@ -569,10 +588,11 @@ impl Inspector {
         )
     }
 
-    /// The bitmaps of a turned card, once drawn for this shape. The first
-    /// time a shape is asked for, and the cover is decoded, it is drawn off
-    /// the drawing thread; until then the card lies straight. A card drawn
-    /// for another shape is shown until the new one is ready.
+    /// Returns the bitmaps of a turned card, if they have been drawn. When
+    /// none has been drawn for this shape and rail colour, and the cover is
+    /// decoded, the card is drawn off the drawing thread. Until it is done,
+    /// this returns the bitmaps that were drawn for an earlier shape, or
+    /// `None`, in which case the caller draws the card without the turn.
     fn turned_card(
         &mut self,
         hash: &str,
@@ -584,7 +604,8 @@ impl Inspector {
         let current = self.selection.turned.get(hash);
         let fresh = current.is_some_and(|(drawn, colour, _)| *drawn == shape && *colour == rail);
         if !fresh && !self.selection.turning.contains(hash) {
-            // The cover is still loading: the view repaints when it is ready.
+            // If the cover is not decoded yet, nothing is started here. The
+            // view is drawn again when the cover is decoded.
             if let Some(cover) = self.thumbnails.read(cx).image(resource) {
                 self.selection.turning.insert(hash.to_owned());
                 let hash = hash.to_owned();
@@ -592,7 +613,8 @@ impl Inspector {
                 cx.spawn(async move |this, cx| {
                     let drawn = job.await;
                     let _ = this.update(cx, |this, cx| {
-                        // The stack was let go while this was drawn.
+                        // The stack was emptied while the card was being drawn, so
+                        // the bitmaps are released and not kept.
                         if !this.selection.turning.remove(&hash) {
                             if let Some(drawn) = drawn {
                                 crate::atlas::release(drawn.card, cx);
@@ -619,13 +641,14 @@ impl Inspector {
             .map(|(_, _, turned)| (turned.card.clone(), turned.mask.clone(), turned.size))
     }
 
-    /// `.summarySpinner`: the property row's spinner, turning from when the
-    /// selection started loading.
+    /// Returns the spinner of a property row. Its rotation is counted from
+    /// the time the selection started loading.
     fn spinner(&self, window: &mut Window, cx: &mut App) -> Svg {
         ui::property_row::spinner(self.loading_since(), window, cx)
     }
 
-    /// When the selection shown loading started loading.
+    /// Returns the time at which the loading state of the selection began,
+    /// or the current time if no loading state is shown.
     fn loading_since(&self) -> Instant {
         self.selection
             .loading
@@ -633,8 +656,9 @@ impl Inspector {
             .map_or_else(Instant::now, |(_, since)| *since)
     }
 
-    /// `.pendingSection` and `.pendingRating`: a 20px line with the spinner
-    /// at its end, in place of what the selection shares.
+    /// Returns a line 20px high with the spinner at its right end. It is
+    /// drawn in place of a value that the selection shares while the summary
+    /// is loading.
     fn pending(&self, window: &mut Window, cx: &mut App) -> Div {
         div()
             .min_h(px(20.))
@@ -644,9 +668,9 @@ impl Inspector {
             .child(self.spinner(window, cx))
     }
 
-    /// The multi-select state's column: the summary on display, or while a
-    /// new selection's loads, its count and spinners where the shared values
-    /// go (`summaryPending`).
+    /// Draws the column for several selected items. It shows the summary, or,
+    /// while the summary of a new selection is loading, the number of
+    /// selected items and spinners in the places of the shared values.
     pub(super) fn selection_body(
         &mut self,
         window: &mut Window,
@@ -680,7 +704,8 @@ impl Inspector {
             .unwrap_or_default();
         panel = panel
             .child(self.palette(&[], window, cx))
-            // `.selectionNameField`
+            // The line that says how many items are selected takes the place
+            // of the name field.
             .child(
                 div()
                     .w_full()
@@ -717,7 +742,9 @@ impl Inspector {
                     .iter()
                     .filter_map(|id| session.tags.get(&id.0).cloned())
                     .collect::<Vec<_>>();
-                // As production lists them, unsorted after `tags.get_many`.
+                // The tags are listed in the order in which the library
+                // returns tags that are read by id: by namespace, then by
+                // name, then by id.
                 crate::tags::sort_as_library(&mut tags);
                 tags
             });
@@ -733,10 +760,10 @@ impl Inspector {
             }
         } else {
             let folders = self.folder_chips(&entries, &shared_folders, window, cx);
-            // i18n: the section's English title; picker_section shows it in the language
+            // i18n: the section's English title, which picker_section translates
             panel = panel.child(self.picker_section("Folders", folders, cx));
             let tags = self.tag_chips(tags, false, window, cx);
-            // i18n: the section's English title; picker_section shows it in the language
+            // i18n: the section's English title, which picker_section translates
             panel = panel.child(self.picker_section("Tags", tags, cx));
         }
 
@@ -767,7 +794,8 @@ impl Inspector {
                     cx,
                 ));
         }
-        // The whole selection, loaded or not.
+        // The export takes the whole selection, also the items the grid has
+        // not loaded.
         let target = self.session.read(cx).selection_target();
         if let Some(target) = target.filter(|_| count > 0) {
             properties = properties.child(div().mt(px(12.)).child(Self::export_row(

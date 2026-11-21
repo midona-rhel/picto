@@ -1,9 +1,14 @@
-//! The Inbox review over the media view and Quick Look, as `GridScreen.tsx`
-//! wires `InboxReviewControls` to its reviewer: the pill shows while the item
-//! being viewed is in the Inbox, a press (or its shortcut) moves the view on
-//! at once and saves through the session in the background, and a reject
-//! that deletes goes through the item menu's permanent delete, which asks
-//! first when it cannot be undone.
+//! The Inbox review in the media view and in Quick Look. A pill with an
+//! Accept button and a Reject button is shown while the item being viewed is
+//! in the Inbox. A click on a button, or the button's shortcut, shows the
+//! next item at once and saves the review through the session in the
+//! background. When the settings say that rejected items are deleted, a
+//! reject goes through the item menu's permanent delete, which asks for
+//! confirmation first when the deletion cannot be undone.
+//!
+//! `Pending` is a review that is waiting for the next page of items to load.
+//! Its item is the last item that is loaded but not the last item in the
+//! list, so the item that follows it is not known yet.
 use super::Shell;
 use crate::i18n::t;
 use crate::viewer::review::{self, Decision, Flash, View};
@@ -12,30 +17,33 @@ use picto_library::selection::SelectionTarget;
 use picto_library::{Lifecycle, RootId};
 use std::time::Instant;
 
-/// A review waiting for the items after the loaded ones: the reviewed item
-/// is the last loaded, but not the last in the list.
-/// Tells a review key's first press from the repeats of holding it down,
-/// which review nothing (`event.repeat`). GPUI hands an action no repeat
-/// flag, so the keys around it are watched: a review key is held from its
-/// press until it is released or another key is pressed.
+/// Tells the first press of a review key from the repeats that the system
+/// sends while the key is held down. A repeat reviews nothing. GPUI does not
+/// tell an action whether its key press is a repeat, so the shell reports
+/// each key press here before and after it is dispatched: a review key
+/// counts as held from its press until it is released or another key is
+/// pressed.
 #[derive(Default)]
 pub(super) struct ReviewKeys {
-    /// The review key held down.
+    /// The review key that is held down, if one is.
     held: Option<String>,
-    /// A review key's action ran for the keystroke being dispatched.
+    /// True when a review key's action ran for the key press that is being
+    /// dispatched.
     pressed: bool,
 }
 
 impl ReviewKeys {
-    /// Before a keystroke is dispatched: another key ends the hold.
+    /// Called before a key press is dispatched. A press of a key other than
+    /// the held review key ends the hold.
     fn before(&mut self, key: &str) {
         if self.held.as_deref() != Some(key) {
             self.held = None;
         }
     }
 
-    /// From the review action: whether its keystroke repeats the held key.
-    /// A first press is remembered for [`Self::after`].
+    /// Called by the review action. Returns true when the key press that
+    /// ran the action is a repeat of the held key. Otherwise it records, for
+    /// [`Self::after`], that a review key was pressed, and returns false.
     fn repeat(&mut self) -> bool {
         if self.held.is_some() {
             return true;
@@ -44,7 +52,8 @@ impl ReviewKeys {
         false
     }
 
-    /// After a keystroke was dispatched: the review key it pressed is held.
+    /// Called after a key press was dispatched. If the key press ran a
+    /// review action, the key counts as held from now on.
     fn after(&mut self, key: &str) {
         if std::mem::take(&mut self.pressed) {
             self.held = Some(key.to_owned());
@@ -64,13 +73,13 @@ pub(super) struct Pending {
 }
 
 impl Shell {
-    /// Whether the media view or Quick Look is open.
+    /// Returns whether the media view or Quick Look is open.
     pub(super) fn viewing(&self, cx: &App) -> bool {
         self.session.read(cx).viewer || self.quick_look.read(cx).is_open()
     }
 
-    /// `resolveInboxReviewItemId`: the item being viewed, while it is in the
-    /// Inbox.
+    /// Returns the item that the media view or Quick Look shows, if that
+    /// item is in the Inbox.
     fn review_item(&self, cx: &App) -> Option<RootId> {
         if !self.viewing(cx) {
             return None;
@@ -90,7 +99,7 @@ impl Shell {
         }
     }
 
-    /// The item `view` shows, or none while it is closed.
+    /// Returns the item that `view` shows, or `None` while `view` is closed.
     fn shown_in(&self, view: View, cx: &App) -> Option<RootId> {
         let open = match view {
             View::QuickLook => self.quick_look.read(cx).is_open(),
@@ -110,8 +119,9 @@ impl Shell {
             .collect()
     }
 
-    /// A press of Accept or Reject, or its key: reviews the item being
-    /// viewed and flashes the button when the review is taken.
+    /// Handles a click on the Accept or the Reject button, and the button's
+    /// key. It reviews the item being viewed, and starts the button's flash
+    /// if the review was taken.
     pub(super) fn press_review(
         &mut self,
         decision: Decision,
@@ -130,8 +140,9 @@ impl Shell {
         }
     }
 
-    /// The review shortcuts while a viewer has the keyboard: a key held
-    /// down reviews once, not once per repeat.
+    /// Handles a review shortcut while the media view or Quick Look is
+    /// open. A key that is held down reviews one item, not one item for each
+    /// repeat.
     pub(super) fn review_key(
         &mut self,
         decision: Decision,
@@ -144,8 +155,11 @@ impl Shell {
         self.press_review(decision, window, cx);
     }
 
-    /// `review` in `inboxReview.ts`. False when the review is not taken: a
-    /// question is open, or the item is already reviewed.
+    /// Reviews `id` with `decision`. It shows the next item and saves the
+    /// review. When the next item is not loaded yet, it loads the next page
+    /// of items first, and `continue_review` does the rest. Returns false
+    /// when the review is not taken: while a confirmation dialog is open,
+    /// and when the item is already reviewed.
     fn review(
         &mut self,
         id: RootId,
@@ -165,9 +179,11 @@ impl Shell {
             self.move_review_on(ticket, view, destination, window, cx);
             self.save_review(ticket, id, decision, window, cx);
         } else {
-            // The next item is in the window that follows, not held: load
-            // it before saving, so the item is still listed to find its
-            // successor from (the next window starts a page before it).
+            // The next item is not loaded: it is in the items after the
+            // loaded ones. Those are loaded before the review is saved, so
+            // that the reviewed item is still in the list when the item
+            // after it is looked up (the items loaded next start one page
+            // before the reviewed item).
             self.pending_review = Some(Pending {
                 ticket,
                 id,
@@ -179,7 +195,9 @@ impl Shell {
         true
     }
 
-    /// The page a review waited for has arrived (or failed to).
+    /// Continues the review that was waiting for the next page of items.
+    /// The session has stopped loading by then: the page has arrived, or it
+    /// could not be loaded.
     pub(super) fn continue_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let session = self.session.read(cx);
         if session.loading || session.window_loading() {
@@ -197,8 +215,9 @@ impl Shell {
         let items = self.listed_ids(cx);
         let loaded = self.reviewer.following(&items, id).flatten();
         if loaded.is_none() && self.session.read(cx).has_following() {
-            // The next items did not load: stay on the item, unsaved, so
-            // the review can be tried again rather than walking backwards.
+            // The next items did not load. The view stays on the item and
+            // the review is not saved, so the user can try the review
+            // again. Going on would show the item before this one.
             self.reviewer.abandon(ticket, id);
             crate::ui::notify::error(
                 review_failure(decision),
@@ -207,7 +226,7 @@ impl Shell {
             );
             return;
         }
-        // Only while the view is still on the reviewed item.
+        // The view moves on only if it still shows the reviewed item.
         if self.shown_in(view, cx) == Some(id) {
             let destination = loaded.or_else(|| self.reviewer.preceding(&items, id));
             self.move_review_on(ticket, view, destination, window, cx);
@@ -215,8 +234,11 @@ impl Shell {
         self.save_review(ticket, id, decision, window, cx);
     }
 
-    /// `moveOn`: shows the item the review lands on, or closes the view
-    /// when none is left, leaving nothing selected.
+    /// Shows `destination` in `view`, which is the item to view after the
+    /// reviewed one. When `destination` is `None`, no item is left to
+    /// review: the view is closed and the selection is cleared. It does
+    /// nothing unless `ticket` is the latest review and has not moved the
+    /// view yet (`Reviewer::move_on`).
     fn move_review_on(
         &mut self,
         ticket: u64,
@@ -228,7 +250,9 @@ impl Shell {
         if !self.reviewer.move_on(ticket, destination) {
             return;
         }
-        // The rest of a flick must not pan or zoom the next item.
+        // After a trackpad flick the system keeps sending scroll events.
+        // They are suppressed, so that they do not pan or zoom the next
+        // item.
         crate::ui::momentum::suppress();
         self.show_for_review(view, destination, window, cx);
         if destination.is_none() {
@@ -237,8 +261,9 @@ impl Shell {
         }
     }
 
-    /// `showReviewItem`: shows and selects `item` in `view`, opening the
-    /// view again if the last item closed it, or closes `view` for none.
+    /// Shows and selects `item` in `view`, and opens the view again if it
+    /// was closed. When `item` is `None`, or is not in the session's list of
+    /// items, it closes `view`.
     fn show_for_review(
         &mut self,
         view: View,
@@ -293,7 +318,8 @@ impl Shell {
             }
             Decision::Reject => Lifecycle::Trash,
         };
-        // The session reports a failure.
+        // When the edit fails, the session shows a notification with this
+        // title.
         crate::session::edit_then_in(
             &self.session,
             crate::session::Report::failure(review_failure(decision)),
@@ -305,8 +331,10 @@ impl Shell {
         );
     }
 
-    /// The save is over: a review that did not happen takes the view back
-    /// to the item, while the view is still where it left it.
+    /// Called when the save of the review `ticket` of `id` is over.
+    /// `committed` says whether the review was saved. When it was not
+    /// saved, and the view still shows what the review moved it to, the
+    /// view goes back to the item.
     fn review_saved(
         &mut self,
         ticket: u64,
@@ -317,7 +345,8 @@ impl Shell {
     ) {
         let listed = self.listed_ids(cx).contains(&id);
         let view = self.review_view(cx);
-        // The view the review left; a closed one is the one it closed.
+        // `shown` is what the view shows now. It is `None` while the view
+        // is closed, which is how a review of the last item leaves it.
         let shown = self.shown_in(view, cx);
         if let Some(back) = self.reviewer.saved(ticket, id, committed, listed, shown) {
             self.show_for_review(view, Some(back), window, cx);
@@ -325,8 +354,10 @@ impl Shell {
         cx.notify();
     }
 
-    /// A key pressed while a review button has the focus shows its focus
-    /// ring, as the keyboard makes `:focus-visible` match.
+    /// Called after each key press is dispatched. It reports the key to
+    /// `review_keys`. When a review button got the keyboard focus from a
+    /// click, a key press makes the button's focus ring show, unless Command
+    /// or Control is held.
     pub(super) fn review_keystroke(&mut self, event: &KeystrokeEvent, cx: &mut Context<Self>) {
         self.review_keys.after(&event.keystroke.key);
         let modifiers = event.keystroke.modifiers;
@@ -341,13 +372,15 @@ impl Shell {
         }
     }
 
-    /// Before a keystroke reaches the window's bindings.
+    /// Called before a key press reaches the window's key bindings. It
+    /// reports the key to `review_keys`.
     pub(super) fn review_keystroke_coming(&mut self, event: &KeystrokeEvent) {
         self.review_keys.before(&event.keystroke.key);
     }
 
-    /// The list changed: saved items that left it stop being skipped, and
-    /// a review waiting for the next page goes on.
+    /// Called when the session's list of items has changed. It tells the
+    /// reviewer, which stops skipping the saved items that have left the
+    /// list, and it continues a review that was waiting for the next page.
     pub(super) fn review_items_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let items = self.listed_ids(cx);
         self.reviewer.items_changed(&items);
@@ -356,13 +389,15 @@ impl Shell {
         }
     }
 
-    /// The pill, while the item being viewed is in the Inbox.
+    /// Returns the review pill while the item being viewed is in the Inbox,
+    /// and `None` otherwise.
     pub(super) fn review_controls(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.review_flash.is_some_and(|flash| flash.over()) {
             self.review_flash = None;
         }
         if self.review_item(cx).is_none() {
-            // The buttons are gone, and their focus with them.
+            // The buttons are not drawn, so neither of them has the
+            // keyboard focus any more.
             self.review_focus = None;
             return None;
         }
@@ -375,7 +410,8 @@ impl Shell {
         Some(
             review::controls(paused, self.review_flash, move |decision, window, cx| {
                 let _ = shell.update(cx, |this, cx| {
-                    // A clicked button takes the focus.
+                    // A clicked button takes the keyboard focus. Its focus
+                    // ring is not shown until a key is pressed.
                     this.review_focus = Some((decision, false));
                     this.press_review(decision, window, cx)
                 });
@@ -393,7 +429,8 @@ impl Shell {
     }
 }
 
-/// `reportFailure`'s title for a review that could not be saved.
+/// Returns the title of the notification that says a review could not be
+/// saved.
 fn review_failure(decision: Decision) -> &'static str {
     match decision {
         Decision::Accept => t("Unable to accept item"),
@@ -422,7 +459,7 @@ mod tests {
         keys.released();
         keys.before("x");
         assert!(!keys.repeat());
-        // A key that reviews nothing holds nothing.
+        // A key that runs no review action does not count as held.
         keys.after("x");
         keys.released();
         keys.before("right");

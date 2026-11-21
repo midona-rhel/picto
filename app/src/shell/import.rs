@@ -1,11 +1,10 @@
 //! The parts of importing that belong to the main window. The first part is
 //! the handling of files that are dragged from the operating system over
 //! the window and dropped on it, with the overlay that is drawn while they
-//! are over it (the drop handler and `.dropOverlay` of production's
-//! `GridScreen.tsx`). The second part is the import commands of the menus
-//! and keys: Import Files, Import Folder and Paste Import. All of them
-//! import into the destination that the grid shows, and the import itself is
-//! done by [`crate::imports`].
+//! are over it. The second part is the import commands of the menus and
+//! keys: Import Files, Import Folder and Paste Import. All of them import
+//! into the destination that the grid shows, and the import itself is done
+//! by [`crate::imports`].
 use super::Shell;
 use crate::i18n::t;
 use crate::imports::{self, plan::Destination};
@@ -93,7 +92,7 @@ impl Shell {
                 // operating system as dragged files (`drag::OUT_GUARD`),
                 // files that come over the window are taken to be those
                 // items. They are already in the library, so they are not
-                // stored for an import (production's `isInternalDragOrigin`).
+                // stored for an import.
                 if crate::grid::drag::model(cx).read(cx).dragging_out() {
                     return;
                 }
@@ -141,13 +140,13 @@ impl Shell {
     }
 
     /// Returns the overlay that is drawn over the grid's area while files
-    /// from the operating system are over the window (production's
-    /// `.dropOverlay`), or `None` when there are no such files or a drop
-    /// would import nothing. The overlay has a 2 px border in the primary
-    /// colour and a fill of the primary colour at 10% opacity. A badge 24 px
-    /// above its bottom edge says "Drop files to import", with "into
-    /// current folder" under it when the destination is a folder. The
-    /// overlay has no listeners, so pointer events pass through it.
+    /// from the operating system are over the window, or `None` when there
+    /// are no such files or a drop would import nothing. The overlay has a
+    /// 2 px border in the primary colour and a fill of the primary colour at
+    /// 10% opacity. A badge 24 px above its bottom edge says "Drop files to
+    /// import", with "into current folder" under it when the destination is
+    /// a folder. The overlay has no listeners, so pointer events pass
+    /// through it.
     pub(super) fn drop_overlay(&mut self, cx: &mut Context<Self>) -> Option<Div> {
         // The drag can end without the window being told, for example
         // when it is cancelled outside the window. `file_drag` is cleared

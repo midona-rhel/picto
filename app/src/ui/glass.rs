@@ -1,21 +1,23 @@
-//! The glass surface of every floating panel (`surfaces.css`
-//! `.glassSurface` and `.floatingGlassSurface::after`): the glass fill, the
-//! panel shadow, and a 1px edge brighter on top (`--glass-border-top`) than
-//! at the sides (`--glass-border-side`) and the bottom
-//! (`--glass-border-bottom`).
+//! Draws the glass surface of every floating panel: the translucent glass
+//! fill, the panel's shadow, and a 1px edge that is brighter at the top
+//! (`Theme::glass_border_top`) than at the sides (`Theme::glass_border`) and
+//! at the bottom (`Theme::glass_border_bottom`).
 use crate::theme;
 use gpui::*;
 
-/// The alpha an edge laid over the bottom edge's colour needs so that the
-/// two together show `wanted`: `1 − (1 − bottom)(1 − a) = wanted`.
+/// Returns the alpha that a colour needs when it is drawn over the bottom
+/// edge's colour, so that the two together have the alpha `wanted`. `bottom`
+/// is the alpha of the bottom edge's colour. The result `a` solves
+/// `1 − (1 − bottom)(1 − a) = wanted`.
 fn laid_over(wanted: f32, bottom: f32) -> f32 {
     1. - (1. - wanted) / (1. - bottom)
 }
 
-/// The three glass edges, inside a box of `radius` that fills its parent.
-/// One border has one colour, so the bottom's goes all the way round and the
-/// sides and the top are laid over it, white at the strengths that add up
-/// to the tokens'.
+/// Returns the three glass edges, in a box with the corner radius `radius`
+/// that fills its parent. One border can have only one colour. So the bottom
+/// edge's colour is drawn all the way round, and the colours of the sides and
+/// of the top are drawn over it at the alphas that [`laid_over`] returns. Each
+/// edge then shows at the alpha of its own colour.
 pub fn glass_edges(radius: f32, cx: &App) -> Div {
     let theme = theme::theme(cx);
     let bottom = theme.glass_border_bottom();
@@ -41,11 +43,11 @@ pub fn glass_edges(radius: f32, cx: &App) -> Div {
         )
 }
 
-/// A glass panel with corners of `radius`: a div to lay out and fill as
-/// usual, whose glass edges are drawn over its contents, as a border would
-/// be, once it renders. The edges take no room. What the window drew behind
-/// it shows through its fill blurred (`--glass-blur`), and its shadow
-/// (`--shadow-panel`) is cut out beneath it.
+/// Returns a glass panel with the corner radius `radius`. The caller lays it
+/// out and fills it like a div. Its glass edges are drawn over its contents,
+/// as a border would be, and take no room. What the window drew behind the
+/// panel shows through the fill, blurred by `Theme::glass_blur`. The panel's
+/// shadow (`Theme::panel_shadow`) is drawn only outside the panel.
 pub fn glass_panel(id: impl Into<ElementId>, radius: f32, cx: &App) -> GlassPanel {
     let theme = theme::theme(cx);
     let mut panel = GlassPanel::new(div().id(id).bg(theme.glass()), radius)
@@ -55,15 +57,17 @@ pub fn glass_panel(id: impl Into<ElementId>, radius: f32, cx: &App) -> GlassPane
     panel
 }
 
-/// The fill a glass panel in its own transparent window draws over the
-/// system's plain blur of what is behind the window
-/// ([`super::window_chrome::system_blur_behind`]), so that it shows what
-/// `glass` over a blur with `brightness` shows. A brightness below 1 is a
-/// black layer of `1 − brightness` over the blur, exactly. Above 1 there
-/// is no layer that multiplies, and a white layer of 0.4 comes nearest to
-/// `min(1, 3x)` over all of `x` (the two differ by at most 0.4, where the
-/// blur is black or a third bright, of which the glass lets a tenth
-/// through). The glass and the layer are then one colour.
+/// Returns the fill that a glass panel in its own transparent window draws
+/// over the system's plain blur of what is behind the window
+/// ([`super::window_chrome::system_blur_behind`]). With this fill the panel
+/// shows what `glass` shows over a blur whose brightness is multiplied by
+/// `brightness`. For a brightness below 1 the result is exact: it is a black
+/// layer with the alpha `1 − brightness` over the blur. For a brightness above
+/// 1 no layer can multiply the blur. A white layer with the alpha 0.4 comes
+/// nearest to `min(1, 3x)` over all values `x` of the blur. The two differ by
+/// at most 0.4, where the blur is black or a third bright, and the glass lets
+/// a tenth of that through. The glass and the layer are combined into the one
+/// colour that is returned.
 pub fn fill_over_system_blur(glass: Rgba, brightness: f32) -> Rgba {
     let (layer, strength) = if brightness <= 1. {
         (0., 1. - brightness)
@@ -86,10 +90,10 @@ pub fn fill_over_system_blur(glass: Rgba, brightness: f32) -> Rgba {
     }
 }
 
-/// The fill of a glass panel in its own transparent window where the
-/// system cannot blur what is behind the window: with nothing to blur it,
-/// the glass lets half as much through, so that what shows behind stays
-/// as faint as the blurred glass keeps it.
+/// Returns the fill of a glass panel in its own transparent window where the
+/// system cannot blur what is behind the window. This fill lets through half
+/// as much of what is behind the panel as `glass` does. What is behind the
+/// window is then about as faint as it is through the blurred glass.
 pub fn fill_without_blur(glass: Rgba) -> Rgba {
     Rgba {
         a: 1. - (1. - glass.a) / 2.,
@@ -98,13 +102,14 @@ pub fn fill_without_blur(glass: Rgba) -> Rgba {
 }
 
 /// A surface that shows what the window drew behind it through a backdrop
-/// blur (CSS `backdrop-filter`) and casts its drop shadows only outside its
-/// rounded shape, as CSS draws a `box-shadow`. Give it its fill as usual;
-/// set its shadows here rather than with `.shadow()`, which GPUI would draw
-/// beneath the fill as well, where the blur would take them in.
+/// blur, and that draws its drop shadows only outside its rounded shape. The
+/// caller gives it its fill as usual. The caller sets its shadows with
+/// `drop_shadows` and not with `.shadow()`, because GPUI draws a `.shadow()`
+/// beneath the fill as well, where the blur would include it.
 pub struct GlassPanel {
     panel: Stateful<Div>,
-    /// Added as the last child when the panel lays out.
+    /// The glass edges. They are added as the panel's last child when the
+    /// panel is laid out.
     edges: Option<Div>,
     radius: f32,
     backdrop: Option<BackdropFilter>,
@@ -112,7 +117,8 @@ pub struct GlassPanel {
 }
 
 impl GlassPanel {
-    /// `panel`, rounded to `radius`, with no blur or shadow yet.
+    /// Returns `panel` with its corners rounded to `radius`, and with no blur
+    /// and no shadow yet.
     pub fn new(panel: Stateful<Div>, radius: f32) -> Self {
         Self {
             panel: panel.rounded(px(radius)),
@@ -123,27 +129,29 @@ impl GlassPanel {
         }
     }
 
-    /// Shows what is behind the surface through `filter`.
+    /// Makes the surface show what is behind it through `filter`.
     pub fn backdrop_blur(mut self, filter: BackdropFilter) -> Self {
         self.backdrop = Some(filter);
         self
     }
 
-    /// Leaves what is behind the panel unblurred: for a panel alone in a
-    /// transparent window, where the window draws nothing behind it to blur.
+    /// Makes the panel show what is behind it without a blur. This is for a
+    /// panel that is alone in a transparent window, where the window draws
+    /// nothing behind the panel that could be blurred.
     pub fn without_backdrop_blur(mut self) -> Self {
         self.backdrop = None;
         self
     }
 
-    /// The surface's drop shadows, drawn outside it only.
+    /// Sets the surface's drop shadows, which are drawn only outside the
+    /// surface.
     pub fn drop_shadows(mut self, shadows: Vec<BoxShadow>) -> Self {
         self.shadows = shadows;
         self
     }
 
-    /// The panel's own opacity, which its blur and shadows, drawn outside
-    /// it, take too.
+    /// Returns the panel's own opacity. The blur and the shadows are not drawn
+    /// by the panel's div, so they are given the same opacity.
     fn opacity(&mut self) -> f32 {
         self.panel.style().opacity.unwrap_or(1.)
     }
@@ -177,8 +185,8 @@ impl IntoElement for GlassPanel {
     }
 }
 
-/// The panel lays out and paints as its div; before the div paints, the
-/// blurred backdrop and the cut-out shadow go beneath it.
+/// The panel is laid out and painted as its div. Before the div is painted,
+/// the blurred backdrop and the shadow are painted beneath it.
 impl Element for GlassPanel {
     type RequestLayoutState = <Stateful<Div> as Element>::RequestLayoutState;
     type PrepaintState = <Stateful<Div> as Element>::PrepaintState;
@@ -287,10 +295,11 @@ impl Element for GlassPanel {
 mod tests {
     use super::{fill_over_system_blur, fill_without_blur, laid_over};
 
-    /// A glass panel's shadow is a drop shadow with the panel cut out of it
-    /// (`Shadow::inset == 2`). Each renderer's shader must reach that branch:
-    /// tested as "inset is not 0", the branch before it takes mode 2 as an
-    /// inset shadow, and no panel has a shadow or an outline outside it.
+    /// A glass panel's shadow is a drop shadow with the panel's shape cut out
+    /// of it (`Shadow::inset == 2`). Each renderer's shader must reach the
+    /// branch for the value 2. If the branch before it tested "inset is not
+    /// 0", it would draw the value 2 as an inset shadow, and no panel would
+    /// have a shadow or an outline outside it.
     #[test]
     fn every_renderer_reaches_the_cut_out_shadow() {
         for (renderer, shader) in [
@@ -324,7 +333,8 @@ mod tests {
         backdrop_blur_downsample, backdrop_blur_reduced_sigma, point, size,
     };
 
-    /// What `fill` over `blurred` shows, one channel.
+    /// Returns what `fill` shows over `blurred`, for one colour channel that
+    /// has the value `value` in the fill.
     fn over(fill: Rgba, value: f32, blurred: f32) -> f32 {
         fill.a * value + (1. - fill.a) * blurred
     }
@@ -403,7 +413,8 @@ mod tests {
         assert_eq!(backdrop_blur_downsample(0.), 1);
         assert_eq!(backdrop_blur_downsample(5.9), 1);
         assert_eq!(backdrop_blur_downsample(6.), 2);
-        // `--glass-blur` at 2x: 13px and 25px.
+        // The themes' glass blurs of 13px and 25px, on a display with a scale
+        // factor of 2.
         assert_eq!(backdrop_blur_downsample(26.), 8);
         assert_eq!(backdrop_blur_downsample(50.), 16);
         for sigma in [7., 13., 26., 32., 50., 100.] {
@@ -419,7 +430,8 @@ mod tests {
             let reduced = backdrop_blur_reduced_sigma(sigma, d);
             let variance = (reduced * d as f32).powi(2) + (d * d) as f32 / 4.;
             assert!((variance.sqrt() - sigma).abs() < 1e-3, "{sigma}");
-            // About three reduced texels: a short kernel at every size.
+            // The reduced blur is about three texels of the reduced picture,
+            // so the kernel is short at every size.
             assert!((2.5..6.).contains(&reduced), "{sigma} {reduced}");
         }
     }
@@ -437,11 +449,12 @@ mod tests {
                 assert!(pair[1] > pair[0], "{sigma} {:?}", kernel.offsets);
             }
         }
-        // Each pair sits between its two texels, nearer the heavier one.
+        // One sample is taken for each pair of texels. It lies between the two
+        // texels, nearer to the one with the higher weight.
         let kernel = BackdropBlurKernel::new(3.);
         assert!((1. ..=2.).contains(&kernel.offsets[1]));
         assert!(kernel.offsets[1] < 1.5);
-        // Cut at three deviations.
+        // The kernel ends at three standard deviations.
         assert_eq!(BackdropBlurKernel::new(3.).reach(), 9);
         assert_eq!(BackdropBlurKernel::new(0.).reach(), 0);
     }
@@ -465,14 +478,15 @@ mod tests {
         );
         let margin = (plan.kernel.reach() + 1) * 8;
         assert_eq!(plan.source_origin.x.0, 900 - margin);
-        // Clamped at the top of the frame.
+        // The region that is read cannot start above the top of the frame.
         assert_eq!(plan.source_origin.y.0, 0);
         let source_right = plan.source_origin.x.0 + plan.reduced_size.width.0 * 8;
         assert!(source_right >= 900 + 532 + margin);
         let source_bottom = plan.source_origin.y.0 + plan.reduced_size.height.0 * 8;
         assert!(source_bottom >= 1730 && source_bottom < 1730 + 8);
 
-        // Fractional bounds round out; the clip trims them.
+        // Bounds that are not whole device pixels are rounded outwards, and
+        // the clip then cuts them.
         let clipped = blur(
             scaled(10.5, 20.25, 100., 100.),
             scaled(0., 50., 2426., 1730.),
@@ -532,7 +546,8 @@ mod tests {
         let bottom = 0.1;
         for wanted in [0.15, 0.25] {
             let alpha = laid_over(wanted, bottom);
-            // White over white at `bottom`, then at `alpha`.
+            // White at the alpha `bottom`, and over it white at the alpha
+            // `alpha`.
             let shown = 1. - (1. - bottom) * (1. - alpha);
             assert!((shown - wanted).abs() < 1e-6, "{wanted} {shown}");
         }

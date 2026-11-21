@@ -1,5 +1,6 @@
-//! `ConfirmModal`: a small dialog asking before a destructive action, with
-//! its message, Cancel, and the confirming button (red when dangerous).
+//! A small dialog that asks the user to confirm before a destructive action.
+//! It shows a message, a Cancel button and the confirming button, which is red
+//! when the action is dangerous.
 use crate::i18n::t;
 use crate::theme;
 use crate::theme::Text as _;
@@ -27,8 +28,8 @@ pub struct Confirm {
     on_close: Option<Handler>,
 }
 
-/// A confirmation titled `title` saying `message`; the confirming button
-/// reads `confirm_label`.
+/// Returns a confirmation dialog with the title `title` and the message
+/// `message`. The confirming button has the label `confirm_label`.
 pub fn confirm(
     id: impl Into<ElementId>,
     title: impl Into<SharedString>,
@@ -54,27 +55,31 @@ pub fn confirm(
 }
 
 impl Confirm {
-    /// The confirming button in the negative colour (`danger`).
+    /// Sets whether the confirming button is drawn in the negative colour.
     pub fn danger(mut self, danger: bool) -> Self {
         self.danger = danger;
         self
     }
-    /// The cancelling button's label (`cancelLabel`), "Cancel" unless set.
+    /// Sets the label of the cancelling button, which is "Cancel" unless it is
+    /// set.
     pub fn cancel_label(mut self, label: impl Into<SharedString>) -> Self {
         self.cancel_label = label.into();
         self
     }
-    /// Both buttons disabled while the confirmed work is running.
+    /// Sets whether both buttons are disabled. They are while the confirmed
+    /// work is running.
     pub fn busy(mut self, busy: bool) -> Self {
         self.busy = busy;
         self
     }
-    /// Drawn above another dialog ([`super::modal::Modal::layer`]).
+    /// Sets the dialog's drawing order, for a dialog that is drawn above
+    /// another dialog (see [`super::modal::Modal::layer`]).
     pub fn layer(mut self, priority: usize) -> Self {
         self.priority = Some(priority);
         self
     }
-    /// The focus the dialog holds, so Escape reaches it.
+    /// Sets the focus handle that has the keyboard focus while the dialog is
+    /// open, so that Escape reaches the dialog.
     pub fn focus(mut self, focus: &FocusHandle) -> Self {
         self.focus = Some(focus.clone());
         self
@@ -83,12 +88,13 @@ impl Confirm {
         self.on_confirm = Some(Rc::new(handler));
         self
     }
-    /// The Cancel button; without it, Cancel closes as the close button does.
+    /// Sets what the Cancel button does. Without it, Cancel does what the
+    /// close button does.
     pub fn on_cancel(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_cancel = Some(Rc::new(handler));
         self
     }
-    /// The close button, Escape and a click on the backdrop.
+    /// Sets what the close button, Escape and a click on the backdrop do.
     pub fn on_close(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_close = Some(Rc::new(handler));
         self
@@ -111,8 +117,7 @@ impl RenderOnce for Confirm {
         }
         let confirm = self.on_confirm;
         dialog
-            // The message at 13px on a 1.5 line height (`.helpText`, as
-            // `ConfirmModal` styles it).
+            // The message is 13px text with a line height of 1.5.
             .child(crate::ui::a11y::text(
                 div()
                     .id("confirm-message")

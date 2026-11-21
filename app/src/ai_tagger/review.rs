@@ -1,37 +1,40 @@
-//! The review's rules (`AiTaggerPanel.tsx`), apart from drawing: how one
-//! item's predictions become rows, which are checked, what is written, the
-//! models a review starts with, and how failures are worded.
+//! The rules of the review, without the drawing: how the predictions for one
+//! item become rows, which rows are checked, what Apply writes, which models a
+//! review starts with, and how failures are worded.
 use crate::i18n::t;
 use picto_core::ai_runtime::{AiModelStatus, AiTagPrediction, RootPrediction};
 use picto_library::{RootId, RootTagAssignment};
 use std::collections::HashMap;
 
-/// `MIN_REVIEW_CONFIDENCE`, `MAX_REVIEW_CONFIDENCE`,
-/// `DEFAULT_REVIEW_CONFIDENCE`, in percent.
+/// The smallest value of the review's confidence cutoff, in percent.
+/// `MAX_CONFIDENCE` is the largest value, and `DEFAULT_CONFIDENCE` is the
+/// value that the cutoff has before the thresholds in Settings have been read.
 pub const MIN_CONFIDENCE: u32 = 5;
 pub const MAX_CONFIDENCE: u32 = 95;
 pub const DEFAULT_CONFIDENCE: u32 = 35;
-/// `REVIEW_WINDOW_SIZE`: how many items' details are read at once, and how
-/// many thumbnails the rail shows around the one reviewed.
+/// The number of items whose details are read at a time, and the largest
+/// number of thumbnails that the review shows around the reviewed item.
 pub const WINDOW: usize = 20;
 
-/// One suggested tag of an item: its predictions by every model run,
-/// merged (`ReviewTag`).
+/// One suggested tag of an item. It merges the predictions of that tag by
+/// every model that was run.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReviewTag {
-    /// What is written: the tag, with its group unless that is general.
+    /// The tag as Apply writes it: `namespace:subtag`, or the subtag alone
+    /// when the namespace is empty, `general` or `default`.
     pub key: String,
     pub namespace: String,
     pub subtag: String,
-    /// The highest confidence any model gave it.
+    /// The highest confidence that any model gave the tag.
     pub confidence: f32,
-    /// Each model that predicted it, with its own confidence.
+    /// Each model that predicted the tag, with the confidence that this model
+    /// gave it.
     pub models: Vec<(String, f32)>,
 }
 
 impl ReviewTag {
-    /// Whether its group is written before it (`general` and `default` are
-    /// not).
+    /// Returns whether the namespace is written before the tag. It is not
+    /// written when it is empty, `general` or `default`.
     pub fn shows_namespace(&self) -> bool {
         shows_namespace(&self.namespace)
     }
@@ -41,7 +44,9 @@ fn shows_namespace(namespace: &str) -> bool {
     !namespace.is_empty() && namespace != "general" && namespace != "default"
 }
 
-/// The name a prediction is written under.
+/// Returns the text under which a prediction is written as a tag:
+/// `namespace:tag`, or the tag alone when the namespace is empty, `general` or
+/// `default`.
 pub fn tag_key(namespace: &str, tag: &str) -> String {
     if shows_namespace(namespace) {
         format!("{namespace}:{tag}")
@@ -50,8 +55,9 @@ pub fn tag_key(namespace: &str, tag: &str) -> String {
     }
 }
 
-/// `predictionTags`: an item's predictions by the models chosen, one row
-/// per tag, most confident first (ties keep the order they came in).
+/// Returns the rows for one item: its predictions by the chosen models, one
+/// row for each tag, with the highest confidence first. Tags of equal
+/// confidence keep the order in which their predictions arrived.
 pub fn prediction_tags(prediction: Option<&RootPrediction>, models: &[String]) -> Vec<ReviewTag> {
     let Some(prediction) = prediction else {
         return Vec::new();
@@ -88,9 +94,10 @@ pub fn prediction_tags(prediction: Option<&RootPrediction>, models: &[String]) -
     tags
 }
 
-/// `mergePredictionResults`: answers arriving model by model and member by
-/// member are joined per item, each model's tag kept at its highest
-/// confidence, and an item's first error kept.
+/// Merges newly arrived predictions into `previous`. The answers arrive for
+/// one model and one image at a time, so the predictions for the same item are
+/// joined into one entry. For each model and tag the prediction with the
+/// highest confidence is kept, and the first error of an item is kept.
 pub fn merge(previous: &mut Vec<RootPrediction>, incoming: Vec<RootPrediction>) {
     for next in incoming {
         let at = previous
@@ -128,8 +135,9 @@ pub fn merge(previous: &mut Vec<RootPrediction>, incoming: Vec<RootPrediction>) 
     }
 }
 
-/// A tag's check for one item, changed by a click; otherwise it is checked
-/// when its confidence reaches the cutoff.
+/// The check marks that the user changed with a click, by item and tag. A tag
+/// without an entry here is checked when its confidence is at or above the
+/// cutoff.
 #[derive(Clone, Debug, Default)]
 pub struct Overrides(HashMap<(RootId, String), bool>);
 
@@ -150,7 +158,8 @@ impl Overrides {
     }
 }
 
-/// What Apply writes: each item's checked tags, items with none left out.
+/// Returns what Apply writes: for each item, its checked tags. An item without
+/// a checked tag is left out.
 pub fn assignments(
     predictions: &[RootPrediction],
     models: &[String],
@@ -173,16 +182,19 @@ pub fn assignments(
         .collect()
 }
 
-/// The cutoff a review starts at: the General confidence in Settings, in
-/// whole percent within the slider's range.
+/// Returns the cutoff that a review starts at: the General confidence from
+/// Settings, in whole percent and limited to the slider's range.
 pub fn initial_confidence(general: f32) -> u32 {
     ((general * 100.).round() as i64).clamp(MIN_CONFIDENCE as i64, MAX_CONFIDENCE as i64) as u32
 }
 
-/// The models a review starts with: those last chosen for a review
-/// (`aiTaggerManualModelSlugs`), else those set to tag imports, that are
-/// downloaded; with neither ever chosen, the recommended downloaded model,
-/// else the first downloaded.
+/// Returns the models that a review starts with. These are the models that
+/// were chosen in the last review (`remembered`, the setting
+/// `ai_tagger_manual_model_slugs`). If no review has chosen models yet, they
+/// are the models that are set to tag imports (`configured`). Of either list,
+/// only the downloaded models are taken. If no review has chosen models yet
+/// and none of the models that tag imports is downloaded, the result is the
+/// recommended downloaded model, or else the first downloaded model.
 pub fn initial_models(
     models: &[AiModelStatus],
     configured: &[String],
@@ -207,8 +219,9 @@ pub fn initial_models(
     previous
 }
 
-/// A model chosen or left out of the review; a model chosen runs after
-/// those chosen before it.
+/// Adds the model `slug` to the chosen models, or removes it if it is already
+/// chosen. An added model is put at the end, so it runs after the models that
+/// were chosen before it.
 pub fn toggle_model(models: &mut Vec<String>, slug: &str) {
     match models.iter().position(|chosen| chosen == slug) {
         Some(at) => {
@@ -218,7 +231,8 @@ pub fn toggle_model(models: &mut Vec<String>, slug: &str) {
     }
 }
 
-/// How many distinct tags each model predicted across the items.
+/// Returns how many tags the model `slug` predicted, counted over all items. A
+/// tag that the model predicted for two items counts twice.
 pub fn model_count(predictions: &[RootPrediction], slug: &str) -> usize {
     let mut keys = std::collections::HashSet::new();
     for prediction in predictions {
@@ -231,9 +245,10 @@ pub fn model_count(predictions: &[RootPrediction], slug: &str) -> usize {
     keys.len()
 }
 
-/// What a finished run reports: items that could not be read come first;
-/// otherwise the model and member analyses that failed, with the first
-/// failure's own words.
+/// Returns the error message of a finished run, or `None` if nothing failed.
+/// If items could not be read, the message gives their number. Otherwise, if
+/// analyses of an image by a model failed, the message gives their number,
+/// `total`, and the text of the first failure.
 pub fn failure(
     unprepared: usize,
     failed: usize,
@@ -257,7 +272,8 @@ pub fn failure(
     }
 }
 
-/// Apply's label: the count and production's English noun.
+/// Returns the label of the Apply button: the number of checked tags, followed
+/// by the English noun "tag" or "tags".
 pub fn apply_label(checked: usize) -> String {
     crate::tf!(
         "Apply {value0} {value1}",
@@ -266,10 +282,11 @@ pub fn apply_label(checked: usize) -> String {
     )
 }
 
-/// What the list says when it shows no tags.
+/// The message that the list shows when it has no tag to show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Empty {
-    /// A failure, with no tags to show it above.
+    /// The run failed. The list shows the run's error message. When the list
+    /// has tags, the error message is shown above them instead.
     Error,
     Preparing,
     NoItems,
@@ -281,7 +298,7 @@ pub enum Empty {
     NoSuggestions,
 }
 
-/// The facts the empty list depends on.
+/// The facts that decide which message an empty list shows.
 pub struct EmptyState {
     pub error: bool,
     pub running: bool,
@@ -294,7 +311,9 @@ pub struct EmptyState {
 }
 
 impl Empty {
-    /// Which message an empty list shows, in production's order.
+    /// Returns the message that an empty list shows for `state`. The
+    /// conditions are tested in the order written here, and the first one that
+    /// holds decides.
     pub fn of(state: &EmptyState) -> Self {
         if state.error && !state.running {
             Empty::Error
@@ -317,7 +336,8 @@ impl Empty {
         }
     }
 
-    /// Its words; the error shows its own.
+    /// Returns the message's text. `Error` has no text here, because the list
+    /// shows the run's error message for it.
     pub fn text(self) -> &'static str {
         match self {
             Empty::Error => "",
@@ -333,8 +353,9 @@ impl Empty {
     }
 }
 
-/// The review window around the item reviewed: up to [`WINDOW`] items,
-/// that item in the middle where the ends allow.
+/// Returns the items whose thumbnails the review shows: at most [`WINDOW`]
+/// items around the reviewed item. The reviewed item is in the middle, except
+/// near the start or the end of `items`.
 pub fn window_around(items: &[RootId], active: RootId) -> &[RootId] {
     let index = items.iter().position(|id| *id == active).unwrap_or(0);
     let last_start = items.len().saturating_sub(WINDOW);
@@ -342,12 +363,11 @@ pub fn window_around(items: &[RootId], active: RootId) -> &[RootId] {
     &items[start..(start + WINDOW).min(items.len())]
 }
 
-/// What the footer names as the inference backend: the backends the
-/// `chosen` models' loaded sessions run on, each once, in the models' order
-/// ("Core ML GPU/ANE", or "Core ML GPU/ANE + CPU" when they differ). None
-/// until one of them has been loaded. (Production shows the status's
-/// `cachedBackend`, which is whichever loaded session the core finds first,
-/// chosen or not.)
+/// Returns the name of the inference backend that the footer shows. It joins
+/// the backends that the loaded sessions of the `chosen` models run on, each
+/// named once, in the order of `models` ("Core ML GPU/ANE", or "Core ML
+/// GPU/ANE + CPU" when they differ). Returns `None` while none of the chosen
+/// models is loaded.
 pub fn backend(models: &[AiModelStatus], chosen: &[String]) -> Option<String> {
     let mut backends: Vec<&str> = Vec::new();
     for model in models.iter().filter(|model| chosen.contains(&model.slug)) {
@@ -395,7 +415,8 @@ mod tests {
             loaded("oracle", None),
         ];
         let chosen = |slugs: &[&str]| slugs.iter().map(|slug| (*slug).to_owned()).collect::<Vec<_>>();
-        // Another model loaded on the CPU does not name the chosen one's.
+        // A model that is loaded on the CPU but is not chosen does not add its
+        // backend to the name.
         assert_eq!(
             backend(&models, &chosen(&["eva"])).as_deref(),
             Some("Core ML GPU/ANE")
@@ -405,7 +426,7 @@ mod tests {
             backend(&models, &chosen(&["swin", "eva"])).as_deref(),
             Some("CPU + Core ML GPU/ANE")
         );
-        // Not loaded yet: nothing to name.
+        // A chosen model that is not loaded yet has no backend to name.
         assert_eq!(backend(&models, &chosen(&["oracle"])), None);
     }
 
@@ -447,7 +468,8 @@ mod tests {
         );
         let tags = prediction_tags(Some(&prediction), &slugs(&["a", "b"]));
         let keys = tags.iter().map(|tag| tag.key.as_str()).collect::<Vec<_>>();
-        // Model c was not run; general tags are written without their group.
+        // Model c is not among the chosen models, so its prediction is left
+        // out. A general tag is written without its namespace.
         assert_eq!(keys, ["character:hatsune_miku", "rating:general", "1girl"]);
         assert_eq!(tags[2].confidence, 0.7);
         assert_eq!(
@@ -514,10 +536,10 @@ mod tests {
         let written = assignments(&predictions, &models, &overrides, 0.35);
         assert_eq!(written[0].tags, ["artist:someone", "dog"]);
         assert_eq!(written[1].tags, ["tree"]);
-        // A higher cutoff moves what is not overridden.
+        // A higher cutoff changes only the tags that the user did not click.
         let written = assignments(&predictions, &models, &overrides, 0.5);
         assert_eq!(written[0].tags, ["dog"]);
-        // No model chosen: nothing.
+        // With no model chosen, nothing is written.
         assert!(assignments(&predictions, &[], &overrides, 0.35).is_empty());
     }
 
@@ -536,16 +558,20 @@ mod tests {
             model("light", true, true),
             model("missing", false, true),
         ];
-        // Remembered from the last review, in that order, if downloaded.
+        // The models of the last review are taken in their order, without
+        // those that are not downloaded.
         assert_eq!(
             initial_models(&models, &[], Some(&slugs(&["missing", "light", "heavy"]))),
             ["light", "heavy"]
         );
-        // Chosen to be left empty last time: stays empty.
+        // If the last review ended with no model chosen, the next one starts
+        // with none.
         assert!(initial_models(&models, &slugs(&["heavy"]), Some(&[])).is_empty());
-        // Never chosen: those that tag imports.
+        // If no review has chosen models yet, the models that tag imports are
+        // taken.
         assert_eq!(initial_models(&models, &slugs(&["heavy"]), None), ["heavy"]);
-        // Neither: the recommended downloaded model, else the first.
+        // If there are neither, the recommended downloaded model is taken, or
+        // else the first downloaded model.
         assert_eq!(initial_models(&models, &[], None), ["light"]);
         let unrecommended = [model("x", false, true), model("y", true, false)];
         assert_eq!(initial_models(&unrecommended, &[], None), ["y"]);
@@ -557,7 +583,7 @@ mod tests {
     }
 
     #[test]
-    fn failures_are_worded_as_production_words_them() {
+    fn failures_are_worded_as_the_earlier_version_worded_them() {
         assert_eq!(failure(0, 0, 4, None), None);
         assert_eq!(
             failure(2, 1, 4, Some("x")).as_deref(),
@@ -595,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_list_says_why_in_production_order() {
+    fn an_empty_list_says_why_in_the_earlier_versions_order() {
         let state = |change: &dyn Fn(&mut EmptyState)| {
             let mut state = EmptyState {
                 error: false,

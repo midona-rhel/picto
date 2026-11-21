@@ -1,5 +1,6 @@
-//! The Tags screen's dialogs: the tag editor (`TagEditorModal`), the merge
-//! picker (`RelationPicker`), the group dialogs and the confirmations.
+//! The dialogs of the Tags screen: the tag editor, the dialog that chooses
+//! the tag to merge a tag into, the dialogs that create and rename a group,
+//! and the confirmations.
 use super::{TagsScreen, model};
 use crate::i18n::t;
 use crate::theme;
@@ -14,7 +15,8 @@ use crate::ui::{
 use gpui::{prelude::FluentBuilder as _, *};
 use picto_library::{TagNamespaceRecord, TagRecord};
 
-/// `PICKER_PAGE_SIZE`: merge candidates shown at a time.
+/// The largest number of tags that the merge dialog asks the library for
+/// when it searches.
 const PICKER_PAGE_SIZE: usize = 40;
 
 pub enum Dialog {
@@ -23,7 +25,7 @@ pub enum Dialog {
         name: Entity<TextInput>,
         _subscriptions: Vec<Subscription>,
     },
-    /// Choosing the tag to merge `tag` into.
+    /// The dialog in which the user chooses the tag to merge `tag` into.
     Merge {
         tag: TagRecord,
         search: Entity<TextInput>,
@@ -49,12 +51,13 @@ pub enum Dialog {
         name: Entity<TextInput>,
         _subscriptions: Vec<Subscription>,
     },
-    /// Deleting the tags nothing carries.
+    /// The confirmation for deleting the tags that are assigned to no item.
     Cleanup,
 }
 
 impl Dialog {
-    /// The editor and the merge and delete steps opened over it.
+    /// Returns whether this is the tag editor, or the merge or delete dialog
+    /// that is opened over the editor.
     pub fn belongs_to_editor(&self) -> bool {
         matches!(
             self,
@@ -62,9 +65,10 @@ impl Dialog {
         )
     }
 
-    /// The field that takes the keyboard when the dialog opens. The
-    /// editor's field waits for a click: `TagEditorModal`'s does not take
-    /// focus, which stays on the tag that was clicked.
+    /// Returns the field that gets the keyboard focus when the dialog
+    /// opens. The result is `None` for the tag editor and the confirmations,
+    /// and the dialog itself then gets the keyboard focus. The name field of
+    /// the tag editor gets it when the user clicks the field.
     fn input(&self) -> Option<&Entity<TextInput>> {
         match self {
             Dialog::RenameGroup { name, .. } | Dialog::CreateGroup { name, .. } => Some(name),
@@ -74,16 +78,19 @@ impl Dialog {
     }
 }
 
-/// An open dialog, with its time on screen.
+/// An open dialog. `presence` holds the time at which it opened and, once it
+/// was dismissed, the time at which it began to fade out.
 pub struct Layer {
     pub dialog: Dialog,
     pub presence: Presence,
-    /// Holds the keyboard while no field in the dialog has it.
+    /// The focus handle of the dialog itself. It has the keyboard focus
+    /// while no field of the dialog has it.
     pub focus: FocusHandle,
 }
 
 impl Layer {
-    /// Gives the dialog the keyboard: its field, or the dialog itself.
+    /// Gives the keyboard focus to the field that `Dialog::input` returns,
+    /// or to the dialog itself when it returns none.
     pub fn focus_in(&self, window: &mut Window, cx: &mut App) {
         match self.dialog.input() {
             Some(input) => window.focus(&input.read(cx).focus_handle(cx), cx),
@@ -112,7 +119,8 @@ fn input_with(
 pub fn editor(tag: TagRecord, cx: &mut Context<TagsScreen>) -> Dialog {
     let name = input_with(t("namespace:tag"), Some(crate::tags::record_name(&tag)), cx);
     let submitted = cx.subscribe(&name, |this, _, _: &Submitted, cx| this.submit_editor(cx));
-    // The rename button follows what is typed.
+    // The screen is drawn again when the text changes, because the Rename
+    // button is disabled while the field is empty.
     let typed = cx.observe(&name, |_, _, cx| cx.notify());
     Dialog::Editor {
         tag,
@@ -164,14 +172,17 @@ pub fn create_group(cx: &mut Context<TagsScreen>) -> Dialog {
     }
 }
 
-/// `RenameTagGroupModal` and `CreateTagGroupModal`: the normalized name, if
-/// the dialog may submit it.
+/// Returns the normalized name that is typed in a group dialog, if the
+/// dialog may submit it: the name is valid and is not `current`, the name
+/// that the group already has.
 fn group_name(input: &Entity<TextInput>, current: Option<&str>, cx: &App) -> Option<String> {
     let name = model::normalized_group_name(&input.read(cx).value());
     (model::valid_group_name(&name) && Some(name.as_str()) != current).then_some(name)
 }
 
-/// `TagChip`'s namespace prefix, shown only with `showTagPrefixes` on.
+/// Returns the name of the group that a tag chip shows before the tag's
+/// name. It is `None` for a tag of the General group, and when the setting
+/// `show_tag_prefixes` is off.
 fn prefix(namespace: &str, cx: &App) -> Option<SharedString> {
     let show = crate::settings::current(cx).show_tag_prefixes;
     crate::tags::group_of(namespace)
@@ -179,7 +190,8 @@ fn prefix(namespace: &str, cx: &App) -> Option<SharedString> {
         .map(SharedString::from)
 }
 
-/// `.pickerHint` and the dialogs' help text.
+/// Returns a line of help text for a dialog, such as "Searching..." in the
+/// merge dialog.
 fn hint(text: impl Into<SharedString>, cx: &App) -> Div {
     ui::form::help_text(theme::theme(cx), text)
 }
@@ -189,7 +201,9 @@ impl TagsScreen {
         self.layers.iter().position(|layer| layer.focus == *focus)
     }
 
-    /// The close button, Escape and the backdrop: the dialog fades out.
+    /// Starts the fade-out of the dialog whose focus handle is `focus`. The
+    /// dialog's close button, the Escape key and a click outside the dialog
+    /// call this.
     fn dismiss(&mut self, focus: &FocusHandle, cx: &mut Context<Self>) {
         if let Some(index) = self.layer_index(focus) {
             self.layers[index].presence.close();
@@ -197,7 +211,8 @@ impl TagsScreen {
         }
     }
 
-    /// A Cancel button: the dialog goes at once.
+    /// Removes the dialog whose focus handle is `focus` without a fade-out.
+    /// The Cancel buttons call this.
     fn cancel(&mut self, focus: &FocusHandle, cx: &mut Context<Self>) {
         if let Some(index) = self.layer_index(focus) {
             self.layers.remove(index);
@@ -206,7 +221,9 @@ impl TagsScreen {
         }
     }
 
-    /// `submitRename`
+    /// Renames the tag of the open tag editor to the text of the editor's
+    /// name field. It does nothing while an edit is running, when the field
+    /// is empty, or when the text is the name the tag already has.
     fn submit_editor(&mut self, cx: &mut Context<Self>) {
         if self.busy {
             return;
@@ -223,7 +240,10 @@ impl TagsScreen {
         }
     }
 
-    /// Enter or the button in a group dialog.
+    /// Submits the topmost dialog, if it is the Rename tag group or the
+    /// Create tag group dialog and the name typed in it may be submitted.
+    /// The Enter key in the dialog's field and the dialog's button call
+    /// this.
     fn submit_group_name(&mut self, cx: &mut Context<Self>) {
         if self.busy {
             return;
@@ -247,8 +267,9 @@ impl TagsScreen {
         }
     }
 
-    /// The merge picker's search: the library's best matches for what was
-    /// typed, without the tag being merged.
+    /// Searches the tags for the merge dialog. It asks the library for the
+    /// best matches for `typed` and leaves out the tag that is being
+    /// merged. An empty search text empties the list of results.
     fn search_merge(&mut self, typed: String, cx: &mut Context<Self>) {
         let Some(Dialog::Merge {
             tag,
@@ -319,7 +340,8 @@ impl TagsScreen {
         .detach();
     }
 
-    /// One open dialog, drawn over the whole window.
+    /// Builds one open dialog, which is drawn over the whole window. `index`
+    /// is the dialog's position in `layers`.
     pub(super) fn layer(
         &self,
         index: usize,
@@ -349,8 +371,9 @@ impl TagsScreen {
                 .layer(ui::layer::DIALOG + index)
                 .on_close(move |window, cx| dismiss(&(), window, cx))
         };
-        // `ConfirmModal`, run by this screen: Cancel takes it away at once,
-        // and both buttons wait while an edit is running.
+        // Builds a confirmation. Its Cancel button removes it without a
+        // fade-out, and both of its buttons are disabled while an edit is
+        // running.
         let confirm = |title: &'static str,
                        message: String,
                        label: &'static str,
@@ -389,7 +412,9 @@ impl TagsScreen {
                         .flex_col()
                         .gap(px(18.))
                         .child(
-                            // `.editorIntro`
+                            // The top of the editor: an icon, the tag as a
+                            // chip, and the number of items that the tag is
+                            // assigned to.
                             div()
                                 .flex()
                                 .items_center()
@@ -426,7 +451,9 @@ impl TagsScreen {
                                                 .mt(px(7.))
                                                 .text_color(theme.text_secondary())
                                                 .text(theme::TEXT_SM)
-                                                // The modal body's 20px line.
+                                                // The line is 20 px high,
+                                                // like the lines of text in
+                                                // a dialog's body.
                                                 .line_height(px(20.))
                                                 .child(format!(
                                                     "{} {}",
@@ -437,7 +464,8 @@ impl TagsScreen {
                                 ),
                         )
                         .child(
-                            // `.editorSection`
+                            // The label "Tag name" with the Rename button,
+                            // and under them the field with the tag's name.
                             div()
                                 .flex()
                                 .flex_col()
@@ -477,7 +505,8 @@ impl TagsScreen {
                                 ),
                         )
                         .child(
-                            // `.editorActions`
+                            // The Merge into... and Delete buttons, with a
+                            // line above them.
                             div()
                                 .flex()
                                 .items_center()
@@ -560,7 +589,8 @@ impl TagsScreen {
                                     .child(target.active_count.to_string()),
                             )
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                // The picker goes, then the merge runs.
+                                // The merge dialog is closed, and then the
+                                // merge runs.
                                 this.close_editor_step();
                                 this.merge_tag(&source, &chosen, cx);
                                 cx.notify();
@@ -569,7 +599,8 @@ impl TagsScreen {
                 }
                 let searched = !query.trim().is_empty();
                 dialog(t("Merge into existing tag"), Size::Medium).child(
-                    // `.pickerBody`
+                    // The search field, a line of help text or an error,
+                    // and the list of results.
                     div()
                         .min_h(px(260.))
                         .flex()
@@ -671,7 +702,9 @@ impl TagsScreen {
     }
 }
 
-/// `.error`: an edit or search that failed, inset from the screen's edges.
+/// Returns the banner that shows the message of an edit, a load or a search
+/// that failed. It has a margin of 12 px above it and of 24 px on its left
+/// and its right.
 pub fn error_banner(message: String, cx: &App) -> Div {
     ui::form::error_banner(theme::theme(cx), message)
         .mt(px(12.))

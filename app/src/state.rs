@@ -5,18 +5,16 @@
 //! fields and saved filters, the tag picker's layout, the recent tags, the
 //! recent folders and the recent Quick Search choices, the keyboard preset
 //! and the changed shortcuts, the language, the audio visualization, the
-//! interface zoom and the list of libraries. Production keeps most of these
-//! in the renderer's localStorage, and keeps the main window's position and
-//! the list of libraries in the main process's `config.json`. Both are kept
-//! per machine. The settings that production keeps in the library are in the
-//! settings model (`settings::model`), and they travel with the library.
+//! interface zoom and the list of libraries. The settings that belong to a
+//! library are in the settings model (`settings::model`), and they travel
+//! with the library.
 //!
 //! The state is one JSON file, `state.json`, in this app's own folder. That
 //! folder is "Picto GPUI" in the platform's configuration folder, or the
 //! folder that the environment variable `PICTO_GPUI_STATE` names. It is never
-//! the Electron app's folder. Tests and the off-screen tool keep no state
-//! unless `PICTO_GPUI_STATE` is set, so that their pictures never depend on
-//! how the user left the app.
+//! the folder of an Electron-based Picto (version 0.6.19 or earlier). Tests
+//! and the off-screen tool keep no state unless `PICTO_GPUI_STATE` is set, so
+//! that their pictures never depend on how the user left the app.
 //!
 //! The file is read once when the app starts. A change is written 250 ms
 //! after the last change, off the thread that draws, and the remaining
@@ -44,12 +42,9 @@ const FILE: &str = "state.json";
 /// The time between the last change and the write of the file.
 const SAVE_DELAY: Duration = Duration::from_millis(250);
 
-/// The smallest size of the main window. These are the `minWidth` and
-/// `minHeight` that production gives its `BrowserWindow` in
-/// `windowManager.mjs`. Production accepts a saved size as small as 700×500
-/// (`MAIN_WINDOW_MIN_WIDTH` and `MAIN_WINDOW_MIN_HEIGHT`), but the window's
-/// own minimum then enlarges it to this size, so this size is the only limit
-/// that has an effect.
+/// The smallest width of the main window. `WINDOW_MIN_HEIGHT` is its
+/// smallest height. A saved size that is smaller than these is enlarged to
+/// them ([`WindowPlace::on_displays`]).
 pub const WINDOW_MIN_WIDTH: f32 = 1000.;
 pub const WINDOW_MIN_HEIGHT: f32 = 600.;
 
@@ -71,11 +66,10 @@ impl Rect {
     }
 }
 
-/// The saved position and size of the main window (`windowState.main` in
-/// production). The bounds are those the window has while it is neither
-/// maximised nor in full screen. `maximized` says whether the window was
-/// maximised. Production does not remember full screen: a window that was
-/// closed in full screen opens again at these bounds.
+/// The saved position and size of the main window. The bounds are those the
+/// window has while it is neither maximised nor in full screen. `maximized`
+/// says whether the window was maximised. Full screen is not saved: a window
+/// that was closed in full screen opens again at these bounds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowPlace {
     /// The position of the window's top-left corner. When `x` or `y` is
@@ -92,7 +86,7 @@ impl WindowPlace {
     /// usable areas of the displays. The size is at least the minimum size.
     /// The saved position is kept only when the window would overlap one of
     /// the displays there. Otherwise the position is `None`, and the window
-    /// opens in the centre. This is production's `normalizeMainWindowState`.
+    /// opens in the centre.
     pub fn on_displays(&self, displays: &[Rect]) -> WindowPlace {
         let mut place = WindowPlace {
             width: self.width.round().max(WINDOW_MIN_WIDTH),
@@ -117,97 +111,83 @@ impl WindowPlace {
     }
 }
 
-/// The keys of one shortcut that the user changed in Settings
-/// (`ShortcutBindingOverride` in production). Each field is one of the
-/// shortcut's two key slots. A slot is `None` when the user did not change
-/// it, and an empty string when the user cleared it.
+/// The keys of one shortcut that the user changed in Settings. Each field is
+/// one of the shortcut's two key slots. A slot is `None` when the user did
+/// not change it, and an empty string when the user cleared it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Binding {
     pub keys: Option<String>,
     pub keys2: Option<String>,
 }
 
-/// Everything that the file holds. The comment on each field names the
-/// storage key under which production keeps the same thing.
+/// Everything that the file holds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct State {
-    /// The main window's position and size (`windowState.main` in
-    /// `config.json`).
+    /// The main window's position and size.
     pub window: Option<WindowPlace>,
-    /// The sidebar's width, and whether the sidebar is hidden
-    /// (`picto-sidebar-width` and `picto-sidebar-collapsed-panel`).
+    /// The sidebar's width, and whether the sidebar is hidden.
     pub sidebar_width: f32,
     pub sidebar_collapsed: bool,
-    /// The inspector's width, and whether the inspector is hidden
-    /// (`picto-inspector-width` and `picto-inspector-collapsed`).
+    /// The inspector's width, and whether the inspector is hidden.
     pub inspector_width: f32,
     pub inspector_collapsed: bool,
-    /// The ids of the sidebar's sections and nodes that are folded
-    /// (`picto-sidebar-collapsed`).
+    /// The ids of the sidebar's sections and nodes that are folded.
     pub folded: Vec<String>,
-    /// The filter fields that the filter bar shows while they are empty,
-    /// under production's names for them, such as `color` and `tags`
-    /// (`picto:grid:pinned-filters`).
+    /// The filter fields that the filter bar shows while they are empty, by
+    /// their ids, such as `color` and `tags` (`grid::filters::Field::id`).
     pub pinned_filters: Vec<String>,
-    /// The saved filters, each with its name, in the order in which they
-    /// were saved (`picto:grid:saved-filters`).
+    /// The saved filters, each with its name, in the order in which they were
+    /// saved.
     pub saved_filters: Vec<(String, Value)>,
-    /// True when the tag picker shows a list and false when it shows a
-    /// grid (`picto-tag-picker-layout`).
+    /// True when the tag picker shows a list and false when it shows a grid.
     pub tag_picker_list: bool,
-    /// Whether the tag picker shows each tag's count
-    /// (`picto-tag-picker-counts`).
+    /// Whether the tag picker shows each tag's count.
     pub tag_picker_counts: bool,
-    /// The tags used most recently, the newest first (`picto-recent-tags`).
+    /// The tags used most recently, the newest first.
     pub recent_tags: Vec<String>,
-    /// For each library, the folders used most recently, the newest first
-    /// (`picto-recent-folders:<library>`). The map's key is the library's
-    /// key ([`library_key`]).
+    /// For each library, the folders used most recently, the newest first.
+    /// The map's key is the library's key ([`library_key`]).
     pub recent_folders: BTreeMap<String, Vec<u32>>,
     /// For each library, the choices made most recently in the Quick Search
     /// panel, the newest first. The map's key is the library's key
     /// ([`library_key`]). Each choice is a JSON object that
-    /// `crate::shell::quick_search` writes and reads. Production has no such
-    /// panel and no such list.
+    /// `crate::shell::quick_search` writes and reads.
     pub quick_search_recent: BTreeMap<String, Vec<Value>>,
-    /// The keyboard preset, `us` or `eu` (`picto-keyboard-preset`).
+    /// The keyboard preset, `us` or `eu`.
     pub keyboard_preset: String,
-    /// The shortcuts whose keys the user changed, by shortcut id
-    /// (`picto-shortcut-overrides`).
+    /// The shortcuts whose keys the user changed, by shortcut id.
     pub shortcut_overrides: BTreeMap<String, Binding>,
-    /// The language the user chose (`picto:locale`). It is empty until the
-    /// user chooses one, and the interface then uses the system's language.
+    /// The language the user chose. It is empty until the user chooses one,
+    /// and while it is empty the interface uses the system's language.
     pub locale: String,
-    /// The audio visualization the user chose (`picto:audio-visualization`).
+    /// The audio visualization the user chose.
     pub audio_visualization: String,
-    /// The interface zoom (`picto-zoom-factor`). `crate::zoom` applies it.
+    /// The interface zoom. `crate::zoom` applies it.
     pub zoom_factor: f64,
     /// The paths of the libraries the user keeps that this app has opened,
-    /// the most recent first (`libraryHistory` in `config.json`).
-    /// `crate::libraries` maintains the list. A disposable copy is never
-    /// listed.
+    /// the most recent first. `crate::libraries` maintains the list. A
+    /// disposable copy is never listed.
     pub library_history: Vec<String>,
     /// The paths of the libraries pinned to Quick Access, in the order in
-    /// which they were pinned (`pinnedLibraries` in `config.json`).
+    /// which they were pinned.
     pub pinned_libraries: Vec<String>,
-    /// The path of the library that the app opens when it starts
-    /// (`lastLibrary` in `config.json`).
+    /// The path of the library that the app opens when it starts.
     pub last_library: Option<String>,
     /// The libraries that the user agreed this app may read and write
     /// directly. Each entry is a library's path and the identity of its
-    /// database file (`libraries::Identity`). Production has no such list.
+    /// database file (`libraries::Identity`).
     pub library_consents: Vec<(String, String)>,
-    /// True once the list of libraries has been copied from the Electron
-    /// app's `config.json` (`libraries::seed`). The copy is made only once.
+    /// True once `libraries::seed` has copied the list of libraries from the
+    /// `config.json` of an Electron-based Picto (version 0.6.19 or earlier).
+    /// The copy is made only once.
     pub libraries_seeded: bool,
-    /// Each library's colour and icon, by the library's path, as the
-    /// Library Manager sets them (`libraryMeta` in `config.json`). A
-    /// library's cover is not here: it is kept in the library's own folder.
+    /// Each library's colour and icon, by the library's path, as the Library
+    /// Manager sets them. A library's cover is not here: it is kept in the
+    /// library's own folder.
     pub library_meta: BTreeMap<String, LibraryLook>,
     /// For each cloud provider, the provider's folder that the user chose
-    /// last (`cloudLocations` in `config.json`, written by production's
-    /// `rememberCloudRoot`). The app offers that folder again for as long as
-    /// it is still a folder of that provider.
+    /// last. The app offers that folder again for as long as it is still a
+    /// folder of that provider.
     pub cloud_locations: BTreeMap<String, crate::cloud::Root>,
 }
 
@@ -217,15 +197,17 @@ pub struct State {
 pub struct LibraryLook {
     pub color: Option<String>,
     pub icon: Option<String>,
-    /// The id of the cloud library that this library was opened from
-    /// (`cloudLibraryId`). Open from Cloud… uses it to say that the library
-    /// is already added.
+    /// The id of the cloud library that this library was opened from. Open
+    /// from Cloud… uses it to say that the library is already added.
     pub cloud_library_id: Option<String>,
 }
 
 impl LibraryLook {
     /// Reads the colour, the icon and the cloud library id from one entry of
-    /// production's `libraryMeta`. The entry's other fields are not read.
+    /// `libraryMeta`. The entry comes from this app's state file, or from the
+    /// `config.json` of an Electron-based Picto (version 0.6.19 or earlier),
+    /// which has the same three fields (`libraries::seed`). The entry's other
+    /// fields are not read.
     pub fn from_value(value: &Value) -> Self {
         let text = |key: &str| {
             value
@@ -281,17 +263,15 @@ impl Default for State {
 }
 
 /// Rounds a sidebar width to a whole number of pixels and keeps it between
-/// the sidebar's smallest and largest widths, as production's
-/// `setSidebarWidthAtom` does.
+/// the sidebar's smallest and largest widths.
 pub fn sidebar_width(width: f32) -> f32 {
     width
         .round()
         .clamp(crate::theme::SIDEBAR_MIN, crate::theme::SIDEBAR_MAX)
 }
 
-/// Rounds an inspector width to a whole number of pixels and keeps it
-/// between the inspector's smallest and largest widths, as production's
-/// `setInspectorWidthAtom` does.
+/// Rounds an inspector width to a whole number of pixels and keeps it between
+/// the inspector's smallest and largest widths.
 pub fn inspector_width(width: f32) -> f32 {
     width
         .round()
@@ -350,8 +330,7 @@ impl State {
         if let Some(folded) = strings(get("sidebarFolded")) {
             state.folded = folded;
         }
-        // Keep only the fields that this version knows, as production's
-        // `loadPinnedFilters` does.
+        // Only the ids of fields that this version knows are kept.
         if let Some(pinned) = strings(get("pinnedFilters")) {
             state.pinned_filters = pinned
                 .into_iter()
@@ -650,8 +629,9 @@ pub fn location() -> Option<PathBuf> {
     config_folder().map(|folder| folder.join("Picto GPUI"))
 }
 
-/// Returns the platform's configuration folder for the current user. This is
-/// what `app.getPath('appData')` returns in production.
+/// Returns the platform's configuration folder for the current user:
+/// `~/Library/Application Support` on macOS, `%APPDATA%` on Windows, and
+/// `$XDG_CONFIG_HOME` or `~/.config` on Linux.
 pub fn config_folder() -> Option<PathBuf> {
     let home = || std::env::var_os("HOME").map(PathBuf::from);
     if cfg!(target_os = "macos") {
@@ -931,7 +911,7 @@ mod tests {
         assert_eq!(state.window, None);
         assert_eq!(state.locale, "");
         assert_eq!(state.zoom_factor, 1.0);
-        // A zoom outside production's limits is brought inside them.
+        // A zoom outside the limits of `crate::zoom` is brought inside them.
         let (state, _) = State::from_value(&json!({ "zoomFactor": 3.5 }));
         assert_eq!(state.zoom_factor, 2.0);
     }
@@ -1044,8 +1024,7 @@ mod tests {
         // The saved position is on the second display, so it is kept.
         let kept = place(2000., 100., 1200., 800.).on_displays(&displays);
         assert_eq!((kept.x, kept.y), (Some(2000.), Some(100.)));
-        // The saved position is partly on a display, so it is kept, as in
-        // production.
+        // The saved position is partly on a display, so it is kept.
         let edge = place(-1100., 10., 1200., 800.).on_displays(&displays);
         assert_eq!(edge.x, Some(-1100.));
         // The saved position is on a display that is no longer connected, so

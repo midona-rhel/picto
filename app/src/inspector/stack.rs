@@ -1,24 +1,28 @@
-//! The stacked preview of a multiple selection (`StackedPreview` in
-//! `Inspector.tsx`): which cards are in the stack, the pose each keeps for as
-//! long as the stack is shown, their order, their shade, and the enter and
-//! exit motion.
+//! Holds the state of the stacked preview, which the inspector shows for a
+//! selection of several items: which cards are in the stack, the pose each
+//! card keeps for as long as the stack is shown, the order the cards are
+//! drawn in, the shade over each card, and how a card moves when it enters
+//! or leaves the stack.
 use crate::motion;
 use std::collections::HashMap;
 use std::time::Instant;
 
-/// The stack shows the last six of the sample.
+/// The largest number of cards in the stack. The stack shows the last six
+/// hashes of the sample given to [`Stack::show`].
 pub const CARDS: usize = 6;
-/// How dark the bottom card is under the rail-coloured shade.
+/// The opacity of the shade over the bottom card. The shade is a layer in
+/// the rail's colour that is drawn over a card. The top card has none.
 const DEEPEST_SHADE: f32 = 0.7;
-/// The scale of a turned card (`.stackItemLeft`, `.stackItemRight`).
+/// The scale a turned card is drawn at when it is not moving.
 const TURNED_SCALE: f32 = 0.93;
-/// Where a card enters from, and how large it starts (`@keyframes
-/// stackPreviewLeft`, `stackPreviewRight`).
+/// A card that enters the stack starts `ENTER_FROM` pixels to the right of
+/// and below its resting place, at the scale `ENTER_SCALE`.
 const ENTER_FROM: (f32, f32) = (100., 40.);
 const ENTER_SCALE: f32 = 1.2;
 
-/// A card's resting pose. The first card lies straight; the rest alternate,
-/// turned five degrees one way or the other.
+/// How a card lies in the stack when it is not moving. The first card is not
+/// turned. Each later card is turned five degrees: the second clockwise
+/// (`Right`), the third anticlockwise (`Left`), and so on in turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pose {
     Base,
@@ -27,7 +31,8 @@ pub enum Pose {
 }
 
 impl Pose {
-    /// The resting turn, clockwise.
+    /// Returns how many degrees the card is turned clockwise when it is not
+    /// moving.
     pub fn degrees(self) -> f32 {
         match self {
             Pose::Base => 0.,
@@ -36,7 +41,7 @@ impl Pose {
         }
     }
 
-    /// The resting scale.
+    /// Returns the scale the card is drawn at when it is not moving.
     pub fn scale(self) -> f32 {
         if self == Pose::Base { 1. } else { TURNED_SCALE }
     }
@@ -54,22 +59,26 @@ impl Pose {
 struct Card {
     hash: String,
     pose: Pose,
-    /// Paint order among the cards still in the stack: later is higher.
+    /// The drawing order among the cards that have not left the stack. A card
+    /// with a larger value is drawn over a card with a smaller one.
     z: u64,
     entered: Option<Instant>,
     exited: Option<Instant>,
-    /// The shade, and where it was fading from and when (200 ms).
+    /// The opacity of the shade that the card is changing to. `shade_from` is
+    /// the opacity it is changing from and `shade_at` is when the change
+    /// began. The change takes `motion::NORMAL`.
     shade: f32,
     shade_from: f32,
     shade_at: Option<Instant>,
 }
 
-/// How to draw one card at one moment.
+/// Holds what is needed to draw one card at one moment.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Placed {
     pub hash: String,
     pub pose: Pose,
-    /// Offset from the resting place, in pixels.
+    /// How far the card is from its resting place, in pixels to the right and
+    /// down.
     pub offset: (f32, f32),
     pub scale: f32,
     pub opacity: f32,
@@ -94,9 +103,11 @@ fn shade_at(index: usize, count: usize) -> f32 {
 }
 
 impl Stack {
-    /// Puts the last six of `sample` in the stack. Cards already in it keep
-    /// their pose and place; new cards enter on top; one card that left
-    /// fades out under the rest.
+    /// Puts the last six hashes of `sample` in the stack. A card that is
+    /// already in the stack keeps its pose and its drawing order. A new card
+    /// is drawn over the others and moves in. Of the cards that are no longer
+    /// in `sample`, the one that came last in the stack fades out under the
+    /// others, and the rest are removed at once.
     pub fn show(&mut self, sample: &[String], now: Instant) {
         let previews = &sample[sample.len().saturating_sub(CARDS)..];
         if previews == self.shown.as_slice() {
@@ -107,7 +118,8 @@ impl Stack {
         let mut next = Vec::with_capacity(count + 1);
         for (index, hash) in previews.iter().enumerate() {
             let shade = shade_at(index, count);
-            // A card on its way out comes back where it was.
+            // A card that is already in the stack, also one that is fading out,
+            // keeps its pose and drawing order, and it no longer fades out.
             if let Some(existing) = self.cards.iter().find(|card| card.hash == *hash) {
                 let mut card = existing.clone();
                 card.exited = None;
@@ -124,7 +136,9 @@ impl Stack {
                 self.next_pose += 1;
                 pose
             });
-            // The stack's first frame animates only its top card in.
+            // When the stack is shown for the first time, only its top card moves
+            // in, and only if there is more than one card. The other cards are
+            // drawn at their resting places at once.
             let entering = if first {
                 count > 1 && index == count - 1
             } else {
@@ -156,19 +170,21 @@ impl Stack {
         self.shown = previews.to_vec();
     }
 
-    /// Whether the stack has never shown a card since it started.
+    /// Returns true if no card is in the stack, also none that is fading out.
     pub fn is_empty(&self) -> bool {
         self.cards.is_empty() && self.shown.is_empty()
     }
 
-    /// The cards to draw, bottom first, at `now`.
+    /// Returns the cards to draw at `now`, in drawing order with the bottom
+    /// card first. Removes the cards that have finished fading out.
     pub fn placed(&mut self, now: Instant) -> Vec<Placed> {
         self.cards.retain(|card| {
             card.exited
                 .is_none_or(|exited| now.duration_since(exited) < motion::STACK_EXIT_REMOVE)
         });
         let mut cards = self.cards.iter().collect::<Vec<_>>();
-        // A leaving card goes under every other; the rest stack by age.
+        // A card that is fading out is drawn under all the others. The others
+        // are drawn in the order in which they entered the stack.
         cards.sort_by_key(|card| (card.exited.is_none(), card.z));
         cards
             .into_iter()
@@ -213,7 +229,8 @@ impl Stack {
             .collect()
     }
 
-    /// Whether a card is still moving, fading or changing shade.
+    /// Returns true if at `now` a card is still moving in, fading out or
+    /// changing its shade.
     pub fn animating(&self, now: Instant) -> bool {
         self.cards.iter().any(|card| {
             let entering = card.pose != Pose::Base

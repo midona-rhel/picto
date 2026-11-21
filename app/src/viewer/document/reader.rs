@@ -2,8 +2,7 @@
 //! EPUB books. It draws the document on a white page inside the frame that
 //! `shell.rs` builds: a viewport that scrolls and shows the page, and a
 //! footer with the Previous page button, the text "Page n of m" and the Next
-//! page button. Production does this in `TextDocumentViewer.tsx` and in the
-//! EPUB part of `ArchiveDocumentViewer.tsx`.
+//! page button.
 //!
 //! The file is read and parsed into blocks (`rich::Block`) on a background
 //! thread. The viewer builds GPUI elements from the blocks, and GPUI lays
@@ -25,24 +24,22 @@ use std::sync::Arc;
 /// shown."
 pub const TEXT_LIMIT: usize = 4 << 20;
 
-/// Which of the two kinds of page the viewer draws. The sizes are those of
-/// production's CSS.
+/// Which of the two kinds of page the viewer draws.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum PageStyle {
-    /// The page of a text document (`.page` in production's
-    /// `TextDocumentViewer.module.css`). It is as wide as the viewport has
-    /// room for, and at most 816 px wide. It is at least as high as the
-    /// viewport has room for, but this least height is never more than
-    /// 1056 px. It has 72 px of padding above and below the text and 76 px
-    /// of padding to the left and right of it. The text is 14 px in the UI
-    /// font, with a line height of 1.65.
+    /// The page of a text document. It is as wide as the viewport has room
+    /// for, and at most 816 px wide. It is at least as high as the viewport
+    /// has room for, but this least height is never more than 1056 px. It
+    /// has 72 px of padding above and below the text and 76 px of padding
+    /// to the left and right of it. The text is 14 px in the UI font, with
+    /// a line height of 1.65 times the font size.
     Text,
-    /// The page of a book (`.bookPage` in production's
-    /// `ArchiveDocumentViewer.module.css`). It is as wide as the viewport
-    /// has room for, and at most 760 px wide. It is at least as high as the
-    /// viewport has room for. It has 56 px of padding above and below the
-    /// text and 64 px of padding to the left and right of it. The text is
-    /// 16 px in Georgia, with a line height of 1.65.
+    /// The page of a book. It is as wide as the viewport has room for, and
+    /// at most 760 px wide. It is at least as high as the viewport has room
+    /// for. It has 56 px of padding above and below the text and 64 px of
+    /// padding to the left and right of it. The text is 16 px in the book
+    /// font (`theme::FONT_BOOK`), with a line height of 1.65 times the font
+    /// size.
     Book,
 }
 
@@ -86,13 +83,12 @@ impl PageStyle {
 }
 
 /// Reads the text document at `path` and parses it into blocks. `mime`, the
-/// file's media type, decides the parser, as in production's
-/// `TextDocumentViewer.tsx`. `text/markdown` is parsed as Markdown.
-/// `application/json` is shown as plain text after the JSON has been
-/// written out again with an indent of two spaces. A JSON file that cannot
-/// be parsed, or that was cut off at `TEXT_LIMIT`, is shown as plain text
-/// without that step. `application/rtf` and `text/rtf` are parsed as RTF.
-/// Every other type is shown as plain text.
+/// file's media type, decides the parser. `text/markdown` is parsed as
+/// Markdown. `application/json` is shown as plain text after the JSON has
+/// been written out again with an indent of two spaces. A JSON file that
+/// cannot be parsed, or that was cut off at `TEXT_LIMIT`, is shown as plain
+/// text without that step. `application/rtf` and `text/rtf` are parsed as
+/// RTF. Every other type is shown as plain text.
 ///
 /// At most `TEXT_LIMIT` bytes of the file are read. Bytes that are not valid
 /// UTF-8 are replaced by the character U+FFFD. The function returns the
@@ -100,7 +96,7 @@ impl PageStyle {
 /// "Could not open this document." when the file cannot be opened.
 pub fn load_text(path: &std::path::Path, mime: &str) -> Result<(Vec<Block>, bool)> {
     use std::io::Read;
-    // i18n: an error the document view shows through t()
+    // i18n: the document shell translates this error where it draws it
     let file = std::fs::File::open(path).map_err(|_| anyhow!("Could not open this document."))?;
     let mut bytes = Vec::new();
     file.take(TEXT_LIMIT as u64 + 1).read_to_end(&mut bytes)?;
@@ -336,10 +332,8 @@ impl ReaderViewer {
         let page = self.blocks.as_ref().map(|blocks| {
             let (vertical, horizontal) = style.padding();
             // The page is as wide as the room it has, and at most as wide
-            // as `style.max_width()`. Production's CSS has
-            // `width: min(816px, 100%)` for a text page and
-            // `width: min(100%, 760px)` for a book page. The page is 0 wide
-            // when it has no room.
+            // as `style.max_width()`: 816 px for a text page and 760 px for
+            // a book page. The page is 0 wide when it has no room.
             let width = super::geometry::bound_page_width(
                 self.available.0,
                 (style.max_width(), 1.),
@@ -347,9 +341,7 @@ impl ReaderViewer {
             )
             .map_or(0., |size| size.0);
             // The page is at least as high as the room it has. For a text
-            // page this least height is at most 1056 px. Production's CSS
-            // has `min-height: min(1056px, 100cqh)` for a text page and
-            // `min-height: 100%` for a book page.
+            // page this least height is at most 1056 px.
             let min_height = match style {
                 PageStyle::Text => self.available.1.min(1056.),
                 PageStyle::Book => self.available.1,
@@ -422,13 +414,9 @@ impl ReaderViewer {
 
 /// Returns the margin in pixels above `block` and the margin below it. A
 /// heading on a text page has a margin of 1.4 times its own font size above
-/// it and 0.55 times its own font size below it (`margin: 1.4em 0 0.55em`
-/// in production's `TextDocumentViewer.module.css`). Every other block on a
-/// text page, and every block on a book page, has no margin. That is
-/// because production's stylesheet starts with a rule that sets the margin
-/// and the padding of every element to 0 (`src/app/globals.css`), and only
-/// the rule for the headings of a text page sets a margin after that.
-/// `font_size` is the size of the page's text in pixels.
+/// it and 0.55 times its own font size below it. Every other block on a
+/// text page, and every block on a book page, has no margin. `font_size`
+/// is the size of the page's text in pixels.
 pub fn margins(block: &Block, font_size: f32, style: PageStyle) -> (f32, f32) {
     match (block, style) {
         (Block::Heading(level, _), PageStyle::Text) => {
@@ -465,8 +453,8 @@ pub fn heading_size(level: u8, font_size: f32) -> f32 {
 /// except the last one, which gets its own bottom margin.
 ///
 /// The space above the first block is its own top margin. It is 0 when the
-/// first block is a heading of level 1 or 2, as in production's rule
-/// `.page h1:first-child, .page h2:first-child { margin-top: 0 }`.
+/// first block is a heading of level 1 or 2, so that a document's title
+/// starts at the top of the page's text area.
 pub fn spacing(blocks: &[Block], font_size: f32, style: PageStyle) -> Vec<(f32, f32)> {
     blocks
         .iter()
@@ -490,10 +478,10 @@ pub fn spacing(blocks: &[Block], font_size: f32, style: PageStyle) -> Vec<(f32, 
 
 /// Returns true when `blocks` is not empty and every block is preformatted
 /// text. A plain text file and a JSON file arrive like that, cut into
-/// blocks of 64 lines (`rich::plain_text`). Production draws such a file as
-/// a single `<pre>` element with the class `.plainText`, and a text page
-/// draws these blocks the same way: without margins, in 13 px monospace
-/// text with a line height of 1.6, and with long lines wrapped.
+/// blocks of 64 lines (`rich::plain_text`). A text page draws these blocks
+/// as one continuous text: without margins and without a background, in
+/// 13 px monospace text with a line height of 1.6 times the font size, and
+/// with long lines wrapped.
 pub(super) fn plain_text_page(blocks: &[Block]) -> bool {
     !blocks.is_empty()
         && blocks
@@ -548,9 +536,8 @@ fn block_view(block: &Block, style: PageStyle, font_size: f32) -> AnyElement {
         Block::Heading(level, inline) => {
             let size = heading_size(*level, font_size);
             // A heading is bold. On a text page its line height is 1.25
-            // times its font size (`line-height: 1.25` in the heading rule
-            // of production's `.page`). On a book page it is 1.65 times
-            // its font size, as for the rest of the page.
+            // times its font size. On a book page it is 1.65 times its
+            // font size, as for the rest of the page.
             let line = match style {
                 PageStyle::Text => 1.25,
                 PageStyle::Book => 1.65,
@@ -565,14 +552,12 @@ fn block_view(block: &Block, style: PageStyle, font_size: f32) -> AnyElement {
         Block::Paragraph(inline) => div().child(styled_text(inline, style)).into_any_element(),
         // Preformatted text, such as a code block in Markdown (`<pre><code>`
         // in HTML), is drawn in the monospace font with its tabs expanded
-        // (`expand_tabs`). On a text page it also gets what production's
-        // rule `.page code` gives it: the background `#eef0f2`, padding of
-        // 0.12 times the font size above and below and 0.3 times the font
-        // size left and right, and corners rounded by 4 px. That box is as
-        // wide as the longest line of the text, not as wide as the page,
-        // which is why it is the child of a flex row. A book page has no
-        // rule for `code`, so there the text has no background and no
-        // padding.
+        // (`expand_tabs`). On a text page it also has the background
+        // `#eef0f2`, padding of 0.12 times the font size above and below
+        // and 0.3 times the font size left and right, and corners rounded
+        // by 4 px. That box is as wide as the longest line of the text,
+        // not as wide as the page, which is why it is the child of a flex
+        // row. On a book page the text has no background and no padding.
         Block::Preformatted(text) => {
             let code = div().font_family(theme::FONT_MONO).child(expand_tabs(text));
             let code = match style {
@@ -587,12 +572,9 @@ fn block_view(block: &Block, style: PageStyle, font_size: f32) -> AnyElement {
         }
         // A quote on a text page has a vertical line 3 px wide in the
         // colour `#c7c9cd` along its left edge, 16 px of padding between
-        // the line and the text, and text in the colour `#5b5e65`
-        // (production's rule `.page blockquote`). A quote on a book page
-        // is drawn like the text around it, without a line and without an
-        // indent: `.bookPage` has no rule for `blockquote`, and the reset
-        // at the start of production's stylesheet removes the margins that
-        // a browser gives a quote by default.
+        // the line and the text, and text in the colour `#5b5e65`. A quote
+        // on a book page is drawn like the text around it, without a line
+        // and without an indent.
         Block::Quote(inner) => match style {
             PageStyle::Text => div()
                 .pl(px(16.))
@@ -615,11 +597,11 @@ fn block_view(block: &Block, style: PageStyle, font_size: f32) -> AnyElement {
                 };
                 // The marker of an item is its number followed by a full
                 // stop in a numbered list, which counts up from `start`,
-                // and a bullet in any other list. The reset at the start
-                // of production's stylesheet removes the padding of a
-                // list, so an item is as wide as the page's text and its
-                // marker is drawn outside it: the marker ends 6 px to the
-                // left of the item's left edge, on the item's first line.
+                // and a bullet in any other list. A list is not indented:
+                // an item is as wide as the element that contains the list,
+                // and its marker is drawn outside it. The marker ends 6 px
+                // to the left of the item's left edge, on the item's first
+                // line.
                 div()
                     .relative()
                     .flex()
@@ -636,18 +618,16 @@ fn block_view(block: &Block, style: PageStyle, font_size: f32) -> AnyElement {
                     .children(item.iter().map(|block| block_view(block, style, font_size)))
             }))
             .into_any_element(),
-        // A table is drawn as a browser draws one whose cells have no
-        // padding, which the reset at the start of production's stylesheet
-        // removes. Each column is as wide as its widest cell. There are
-        // 2 px between two columns, between two rows and around the whole
-        // table, which is a browser's default `border-spacing`. The table
-        // is built as a row of columns, each column holding its cell of
-        // every row, so that the cells of a column have the same left
-        // edge. Each column is laid out on its own. The cells of one row
-        // are at the same height in every column because the text of a
-        // cell does not wrap, which makes a cell one line high. A row that
-        // has fewer cells than the table has columns gets an element
-        // without text in each column that it lacks.
+        // A table is drawn without borders, and its cells have no padding.
+        // Each column is as wide as its widest cell. There are 2 px
+        // between two columns, between two rows and around the whole
+        // table. The table is built as a row of columns, each column
+        // holding its cell of every row, so that the cells of a column
+        // have the same left edge. Each column is laid out on its own.
+        // The cells of one row are at the same height in every column
+        // because the text of a cell does not wrap, which makes a cell one
+        // line high. A row that has fewer cells than the table has columns
+        // gets an element without text in each column that it lacks.
         Block::Table(rows) => {
             let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
             div()
@@ -712,8 +692,7 @@ fn styled_text(inline: &Inline, style: PageStyle) -> StyledText {
 /// `page`. Bold text has the bold weight. Italic text is italic. Struck
 /// text has a line 1 px thick through it. A link is in the colour `#2773c9`
 /// and has an underline 1 px thick in that colour. Code has the background
-/// `#eef0f2` on a text page and no background on a book page, because
-/// production's CSS has a rule for `code` only on the text page.
+/// `#eef0f2` on a text page and no background on a book page.
 fn highlight(marks: Marks, page: PageStyle) -> HighlightStyle {
     let mut style = HighlightStyle::default();
     if marks.bold {
@@ -745,9 +724,8 @@ fn highlight(marks: Marks, page: PageStyle) -> HighlightStyle {
 
 /// Returns `text` with each tab character replaced by one to four spaces,
 /// so that the character after the tab is at the next column that is a
-/// multiple of 4 (`tab-size: 4` in production's `.plainText`). Columns are
-/// counted in characters from the start of the line. Text without a tab
-/// is returned as it is.
+/// multiple of 4. Columns are counted in characters from the start of the
+/// line. Text without a tab is returned as it is.
 pub fn expand_tabs(text: &str) -> String {
     if !text.contains('\t') {
         return text.to_owned();

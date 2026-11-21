@@ -1,5 +1,6 @@
-//! How the folder picker is drawn: the tree's guide lines, a folder's row, the
-//! Library row, the dialog for a new folder, and the picker as a whole.
+//! Draws the folder picker: the guide lines of the tree, the row of a folder,
+//! the row for Library, the dialog for a new folder, and the picker as a
+//! whole.
 use super::{FolderPicker, HEIGHT, ROW, Row, View, WIDTH};
 use crate::i18n::t;
 use crate::theme;
@@ -16,10 +17,10 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use picto_library::predicate::SetMatchMode;
 
-/// The guide lines of `FolderTree` for one row. For each ancestor that has
-/// more children below this row, a vertical line runs through the row. The
-/// row's own branch runs from its parent's line to the row, and ends in a
-/// curve when the row is its parent's last child.
+/// Draws the guide lines of the folder tree for one row. For each ancestor
+/// that has more children below this row, a vertical line runs through the
+/// row. The row's own branch runs from its parent's line to the row. When the
+/// row is its parent's last child, the branch ends in a curve.
 fn guides(depth: usize, continues: Vec<bool>, last: bool, color: Rgba) -> impl IntoElement {
     canvas(
         |_, _, _| {},
@@ -46,7 +47,9 @@ fn guides(depth: usize, continues: Vec<bool>, last: bool, color: Rgba) -> impl I
             let x = bounds.left() + px(14. + (depth as f32 - 1.) * 24.);
             let arm_y = (top + unit * 13.).floor();
             if last {
-                // `M0 0 V9.5 A3.5 3.5 0 0 0 3.5 13 H13`
+                // The line of the last child runs down from the top of the row,
+                // turns to the right in a quarter circle of radius 3.5px, and
+                // ends 13px to the right at the middle of the row.
                 let mut path = PathBuilder::stroke(px(1.));
                 path.move_to(point(x + px(0.5), top));
                 path.line_to(point(x + px(0.5), top + unit * 9.5));
@@ -62,7 +65,9 @@ fn guides(depth: usize, continues: Vec<bool>, last: bool, color: Rgba) -> impl I
                     window.paint_path(path, color);
                 }
             } else {
-                // `M0 0 V26 M0 13 H13`
+                // The line of any other child runs down through the whole row,
+                // and a line 13px long goes to the right from it at the middle
+                // of the row.
                 line(window, x, top, bounds.bottom());
                 window.paint_quad(fill(
                     Bounds::from_corners(point(x, arm_y), point(x + px(13.), arm_y + px(1.))),
@@ -87,10 +92,10 @@ impl FolderPicker {
         let focused = self.focus_index == Some(index + self.key_offset());
         let indent = 4. + row.depth as f32 * 24.;
         let group = SharedString::from(format!("folder-row-{index}"));
-        // `.row::before`: the row's fill and outline. They start after the
-        // tree's indent. They are one pixel shorter than the row at the top
-        // and at the bottom, so that two chosen rows, one above the other,
-        // have two pixels between their outlines and are seen as two rows.
+        // The row's background and outline start after the tree's indent.
+        // They are one pixel shorter than the row at the top and at the
+        // bottom, so that two chosen rows, one above the other, have two
+        // pixels between their outlines and are seen as two rows.
         let (fill, outline) = if selected {
             (theme.surface_active(), Some(theme.contrast(25.)))
         } else if focused {
@@ -245,14 +250,14 @@ impl FolderPicker {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    // `.rowExcluded .name`: the name of a folder that the
-                    // filter excludes.
+                    // The name of a folder that the filter excludes is drawn at
+                    // 70% opacity.
                     .when(excluded, |name| name.opacity(0.7))
                     .child(name),
             )
             .child(right.relative())
-            // `.rowExcluded`: the whole row of a folder that the filter
-            // excludes.
+            // The whole row of a folder that the filter excludes is drawn at
+            // 58% opacity.
             .when(excluded, |row| row.opacity(0.58))
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 this.focus_index = Some(index);
@@ -271,7 +276,7 @@ impl FolderPicker {
             )
     }
 
-    /// The Library row of the move mode (`.checkRow`). It stands for the top
+    /// Draws the row for Library in the move mode. It stands for the top
     /// level, above all folders.
     fn root_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = theme::theme(cx);

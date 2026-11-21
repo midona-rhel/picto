@@ -1,10 +1,11 @@
-//! One item's pieces: its cover in the fitted frame, its palette and the
-//! swatch menu, and the rating.
+//! Draws the parts of the inspector that show one item: its cover in a frame
+//! fitted to the cover's shape, the swatches of its palette with their menu,
+//! and its rating.
 use super::*;
 
 impl Inspector {
-    /// The cover in its fitted frame, with the format badge
-    /// (`InspectorPreview`).
+    /// Draws the cover in a frame fitted to its shape, with the format badge
+    /// `label` over it. A right-click on it emits `PreviewMenuRequested`.
     pub(super) fn preview(
         &mut self,
         thumbnail: std::path::PathBuf,
@@ -12,8 +13,9 @@ impl Inspector {
         label: AnyElement,
         cx: &mut Context<Self>,
     ) -> Div {
-        // `.previewImage` shows the thumbnail at its own size, at most 200px
-        // each way; until it is decoded the media's shape stands in.
+        // The frame shows the thumbnail at its own size, at most 200px each
+        // way. Until the thumbnail is decoded, the frame takes its shape from
+        // the media's dimensions.
         let resource = Resource::Path(thumbnail.clone().into());
         let natural = self
             .thumbnails
@@ -21,8 +23,8 @@ impl Inspector {
             .size(&resource)
             .map(|(width, height)| (width.round() as u32, height.round() as u32));
         let (width, height) = fitted(natural.or(dimensions));
-        // `ThumbnailImage`: a thumbnail that cannot be loaded gives way to
-        // the torn page, fitted inside the same frame.
+        // A thumbnail that cannot be loaded is replaced by the picture of a
+        // torn page, fitted inside the same frame.
         let failed = self.thumbnails.read(cx).is_failed(&resource);
         let picture = if failed {
             use crate::grid::art;
@@ -72,9 +74,10 @@ impl Inspector {
                     .relative()
                     .w(px(width.round()))
                     .h(px(height.round()))
-                    // `.previewGlass`'s `box-shadow: 0 0 5px`, outside the
-                    // frame only: CSS draws no shadow under its element, so
-                    // a picture's transparent parts show the panel.
+                    // The frame's shadow, black at 10% with a blur of 5px, is
+                    // drawn only outside the frame. A shadow under the frame
+                    // would show through the transparent parts of a picture,
+                    // which must show the panel.
                     .child(
                         canvas(
                             |_, _, _| {},
@@ -97,7 +100,8 @@ impl Inspector {
                             .rounded(px(theme::RADIUS_MD))
                             .overflow_hidden()
                             .child(picture)
-                            // The glass edge: a 1px ring over the image.
+                            // A 1px ring, black at 10%, is drawn over the edge of
+                            // the image.
                             .child(
                                 div()
                                     .absolute()
@@ -111,8 +115,9 @@ impl Inspector {
             )
     }
 
-    /// The colour pill (`ColorPalette`). It keeps its height when there are
-    /// no colours, so the fields below never move.
+    /// Draws the pill that holds the swatches of the item's colours. It keeps
+    /// its height when there are no colours, so that the fields below it
+    /// never move.
     pub(super) fn palette(
         &self,
         colors: &[picto_library::LabColor],
@@ -150,7 +155,8 @@ impl Inspector {
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                // The hover ring sits one pixel outside the swatch's cell.
+                // The ring that is shown while the pointer is over the swatch
+                // lies one pixel outside the swatch's cell.
                 .child(
                     div()
                         .absolute()
@@ -170,8 +176,8 @@ impl Inspector {
                         .border_1()
                         .border_color(theme.contrast(10.)),
                 )
-                // `ColorPalette`'s `onFilter`: the filter bar opens with
-                // this colour in its colour filter.
+                // A click opens the filter bar with this colour as its colour
+                // filter.
                 .on_click(cx.listener(move |this, _, _, cx| this.filter_by_color(color, cx)))
                 .on_mouse_down(
                     MouseButton::Right,
@@ -205,8 +211,7 @@ impl Inspector {
             .child(swatches)
     }
 
-    /// `onFilter`: the filter bar opens with this colour as its colour
-    /// filter.
+    /// Opens the filter bar and sets `color` as its colour filter.
     pub(super) fn filter_by_color(&mut self, color: u32, cx: &mut Context<Self>) {
         let hex = colors::hex(color);
         self.session.update(cx, |session, cx| {
@@ -217,8 +222,9 @@ impl Inspector {
         });
     }
 
-    /// A swatch's menu (`ColorPalette`'s `openMenu`): Filter by color, then
-    /// the colour copied in seven notations.
+    /// Opens the menu of a swatch at `position`. Its rows are Filter by color
+    /// and seven rows that each copy the colour in one format. After a copy,
+    /// the swatch's tooltip says "Copied!" for 1.5 seconds.
     pub(super) fn open_swatch_menu(
         &mut self,
         color: u32,
@@ -276,8 +282,9 @@ impl Inspector {
         self.menu_target = Some(ChipMenu::Swatch);
     }
 
-    /// The rating row (`StarRating`): the stars up to the one under the
-    /// pointer preview that rating, and a click on the current rating clears it.
+    /// Draws the rating row. While the pointer is over a star, the stars up
+    /// to that one are filled, which shows the rating a click would set. A
+    /// click on the star of the current rating clears the rating.
     pub(super) fn rating(&self, target: Rate, current: usize, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
         let shown = self.hovered_star.unwrap_or(current);
@@ -287,7 +294,8 @@ impl Inspector {
             .items_center()
             .text(theme::TEXT_CAPTION)
             .child(div().flex_1().child(t("Rating")));
-        // The stars sit in the row's value cell, which is drawn at 80%.
+        // The stars are drawn at 80% opacity, as the values of the other
+        // property rows are.
         for value in 1..=5 {
             let star = if value <= shown {
                 ui::icon("star-filled", 12., rgb(theme::RATING)).opacity(0.8)
@@ -329,8 +337,10 @@ impl Inspector {
                         match target {
                             Rate::Item(id) => {
                                 this.rate_item(id, next, cx);
-                                // A pinned item is not the selection, whose
-                                // details the session reads back.
+                                // The session reads the details of the selected
+                                // item again by itself. A pinned item need not be
+                                // the selected one, so the inspector reads its
+                                // details again here.
                                 if this.pinned {
                                     this.reread(membership::Touches::Text, cx);
                                 }

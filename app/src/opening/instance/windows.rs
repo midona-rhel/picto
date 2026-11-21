@@ -1,8 +1,9 @@
-//! The instance's named pipe on Windows. The lock files are in
-//! `%TEMP%\picto-gpui-instances`, the user's own; the pipe takes no remote
-//! clients and is created as the first instance of its name, so a pipe of
-//! that name made by another process makes the listener fail rather than
-//! be joined.
+//! The transport between a launch and an instance on Windows: a named pipe.
+//! The lock files are in `%TEMP%\picto-gpui-instances`, which belongs to the
+//! user. The pipe refuses clients on other machines. The listener creates
+//! the pipe with `FILE_FLAG_FIRST_PIPE_INSTANCE`, so when another process
+//! has already made a pipe of that name, the listener fails and does not
+//! join that pipe.
 use super::Request;
 use std::fs::File;
 use std::os::windows::ffi::OsStrExt as _;
@@ -22,21 +23,24 @@ use windows::Win32::System::Pipes::{
 use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
 use windows::core::PCWSTR;
 
-/// `%TEMP%\picto-gpui-instances`.
+/// Returns `%TEMP%\picto-gpui-instances`, and creates it if it does not
+/// exist.
 pub fn folder() -> std::io::Result<PathBuf> {
     let folder = std::env::temp_dir().join("picto-gpui-instances");
     std::fs::create_dir_all(&folder)?;
     Ok(folder)
 }
 
-/// The copy's canonical path, case folded (NTFS names ignore case).
+/// Returns the copy's canonical path in lower case, as bytes. The path is
+/// put in lower case because NTFS ignores case in names.
 pub fn identity(copy: &Path) -> std::io::Result<Vec<u8>> {
     let canonical = copy.canonicalize()?;
     Ok(canonical.to_string_lossy().to_lowercase().into_bytes())
 }
 
-/// The pipe's name: the key and the user, since pipe names are shared by
-/// every user of the machine.
+/// Returns the pipe's name as a nul-terminated wide string. The name holds
+/// a hash of the user's name and the key, because every user of the machine
+/// shares one set of pipe names.
 fn pipe(key: &str) -> Vec<u16> {
     let user = std::env::var("USERNAME").unwrap_or_default();
     let mut user_hash: u64 = 0xcbf29ce484222325;
@@ -58,9 +62,9 @@ fn create(name: &[u16], first: bool) -> std::io::Result<HANDLE> {
         } else {
             FILE_FLAGS_AND_ATTRIBUTES(0)
         };
-    // SAFETY: `name` is a nul-terminated wide string; no security
-    // attributes, so the default ones (the creator and administrators
-    // write, others read) apply.
+    // SAFETY: `name` is a nul-terminated wide string. No security
+    // attributes are passed, so the default ones apply: the creator and
+    // administrators can write, and others can read.
     let handle = unsafe {
         CreateNamedPipeW(
             PCWSTR(name.as_ptr()),
@@ -79,8 +83,9 @@ fn create(name: &[u16], first: bool) -> std::io::Result<HANDLE> {
     Ok(handle)
 }
 
-/// Listens for launches on the copy: one pipe instance at a time waits for
-/// a launch, and each connected one is answered on a thread of its own.
+/// Starts a thread that listens for launches on the copy. One instance of
+/// the pipe at a time waits for a launch, and each launch that connects is
+/// answered on a thread of its own.
 pub fn serve(
     _folder: &Path,
     key: &str,
@@ -93,18 +98,21 @@ pub fn serve(
         .spawn(move || {
             let mut waiting = HANDLE(first as _);
             loop {
-                // SAFETY: `waiting` is a pipe instance this thread made and
-                // owns; no overlapped structure, so the call blocks.
+                // SAFETY: `waiting` is a pipe instance that this thread made
+                // and owns. No overlapped structure is passed, so the call
+                // blocks until a launch connects.
                 let connected = unsafe { ConnectNamedPipe(waiting, None) }.is_ok()
                     || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
                 if connected {
-                    // SAFETY: the handle is a connected pipe this thread
-                    // owns; the file takes it and closes it when dropped.
+                    // SAFETY: the handle is a connected pipe that this thread
+                    // owns. The file takes the handle and closes it when the
+                    // file is dropped.
                     let stream = unsafe { File::from_raw_handle(waiting.0) };
                     let deliver = deliver.clone();
                     std::thread::spawn(move || super::answer(stream, &*deliver));
                 } else {
-                    // SAFETY: the handle is ours and not used again.
+                    // SAFETY: this thread owns the handle and does not use it
+                    // again.
                     let _ = unsafe { CloseHandle(waiting) };
                 }
                 match create(&name, false) {
@@ -125,9 +133,11 @@ pub fn connect(_folder: &Path, key: &str) -> std::io::Result<File> {
         .open(name)
 }
 
-/// Lets the instance bring its window in front of this launch's, which the
-/// system otherwise refuses to a process that is not in front.
+/// Allows the instance with process id `pid` to bring its window in front
+/// of this launch's window. Windows refuses that to a process that is not
+/// in front unless the process in front allows it.
 pub fn allow_foreground(pid: u32) {
-    // SAFETY: takes a process id; failing leaves the window where it is.
+    // SAFETY: the call takes a process id. If it fails, the instance's
+    // window stays where it is.
     let _ = unsafe { AllowSetForegroundWindow(pid) };
 }

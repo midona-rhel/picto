@@ -1,14 +1,14 @@
-//! Exporting, as `filesController.ts`, `ExportModal.tsx` and
-//! `PictoPackModal.tsx` do it: an item, a selection or a whole destination
-//! written out as its original files (`media.export` with the original
-//! format, after a folder dialog), converted and resized through the Export
-//! dialog, or packed with its metadata into a Picto Pack
-//! (`picto_pack.export`, after a save dialog); and a Picto Pack read back in
-//! (`picto_pack.inspect`, the dialog showing what it holds, then
-//! `picto_pack.import`).
+//! Exports items and reads Picto Packs. An item, a selection or a whole
+//! destination can be written out in three ways: as its original files
+//! (the command `media.export` with the original format, after a folder
+//! dialog), converted and resized through the Export dialog, or packed
+//! with its metadata into a Picto Pack (the command `picto_pack.export`,
+//! after a save dialog). A Picto Pack is read back in with
+//! `picto_pack.inspect`, then a dialog that shows what the pack holds, and
+//! then `picto_pack.import`.
 //!
-//! One `Exports` view serves the window; the shell draws it over everything
-//! and anything else reaches it through [`get`].
+//! The window has one `Exports` view. The shell draws it over everything
+//! else, and other code reaches it through [`get`].
 mod view;
 
 use crate::i18n::t;
@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
-/// What a Picto Pack is made from (`PictoPackSource`).
+/// The items that a Picto Pack is made from.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PackSource {
     Items(SelectionTarget),
@@ -44,7 +44,7 @@ impl PackSource {
     }
 }
 
-/// `ExportFormat`, with the label the dialog's select gives it.
+/// A file format that the Export dialog offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     Original,
@@ -52,13 +52,12 @@ pub enum Format {
     Png,
     Webp,
     Avif,
-    /// The original files in one zip archive, which production does not
-    /// offer.
+    /// The original files in one zip archive.
     Zip,
 }
 
 impl Format {
-    /// `FORMAT_OPTIONS`, in their order, then the archive.
+    /// Every format, in the order in which the dialog's select lists them.
     pub const ALL: [Format; 6] = [
         Format::Original,
         Format::Jpeg,
@@ -94,18 +93,20 @@ impl Format {
         Self::ALL.into_iter().find(|format| format.value() == value)
     }
 
-    /// The quality slider shows for the lossy formats only.
+    /// Returns whether the dialog shows the quality slider, which it does
+    /// for the lossy formats only.
     pub fn has_quality(self) -> bool {
         !matches!(self, Format::Original | Format::Png | Format::Zip)
     }
 
-    /// Resizing needs the file to be converted.
+    /// Returns whether the dialog offers resizing. A file can be resized
+    /// only when it is converted to another format.
     pub fn resizes(self) -> bool {
         !matches!(self, Format::Original | Format::Zip)
     }
 }
 
-/// The arguments of `media.export`, as `exportMedia` sends them.
+/// The arguments of the command `media.export`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Request {
     pub target: SelectionTarget,
@@ -118,7 +119,8 @@ pub struct Request {
 }
 
 impl Request {
-    /// Every file as it is (`chooseAndExportOriginals`).
+    /// Returns the request that writes every file of `target` as it is, in
+    /// its original format.
     pub fn originals(target: SelectionTarget, output_dir: PathBuf) -> Self {
         Self {
             target,
@@ -144,8 +146,10 @@ impl Request {
     }
 }
 
-/// How a finished export is reported: how many files were written, and
-/// the first reason one was not.
+/// Returns how a finished export is reported. The first string is the
+/// notification's title, which says how many files were written. The second
+/// is present when files were skipped: it gives their number and the first
+/// error.
 fn export_outcome(result: &Value) -> (String, Option<String>) {
     let count = |key: &str| result[key].as_u64().unwrap_or(0);
     let exported = count("exported");
@@ -160,19 +164,22 @@ fn export_outcome(result: &Value) -> (String, Option<String>) {
     (title, problem)
 }
 
-/// "1 file", "3 files", with grouped digits. This app reports exports
-/// production leaves silent; their words are English.
+/// Returns the count with the word "file" or "files", for example "1 file"
+/// or "1,200 files". The report of an export is in English in every
+/// language.
 fn files(count: u64) -> String {
     format!(
         "{} file{}",
         crate::i18n::format::grouped(count),
-        // i18n: this app's own export report, in English
+        // i18n: the report of an export is in English in every language
         if count == 1 { "" } else { "s" }
     )
 }
 
-/// `safePackName`: a pack's file name from a destination's name, without
-/// the characters file systems refuse or trailing dots.
+/// Returns the file name for a pack that is named after a destination.
+/// Each run of characters that file systems refuse becomes one hyphen, and
+/// dots at the end are removed. The name is "Picto Pack" when nothing is
+/// left.
 pub fn safe_pack_name(value: &str) -> String {
     let mut cleaned = String::new();
     let mut in_run = false;
@@ -192,14 +199,15 @@ pub fn safe_pack_name(value: &str) -> String {
     }
     let cleaned = cleaned.trim_end_matches('.');
     if cleaned.is_empty() {
-        // i18n: a file's name, English as production suggests it
+        // i18n: a file's name, which is English in every language
         "Picto Pack".into()
     } else {
         cleaned.to_owned()
     }
 }
 
-/// What a Picto Pack holds (`PictoPackSummary`).
+/// What a Picto Pack holds, as the commands `picto_pack.inspect` and
+/// `picto_pack.export` report it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Summary {
     pub name: String,
@@ -224,7 +232,7 @@ impl Summary {
     }
 }
 
-/// How a notification reads.
+/// Whether a notification reports a success, a warning or an error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
     Success,
@@ -232,8 +240,7 @@ pub enum Level {
     Error,
 }
 
-/// Shows a notification (`showSuccessNotification`, `showWarningNotification`,
-/// `showErrorNotification`).
+/// Shows a notification of the given level.
 pub(crate) fn notify(level: Level, title: &str, message: &str, cx: &mut App) {
     let (title, message) = (title.to_owned(), message.to_owned());
     match level {
@@ -243,15 +250,15 @@ pub(crate) fn notify(level: Level, title: &str, message: &str, cx: &mut App) {
     }
 }
 
-/// The dialogs export opens.
+/// A dialog that this view opens.
 enum Dialog {
-    /// `ExportModal`
+    /// The Export dialog, which converts and resizes files.
     Convert(Convert),
-    /// `PictoPackModal`
+    /// The Picto Pack dialog, for a pack that is written or read in.
     Pack(Pack),
 }
 
-/// The Export dialog's choices.
+/// The choices that the user has made in the Export dialog.
 struct Convert {
     target: SelectionTarget,
     count: u64,
@@ -266,7 +273,8 @@ struct Convert {
 
 struct Pack {
     mode: PackMode,
-    /// The pack is being written or read in; the dialog waits for it.
+    /// True while the pack is being written or read in. The dialog cannot be
+    /// closed during that time.
     busy: bool,
 }
 
@@ -285,12 +293,12 @@ enum PackMode {
 pub struct Exports {
     session: Entity<Session>,
     dialog: ui::modal::Host<Dialog>,
-    /// Where the keyboard goes back to.
+    /// The element that gets the keyboard focus when a dialog closes.
     back: FocusHandle,
-    /// Packs the system asked the app to open (`pendingPictoPackPaths`),
-    /// shown one at a time as each dialog closes.
+    /// The packs that the system asked the app to open. They are shown one
+    /// at a time, each after the dialog before it has closed.
     pending_packs: VecDeque<PathBuf>,
-    /// A pack is being read for its dialog.
+    /// True while a pack is being read so that its dialog can be shown.
     pack_opening: bool,
 }
 
@@ -298,24 +306,25 @@ struct ExportsGlobal(WeakEntity<Exports>);
 
 impl Global for ExportsGlobal {}
 
-/// The window's exports, for the views that start one.
+/// Returns the window's `Exports` view, for the views that start an export.
 pub fn get(cx: &App) -> Option<Entity<Exports>> {
     cx.try_global::<ExportsGlobal>()?.0.upgrade()
 }
 
-/// Keeps only the digits of what was typed (`replace(/\D/g, '')`).
+/// Returns `text` with every character that is not a digit removed.
 fn digits(text: &str) -> String {
     text.chars().filter(char::is_ascii_digit).collect()
 }
 
-/// A dimension field's value, if it holds a whole number.
+/// Returns the number in a width or height field, or `None` when the field
+/// is empty or the number does not fit in a `u32`.
 fn dimension(input: &Entity<TextInput>, cx: &App) -> Option<u32> {
     let text = input.read(cx).value();
     if text.is_empty() {
         return None;
     }
-    // Production's `parseInt` of the digits; a number past what `u32`
-    // holds is no size anyone exports at.
+    // The field holds digits only, so parsing fails only for a number that
+    // is too large for `u32`. Such a number is treated as no size.
     text.parse::<u32>().ok()
 }
 
@@ -331,9 +340,9 @@ impl Exports {
         }
     }
 
-    // ── Export Originals ────────────────────────────────────────
+    // The functions below export files in their original format.
 
-    /// `chooseAndExportOriginals`: the folder dialog, then every file as
+    /// Asks for a folder and then writes every file of `target` into it as
     /// it is.
     pub fn export_originals(&mut self, target: SelectionTarget, cx: &mut Context<Self>) {
         let chosen = crate::prompt::folder(t("Export originals"), cx);
@@ -352,7 +361,9 @@ impl Exports {
         .detach();
     }
 
-    /// `exportMedia`, and its outcome as a notification.
+    /// Sends the export to the application and shows its outcome as a
+    /// notification. `failure` is the notification's title when the export
+    /// fails.
     fn export(&mut self, request: Request, failure: &'static str, cx: &mut Context<Self>) {
         let answer = self
             .session
@@ -360,8 +371,8 @@ impl Exports {
             .dispatch("media.export", request.json());
         cx.spawn(async move |this, cx| {
             let result = answer.await;
-            // One notification shows at a time, so files that were skipped
-            // are told with the count rather than after it.
+            // Only one notification shows at a time, so the skipped files are
+            // reported in the same notification as the number of written files.
             let _ = this.update(cx, |_, cx| match result {
                 Ok(Ok(result)) => match export_outcome(&result) {
                     (title, Some(problem)) => notify(Level::Warning, &title, &problem, cx),
@@ -374,9 +385,10 @@ impl Exports {
         .detach();
     }
 
-    // ── Export As ───────────────────────────────────────────────
+    // The functions below serve the Export dialog.
 
-    /// `ExportModal`, for `count` items, starting from the original format.
+    /// Opens the Export dialog for `count` items. The original format is
+    /// selected at first.
     pub fn export_as(&mut self, target: SelectionTarget, count: u64, cx: &mut Context<Self>) {
         let width = cx.new(|cx| {
             TextInput::new(Kind::Form, cx)
@@ -418,7 +430,8 @@ impl Exports {
         );
     }
 
-    /// Browse: the folder the files go to.
+    /// Asks for the folder that the files go to, for the dialog's Browse
+    /// button.
     fn browse(&mut self, cx: &mut Context<Self>) {
         let chosen = crate::prompt::folder(t("Choose export folder"), cx);
         cx.spawn(async move |this, cx| {
@@ -458,8 +471,8 @@ impl Exports {
         }
     }
 
-    /// The Export dialog's Export: the dialog closes and the files are
-    /// written.
+    /// Closes the Export dialog and writes the files, for the dialog's
+    /// Export button.
     fn convert(&mut self, cx: &mut Context<Self>) {
         let Some(Dialog::Convert(convert)) = self.dialog.content() else {
             return;
@@ -481,10 +494,10 @@ impl Exports {
         self.export(request, "Could not export files", cx);
     }
 
-    // ── Picto Packs ─────────────────────────────────────────────
+    // The functions below write and read Picto Packs.
 
-    /// `requestPictoPackExport`: the dialog that says what a pack keeps,
-    /// before the save dialog.
+    /// Opens the dialog that says what a pack keeps. The save dialog follows
+    /// when the user confirms.
     pub fn export_pack(
         &mut self,
         source: PackSource,
@@ -497,7 +510,7 @@ impl Exports {
                 mode: PackMode::Export {
                     source,
                     count,
-                    // i18n: a file's name, English as production suggests it
+                    // i18n: a file's name, which is English in every language
                     name: name.unwrap_or_else(|| "Picto Pack".into()),
                 },
                 busy: false,
@@ -507,11 +520,11 @@ impl Exports {
         );
     }
 
-    /// `chooseAndImportPictoPack`: the file dialog, then the pack's dialog.
-    /// The caller has checked that an import may start.
+    /// Asks for a pack file and then opens the pack's dialog. The caller has
+    /// checked that an import may start.
     pub fn choose_pack(&mut self, cx: &mut Context<Self>) {
-        // TODO: limit the dialog to `.picto-pack` files; GPUI's path
-        // prompt takes no file types.
+        // TODO: limit the dialog to `.picto-pack` files. GPUI's path prompt
+        // takes no file types.
         let chosen = crate::prompt::file(t("Import Picto Pack"), cx);
         cx.spawn(async move |this, cx| {
             let Ok(Some(path)) = chosen.await else {
@@ -522,8 +535,8 @@ impl Exports {
         .detach();
     }
 
-    /// `openPictoPackImport`: reads what the pack holds and shows it. The
-    /// caller has checked that an import may start.
+    /// Reads what the pack at `path` holds and shows it in the pack dialog.
+    /// The caller has checked that an import may start.
     pub fn open_pack(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         let answer = self.session.read(cx).dispatch(
             "picto_pack.inspect",
@@ -562,8 +575,10 @@ impl Exports {
         .detach();
     }
 
-    /// The pack dialog's primary button: Choose Destination… then the save
-    /// dialog and the export, or Import.
+    /// Runs the pack dialog's primary button. For an export the button is
+    /// "Choose Destination...": it opens the save dialog and then writes the
+    /// pack. For an import the button is "Import": it reads the pack into the
+    /// library.
     fn run_pack(&mut self, cx: &mut Context<Self>) {
         let Some(Dialog::Pack(pack)) = self.dialog.content_mut() else {
             return;
@@ -593,7 +608,8 @@ impl Exports {
             }
             PackMode::Import { path, .. } => {
                 let path = path.clone();
-                // `allowTaskAction('import')`, again now that it starts.
+                // Check again that an import may start, because another import
+                // may have started while the dialog was open.
                 let allowed = crate::imports::get(cx)
                     .is_none_or(|imports| imports.update(cx, |imports, cx| imports.allow(cx)));
                 if !allowed {
@@ -667,7 +683,8 @@ impl Exports {
         .detach();
     }
 
-    /// The pack dialog takes input again after a cancel or a failure.
+    /// Lets the pack dialog take input again after the save dialog was
+    /// cancelled or the work failed.
     fn settle_pack(&mut self, cx: &mut Context<Self>) {
         if let Some(Dialog::Pack(pack)) = self.dialog.content_mut() {
             pack.busy = false;
@@ -675,8 +692,9 @@ impl Exports {
         }
     }
 
-    /// Cancel, Escape, the close button or the backdrop: a pack dialog at
-    /// work cannot be closed.
+    /// Starts the dialog's fade-out, for Escape, the close button and a click
+    /// on the backdrop. A pack dialog that is writing or reading a pack stays
+    /// open.
     fn dismiss(&mut self, cx: &mut Context<Self>) {
         if let Some(Dialog::Pack(Pack { busy: true, .. })) = self.dialog.content() {
             return;
@@ -685,15 +703,15 @@ impl Exports {
         self.drain_packs(cx);
     }
 
-    /// A dialog whose work is done, or Cancel: it goes at once, and the
-    /// next pack the system asked to open comes up.
+    /// Removes the dialog at once, for Cancel and for a dialog whose work is
+    /// done. Then the next pack that the system asked to open is shown.
     fn close(&mut self, cx: &mut Context<Self>) {
         self.dialog.close(cx);
         self.drain_packs(cx);
     }
 
-    /// `enqueuePictoPack`: a pack opened from the file manager or a second
-    /// launch, shown once no dialog of this view is up.
+    /// Queues a pack that was opened from the file manager or passed by a
+    /// second launch. Its dialog is shown once no dialog of this view is open.
     pub fn queue_pack(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         if !self.pending_packs.contains(&path) {
             self.pending_packs.push_back(path);
@@ -701,11 +719,10 @@ impl Exports {
         self.drain_packs(cx);
     }
 
-    /// `startAssociatedFilesRuntime`'s drain: the next queued pack is opened
-    /// while no dialog is up (production waits for the pack dialog only;
-    /// here the Export dialog is waited for too, since one dialog of this
-    /// view shows at a time and opening the pack would close it). A pack
-    /// that cannot be opened is reported and the next one comes up.
+    /// Opens the next queued pack when no dialog of this view is open and no
+    /// pack is being read. Only one dialog of this view shows at a time, so
+    /// opening a pack while the Export dialog is open would close that dialog.
+    /// A pack that cannot be opened is reported, and the next one is opened.
     fn drain_packs(&mut self, cx: &mut Context<Self>) {
         let showing = self
             .dialog
@@ -714,8 +731,8 @@ impl Exports {
         if self.pack_opening || showing {
             return;
         }
-        // `openPictoPackImport`'s `allowTaskAction('import')`: a pack
-        // refused while an import runs is let go, as production's claim is.
+        // A pack cannot be opened while an import runs. `allow` reports that
+        // to the user, and the pack is removed from the queue.
         while let Some(path) = self.pending_packs.pop_front() {
             let allowed = crate::imports::get(cx)
                 .is_none_or(|imports| imports.update(cx, |imports, cx| imports.allow(cx)));

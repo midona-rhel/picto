@@ -1,12 +1,14 @@
-//! `ColorPicker.tsx`: a row of colour swatches, the chosen one ringed in its
-//! colour over the app background with a check. In a context menu it is the
-//! menu's swatch row ([`menu_row`]); elsewhere it is [`color_picker`].
+//! A row of colour swatches. The chosen swatch has a check, and around it a
+//! ring in its colour with a gap in the app's background colour between them.
+//! In a context menu the row is the menu's swatch row ([`menu_row`]).
+//! Elsewhere it is [`color_picker`].
 use super::menu;
 use crate::theme;
 use gpui::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
-/// `FOLDER_COLORS`: the label and the stored hex, `None` for the default.
+/// The colours a folder can have: the label and the stored hex code of each.
+/// `None` is the default colour.
 const FOLDER_COLORS: [(&str, Option<&str>); 10] = [
     ("Default", None),
     ("Blue", Some("#339AF0")),
@@ -22,8 +24,9 @@ const FOLDER_COLORS: [(&str, Option<&str>); 10] = [
 
 const SWATCH: f32 = 18.;
 
-/// Which swatch shows `value` chosen. A colour the row does not have
-/// rings nothing, as `local === c.hex` finds no swatch.
+/// Returns the index of the swatch that is shown as chosen for `value`.
+/// Returns `None` for a colour that the row does not have, and no swatch is
+/// then shown as chosen.
 pub fn selected(value: Option<&str>) -> Option<usize> {
     FOLDER_COLORS
         .iter()
@@ -34,8 +37,8 @@ pub fn selected(value: Option<&str>) -> Option<usize> {
         })
 }
 
-/// The swatch row inside a context menu. Its chosen value is the hex, or
-/// empty for the default.
+/// Returns the swatch row for a context menu. The value of a swatch is its hex
+/// code, or an empty text for the default colour.
 pub fn menu_row(action: &'static str, value: Option<&str>) -> menu::Swatches {
     menu::swatches(
         action,
@@ -51,12 +54,13 @@ pub fn menu_row(action: &'static str, value: Option<&str>) -> menu::Swatches {
     )
 }
 
-/// One swatch: an 18px disc of `color`, with the check in `check` when it
-/// is the chosen one, ringed as
-/// `box-shadow: 0 0 0 1.5px var(--color-bg-app), 0 0 0 3px <colour>` draws
-/// it. The rings are discs behind the swatch rather than spread shadows,
-/// which GPUI paints with the element's own corner radius and the later
-/// one on top.
+/// Returns one swatch: an 18px disc of `color`. When `check` is given, the
+/// swatch is the chosen one: it shows a check in the colour `check`, and
+/// around the disc a 1.5px ring in the app's background colour and around that
+/// a 1.5px ring in `color`. The rings are drawn as larger discs behind the
+/// swatch. Spread shadows are not used, because GPUI paints a spread shadow
+/// with the element's own corner radius, and paints the later shadow over the
+/// earlier one.
 pub fn swatch(color: Rgba, check: Option<Rgba>, cx: &App) -> Div {
     let background = theme::theme(cx).background();
     let disc = |inset: f32, fill: Rgba| {
@@ -83,7 +87,8 @@ pub fn swatch(color: Rgba, check: Option<Rgba>, cx: &App) -> Div {
 
 type Handler = Rc<dyn Fn(Option<&'static str>, &mut Window, &mut App) + 'static>;
 
-/// The swatch row on its own, spread across the width it is given.
+/// The swatch row outside a menu. The swatches are spread across the width
+/// that the row is given.
 #[derive(IntoElement)]
 pub struct ColorPicker {
     id: ElementId,
@@ -133,7 +138,8 @@ impl RenderOnce for ColorPicker {
             let handler = self.on_pick.clone();
             let pressed = handler.clone();
             let hex = *hex;
-            // Named by its colour, as its tooltip; the chosen one checked.
+            // Assistive technology names the swatch by its colour, which is
+            // also its tooltip, and is told whether it is the chosen one.
             let target = div()
                 .id(("swatch", position))
                 .role(Role::RadioButton)
@@ -146,7 +152,7 @@ impl RenderOnce for ColorPicker {
                         handler(hex, window, cx);
                     }
                 });
-            // `ColorPicker`'s swatches are `<button>`s: stops with no ring.
+            // Each swatch is a Tab stop and draws no focus ring.
             let target = super::focus::button(
                 target,
                 &ElementId::NamedChild(

@@ -3,16 +3,14 @@ use crate::theme::Text as _;
 use gpui::*;
 use std::time::{Duration, Instant};
 
-/// The loading spinner makes one full turn in this time. Production's CSS
-/// animation `property-spinner` has the same duration.
+/// The time in which the loading spinner makes one full turn.
 const SPIN: Duration = Duration::from_millis(650);
 
-/// One row of the inspector's property list, a port of production's
-/// `PropertyRow.tsx`. The row is 20 px high. The label is on the left in a
-/// column at least 88 px wide. The value is right-aligned after a 12 px gap,
-/// in the Fira Mono font with tabular figures, and is cut off with an
-/// ellipsis when it does not fit. While the value is loading, a spinner is
-/// drawn where the value would be.
+/// One row of the inspector's property list. The row is 20 px high. The label
+/// is on the left in a column at least 88 px wide. The value is right-aligned
+/// after a 12 px gap, in the Fira Mono font with tabular figures, and is cut
+/// off with an ellipsis when it does not fit. While the value is loading, a
+/// spinner is drawn where the value would be.
 #[derive(IntoElement)]
 pub struct PropertyRow {
     label: SharedString,
@@ -43,7 +41,7 @@ pub enum RowColor {
 }
 
 /// Makes a property row with the inspector's colours. The value is drawn in
-/// Fira Mono, which production names `--inspector-mono-font-family`.
+/// Fira Mono.
 pub fn property_row(label: impl Into<SharedString>, value: impl Into<SharedString>) -> PropertyRow {
     PropertyRow {
         label: label.into(),
@@ -54,11 +52,11 @@ pub fn property_row(label: impl Into<SharedString>, value: impl Into<SharedStrin
     }
 }
 
-/// The loading spinner: a ring 10 px across with a gap on its right side,
-/// which production styles as `.spinner`. Its angle is computed from the
-/// time since `since`, so two spinners that started at the same time are
-/// always at the same angle. It asks for a new frame every
-/// [`crate::motion::LOOP_FRAME`] instead of at the display's refresh rate.
+/// Returns the loading spinner: a ring 10 px across with a gap on its right
+/// side. Its angle is computed from the time since `since`, so two spinners
+/// that started at the same time are always at the same angle. It asks for a
+/// new frame every [`crate::motion::LOOP_FRAME`] instead of at the display's
+/// refresh rate.
 pub fn spinner(since: Instant, window: &mut Window, cx: &mut App) -> Svg {
     crate::motion::loop_frame(window, cx);
     let turn = since.elapsed().as_secs_f32() / SPIN.as_secs_f32();
@@ -115,9 +113,8 @@ impl RenderOnce for PropertyRow {
         }
         let label = label.child(self.label.clone());
         // Assistive technology reads the row as one line of text: the label
-        // followed by the value. While the value is loading it reads
-        // "Loading" followed by the label, which is the `aria-label` of
-        // production's spinner.
+        // followed by the value. While the value is loading it reads "Loading"
+        // followed by the label.
         let read = match self.loading {
             Some(_) => crate::tf!("Loading {value0}", self.label),
             None => format!("{} {}", self.label, self.value),

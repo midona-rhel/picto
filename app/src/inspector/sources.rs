@@ -22,9 +22,10 @@ use crate::ui::{
 use gpui::*;
 use std::{cell::Cell, rc::Rc};
 
-/// `handleSave`: the list once the address at `index` is saved as `value`.
-/// A blank value deletes the address; saving past the end adds one, unless
-/// it is blank.
+/// Returns the list of addresses after the address at `index` is saved as
+/// `value`, with the spaces around `value` removed. A blank value deletes the
+/// address. An `index` past the end of the list adds the value as a new
+/// address, or returns `None` if the value is blank.
 pub fn saved(urls: &[String], index: usize, value: &str) -> Option<Vec<String>> {
     let trimmed = value.trim();
     if index >= urls.len() {
@@ -43,7 +44,7 @@ pub fn saved(urls: &[String], index: usize, value: &str) -> Option<Vec<String>> 
     Some(next)
 }
 
-/// `handleRemove`
+/// Returns the list of addresses without the one at `index`.
 pub fn removed(urls: &[String], index: usize) -> Vec<String> {
     urls.iter()
         .enumerate()
@@ -52,8 +53,11 @@ pub fn removed(urls: &[String], index: usize) -> Vec<String> {
         .collect()
 }
 
-/// `splitUrl`: the host without `www.`, and the path (unless it is `/`),
-/// query and fragment; an address that does not parse is all host.
+/// Splits an address into the two parts that the field draws in different
+/// colours. The first part is the host without a leading `www.`. The second
+/// is the path, unless the path is only `/`, followed by the query and the
+/// fragment. An address that cannot be parsed is returned whole as the first
+/// part.
 pub fn split(url: &str) -> (String, String) {
     match url::Url::parse(url) {
         Ok(address) => {
@@ -76,8 +80,10 @@ pub fn split(url: &str) -> (String, String) {
     }
 }
 
-/// The list's state: whether it is open, which row is being edited (the
-/// row past the last is a new address), and the field's place.
+/// Holds the state of the list of addresses: whether it is open, which row is
+/// being edited, the text field of that row, and where the address field was
+/// last drawn. A row index one past the last address means that a new
+/// address is being typed.
 pub(super) struct SourcesState {
     pub(super) open: bool,
     pub(super) editing: Option<usize>,
@@ -100,7 +106,8 @@ impl SourcesState {
     }
 }
 
-/// `UrlLabel`: the host, then the rest at half strength, cut with an
+/// Returns the label of one address: the host, and after it the rest of the
+/// address at 50% opacity. A rest that does not fit is cut off with an
 /// ellipsis.
 fn label(url: &str) -> Div {
     let (host, rest) = split(url);
@@ -118,8 +125,9 @@ fn label(url: &str) -> Div {
 }
 
 impl Inspector {
-    /// The addresses the field shows and edits, and whether they can be
-    /// edited.
+    /// Returns the addresses that the field shows and edits: those of the
+    /// item, or those that all selected items share. Returns `None` when the
+    /// inspector describes neither, in which case there is nothing to edit.
     fn source_urls(&self) -> Option<Vec<String>> {
         match self.shown {
             super::Mode::Item => self.item.as_ref().map(|item| item.root.source_urls.clone()),
@@ -137,7 +145,7 @@ impl Inspector {
         cx.notify();
     }
 
-    /// `handleAdd`: opens the list on a new, empty address.
+    /// Opens the list with an empty text field for a new address.
     fn add_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let count = self.source_urls().map_or(0, |urls| urls.len());
         self.edit_source(count, String::new(), window, cx);
@@ -150,7 +158,8 @@ impl Inspector {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // A row already being edited is saved first, as its blur does.
+        // If another row is being edited, it is saved first, as it is when its
+        // text field loses the focus.
         self.save_source(cx);
         self.sources.open = true;
         self.sources.editing = Some(index);
@@ -163,7 +172,7 @@ impl Inspector {
         cx.notify();
     }
 
-    /// Saves the row being edited, if any.
+    /// Saves the row that is being edited, if there is one.
     pub(super) fn save_source(&mut self, cx: &mut Context<Self>) {
         let Some(index) = self.sources.editing.take() else {
             return;
@@ -188,8 +197,8 @@ impl Inspector {
         }
     }
 
-    /// The source field. Without addresses to show (`unavailable`) it holds
-    /// a dash and no button.
+    /// Draws the source field. When `urls` is `None`, the field holds a dash
+    /// and has no link button.
     pub(super) fn source(&mut self, urls: Option<&[String]>, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
         let unavailable = urls.is_none();
@@ -365,7 +374,7 @@ impl Inspector {
                 .child(self.sources.input.clone())
         };
         let mut list = div().w_full().flex().flex_col();
-        // The first row: the text field for a new address while one is
+        // The first row is the text field for a new address while one is
         // being typed, and the "Add URL" button otherwise.
         list = list.child(if editing == Some(urls.len()) {
             div()
@@ -419,7 +428,8 @@ impl Inspector {
                         .items_center()
                         .cursor_pointer()
                         .hover(move |style| style.bg(theme.control_surface()))
-                        // `.urlDropdown .urlLabel { transform: translateY(-1px) }`
+                        // A top margin of -2px in a row that centres its content
+                        // draws the address 1px higher than the centre.
                         .child(label(url).mt(px(-2.)))
                         .on_click(move |_, _, cx| crate::desktop::open_link(&address, cx)),
                 )
@@ -466,14 +476,15 @@ impl Inspector {
             .text_color(theme.text())
             .on_action(
                 cx.listener(|this, _: &crate::ui::text_input::Cancel, _, cx| {
-                    // Escape leaves the row as it was.
+                    // Escape ends the editing without saving, so the row keeps
+                    // the address it had.
                     this.sources.editing = None;
                     cx.notify();
                 }),
             )
             .child(list);
-        // Over the field where it is laid out; a press outside it and the
-        // field closes it.
+        // The list is drawn over the field, at the place where the field is
+        // laid out. A press outside the list and outside the field closes it.
         let this = cx.entity().downgrade();
         div().absolute().top_0().left_0().child(
             ui::popover::floating("source-floating", ui::layer::OVERLAY)

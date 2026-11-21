@@ -1,44 +1,47 @@
 //! What assistive technology (VoiceOver, Narrator, Orca) is told about the
-//! app: GPUI's AccessKit tree, which each element with an id and a role
-//! joins (`.role(…)`, `.aria_label(…)`, `.aria_toggled(…)`, …).
+//! app. GPUI builds an AccessKit tree, and each element that has an id and a
+//! role is a node of it (`.role(…)`, `.aria_label(…)`, `.aria_toggled(…)`, …).
 //!
 //! GPUI builds the tree only while assistive technology has asked for it
-//! (`Window::is_a11y_active`); otherwise the roles and names elements are
-//! given are stored and never read. Work done only to describe something
-//! (formatting a name from numbers, a node per item) is skipped unless the
-//! window is building the tree ([`active`]).
+//! (`Window::is_a11y_active`). At other times the roles and names that
+//! elements are given are stored and never read. Work that is done only to
+//! describe something (formatting a name from numbers, making a node per item)
+//! is skipped unless the window is building the tree ([`active`]).
 //!
-//! Rules (the README's "Accessibility"):
-//! - Every shared control sets its own role, name, value and states; a view
-//!   gives a control the name production's `aria-label` gives it, through
-//!   `t`, when its visible text or tooltip is not that name.
-//! - A control is named by its visible label, else by its tooltip's text
-//!   (production's icon buttons repeat their tooltip in `aria-label`).
-//! - Plain text is not in the tree: a container that reads as text to
-//!   production (a heading, a status line, a dialog's message) takes a role
-//!   and its text as a label.
-//! - Ids under one node with a role must not repeat in a frame: a debug
-//!   build stops on a repeated one while the tree is built.
+//! The rules, which the README also gives under "Accessibility":
+//! - Every shared control sets its own role, name, value and states. A view
+//!   gives a control a name of its own, through `t`, when the control's
+//!   visible text or tooltip is not a good name for it.
+//! - A control is named by its visible label, or else by its tooltip's text.
+//! - Plain text is not in the tree. A container whose text assistive
+//!   technology should read (a heading, a status line, a dialog's message)
+//!   takes a role and its text as a label.
+//! - Ids under one node with a role must not repeat in a frame. A debug build
+//!   stops on a repeated id while the tree is built.
 use gpui::{Role, SharedString, StatefulInteractiveElement, Toggled, Window};
 
-/// `aria-checked` / `aria-pressed` from a boolean.
+/// Returns the `Toggled` state for a boolean: `True` when `on` is true, and
+/// `False` otherwise. A control that can be ticked or pressed reports it.
 pub fn toggled(on: bool) -> Toggled {
     if on { Toggled::True } else { Toggled::False }
 }
 
-/// Whether the window is building its accessibility tree this frame: gate
-/// work that only describes the window to assistive technology on it.
+/// Returns whether the window is building its accessibility tree in this
+/// frame. Work that only describes the window to assistive technology is done
+/// only when this is true.
 pub fn active(window: &Window) -> bool {
     window.is_a11y_active()
 }
 
-/// Makes `element` text assistive technology reads (GPUI's own text is
-/// not in the tree): a dialog's message, a status line, an empty state.
+/// Makes `element` a text that assistive technology reads: a dialog's message,
+/// a status line, the text of an empty list. This is needed because the text
+/// that GPUI draws is not in the tree.
 pub fn text<E: StatefulInteractiveElement>(element: E, text: impl Into<SharedString>) -> E {
     element.role(Role::Label).aria_value(text)
 }
 
-/// Makes `element` a heading of `level` named `text`: a section's title.
+/// Makes `element` a heading of the level `level` with the name `text`, for
+/// example a section's title.
 pub fn heading<E: StatefulInteractiveElement>(
     element: E,
     text: impl Into<SharedString>,

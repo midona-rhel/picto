@@ -1,8 +1,9 @@
-//! The Library Manager's cloud parts (`LibraryManager.tsx`): the Cloud Sync
-//! card of the open library, the cloud rows of its actions menu, the sync
-//! dot on its row, Connect Google Drive… and Connect Dropbox…, and Open from
-//! Cloud…. Detecting, validating and discovering provider folders need no
-//! library; everything else is a command of the open library's application.
+//! The cloud parts of the Library Manager: the Cloud Sync card of the open
+//! library, the cloud rows of its actions menu, the sync dot on its row,
+//! Connect Google Drive… and Connect Dropbox…, and the Open from Cloud…
+//! pane. Detecting and validating the providers' folders and finding the
+//! libraries in them need no open library. Everything else is a command of
+//! the open library's application.
 use super::{Manager, Pane, host};
 use crate::cloud::{self, Choice, Root, Tone};
 use crate::i18n::{en, t};
@@ -14,7 +15,7 @@ use gpui::*;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// A tone's colour (`.syncState_*`).
+/// Returns the colour in which a sync state of the given tone is drawn.
 fn tone_color(tone: Tone, theme: &theme::Theme) -> Rgba {
     match tone {
         Tone::Positive => rgb(theme::SUCCESS),
@@ -24,13 +25,15 @@ fn tone_color(tone: Tone, theme: &theme::Theme) -> Rgba {
     }
 }
 
-/// `.syncDot`: 7px, in the tone's colour.
+/// Returns the sync dot: a filled circle of 7px in `color`.
 fn dot(color: Rgba) -> Div {
     div().size(px(7.)).flex_none().rounded_full().bg(color)
 }
 
 impl Manager {
-    /// Follows the open library's cloud state, or lets go of it.
+    /// Observes the cloud sync state of the open library, so that this
+    /// window is redrawn when the state changes. Stops observing when no
+    /// library is open.
     pub(super) fn follow_cloud(&mut self, cx: &mut Context<Self>) {
         let cloud = host::shell(cx).map(|shell| shell.read(cx).cloud().clone());
         match (cloud, &self.cloud) {
@@ -44,7 +47,8 @@ impl Manager {
         }
     }
 
-    /// The state changed: the time estimate follows.
+    /// Called when the cloud sync state has changed. Works out the estimate
+    /// of the remaining time again and redraws the window.
     fn cloud_changed(&mut self, cx: &mut Context<Self>) {
         let presentation = cloud::present(self.status(cx).as_ref());
         self.eta = cloud::track(
@@ -68,14 +72,17 @@ impl Manager {
             .and_then(|(cloud, _)| cloud.read(cx).configuration.clone())
     }
 
-    /// The folder the open library syncs to, if it does.
+    /// Returns the folder that the open library syncs to, or `None` when it
+    /// does not sync.
     fn cloud_root(&self, cx: &App) -> Option<String> {
         self.configuration(cx)?.root_path
     }
 
-    /// `refreshCloud`: the folders detected on this device, then those the
-    /// user chose that are still provider folders, and the libraries in
-    /// each, read off the thread that draws.
+    /// Reads the providers' folders and the libraries in them again, on a
+    /// background thread. The folders are those detected on this device,
+    /// followed by those the user chose earlier that are still valid folders
+    /// of their provider. The cloud library chosen in the Open from Cloud…
+    /// pane stays chosen if it is found again.
     pub(super) fn refresh_cloud(&mut self, cx: &mut Context<Self>) {
         let remembered: Vec<Root> = crate::state::get(cx)
             .cloud_locations
@@ -117,7 +124,7 @@ impl Manager {
         .detach();
     }
 
-    /// `rememberCloudRoot`: kept as this provider's folder.
+    /// Stores `root` in the app's state as the folder of its provider.
     fn remember(root: &Root, cx: &mut App) {
         crate::state::update(cx, |state| {
             state
@@ -126,8 +133,9 @@ impl Manager {
         });
     }
 
-    /// Sends a cloud command for the open library while nothing else runs,
-    /// then shows `success` or the error, and reads the folders again.
+    /// Sends a cloud command to the open library's application, unless
+    /// another cloud operation is running. When the command has finished, it
+    /// shows `success` or the error, and reads the providers' folders again.
     fn cloud_command(
         &mut self,
         key: &'static str,
@@ -162,7 +170,8 @@ impl Manager {
         });
     }
 
-    /// `configureCloud`: the open library syncs through `root`.
+    /// Makes the open library sync through the folder `root`
+    /// (`cloud.configure`), and stores `root` as the folder of its provider.
     fn configure(&mut self, root: Root, cx: &mut Context<Self>) {
         Self::remember(&root, cx);
         let success = crate::tf!(
@@ -182,11 +191,13 @@ impl Manager {
         );
     }
 
-    /// `chooseCloudRoot`: Connect Google Drive… or Connect Dropbox…. The
-    /// folder chosen must be the root of that provider's installed app; it
-    /// is kept, and the open library syncs through it if it does not sync
-    /// yet and is the one chosen in the list. With no library chosen, Open
-    /// from Cloud… shows what is in it.
+    /// Does Connect Google Drive… and Connect Dropbox…. The user chooses a
+    /// folder, which must be the folder of that provider's installed desktop
+    /// app (`cloud::validate`). The folder is stored as the provider's
+    /// folder. If the open library is the one chosen in the list and does
+    /// not sync yet, it is then made to sync through the folder. If no
+    /// library is chosen in the list, the Open from Cloud… pane is shown,
+    /// which lists the libraries found in the folder.
     fn choose_root(&mut self, provider: &'static str, cx: &mut Context<Self>) {
         if self.working.is_some() {
             return;
@@ -241,7 +252,11 @@ impl Manager {
         .detach();
     }
 
-    /// The open library's cloud rows in the actions menu.
+    /// Returns the cloud rows of the actions menu for the open library. A
+    /// library that syncs gets Sync Now, Pause Sync or Resume Sync, Create
+    /// Recovery Snapshot, Show Cloud Folder and Stop Syncing. A library that
+    /// does not sync gets the submenu Enable Cloud Sync, with one row for
+    /// each provider folder that was found.
     pub(super) fn cloud_rows(&self, cx: &App) -> Vec<menu::Entry> {
         let busy = self.working.is_some();
         if self.cloud_root(cx).is_some() {
@@ -285,7 +300,8 @@ impl Manager {
         if self.roots.is_empty() || self.cloud.is_none() {
             return Vec::new();
         }
-        // The actions are told apart by the folder's place in the list.
+        // Each row's action name holds the index of its folder in `roots`
+        // (`ENABLE`). `cloud_action` finds the folder by that index.
         let children = self
             .roots
             .iter()
@@ -310,7 +326,8 @@ impl Manager {
         ]
     }
 
-    /// A cloud row of the actions menu was chosen.
+    /// Carries out the cloud row of the actions menu whose action name is
+    /// `action`.
     pub(super) fn cloud_action(&mut self, action: &str, cx: &mut Context<Self>) {
         match action {
             "cloud-sync" => self.cloud_command(
@@ -360,7 +377,7 @@ impl Manager {
         }
     }
 
-    /// Stop Syncing's question (`window.confirm`).
+    /// Draws the question that Stop Syncing asks before it stops the sync.
     pub(super) fn stop_question(
         &mut self,
         window: &mut Window,
@@ -399,7 +416,8 @@ impl Manager {
         )
     }
 
-    /// The dot on the open library's row while it syncs to a folder.
+    /// Returns the sync dot for the open library's row in the list, or
+    /// `None` when the library does not sync to a folder.
     pub(super) fn row_sync_dot(&self, cx: &App) -> Option<AnyElement> {
         self.cloud_root(cx)?;
         let theme = theme::theme(cx);
@@ -417,8 +435,11 @@ impl Manager {
         )
     }
 
-    /// The Cloud Sync card of the open library: its sync, or the folders
-    /// it can sync through.
+    /// Draws the content of the Cloud Sync card of the open library. For a
+    /// library that syncs it shows the provider, the state, the time of the
+    /// last sync, and the numbers of pending changes and files, and under
+    /// them the progress while a sync runs. For a library that does not sync
+    /// it shows the buttons of `connect_buttons`.
     pub(super) fn cloud_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = theme::theme(cx);
         let Some(configuration) = self
@@ -495,7 +516,9 @@ impl Manager {
             .unwrap_or_default();
         let after = if presentation.active {
             let doing = if message.is_empty() {
-                // Production writes these without a key.
+                // This text and "Estimating time remaining…" below have no
+                // key in the locale files, so they are shown in English in
+                // every language.
                 en("Syncing library changes").to_owned()
             } else {
                 message
@@ -558,9 +581,11 @@ impl Manager {
             .into_any_element()
     }
 
-    /// `.cloudProviderActions`: for the open library, Synchronize Library
-    /// with each folder found; then Connect Google Drive… and Connect
-    /// Dropbox….
+    /// Returns the column of buttons that connect a cloud folder. In the
+    /// Cloud Sync card of the open library (`id` is "library-cloud") it
+    /// starts with one Synchronize Library with… button for each provider
+    /// folder that was found. Connect Google Drive… and Connect Dropbox…
+    /// follow in every case.
     pub(super) fn connect_buttons(&self, id: &'static str, cx: &mut Context<Self>) -> Div {
         let busy = self.busy || self.working.is_some();
         let mut actions = div().w_full().flex().flex_col().gap(px(8.));
@@ -611,7 +636,8 @@ impl Manager {
             )
     }
 
-    /// Open from Cloud….
+    /// Does Open from Cloud…: shows the Open from Cloud… pane and reads the
+    /// providers' folders again.
     pub(super) fn show_cloud_open(&mut self, cx: &mut Context<Self>) {
         self.pane = Pane::Cloud;
         self.icons = None;
@@ -620,8 +646,9 @@ impl Manager {
         cx.notify();
     }
 
-    /// The cloud libraries already in the list, by id, with the name of
-    /// the library they were added as.
+    /// Returns the cloud libraries that are already in the list of
+    /// libraries. The key is the cloud library's id, and the value is the
+    /// name of the library in the list.
     fn added(&self, cx: &App) -> BTreeMap<String, String> {
         let state = crate::state::get(cx);
         let mut added = BTreeMap::new();
@@ -643,8 +670,9 @@ impl Manager {
         added
     }
 
-    /// Choose Location…: where the cloud library goes, then it is joined
-    /// (`joinCloudLibrary`).
+    /// Does Choose Location… of the Open from Cloud… pane: the user chooses
+    /// the folder that the library goes into, and the library is then made
+    /// there from the chosen cloud library and opened (`host::join`).
     pub(super) fn join(&mut self, cx: &mut Context<Self>) {
         let Some(choice) = self.chosen.and_then(|index| self.choices.get(index)).cloned() else {
             return;
@@ -655,7 +683,8 @@ impl Manager {
         }
         self.error = None;
         self.message = None;
-        // Production's main process writes it in English.
+        // The locale files have no key for this text, so it is shown in
+        // English in every language.
         let chosen = crate::prompt::folder(&format!("Choose where to store \"{name}\""), cx);
         cx.spawn(async move |this, cx| {
             let Ok(Some(parent)) = chosen.await else {
@@ -700,8 +729,9 @@ impl Manager {
         .detach();
     }
 
-    /// Open from Cloud…'s pane: the providers to connect, the cloud
-    /// libraries found, the local name, and Choose Location….
+    /// Draws the Open from Cloud… pane: the buttons that connect a
+    /// provider's folder, the cloud libraries that were found, the field for
+    /// the library's name on this device, and Choose Location….
     pub(super) fn cloud_pane(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = theme::theme(cx);
         let added = self.added(cx);
@@ -711,7 +741,8 @@ impl Manager {
             .flex_col()
             .items_start()
             .child(
-                // `.heroIcon`
+                // The cloud icon in a rounded square of 56px, above the
+                // heading.
                 div()
                     .size(px(56.))
                     .mb(px(12.))
@@ -873,7 +904,9 @@ impl Manager {
     }
 }
 
-/// The actions of Enable Cloud Sync's rows, one per folder found.
+/// The action names of the rows of the Enable Cloud Sync submenu. The row at
+/// index `n` enables sync through the folder at index `n` of `roots`, so at
+/// most eight folders get a row.
 const ENABLE: [&str; 8] = [
     "cloud-enable-0",
     "cloud-enable-1",

@@ -1,18 +1,22 @@
-//! The pieces the Settings window's sections are built from
-//! (`Settings.module.css`): cards, rows, labels, values, hints, columns,
-//! fields, selects and theme swatches.
+//! The parts that the sections of the Settings window are built from:
+//! cards, rows, labels, values, help texts, grids of columns and theme
+//! swatches. The file also has the functions that make a control's handler
+//! write the control's value into the draft.
 use crate::settings::{Settings, SettingsModel};
 use crate::theme::Text as _;
 use crate::ui;
 use crate::{motion, theme};
 use gpui::*;
 
-/// `.settingsBlock`
+/// Returns the container of one card of a section. It is as wide as the
+/// section and has 12px of space below it.
 pub(super) fn block() -> Div {
     div().w_full().mb(px(12.)).flex().flex_col()
 }
 
-/// `.blockContent`
+/// Returns a card: a box with 12px of padding, rounded corners, a border,
+/// and the theme's contrast colour at 3% as its background. The rows of a
+/// section are laid out in cards.
 pub(super) fn card(theme: theme::Theme) -> Div {
     div()
         .w_full()
@@ -25,7 +29,8 @@ pub(super) fn card(theme: theme::Theme) -> Div {
         .bg(theme.contrast(3.))
 }
 
-/// `.blockTitle`, read as a heading.
+/// Returns the title of a card: `text` in semibold, in a line 26px high.
+/// Assistive technology is told that it is a heading of level 3.
 pub(super) fn title(theme: theme::Theme, text: &'static str) -> Stateful<Div> {
     ui::a11y::heading(
         div().id(ElementId::Name(format!("title-{text}").into())),
@@ -42,7 +47,8 @@ pub(super) fn title(theme: theme::Theme, text: &'static str) -> Stateful<Div> {
     .child(text)
 }
 
-/// `.settingLabel`
+/// Returns the box for the label of a row: at least 100px wide, with text
+/// in the secondary text colour.
 pub(super) fn label(theme: theme::Theme) -> Div {
     div()
         .min_w(px(100.))
@@ -53,7 +59,8 @@ pub(super) fn label(theme: theme::Theme) -> Div {
         .text_color(theme.text_secondary())
 }
 
-/// `.settingControl`
+/// Returns the box for the control of a row. It is at the right end of the
+/// row, and its children are 6px apart.
 pub(super) fn control() -> Div {
     div()
         .ml_auto()
@@ -64,13 +71,14 @@ pub(super) fn control() -> Div {
         .gap(px(6.))
 }
 
-/// `Row`: a label and its control.
+/// Returns one row of a card: the label `text` on the left and the control
+/// `child` at the right end.
 pub(super) fn row(
     theme: theme::Theme,
     text: impl Into<SharedString>,
     child: impl IntoElement,
 ) -> Div {
-    // The label is text assistive technology reads before the control.
+    // Assistive technology reads the label as text, before the control.
     let text = text.into();
     div()
         .flex()
@@ -86,17 +94,20 @@ pub(super) fn row(
         .child(control().child(child))
 }
 
-/// `.rowSep`
+/// The line between two rows of a card: 1px thick, with 12px of space above
+/// it and below it.
 pub(super) use crate::ui::form::separator;
 
-/// `.settingHint`
+/// Returns the help text below a row: small text in the secondary text
+/// colour, in lines 20px high, 8px below the row.
 pub(super) fn hint(theme: theme::Theme, text: &'static str) -> Div {
     ui::form::help_text(theme, text)
         .mt(px(8.))
         .line_height(px(20.))
 }
 
-/// `.staticValue`
+/// Returns a value that the user cannot change, shown at the right end of a
+/// row.
 pub(super) fn value(theme: theme::Theme, text: impl Into<SharedString>) -> Div {
     div()
         .ml_auto()
@@ -109,7 +120,8 @@ pub(super) fn value(theme: theme::Theme, text: impl Into<SharedString>) -> Div {
         .child(text.into())
 }
 
-/// `.valueLabel`
+/// Returns the small monospaced text that shows the current value of a
+/// slider, 8px to the right of the slider.
 pub(super) fn value_label(theme: theme::Theme, text: String) -> Div {
     div()
         .ml(px(8.))
@@ -119,20 +131,20 @@ pub(super) fn value_label(theme: theme::Theme, text: String) -> Div {
         .child(text)
 }
 
-/// `.checkboxGrid`: items 4px short of half wide, wrapping 4px apart, each
-/// pulled 6px left by its own margin, so the second column starts 6px short
-/// of half. Equal grid columns put it there with no gap and 12px spare at
-/// the end (an item is then 2px narrower than production's).
+/// Returns a grid of two equal columns for checkboxes, with 4px between its
+/// rows. The grid has 12px of padding at its right end, so the second
+/// column starts 6px before the middle of the card.
 pub(super) fn two_columns() -> Div {
     div().w_full().grid().grid_cols(2).gap_y(px(4.)).pr(px(12.))
 }
 
-/// `.sidebarSettingsGrid`: three equal columns 4px apart.
+/// Returns a grid of three equal columns, with 4px between its cells.
 pub(super) fn three_columns() -> Div {
     div().w_full().grid().grid_cols(3).gap(px(4.))
 }
 
-/// A change to the draft, for a control's handler.
+/// Returns a handler for a control. The handler applies `change` to the
+/// draft.
 pub(super) fn edit(
     model: &Entity<SettingsModel>,
     change: impl Fn(&mut Settings) + 'static,
@@ -141,7 +153,8 @@ pub(super) fn edit(
     move |_, cx| model.update(cx, |model, cx| model.edit(&change, cx))
 }
 
-/// A choice from a select, written into the draft.
+/// Returns a handler for a select. The handler applies `change` to the
+/// draft with the value of the chosen choice.
 pub(super) fn pick(
     model: &Entity<SettingsModel>,
     change: impl Fn(&mut Settings, &'static str) + 'static,
@@ -150,7 +163,8 @@ pub(super) fn pick(
     move |value, _, cx| model.update(cx, |model, cx| model.edit(|draft| change(draft, value), cx))
 }
 
-/// A number from a field or slider, written into the draft.
+/// Returns a handler for a number field or a slider. The handler applies
+/// `change` to the draft with the new number.
 pub(super) fn number<T: 'static>(
     model: &Entity<SettingsModel>,
     change: impl Fn(&mut Settings, T) + 'static,
@@ -159,9 +173,13 @@ pub(super) fn number<T: 'static>(
     move |value, cx| model.update(cx, |model, cx| model.edit(|draft| change(draft, value), cx))
 }
 
-/// `.themeSwatch`: a 20px swatch whose outline lightens under the pointer
-/// and is full when chosen, over 100 ms, with its name above it while the
-/// pointer is on it (a CSS tooltip, without the usual delay).
+/// Draws the swatch of one theme: a 20px square in `color`, or half light
+/// and half dark when `color` is `None`. The swatch has an outline around
+/// it. The outline is in the text colour when the theme is the chosen one
+/// (`active`). Otherwise it is invisible, and it fades to the secondary
+/// text colour over 100 ms while the pointer is on the swatch. The theme's
+/// name is shown above the swatch as soon as the pointer is on it, without
+/// the delay that other tooltips have.
 pub(super) fn swatch(
     index: usize,
     name: &'static str,
@@ -194,14 +212,16 @@ pub(super) fn swatch(
     };
     let fill = match color {
         Some(color) => div().bg(rgb(color)),
-        // `linear-gradient(135deg, #f0f0f0 50%, #1a1a1e 50%)`
+        // The swatch of Auto is divided along its diagonal into a light
+        // half and a dark half (`theme::THEME_SWATCH_AUTO`).
         None => div().bg(linear_gradient(
             135.,
             linear_color_stop(rgb(theme::THEME_SWATCH_AUTO.0), 0.5),
             linear_color_stop(rgb(theme::THEME_SWATCH_AUTO.1), 0.5001),
         )),
     };
-    // The 1.5px outline sits 1.5px out from the border.
+    // The outline is 1.5px thick, and there is 1.5px between it and the
+    // edge of the swatch.
     let mut ring = div()
         .absolute()
         .top(px(-3.))
@@ -215,8 +235,9 @@ pub(super) fn swatch(
         bottom: Some(px(1.5).into()),
         left: Some(px(1.5).into()),
     };
-    // A `<button>`: a stop that Enter and Space choose; its outline does not
-    // change with the keyboard.
+    // The swatch can have the keyboard focus, and Enter and Space choose
+    // its theme then. Its outline does not change when it has the keyboard
+    // focus.
     let focus = ui::focus::control(&id, window, cx);
     let on_click = std::rc::Rc::new(on_click);
     let pressed = on_click.clone();
@@ -224,7 +245,8 @@ pub(super) fn swatch(
     let mut cell = div()
         .id(id)
         .role(Role::Button)
-        // `theme.name`, as production writes it.
+        // Assistive technology is told the theme's name followed by
+        // "theme".
         .aria_label(crate::tf!("{value0} theme", name))
         .aria_toggled(ui::a11y::toggled(active))
         .relative()

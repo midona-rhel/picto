@@ -1,4 +1,5 @@
-//! Grid labels, ported from `src/features/grid/canvas/primitives.ts`.
+//! The texts the grid draws on and under a tile: the format label, the
+//! duration and the name cut to fit. Also converts colours for the grid.
 
 fn extension_for_subtype(subtype: &str) -> &str {
     match subtype {
@@ -27,14 +28,17 @@ fn extension_for_subtype(subtype: &str) -> &str {
     }
 }
 
-/// `mimeToExt`: the grid's extension for a type, as its labels spell it.
+/// Returns the file extension the grid shows for a MIME type, in lower
+/// case, or an empty text when `mime` has no `/`.
 pub fn label_extension(mime: &str) -> String {
     mime.split_once('/')
         .map(|(_, subtype)| extension_for_subtype(&subtype.to_lowercase()).to_owned())
         .unwrap_or_default()
 }
 
-/// Compact grid label: four characters, except the five-letter JPGXL.
+/// Returns the label of a tile's format badge: the extension for the MIME
+/// type in upper case, cut to four characters, except "JPGXL", which keeps
+/// its five.
 pub fn format_label(mime: &str) -> String {
     let Some((_, subtype)) = mime.split_once('/') else {
         return String::new();
@@ -60,7 +64,8 @@ pub fn format_duration(ms: u64) -> String {
     }
 }
 
-/// A palette entry as an sRGB colour (`labToHex` in `labColor.ts`).
+/// Returns a colour given in CIE Lab (D65 white) as an sRGB colour
+/// (`0xRRGGBB`).
 pub fn lab_to_rgb(l: f32, a: f32, b: f32) -> u32 {
     let fy = (l + 16.) / 116.;
     let fx = a / 500. + fy;
@@ -86,9 +91,10 @@ pub fn lab_to_rgb(l: f32, a: f32, b: f32) -> u32 {
         | channel(x * 0.0557 + y * -0.204 + z * 1.057)
 }
 
-/// How many of a text's characters fit in `max` before an ellipsis
-/// `ellipsis` wide, from where each character starts in the whole text's
-/// shaping (`x_at` takes a byte index).
+/// Returns how many of a text's leading characters fit in the width `max`
+/// together with an ellipsis that is `ellipsis` wide. `x_at` takes a byte
+/// index into the text and returns the horizontal position where the
+/// character at that index starts when the whole text is shaped.
 pub fn characters_before(
     text: &str,
     max: f32,
@@ -103,8 +109,9 @@ pub fn characters_before(
         .count()
 }
 
-/// CSS `grayscale(1)` of an sRGB colour (`0xRRGGBB`): each channel the
-/// colour's luminance, by the filter's coefficients.
+/// Returns the grey with the same luminance as an sRGB colour (`0xRRGGBB`).
+/// The weights of the three channels are those of the CSS filter
+/// `grayscale(1)`.
 pub fn grayscale(color: u32) -> u32 {
     let channel = |shift: u32| ((color >> shift) & 0xff) as f32;
     let gray = (0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0))
@@ -117,8 +124,9 @@ pub fn grayscale(color: u32) -> u32 {
 mod tests {
     use super::*;
 
-    /// Originals are found under the extension the library stores them
-    /// with (core's), which a copy of the real library has for each type.
+    /// The library stores each original under the extension that
+    /// `picto_core::blob_store::mime_to_extension` gives for its type. These
+    /// are the extensions found in a copy of a real library.
     #[test]
     fn originals_are_looked_for_under_the_stored_extension() {
         for (mime, stored) in [
@@ -143,14 +151,14 @@ mod tests {
     fn grayscale_keeps_the_luminance_of_a_colour() {
         assert_eq!(grayscale(0xffffff), 0xffffff);
         assert_eq!(grayscale(0x000000), 0x000000);
-        // Pure green is mostly light; pure blue barely.
+        // Green adds most to a colour's luminance and blue adds least.
         assert_eq!(grayscale(0x00ff00), 0xb6b6b6);
         assert_eq!(grayscale(0x0000ff), 0x121212);
     }
 
     #[test]
     fn a_name_is_cut_where_one_character_at_a_time_would_cut_it() {
-        // Characters of different widths, as a proportional font has them.
+        // The characters have different widths, as in a proportional font.
         let width = |c: char| match c {
             'i' | 'l' | '.' => 4.,
             'm' | 'w' | 'M' => 14.,
@@ -176,7 +184,7 @@ mod tests {
             "x",
             "",
         ];
-        // Whatever the guess, the cut is the same.
+        // The cut is the same whichever number of characters is guessed first.
         for name in names {
             for max in 0..300 {
                 let max = max as f32;
@@ -189,8 +197,8 @@ mod tests {
                 }
             }
         }
-        // With the guess the whole text's shaping gives, a cut takes the
-        // whole text and two more measurements.
+        // When the first guess comes from the shaping of the whole text, a
+        // cut measures at most three texts.
         for max in 0..300 {
             let max = max as f32;
             let name = names[0];
@@ -210,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn labels_match_the_electron_grid() {
+    fn labels_match_the_earlier_versions_grid() {
         assert_eq!(format_label("image/jpeg"), "JPG");
         assert_eq!(format_label("image/png"), "PNG");
         assert_eq!(format_label("image/jxl"), "JPGXL");

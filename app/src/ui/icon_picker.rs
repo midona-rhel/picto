@@ -1,13 +1,13 @@
-//! The icon picker (`IconPicker.tsx`) in its compact presentation, the one
-//! Picto's icon surfaces use: the default-folder tile, then the curated
-//! icons, ten to a row in a 252×300 box. Choosing a tile tells the owner and
-//! keeps the picker open with the new choice marked.
+//! The icon picker: a tile for the default folder icon, and then the icons
+//! that can be chosen, ten in a row, in a box of 252 by 300 pixels. Choosing a
+//! tile calls the handler, and the picker stays open with the new choice
+//! marked.
 use crate::theme;
 use gpui::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
-/// `CURATED_ICONS` in `iconRegistry.ts`: the name stored on a folder, which
-/// is also the glyph's file in `assets/`, and its label.
+/// The icons that can be chosen. Each has the name that is stored on a folder,
+/// which is also the name of the glyph's file in `assets/`, and a label.
 // i18n: translated where drawn (the tiles' tips)
 const CURATED_ICONS: [(&str, &str); 115] = [
     ("IconPhoto", "Photo"),
@@ -127,7 +127,9 @@ const CURATED_ICONS: [(&str, &str); 115] = [
     ("IconPersonFemale", "Female"),
 ];
 
-/// `.compact`: the picker's box, padding and tiles.
+/// The width of the picker's box. `HEIGHT` is its height, `PADDING` the
+/// padding inside it, `TILE` the size of a tile, `GLYPH` the size of a tile's
+/// glyph, and `COLUMNS` the number of tiles in a row.
 pub const WIDTH: f32 = 252.;
 pub const HEIGHT: f32 = 300.;
 const PADDING: f32 = 6.;
@@ -144,7 +146,8 @@ pub struct IconPicker {
 }
 
 impl IconPicker {
-    /// A picker showing `value` chosen (`None` is the default icon).
+    /// Returns a picker in which `value` is shown as chosen. `None` is the
+    /// default icon. `on_change` is called with each new choice.
     pub fn new(
         value: Option<String>,
         on_change: impl Fn(Option<String>, &mut Window, &mut App) + 'static,
@@ -156,7 +159,7 @@ impl IconPicker {
         }
     }
 
-    /// The default tile's name (`defaultLabel`).
+    /// Sets the name of the tile for the default icon.
     pub fn default_label(mut self, label: impl Into<SharedString>) -> Self {
         self.default_label = label.into();
         self
@@ -207,7 +210,7 @@ impl IconPicker {
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.pick(value.map(str::to_owned), window, cx)
             }));
-        // Each tile is a `<button>`: a stop with no ring.
+        // Each tile is a Tab stop and draws no focus ring.
         let press =
             cx.listener(move |this, _, window, cx| this.pick(value.map(str::to_owned), window, cx));
         let tile = super::focus::button(
@@ -249,7 +252,8 @@ impl Render for IconPicker {
             .h(px(HEIGHT))
             .overflow_hidden()
             .p(px(PADDING))
-            // A press inside the picker is not a press outside the menu.
+            // A press inside the picker is stopped here, so that the menu the
+            // picker is in does not take it for a press outside the menu.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(grid)
     }

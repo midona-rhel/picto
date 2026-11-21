@@ -1,9 +1,9 @@
 //! The sections of the Settings window. `SettingsWindow::panel` returns the
 //! rows of one section. The sections and their rows are in the same order
-//! and have the same wording as in production's `Settings.tsx` and
-//! `AiTaggingPanel.tsx`. The switch for the frosted material of the sidebar
-//! and the inspector, in the "Appearance" card of the General section, is
-//! not in production.
+//! and have the same wording as in Picto 0.6.19 and earlier. One row was
+//! added after those versions: the switch for the frosted material of the
+//! sidebar and the inspector, in the "Appearance" card of the General
+//! section.
 use super::model;
 use super::model::NOTIFICATION_TONES;
 use super::pieces::{
@@ -28,10 +28,9 @@ mod controls;
 pub use catalog::{PANELS, matched_panels};
 pub use cloud::CloudPanel;
 
-/// The choices of the "Zoom Level" select in the General section. They are
-/// the choices of production's `ZOOM_OPTIONS`. Each pair is a percentage,
-/// which is the select's value for that choice, and the label that the
-/// select shows for it.
+/// The choices of the "Zoom Level" select in the General section. Each pair
+/// is a percentage, which is the select's value for that choice, and the
+/// label that the select shows for it.
 const ZOOM: [(&str, &str); 7] = [
     ("75", "75%"),
     ("80", "80%"),
@@ -43,10 +42,10 @@ const ZOOM: [(&str, &str); 7] = [
 ];
 
 /// The themes that the "Theme" row of the General section shows a swatch
-/// for. They are the themes of production's `THEMES`. Each entry is the
-/// theme's name, the value that the `color_scheme` setting stores for the
-/// theme, and the colour of its swatch. Auto has no colour: `pieces::swatch`
-/// draws its swatch as a light half and a dark half.
+/// for. Each entry is the theme's name, the value that the `color_scheme`
+/// setting stores for the theme, and the colour of its swatch. Auto has no
+/// colour: `pieces::swatch` draws its swatch as a light half and a dark
+/// half.
 const THEMES: [(&str, &str, Option<u32>); 7] = [
     (en("Auto"), "auto", None),
     (en("Light"), "light", Some(0xffffff)),
@@ -125,10 +124,9 @@ impl SettingsWindow {
         let toggle_rail_material = edit(model, |draft| draft.app.toggle_rail_material());
         let mut swatches = div().flex().flex_wrap().justify_end().gap(px(8.));
         for (index, &(name, css, color)) in THEMES.iter().enumerate() {
-            // Clicking a swatch shows its theme in every window at once, as
-            // production's `previewTheme` does. Closing the Settings window
-            // without saving shows the saved theme again
-            // (`SettingsWindow::close`).
+            // Clicking a swatch shows its theme in every window at once.
+            // Closing the Settings window without saving shows the saved
+            // theme again (`SettingsWindow::close`).
             let choose = edit(model, move |draft| draft.app.color_scheme = css.into());
             swatches = swatches.child(swatch(
                 index,
@@ -155,12 +153,11 @@ impl SettingsWindow {
                             t("Zoom Level"),
                             // TODO: This select only saves the chosen factor in
                             // the `zoom_factor` setting. Nothing is scaled by
-                            // it, because production also saves the factor
-                            // without applying it. The zoom that production
-                            // applies is a separate one, the renderer zoom
-                            // that ⌘+ and ⌘- change. Scale the main window's
-                            // content by this factor once production applies
-                            // it.
+                            // it, and Picto 0.6.19 and earlier did not scale
+                            // anything by it either. The zoom that ⌘+ and ⌘-
+                            // change is a separate value, which `crate::zoom`
+                            // keeps in the app's state. Scale the main
+                            // window's content by this factor.
                             ui::select(
                                 "zoom",
                                 zoom.to_string(),
@@ -244,24 +241,23 @@ impl SettingsWindow {
         ]
     }
 
-    /// Returns the rows of the Updates section, which is production's
-    /// `UpdatesPanel`. Its one card, "Software Update", shows the installed
-    /// version. Under that is a row whose label says what the last check for
-    /// an update found, for example "Picto is up to date", or that a check
-    /// or a download is under way. The row holds the "Check Now" button.
-    /// When an update was found, the row also holds a button for the next
-    /// step. On macOS that button is "Open Download Page". On the other
-    /// systems it is "Restart and Install", and it is shown only once the
-    /// update has been downloaded. The last line of the card is a sentence
-    /// that says how updates are installed on this system.
+    /// Returns the rows of the Updates section. Its one card, "Software
+    /// Update", shows the installed version. Under that is a row whose label
+    /// says what the last check for an update found, for example "Picto is
+    /// up to date", or that a check or a download is under way. The row
+    /// holds the "Check Now" button. When an update was found, the row also
+    /// holds a button for the next step. On macOS that button is "Open
+    /// Download Page". On the other systems it is "Restart and Install", and
+    /// it is shown only once the update has been downloaded. The last line
+    /// of the card is a sentence that says how updates are installed on this
+    /// system.
     fn updates(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         use crate::updates::Status;
         let theme = theme::theme(cx);
         let state = crate::updates::state(cx);
         let found = state.version.clone().unwrap_or_default();
-        // Production's `UpdatesPanel` writes these status texts in English
-        // and does not translate them, so they are in English here in every
-        // language (`en`).
+        // These status texts have no translations, so they are shown in
+        // English in every language (`en`).
         let status = match state.status {
             Status::Checking => en("Checking…").to_owned(),
             Status::Downloading => format!(
@@ -280,10 +276,9 @@ impl SettingsWindow {
                 .clone()
                 .unwrap_or_else(|| en("Check for a newer version of Picto.").to_owned()),
         };
-        // Production chooses between these two sentences with its
-        // `automaticInstall` flag, which is false only on macOS, so
-        // `state.mac()` makes the same choice here. The first sentence is
-        // the one production shows when the flag is false.
+        // macOS is the only system on which the app does not install an
+        // update itself, so `state.mac()` chooses between the two
+        // sentences.
         let description = if state.mac() {
             t(
                 "On macOS, Picto opens the release download because this build is not signed for automatic installation.",

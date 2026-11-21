@@ -1,14 +1,12 @@
-//! This module does for the desktop what the Electron app's main process does
-//! outside its window. It sets the app's badge to the Inbox count
-//! (`inboxBadgeService.mjs`), and it shows a system notification when a batch
-//! of subscription runs has finished (`subscriptionNotificationService.mjs`).
-//! Both react to the library's change events. Only the real app starts them;
-//! the off-screen checks never do.
+//! This module connects the app to the desktop outside its windows. It sets
+//! the app's badge to the Inbox count, and it shows a system notification when
+//! a batch of subscription runs has finished. Both react to the library's
+//! change events. Only the real app starts them; the off-screen checks never
+//! do.
 //!
-//! It also passes files to other parts of the desktop, as the Electron app's
-//! main process does (`picto:shell:*`, `picto:clipboard:copyFiles`): it opens
-//! a file in its default application or in one the user picks, shows a file in
-//! the file manager, and puts files on the clipboard. These requests reach the
+//! It also passes files to other parts of the desktop: it opens a file in its
+//! default application or in one the user picks, shows a file in the file
+//! manager, and puts files on the clipboard. These requests reach the
 //! desktop only in the real app. In the off-screen checks each request is
 //! recorded instead, and the checks read the records with [`requests`], so
 //! nothing opens on the screen and the clipboard is not changed. Only files
@@ -26,14 +24,13 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 /// The time the badge waits after a change before it reads the Inbox count,
-/// so that several changes close together set the badge once. The Electron
-/// app waits the same time (`CHANGE_DEBOUNCE_MS`).
+/// so that several changes close together set the badge once.
 const BADGE_DEBOUNCE: Duration = Duration::from_millis(200);
 /// The time to wait after a change to subscriptions or tasks before the
-/// subscriptions' runs are read. The Electron app waits the same time
-/// (`SETTLE_DEBOUNCE_MS`).
+/// subscriptions' runs are read, so that several changes close together cause
+/// one read.
 const SETTLE_DEBOUNCE: Duration = Duration::from_millis(250);
-/// The largest number the badge shows, as in the Electron app (`MAX_BADGE`).
+/// The largest number the badge shows.
 const MAX_BADGE: u64 = 9_999;
 
 /// A global that `main` sets through [`enable`]. While it is set, [`start`]
@@ -182,7 +179,7 @@ impl Desktop {
     /// the batch. When no run is pending or running any more, it reads each
     /// run of the batch with `subscriptions.runs.get`, counts the library
     /// items the batch added, and shows the system notification with that
-    /// count. The Electron app does this in `refreshOnce`.
+    /// count.
     fn read_runs(&mut self, cx: &mut Context<Self>) {
         if !self.settle_reading.begin() {
             return;
@@ -219,9 +216,8 @@ impl Desktop {
                         this.batch.clear();
                         this.batch_active = false;
                         // The system notification is shown whatever Settings ›
-                        // Notifications says, as in the Electron app. Those
-                        // settings apply only to the notifications shown
-                        // inside the window.
+                        // Notifications says. Those settings apply only to the
+                        // notifications shown inside the window.
                         platform::notify("Subscriptions finished", &finished_body(count), cx);
                     }
                     // If a run's activity could not be read, that does not
@@ -390,10 +386,9 @@ fn listed(paths: &[PathBuf]) -> String {
 }
 
 /// Returns whether a link may be opened by the system. Only `http` and `https`
-/// addresses may, as in the Electron app's `open_external_url`. A source
-/// address comes from downloaded metadata or from what the user typed, so a
-/// `file:` address, or an address with another application's scheme, is never
-/// opened.
+/// addresses may. A source address comes from downloaded metadata or from what
+/// the user typed, so a `file:` address, or an address with another
+/// application's scheme, is never opened.
 pub fn is_web_link(link: &str) -> bool {
     let link = link.trim();
     let Some((scheme, rest)) = link.split_once(':') else {
@@ -404,9 +399,8 @@ pub fn is_web_link(link: &str) -> bool {
         && rest.len() > 2
 }
 
-/// Opens a web address in the browser, as the Electron app's
-/// `open_external_url` does. For any other link it shows the Electron app's
-/// error message and opens nothing.
+/// Opens a web address in the browser. For any other link it shows an error
+/// notification and opens nothing.
 pub fn open_link(link: &str, cx: &mut App) {
     if !is_web_link(link) {
         crate::ui::notify::error(
@@ -424,8 +418,7 @@ pub fn open_link(link: &str, cx: &mut App) {
 }
 
 /// Opens the file in its default application, if the file is inside the open
-/// copy. Otherwise it shows an error notification. The Electron app opens the
-/// file with `shell.openPath`.
+/// copy. Otherwise it shows an error notification.
 pub fn open_default(path: &Path, cx: &mut App) {
     let path = match checked_one(path, cx) {
         Ok(path) => path,
@@ -441,9 +434,8 @@ pub fn open_default(path: &Path, cx: &mut App) {
 }
 
 /// Shows the file, selected, in the system's file manager (Finder or
-/// Explorer), if the file is inside the open copy. Otherwise it shows an
-/// error notification. The Electron app shows the file with
-/// `shell.showItemInFolder`.
+/// Explorer), if the file is inside the open copy. Otherwise it shows an error
+/// notification.
 pub fn reveal(path: &Path, cx: &mut App) {
     let path = match checked_one(path, cx) {
         Ok(path) => path,
@@ -456,10 +448,10 @@ pub fn reveal(path: &Path, cx: &mut App) {
     }
 }
 
-/// Starts an update's verified installer in the way that electron-updater's
-/// updater for this operating system starts it (`doInstall`). The details are
-/// in each system's file (`macos.rs`, `windows.rs`, `linux.rs`). A test build
-/// records the request and starts nothing.
+/// Starts an update's verified installer. How it is started depends on the
+/// operating system and is described in each system's file (`macos.rs`,
+/// `windows.rs`, `linux.rs`). A test build records the request and starts
+/// nothing.
 pub fn install_update(
     installer: &Path,
     silent: bool,
@@ -531,8 +523,8 @@ pub fn reveal_cloud_folder(path: &Path, cx: &mut App) {
 }
 
 /// Opens the file in the application at `application`, if the file is inside
-/// the open copy. This exists on macOS only, as in the Electron app
-/// (`picto:shell:openWithApplication`).
+/// the open copy. Only the macOS build can do this. On Windows and Linux the
+/// function returns an error.
 #[cfg(target_os = "macos")]
 pub fn open_with(application: &Path, file: &Path, cx: &App) -> Result<(), String> {
     let file = checked_one(file, cx)?;
@@ -555,8 +547,7 @@ pub fn open_with(_application: &Path, _file: &Path, _cx: &App) -> Result<(), Str
 
 /// Puts the files themselves on the clipboard, each one once, so that Finder
 /// or another application can paste them. It does so only if all of them are
-/// inside the open copy. The Electron app does this in
-/// `writeClipboardFilePaths`.
+/// inside the open copy.
 pub fn copy_files(paths: &[PathBuf], cx: &App) -> Result<(), String> {
     let mut unique: Vec<PathBuf> = Vec::new();
     for path in checked(paths, cx)? {
@@ -593,9 +584,8 @@ pub fn copy_paths(paths: &[PathBuf], cx: &mut App) -> Result<(), String> {
 }
 
 /// Opens the system's own dialog for choosing an application for the file, if
-/// the file is inside the open copy. Only Windows has such a dialog (its
-/// "Open with" dialog). The Electron app opens it for
-/// `picto:shell:openWithChooser`.
+/// the file is inside the open copy. Only Windows has such a dialog (its "Open
+/// with" dialog). On macOS and Linux the function returns an error.
 #[cfg(target_os = "windows")]
 pub fn open_with_chooser(file: &Path, cx: &App) -> Result<(), String> {
     let file = checked_one(file, cx)?;
@@ -612,8 +602,7 @@ pub fn open_with_chooser(_file: &Path, _cx: &App) -> Result<(), String> {
     Err("The system application chooser is unavailable".into())
 }
 
-/// One application that can open a file, as `getAssociatedApplications` lists
-/// it.
+/// One application that can open a file, as [`applications`] lists it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Application {
     pub name: String,
@@ -626,9 +615,10 @@ pub struct Application {
 }
 
 /// Returns the applications that can open `file`: the default one first, then
-/// the rest by name, without Picto itself. Only macOS lists them; the Electron
-/// app offers Windows' own chooser on Windows and nothing on Linux. Asking the
-/// system for the list changes nothing on the desktop, so the off-screen
+/// the rest by name, without Picto itself. Only macOS lists them. On Windows
+/// the list is empty and the app offers Windows' own chooser instead
+/// ([`open_with_chooser`]), and on Linux the list is empty. Asking the system
+/// for the list changes nothing on the desktop, so the off-screen
 /// checks ask too. The answer can take a long time for a file type that has
 /// not been asked about before, so this is called on a background thread, not
 /// on the thread that draws.
@@ -690,20 +680,18 @@ fn badge_count(count: &serde_json::Value) -> u64 {
 #[path = "macos.rs"]
 mod platform;
 
-/// On Windows there is no badge, because Electron's `setBadgeCount` does
-/// nothing there. The notification is shown as a toast through GPUI. Files are
-/// put on the clipboard in the `CF_HDROP` format, as the Electron app's native
-/// addon does. Open With Other opens the system's own chooser.
+/// On Windows the app has no badge; `set_badge` does nothing there. The
+/// notification is shown as a toast through GPUI. Files are put on the
+/// clipboard in the `CF_HDROP` format. Open With Other opens the system's own
+/// chooser.
 #[cfg(target_os = "windows")]
 #[path = "windows.rs"]
 mod platform;
 
-/// On Linux the Inbox count is shown on the launcher, as `app.setBadgeCount`
-/// does; Electron sends it as the Unity launcher's D-Bus signal. The
-/// notification is shown through GPUI, which uses the freedesktop notification
-/// service. Files are put on the clipboard as a `text/uri-list` of `file:`
-/// URLs, as the Electron app does. There is no Open With Other, because the
-/// Electron app has none on Linux.
+/// On Linux the Inbox count is shown on the launcher. It is sent as the Unity
+/// launcher's D-Bus signal. The notification is shown through GPUI, which uses
+/// the freedesktop notification service. Files are put on the clipboard as a
+/// `text/uri-list` of `file:` URLs. There is no Open With Other on Linux.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[path = "linux.rs"]
 mod platform;
@@ -713,10 +701,10 @@ mod platform;
 /// it, and the packaged macOS app has it as its bundle identifier
 /// (`packaging/macos/Info.plist`).
 ///
-/// A release build is Picto itself: it has the id and the name that the
-/// Electron app has, because it is installed over the Electron app as its
-/// next version. A debug build keeps an id and a name of its own, so that a
-/// developer's window is never taken for the installed app.
+/// A release build has the id and the name that Picto 0.6.19 and earlier have,
+/// because it is installed over them as the next version of Picto. A debug
+/// build keeps an id and a name of its own, so that a developer's window is
+/// never taken for the installed app.
 pub const APP_ID: &str = if cfg!(debug_assertions) {
     "dev.picto.gpui-experiment"
 } else {
@@ -743,8 +731,7 @@ fn launcher_uri() -> String {
 }
 
 /// Shows a notification on Windows and Linux through GPUI's system
-/// notifications, under [`APP_ID`]. The Electron app shows it with
-/// `new Notification({ title, body }).show()`.
+/// notifications, under [`APP_ID`].
 #[cfg(not(target_os = "macos"))]
 fn system_notification(title: &str, body: &str, cx: &App) {
     cx.show_system_notification(gpui::SystemNotification {
@@ -764,9 +751,10 @@ fn drop_files(paths: &[PathBuf]) -> Vec<u8> {
     gpui_windows::drag_drop_files(&paths)
 }
 
-/// Returns the `text/uri-list` that the Electron app writes on Linux. The
-/// vendored GPUI's X11 drag source builds it, so that Copy and a drag out of
-/// the window offer the same list.
+/// Returns the `text/uri-list` of `paths`: one `file:` URL for each path, each
+/// ended by a carriage return and a line feed. The vendored GPUI's X11 drag
+/// source builds it, so that Copy and a drag out of the window offer the same
+/// list.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn uri_list(paths: &[PathBuf]) -> Vec<u8> {
     gpui_linux::xdnd_uri_list(paths)
@@ -788,8 +776,8 @@ pub fn system_path(path: &Path) -> PathBuf {
     }
 }
 
-/// Sorts the applications in the Electron app's order: the default application
-/// first, then the rest by name.
+/// Sorts the applications: the default application first, then the rest by
+/// name.
 #[cfg(any(test, target_os = "macos"))]
 fn sort_applications(
     applications: &mut [Application],
@@ -807,9 +795,9 @@ fn sort_applications(
 mod tests {
     use std::path::{Path, PathBuf};
 
-    /// The `CF_HDROP` list has the layout that the Electron app's native addon
-    /// builds: a 20-byte `DROPFILES` header, then the paths as UTF-16 text,
-    /// each ended by a zero, and one more zero at the end.
+    /// The `CF_HDROP` list has this layout: a 20-byte `DROPFILES` header, then
+    /// the paths as UTF-16 text, each ended by a zero, and one more zero at
+    /// the end.
     #[cfg(windows)]
     #[test]
     fn files_go_to_the_windows_clipboard_as_a_wide_dropfiles_list() {
@@ -831,8 +819,8 @@ mod tests {
         assert_eq!(units, expected);
     }
 
-    /// Checks what the Electron app's test "Linux writes the standard
-    /// URI-list clipboard format" in `clipboardImport.test.mjs` checks.
+    /// Each path is written as a `file:` URL in which a space is `%20`, and
+    /// each URL is ended by a carriage return and a line feed.
     #[cfg(target_os = "linux")]
     #[test]
     fn files_go_to_the_linux_clipboard_as_a_uri_list() {
@@ -1108,7 +1096,7 @@ mod tests {
     }
 
     #[test]
-    fn the_notification_reads_as_production_writes_it() {
+    fn the_notification_reads_as_the_earlier_version_wrote_it() {
         assert_eq!(
             finished_body(0),
             "All subscriptions finished. No new library items were added."

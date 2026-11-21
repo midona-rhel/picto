@@ -1,7 +1,7 @@
-//! What the Add Tags and Folders dialogs share
-//! (`SelectionModalShell.module.css`): the search bar under the title, the
-//! rail of views on the left with their counts, the 28px rows of the list,
-//! the empty state and the footer's summary of what Apply will do.
+//! The parts that the Add Tags dialog and the Folders dialog share: the search
+//! bar under the title, the rail of views on the left with their counts, the
+//! 28px rows of the list, the text that is shown when the list is empty, and
+//! the footer's summary of what Apply will do.
 use super::overlay_shell;
 use super::text_input::{self, TextInput};
 use crate::i18n::t;
@@ -12,8 +12,9 @@ use std::rc::Rc;
 
 use super::keys::{self, Down, NextView, Up};
 
-/// The keys the dialogs take from their search field. Enter and Escape are
-/// the field's own, which the search bar catches before it.
+/// Binds the keys that the dialogs handle while their search field has the
+/// keyboard focus: Up, Down and Tab. Enter and Escape are bound by the field
+/// itself, and the search bar handles them before the field does.
 pub fn bind(cx: &mut App) {
     keys::bind(
         cx,
@@ -22,31 +23,31 @@ pub fn bind(cx: &mut App) {
     );
 }
 
-/// `--control-height-md`: a rail item and a row of the list.
+/// The height of a rail item and of a row of the list.
 pub const ROW: f32 = theme::CONTROL_MD;
-/// `.searchBar`
+/// The height of the search bar.
 const SEARCH: f32 = 38.;
 
-/// A key typed in the search field.
+/// A key that was pressed while the search field had the keyboard focus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
     Up,
     Down,
-    /// Enter.
+    /// The Enter key.
     Confirm,
-    /// Tab.
+    /// The Tab key.
     Next,
-    /// Escape.
+    /// The Escape key.
     Dismiss,
 }
 
 type KeyHandler = Rc<dyn Fn(Key, &mut Window, &mut App) + 'static>;
 
-/// `.searchBar` with its `IconSearch` and the field, which takes the
-/// keyboard. `on_key` hears the keys typed in the field. With `views`, Tab
-/// (and Shift-Tab) turn the rail's views, as `TagSelectModal`'s field does;
-/// without, they go on to the dialog's next control, as
-/// `FolderPickerModal`'s field lets the browser do.
+/// Returns the search bar: a search icon and the field `input`. `on_key` is
+/// called with each key of [`Key`] that is pressed while the field has the
+/// keyboard focus. With `views`, Tab is passed to `on_key` as `Key::Next`,
+/// which the Add Tags dialog uses to show the next view of the rail. Without
+/// `views`, Tab moves the keyboard focus to the dialog's next control.
 pub fn search_bar(
     input: &Entity<TextInput>,
     views: bool,
@@ -85,7 +86,8 @@ pub fn search_bar(
                 cx.propagate();
             }
         })
-        // Enter and Escape reach the dialog, not the field.
+        // Enter and Escape are handled here, before the field handles them,
+        // and are passed to the dialog.
         .capture_action(move |_: &text_input::Commit, window, cx| {
             cx.stop_propagation();
             confirm(window, cx);
@@ -94,7 +96,8 @@ pub fn search_bar(
             cx.stop_propagation();
             dismiss(window, cx);
         })
-        // `.searchIcon`: the tertiary colour at 60%.
+        // The search icon is in the tertiary text colour at 60% of that
+        // colour's opacity.
         .child(
             super::icon(
                 "library-search",
@@ -109,7 +112,8 @@ pub fn search_bar(
         .child(div().flex_1().min_w_0().h(px(SEARCH)).child(input.clone()))
 }
 
-/// `.sidebar`: the rail, `width` wide with its right border, padded 4px.
+/// Returns the rail: `width` wide, with a border on its right and 4px of
+/// padding.
 pub fn rail(width: f32, cx: &App) -> Div {
     let theme = theme::theme(cx);
     div()
@@ -125,8 +129,9 @@ pub fn rail(width: f32, cx: &App) -> Div {
         .border_color(theme.border_secondary())
 }
 
-/// `.sidebarBadge` and `.itemBadge`: a count in the monospaced caption, at
-/// half strength until the row is under the pointer or chosen.
+/// Returns the element for a count, in the monospaced font at the caption
+/// size. It is drawn at half strength until the pointer is over the row whose
+/// hover group is `group`. With `strong` it is always at full strength.
 pub fn badge(group: SharedString, strong: bool, cx: &App) -> Div {
     let theme = theme::theme(cx);
     div()
@@ -139,7 +144,7 @@ pub fn badge(group: SharedString, strong: bool, cx: &App) -> Div {
         .group_hover(group, |style| style.opacity(1.))
 }
 
-/// `.sidebarSep`
+/// Returns the 1px line that separates two groups of rail items.
 pub fn rail_separator(cx: &App) -> Div {
     let theme = theme::theme(cx);
     div()
@@ -150,8 +155,10 @@ pub fn rail_separator(cx: &App) -> Div {
         .bg(theme.border_secondary())
 }
 
-/// `.itemRow`: a row of the list, inset 4px, lit under the pointer or while
-/// the keyboard is on it. Its children brighten through `group`.
+/// Returns a row of the list, 4px in from the list's edges. Its background is
+/// the subtle overlay under the pointer, and while `focused` is true, which is
+/// when the arrow keys have moved to the row. The row is the hover group
+/// `group`, so that its children can change while the pointer is over the row.
 pub fn item_row(
     id: impl Into<ElementId>,
     group: SharedString,
@@ -181,7 +188,7 @@ pub fn item_row(
     }
 }
 
-/// `.emptyState`
+/// Returns the text that is shown in place of an empty list.
 pub fn empty_state(text: &'static str, cx: &App) -> Div {
     let theme = theme::theme(cx);
     div()
@@ -194,10 +201,11 @@ pub fn empty_state(text: &'static str, cx: &App) -> Div {
         .child(text)
 }
 
-/// The footer's summary: what Apply adds and removes and how many files it
-/// applies to, or how many are selected while nothing is pending.
+/// Returns the footer's summary: how many tags or folders Apply adds and
+/// removes, and how many files it applies to. While nothing is waiting to be
+/// applied, it is the number of selected files.
 pub fn summary(added: usize, removed: usize, selected: usize) -> String {
-    // i18n: production writes the summary in English
+    // i18n: the summary is English in every language
     let files = |count: usize| format!("{count} file{}", if count == 1 { "" } else { "s" });
     let mut parts = Vec::new();
     if added > 0 {
@@ -219,8 +227,9 @@ pub fn summary(added: usize, removed: usize, selected: usize) -> String {
     }
 }
 
-/// `.footerLeft`: the summary in the monospaced caption, or, with `hints`
-/// and nothing to summarise, the keys the list takes.
+/// Returns the left part of the footer: the summary, in the monospaced font at
+/// the caption size. When the summary is empty and `hints` is true, it shows
+/// the keys that the list handles.
 pub fn footer_left(summary: String, hints: bool, cx: &App) -> Div {
     let theme = theme::theme(cx);
     let left = div().flex_1().flex().items_center().gap(px(6.));

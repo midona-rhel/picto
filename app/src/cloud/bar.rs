@@ -1,8 +1,8 @@
-//! `CloudSyncBar`: while the open library syncs, a 48px glass bar slides up
-//! along the bottom of the main window between the rails, with the sync's
-//! progress and what it is doing; while a library joined from the cloud
-//! restores its media (a blocking sync), a progress dialog holds the window
-//! instead.
+//! The sync bar. While the open library syncs, a glass bar 48px high slides up
+//! along the bottom of the main window, between the rails. It shows the sync's
+//! progress and what the sync is doing. While a library that was joined from
+//! the cloud restores its media, which is a blocking sync, a progress dialog
+//! blocks the window instead.
 use super::{Cloud, Status};
 use crate::i18n::en;
 use crate::theme;
@@ -11,11 +11,13 @@ use crate::{motion, ui};
 use gpui::*;
 use std::time::Duration;
 
-/// `.root`'s `transition: transform 300ms`.
+/// The time the bar takes to slide in or out.
 const SLIDE: Duration = Duration::from_millis(300);
 const HEIGHT: f32 = 48.;
 
-/// The detail after the message: bytes while files move, else units.
+/// Returns the progress text that follows the message: two sizes while files
+/// are transferred (the phase `blobs`), and two counts of units otherwise.
+/// Returns `None` when the status has no total.
 fn detail(status: &Status) -> Option<String> {
     let total = status.total_units.filter(|total| *total > 0)?;
     Some(if status.phase == "blobs" {
@@ -31,15 +33,17 @@ fn detail(status: &Status) -> Option<String> {
 
 fn message(status: &Status) -> String {
     if status.message.is_empty() {
-        // Production writes it without a key.
+        // The locale files have no key for this text, so it is shown in
+        // English in every language.
         en("Working…").to_owned()
     } else {
         status.message.clone()
     }
 }
 
-/// The bar, kept clear of the rails (`left`, `right`), and the blocking
-/// dialog, which holds the keyboard on `focus`.
+/// Returns the elements of the sync bar and of the blocking progress dialog.
+/// The bar leaves `left` and `right` pixels free for the rails. The dialog
+/// keeps the keyboard focus on `focus`.
 pub fn bar(
     cloud: &Entity<Cloud>,
     (left, right): (f32, f32),
@@ -123,7 +127,7 @@ pub fn bar(
             .absolute()
             .left(px(left))
             .right(px(right))
-            // `translateY(100%)` to `0`.
+            // The bar slides up from below the bottom edge of the window.
             .bottom(px(-HEIGHT * (1. - progress)))
             .h(px(HEIGHT))
             .opacity(if shown || progress > 0. { 1. } else { 0. })
@@ -134,7 +138,8 @@ pub fn bar(
             .text_color(theme.text())
             .font_family(theme::FONT_UI)
             .bg(theme.glass())
-            // `box-shadow: 0 -1px 0 var(--color-border-secondary)`.
+            // A 1px line in the secondary border colour runs along the bar's
+            // top edge.
             .border_t_1()
             .border_color(theme.border_secondary())
             .occlude()

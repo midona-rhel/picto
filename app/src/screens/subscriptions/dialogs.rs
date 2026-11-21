@@ -1,8 +1,8 @@
-//! The screen's dialogs: a new subscription (`NewSubscriptionDialog`), a
-//! gallery download (`AddGalleryDialog`), a rename (`RenameDialog`), a
-//! source's edit (`QueryEditModal`) and details, the confirmations the
-//! screen asks before deleting or resetting, and the cover
-//! (`SubscriptionCoverDialog`, in the shared `ui::cover_dialog`).
+//! The screen's dialogs: "Add subscription", "Add gallery", "Rename
+//! Subscription", "Edit query", "Source details", the confirmations that
+//! the screen asks for before it deletes or resets, the choice of a cover
+//! picture (the shared `ui::cover_dialog`) and "Site accounts"
+//! (`accounts.rs`).
 use super::{SubscriptionsScreen, data, format, requests};
 use crate::i18n::{en, t};
 use crate::theme::Text as _;
@@ -39,14 +39,16 @@ pub enum Dialog {
     Details(Box<data::Query>),
     Confirm(Confirmation),
     Cover(Box<cover_dialog::Cover>),
-    /// `AccountsModal`: the services' logins.
+    /// The "Site accounts" dialog, which shows the services' logins.
     Accounts(Entity<super::accounts::Accounts>),
 }
 
-/// A source being edited: its site and the fields of `QueryEditModal`.
+/// The state of the "Edit query" dialog: the source that is edited, the
+/// site that is chosen for it and the dialog's text fields.
 pub struct EditQuery {
     query: i64,
-    /// Kept as it is: the dialog does not edit it.
+    /// Whether the source groups the media of one post. The dialog does not
+    /// change it and saves it as it was.
     group_posts: bool,
     site: &'static str,
     text: Entity<TextInput>,
@@ -55,7 +57,11 @@ pub struct EditQuery {
     _subscriptions: Vec<Subscription>,
 }
 
-/// A question asked before an edit that cannot be taken back.
+/// A confirmation dialog: its title, its message, the label of its
+/// confirming button, whether that button is drawn as a dangerous action,
+/// and what is done when the user confirms. The screen asks for one before
+/// it deletes subscriptions, deletes a source or resets a subscription's
+/// sync history.
 pub struct Confirmation {
     title: String,
     message: &'static str,
@@ -64,7 +70,9 @@ pub struct Confirmation {
     action: Confirmed,
 }
 
-/// What a confirmation does once confirmed.
+/// What is done when the user confirms a confirmation: the subscriptions
+/// with these ids are deleted, the sync history of this subscription is
+/// reset, or this source is deleted.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Confirmed {
     Delete(Vec<i64>),
@@ -72,11 +80,13 @@ pub enum Confirmed {
     DeleteQuery(i64),
 }
 
-/// `AddGalleryDialog`'s services.
+/// The services that the "Add gallery" dialog offers. Each pair holds the
+/// service's id and its name.
 // i18n: translated where drawn (select choices)
 const SERVICES: [(&str, &str); 2] = [("ehentai", "E-Hentai"), ("exhentai", "ExHentai")];
 
-/// The gallery address field's example for a service.
+/// Returns the placeholder of the "Gallery URL" field for the service
+/// `service`: an example of the address of a gallery at that service.
 fn gallery_placeholder(service: &str) -> &'static str {
     if service == "exhentai" {
         t("https://exhentai.org/g/12345/67890abcde/")
@@ -85,7 +95,8 @@ fn gallery_placeholder(service: &str) -> &'static str {
     }
 }
 
-/// `.row`: an 84px label on the right of its column, then the control.
+/// Builds a row of a dialog's form: a label in a column 84px wide, aligned
+/// to the column's right edge, and then the control.
 fn label_row(label: &'static str, control: impl IntoElement, cx: &App) -> Div {
     let theme = theme::theme(cx);
     div()
@@ -99,7 +110,7 @@ fn label_row(label: &'static str, control: impl IntoElement, cx: &App) -> Div {
                 .flex_none()
                 .pt(px(6.))
                 .text(theme::TEXT_SM)
-                // The dialog body's 20px line.
+                // The label has the line height of the dialog's other text.
                 .line_height(px(theme::LINE_HEIGHT_MD))
                 .text_color(theme.text_secondary())
                 .text_right()
@@ -117,8 +128,9 @@ fn label_row(label: &'static str, control: impl IntoElement, cx: &App) -> Div {
 }
 
 impl SubscriptionsScreen {
-    /// Opens `dialog`; the keyboard goes to `first` and back to the screen
-    /// once it has gone.
+    /// Opens `dialog` and closes the open context menu. The keyboard focus
+    /// goes to `first`, when it is given. When the dialog has closed, the
+    /// focus goes back to the screen.
     pub(super) fn show_dialog(
         &mut self,
         dialog: Dialog,
@@ -136,8 +148,12 @@ impl SubscriptionsScreen {
         self.dialog.dismiss(cx);
     }
 
-    /// A text field of a dialog whose Enter submits it and whose changes
-    /// repaint the dialog's buttons.
+    /// Creates a text field for a dialog, with the placeholder
+    /// `placeholder` and the text `text`. Enter in the field calls
+    /// `submit`. The screen is drawn again whenever the field changes,
+    /// because a dialog's buttons are enabled only while its fields hold
+    /// text. Returns the field and the subscriptions to its events, which
+    /// the dialog keeps for as long as it is open.
     fn dialog_field(
         &mut self,
         placeholder: &'static str,
@@ -160,9 +176,10 @@ impl SubscriptionsScreen {
         (input, subscriptions)
     }
 
-    // ── New subscription ────────────────────────────────────────
+    // The functions below belong to the "Add subscription" dialog.
 
-    /// The header's Add.
+    /// Opens the "Add subscription" dialog. The Add button in the titlebar
+    /// calls it.
     pub(super) fn open_create(&mut self, cx: &mut Context<Self>) {
         let (name, subscriptions) =
             self.dialog_field(t("e.g. Favourite artists"), "", Self::submit_create, cx);
@@ -177,8 +194,13 @@ impl SubscriptionsScreen {
         );
     }
 
-    /// Add: the subscription is made with no sources, on the schedule and
-    /// run limit Settings gives new ones, and opened once it exists.
+    /// Creates the subscription named in the "Add subscription" dialog. The
+    /// dialog's Add button and Enter in its name field call it. The
+    /// subscription is created without sources, with the schedule and the
+    /// "Posts per run" limit that Settings gives new subscriptions. When it
+    /// has been created, the dialog closes, and the screen opens the
+    /// subscription's page as soon as a read of the list contains it. It
+    /// does nothing when the name is empty or while `busy()` is true.
     fn submit_create(&mut self, cx: &mut Context<Self>) {
         let Some(Dialog::Create { name, .. }) = self.dialog.content() else {
             return;
@@ -188,7 +210,8 @@ impl SubscriptionsScreen {
         if typed.is_empty() || self.busy() {
             return;
         }
-        // The field empties at once, as the Electron dialog's does.
+        // The field is emptied as soon as the request is made, without
+        // waiting for the application's answer.
         name.update(cx, |input, cx| input.clear(cx));
         let settings = crate::settings::current(cx);
         let request = requests::create(
@@ -209,11 +232,14 @@ impl SubscriptionsScreen {
         });
     }
 
-    // ── Accounts ────────────────────────────────────────────────
+    // The functions below belong to the "Site accounts" dialog.
 
-    /// The header's Accounts, a source's login chip and a login problem's
-    /// Fix login: the Accounts dialog, on the service that owns `site`'s
-    /// login when one is given.
+    /// Opens the "Site accounts" dialog. When `site` is given, the service
+    /// that owns that site's login is chosen in the dialog. When the dialog
+    /// is already open, it chooses that service in the open dialog and the
+    /// dialog reads the services again. The Accounts button in the
+    /// titlebar, the login warning in a source's row and the "Fix login"
+    /// button of a problem call it.
     pub(super) fn open_accounts(&mut self, site: Option<&str>, cx: &mut Context<Self>) {
         let focus = site.map(|site| {
             format::site(site).map_or_else(
@@ -246,16 +272,19 @@ impl SubscriptionsScreen {
         self.show_dialog(Dialog::Accounts(accounts), None, cx);
     }
 
-    /// Closing the Accounts dialog reads the subscriptions and their logins
-    /// again (`refreshSubscriptionsWorkspace`).
+    /// Closes the "Site accounts" dialog and reads the subscriptions and
+    /// the sites' logins again, because the logins can have changed while
+    /// the dialog was open.
     fn close_accounts(&mut self, cx: &mut Context<Self>) {
         self.dismiss_dialog(cx);
         self.reload(cx);
     }
 
-    // ── Gallery ─────────────────────────────────────────────────
+    // The functions below belong to the "Add gallery" dialog.
 
-    /// One gallery downloads at a time.
+    /// Returns whether a gallery download has an active run. Only one
+    /// gallery is downloaded at a time, so the "Add Gallery" buttons are
+    /// disabled while this is true.
     pub(super) fn gallery_running(&self) -> bool {
         self.list.iter().flatten().any(|subscription| {
             format::is_gallery_job(subscription)
@@ -264,11 +293,13 @@ impl SubscriptionsScreen {
         })
     }
 
-    /// The header's Add Gallery.
+    /// Opens the "Add gallery" dialog. The "Add Gallery" button in the
+    /// titlebar calls it.
     pub(super) fn open_gallery(&mut self, cx: &mut Context<Self>) {
         let (url, mut subscriptions) =
             self.dialog_field(gallery_placeholder("ehentai"), "", Self::submit_gallery, cx);
-        // The service follows an address typed or pasted for the other.
+        // When the address that is typed or pasted belongs to the other
+        // service, the Service control changes to that service.
         subscriptions.push(cx.observe(&url, |this, url, cx| {
             let typed = url.read(cx).value();
             if let Some(found) = format::gallery_service(&typed) {
@@ -300,7 +331,12 @@ impl SubscriptionsScreen {
         }
     }
 
-    /// Add Gallery: the download starts, and the dialog closes once it has.
+    /// Starts the download of the gallery whose address is in the "Add
+    /// gallery" dialog (`subscriptions.gallery.start`). The dialog's "Add
+    /// Gallery" button and Enter in its address field call it. The dialog
+    /// closes when the application has accepted the command. It does
+    /// nothing when the address is empty, while `busy()` is true, or while
+    /// a gallery download has an active run.
     fn submit_gallery(&mut self, cx: &mut Context<Self>) {
         let Some(Dialog::Gallery { url, .. }) = self.dialog.content() else {
             return;
@@ -320,9 +356,12 @@ impl SubscriptionsScreen {
         );
     }
 
-    // ── Rename ──────────────────────────────────────────────────
+    // The functions below belong to the "Rename Subscription" dialog.
 
-    /// The menu's Rename and a double-click on the rail's name.
+    /// Opens the "Rename Subscription" dialog for the subscription `id`.
+    /// The dialog's field holds the subscription's name, with all of it
+    /// selected. Rename in the subscription's menu and a double-click on
+    /// the name in the header of the subscription's page call it.
     pub(super) fn open_rename(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         let _ = window;
         let Some(current) = self.subscription(id).map(|entry| entry.name.clone()) else {
@@ -343,8 +382,11 @@ impl SubscriptionsScreen {
         );
     }
 
-    /// Rename: an empty or unchanged name closes the dialog; another is
-    /// saved, and the dialog closes once it has been.
+    /// Saves the name typed in the "Rename Subscription" dialog. The
+    /// dialog's Rename button and Enter in its field call it. An empty
+    /// name, or the name the subscription already has, closes the dialog
+    /// and saves nothing. Any other name is saved, and the dialog closes
+    /// when the application has answered.
     fn submit_rename(&mut self, cx: &mut Context<Self>) {
         let Some(Dialog::Rename {
             id, current, name, ..
@@ -367,9 +409,11 @@ impl SubscriptionsScreen {
         });
     }
 
-    // ── Sources ─────────────────────────────────────────────────
+    // The functions below open the dialogs of a source and save its edit.
 
-    /// A source's Edit.
+    /// Opens the "Edit query" dialog for the source `query`, with the
+    /// source's site, query, display name and notes. The Edit button in the
+    /// source's row calls it.
     pub(super) fn open_edit_query(&mut self, query: &data::Query, cx: &mut Context<Self>) {
         let site = format::site(&query.site_id).map_or("", |site| site.id);
         let example = format::site(site).map_or("", |site| site.example_query);
@@ -416,7 +460,11 @@ impl SubscriptionsScreen {
         }
     }
 
-    /// Save: the source is updated, and the dialog closes once it has been.
+    /// Saves the source that the "Edit query" dialog edits
+    /// (`subscriptions.queries.update`). The dialog's Save button and Enter
+    /// in one of its fields call it. The dialog closes when the application
+    /// has answered. It does nothing when no site is chosen, when the query
+    /// is empty, or while `busy()` is true.
     fn save_query(&mut self, cx: &mut Context<Self>) {
         let Some(Dialog::EditQuery(edit)) = self.dialog.content() else {
             return;
@@ -446,12 +494,13 @@ impl SubscriptionsScreen {
         );
     }
 
-    /// A double-click on a source's row.
+    /// Opens the "Source details" dialog for the source `query`. A
+    /// double-click on the source's row calls it.
     pub(super) fn open_details(&mut self, query: &data::Query, cx: &mut Context<Self>) {
         self.show_dialog(Dialog::Details(Box::new(query.clone())), None, cx);
     }
 
-    // ── Confirmations ───────────────────────────────────────────
+    // The functions below open the confirmations and perform them.
 
     fn ask(&mut self, confirmation: Confirmation, cx: &mut Context<Self>) {
         self.show_dialog(Dialog::Confirm(confirmation), None, cx);
@@ -470,7 +519,9 @@ impl SubscriptionsScreen {
         );
     }
 
-    /// The bulk menu's Delete and ⌘⌫ (`deleteSubscriptions`).
+    /// Asks whether to delete the subscriptions `ids`. The "Delete N…" row
+    /// of the menu for several subscriptions and the Delete shortcut call
+    /// it.
     pub(super) fn confirm_delete_all(&mut self, ids: Vec<i64>, cx: &mut Context<Self>) {
         let total = ids.len();
         self.ask(
@@ -515,7 +566,10 @@ impl SubscriptionsScreen {
         );
     }
 
-    /// The confirming button: the dialog goes and the edit is made.
+    /// Called when the user confirms the open confirmation. It closes the
+    /// dialog and sends the commands that delete the subscriptions, reset
+    /// the sync history or delete the source. Subscriptions that are
+    /// deleted are also removed from the selection.
     fn confirmed(&mut self, cx: &mut Context<Self>) {
         let Some(Dialog::Confirm(confirmation)) = self.dialog.content() else {
             return;
@@ -533,9 +587,10 @@ impl SubscriptionsScreen {
         self.act(requests, cx, |_, _, _| {});
     }
 
-    // ── Drawing ─────────────────────────────────────────────────
+    // The function below draws the open dialog.
 
-    /// The open dialog, drawn over the window.
+    /// Builds the open dialog, which is drawn over the window. Returns
+    /// `None` when no dialog is open.
     pub(super) fn dialog_layer(
         &mut self,
         window: &mut Window,
@@ -742,8 +797,8 @@ impl SubscriptionsScreen {
                             .on_click(close_now(view.clone())),
                     )
                     .footer(
-                        // `pending`: a save on its way blocks another without
-                        // dimming the button.
+                        // The Save button is not disabled while a save waits
+                        // for its answer. `save_query` does nothing then.
                         ui::action_button("subscription-edit-save", ButtonLook::Primary)
                             .label(t("Save"))
                             .disabled(!can_save)
@@ -782,8 +837,9 @@ impl SubscriptionsScreen {
                 let last = rows.len() - 1;
                 let mut table = div().flex().flex_col();
                 for (index, (label, value)) in rows.into_iter().enumerate() {
-                    // `.queryStats > div`: a 92px label column and the value
-                    // on the right, ruled between rows.
+                    // A row has its label in a column 92px wide and its
+                    // value aligned to the right. Every row but the last has
+                    // a line under it.
                     table = table.child(
                         div()
                             .min_h(px(28.))

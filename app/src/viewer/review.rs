@@ -1,11 +1,13 @@
-//! Accepting or rejecting the Inbox item being viewed
-//! (`InboxReviewControls.tsx`, `inboxReview.ts`): the Accept and Reject pill
-//! over the media view and Quick Look, and the reviewer behind it.
+//! The controls that accept or reject the Inbox item being viewed. They are
+//! a rounded bar with an Accept button and a Reject button, which this code
+//! calls the pill, drawn over the media view and Quick Look. [`Reviewer`]
+//! keeps track of the reviews.
 //!
-//! The view moves on to the next item at once, chosen by id, and the change
-//! is saved in the background: waiting for the save would make every review
-//! take most of a second. If the save fails or is cancelled, the view goes
-//! back to the item, but only while it is still where this review left it.
+//! The view moves on to the next item at once, and the change is saved in
+//! the background, because waiting for the save would make every review take
+//! most of a second. The next item is found by its id. If the save fails or
+//! is cancelled, the view goes back to the item, but only while the view
+//! still shows what this review moved it to.
 use super::review_art::{self, Art, GLOW_INSET, GLYPH, HALF_WIDTH, HEIGHT, Half, SHADOW_MARGIN};
 use crate::i18n::t;
 use crate::ui::tooltip::{self, Tip};
@@ -22,15 +24,16 @@ pub enum Decision {
     Reject,
 }
 
-/// The view a review happens in.
+/// The view that a review is made in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
     QuickLook,
     Detail,
 }
 
-/// Where a review left the view: nothing until it has moved on, then the
-/// item it moved to (none when it closed the view).
+/// Where a review moved the view to. `ticket` identifies the review. `moved`
+/// is false until the review has moved the view. After that, `item` is the
+/// item the view moved to, or `None` when the review closed the view.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Destination {
     ticket: u64,
@@ -38,32 +41,35 @@ struct Destination {
     moved: bool,
 }
 
-/// The reviews in progress (`createInboxReviewer`).
+/// Keeps track of the reviews that are in progress.
 #[derive(Default)]
 pub struct Reviewer {
-    /// Items whose review is still being saved.
+    /// The items whose review is still being saved.
     in_flight: HashSet<RootId>,
-    /// Saved items the list has not dropped yet.
+    /// The items whose review was saved and which the list of results has
+    /// not dropped yet.
     leaving: HashSet<RootId>,
-    /// The latest review's destination.
+    /// Where the latest review moved the view to.
     latest: Option<Destination>,
     tickets: u64,
 }
 
 impl Reviewer {
-    /// Whether `id` is already reviewed: being saved, or saved and about to
-    /// leave the list.
+    /// Returns whether `id` is already reviewed: its review is being saved,
+    /// or it was saved and the item is about to leave the list.
     pub fn reviewed(&self, id: RootId) -> bool {
         self.in_flight.contains(&id) || self.leaving.contains(&id)
     }
 
-    /// An item the review of `id` may land on.
+    /// Returns whether the review of `id` may move the view to `item`:
+    /// `item` is another item and is not reviewed itself.
     fn open(&self, id: RootId, item: RootId) -> bool {
         item != id && !self.reviewed(item)
     }
 
-    /// The first open item after `id` in `items`; `None` when `id` is not
-    /// listed.
+    /// Returns the first item after `id` in `items` that the view may move
+    /// to, or `Some(None)` when there is none. Returns `None` when `id` is
+    /// not in `items`.
     pub fn following(&self, items: &[RootId], id: RootId) -> Option<Option<RootId>> {
         let index = items.iter().position(|item| *item == id)?;
         Some(
@@ -74,7 +80,8 @@ impl Reviewer {
         )
     }
 
-    /// The nearest open item before `id` in `items`.
+    /// Returns the nearest item before `id` in `items` that the view may
+    /// move to. Returns `None` when there is none or `id` is not in `items`.
     pub fn preceding(&self, items: &[RootId], id: RootId) -> Option<RootId> {
         let index = items.iter().position(|item| *item == id)?;
         items[..index]
@@ -84,7 +91,8 @@ impl Reviewer {
             .find(|item| self.open(id, *item))
     }
 
-    /// Starts reviewing `id`; the ticket names this review from now on.
+    /// Starts the review of `id` and returns its ticket, the number that
+    /// identifies this review in the later calls.
     pub fn begin(&mut self, id: RootId) -> u64 {
         self.in_flight.insert(id);
         self.tickets += 1;
@@ -96,8 +104,9 @@ impl Reviewer {
         self.tickets
     }
 
-    /// Whether the review `ticket` moves the view on to `next`: only the
-    /// latest review does, and only once.
+    /// Returns whether the review `ticket` may move the view on to `next`,
+    /// and records `next` when it may. Only the latest review moves the
+    /// view, and only once.
     pub fn move_on(&mut self, ticket: u64, next: Option<RootId>) -> bool {
         match &mut self.latest {
             Some(destination) if destination.ticket == ticket && !destination.moved => {
@@ -109,10 +118,11 @@ impl Reviewer {
         }
     }
 
-    /// The save of the review `ticket` of `id` is over. `listed` says
-    /// whether the item is still in the list, `shown` what the view shows
-    /// now. Hands back the item to show again when the save did not happen
-    /// and the view is still where the review left it.
+    /// Records that the save of the review `ticket` of `id` has ended.
+    /// `committed` says whether the change was saved, `listed` whether the
+    /// item is still in the list, and `shown` what the view shows now.
+    /// Returns the item to show again when the change was not saved and the
+    /// view still shows what the review moved it to.
     pub fn saved(
         &mut self,
         ticket: u64,
@@ -130,12 +140,14 @@ impl Reviewer {
         }
         let destination = self.latest.filter(|latest| latest.ticket == ticket)?;
         self.latest = None;
-        // The last item closes the view, so "still there" is "still closed".
+        // The review of the last item closes the view, and `destination.item`
+        // is then `None`. In that case the view is still where the review left
+        // it while it shows no item.
         (destination.moved && shown == destination.item && listed).then_some(id)
     }
 
-    /// The review `ticket` of `id` was dropped before it saved anything
-    /// (the next items could not be loaded): the item stays, unreviewed.
+    /// Drops the review `ticket` of `id`, which saved nothing because the
+    /// next items could not be loaded. The item stays unreviewed.
     pub fn abandon(&mut self, ticket: u64, id: RootId) {
         self.in_flight.remove(&id);
         if self.latest.is_some_and(|latest| latest.ticket == ticket) {
@@ -143,17 +155,19 @@ impl Reviewer {
         }
     }
 
-    /// The list changed: saved items that have left it stop being skipped.
+    /// Takes the list's new items. Saved items that are no longer in the
+    /// list are forgotten, so they are no longer skipped.
     pub fn items_changed(&mut self, items: &[RootId]) {
         let listed = items.iter().copied().collect::<HashSet<_>>();
         self.leaving.retain(|id| listed.contains(id));
     }
 }
 
-/// `FLASH_DURATION_MS`, `reviewFlash`.
+/// How long a button flashes after it was pressed.
 pub const FLASH: Duration = Duration::from_millis(360);
 
-/// A press that was taken: which button flashes, and since when.
+/// A press of a button that was accepted: which button flashes, and since
+/// when.
 #[derive(Clone, Copy)]
 pub struct Flash {
     pub decision: Decision,
@@ -166,40 +180,46 @@ impl Flash {
     }
 }
 
-/// `.pill`: 129 wide (two 64px halves and a 1px divider), 96px above the
-/// window's bottom edge, centred on the window.
+/// The width of the pill: two halves of 64px each and a 1px divider between
+/// them. `PILL_BOTTOM` is the distance from the pill to the bottom edge of
+/// the window. The pill is centred horizontally in the window.
 const PILL_WIDTH: f32 = 2. * HALF_WIDTH + 1.;
 const PILL_BOTTOM: f32 = 96.;
-/// `.divider`'s `margin-block: 9px`.
+/// The space above and below the divider inside the pill.
 const DIVIDER_MARGIN: f32 = 9.;
-/// `reviewPillIn`: it rises the last 7px into place from 96%.
+/// When the pill appears, it moves up by this many points into its place,
+/// and its background grows from `PILL_SCALE` (96%) to its full size.
 const PILL_RISE: f32 = 7.;
 const PILL_SCALE: f32 = 0.96;
-/// The pill's drawing layer: just above the dialogs'.
+/// The priority that the pill is drawn at, which is just above that of the
+/// dialogs.
 const LAYER: usize = crate::ui::layer::REVIEW;
-/// `outline-offset: -3px`.
+/// How far inside a half's edge the focus ring is drawn.
 const RING_INSET: f32 = 3.;
-/// `.glow`'s hovered opacity.
+/// The opacity of a half's glow while the pointer is over the half.
 const GLOW_HOVERED: f32 = 0.72;
 
 type ReviewHandler = Rc<dyn Fn(Decision, &mut Window, &mut App)>;
 type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 
-/// The pill, drawn over everything while the item being viewed is in the
-/// Inbox. The shell positions nothing: the pill places itself in the window.
+/// The pill. It is drawn over everything else while the item being viewed is
+/// in the Inbox. The pill positions itself in the window, so the shell does
+/// not place it.
 #[derive(IntoElement)]
 pub struct Controls {
-    /// A question is open: the controls take no input.
+    /// True while a question to the user is open. The controls then take no
+    /// input.
     paused: bool,
     flash: Option<Flash>,
-    /// The button that has the keyboard's focus ring (`:focus-visible`): a
-    /// clicked button keeps the focus, and shows it once a key is pressed.
+    /// The button that shows the keyboard focus ring. A button that was
+    /// clicked keeps keyboard focus, and shows the ring once a key is
+    /// pressed.
     focus_ring: Option<Decision>,
     on_review: ReviewHandler,
     on_blur: Option<Handler>,
 }
 
-/// The pill. `on_review` hears a click on either button.
+/// Builds the pill. `on_review` is called when either button is clicked.
 pub fn controls(
     paused: bool,
     flash: Option<Flash>,
@@ -220,17 +240,20 @@ impl Controls {
         self
     }
 
-    /// A press outside the pill, which takes the focus from its buttons.
+    /// Sets the handler of a press outside the pill. The shell uses it to
+    /// take keyboard focus away from the pill's buttons.
     pub fn on_blur(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_blur = Some(Rc::new(handler));
         self
     }
 }
 
-/// One half's moving state: its hover, the light (`.glow` opacity, 160 ms),
-/// the glyph's tint (140 ms) and shadow (160 ms), and the flash it showed
-/// last, so the light snaps back when the flash ends, as production's
-/// remounted `.glow` does.
+/// The animated state of one half: whether the pointer is over it, the
+/// opacity of its glow, which is the coloured light behind the button
+/// (160 ms), the tint of its glyph (140 ms) and the glyph's shadow (160 ms).
+/// `flashing` records whether the half was flashing in the last frame, so
+/// that when the flash ends the glow goes straight to its resting opacity
+/// without a fade.
 #[derive(Default)]
 struct HalfState {
     hovered: bool,
@@ -240,13 +263,13 @@ struct HalfState {
     flashing: bool,
 }
 
-/// When the pill appeared, for `reviewPillIn`.
+/// The time at which the pill appeared. Its entry animation runs from then.
 struct Entered(Instant);
 
-/// The drawn bitmaps, one set per display scale, kept for the app's life:
-/// the pill comes and goes with each Inbox item, and drawing them again
-/// each time would cost a blur on the drawing thread and leave the old set
-/// in the sprite atlas.
+/// The bitmaps of the pill, one set for each display scale, kept for as long
+/// as the app runs. The pill appears and disappears with each Inbox item.
+/// Drawing the bitmaps again each time would cost a blur on the drawing
+/// thread and would leave the old set in the sprite atlas.
 #[derive(Default)]
 struct ArtCache(Vec<Rc<Art>>);
 
@@ -267,8 +290,9 @@ impl RenderOnce for Controls {
         let viewport = window.viewport_size();
         let left = (f32::from(viewport.width) - PILL_WIDTH) / 2.;
         let top = f32::from(viewport.height) - PILL_BOTTOM - HEIGHT + PILL_RISE * (1. - appear);
-        // GPUI scales no boxes, so only the glass is drawn at the entry
-        // scale, about the pill's centre; the glyphs keep their size.
+        // GPUI cannot scale an element together with its children. Only the
+        // glass panel is therefore drawn at the entry scale, about the pill's
+        // centre, and the glyphs keep their size.
         let scale = PILL_SCALE + (1. - PILL_SCALE) * appear;
         let glass = ui::glass_panel("inbox-review-glass", HEIGHT / 2. * scale, cx)
             .absolute()
@@ -276,8 +300,9 @@ impl RenderOnce for Controls {
             .top(px(HEIGHT * (1. - scale) / 2.))
             .w(px(PILL_WIDTH * scale))
             .h(px(HEIGHT * scale));
-        // `.divider`: a 1px line fading in over its top fifth and out over
-        // its bottom fifth, with a dark line beside it (`box-shadow: 1px 0`).
+        // The divider is a 1px line that fades in over its top fifth and out
+        // over its bottom fifth, with a dark line of the same height to its
+        // right.
         let line = HEIGHT - 2. * DIVIDER_MARGIN;
         let divider = |from: u32, to: u32, share: f32| {
             div().w_full().h(px(line * share)).bg(linear_gradient(
@@ -335,13 +360,15 @@ impl RenderOnce for Controls {
             .child(divider_line)
             .child(divider_shade)
             .child(half(Half::Reject, &self, &art, window, cx));
-        // Over the dialogs (`ui::modal`'s layer 10), so it stays clear of
-        // the backdrop of the question a reject asks.
+        // The pill is drawn above the dialogs (layer 10 of `ui::modal`), so
+        // that the backdrop of the question that a reject asks does not cover
+        // it.
         deferred(pill).with_priority(LAYER)
     }
 }
 
-/// The bitmaps for the window's display scale, drawn on first use.
+/// Returns the bitmaps for the window's display scale, and draws them on
+/// first use.
 fn art(window: &mut Window, cx: &mut App) -> Rc<Art> {
     let scale = window.scale_factor();
     let cache = cx.default_global::<ArtCache>();
@@ -363,8 +390,8 @@ fn art(window: &mut Window, cx: &mut App) -> Rc<Art> {
     art
 }
 
-/// One half of the pill: its light, its glyph's shadow and glyph, and its
-/// tooltip.
+/// Builds one half of the pill: its glow, the shadow of its glyph, the glyph
+/// and its tooltip.
 fn half(
     side: Half,
     controls: &Controls,
@@ -405,8 +432,9 @@ fn half(
         .filter(|flash| flash.decision == decision && !flash.over());
     let paused = controls.paused;
     let ring = controls.focus_ring == Some(decision);
-    // `:hover:not(:disabled)` and `:focus-visible`, and `.chosen` while the
-    // press flashes.
+    // The half is lit while the pointer is over it and the controls are not
+    // paused, or while it has the focus ring. The glyph's tint and shadow
+    // are also shown while the press flashes.
     let (glow, lit, shade, flashing) = state.update(cx, |state, _| {
         let hovered = state.hovered && !paused || ring;
         state.glow.set(hovered, motion::REVIEW_GLOW);
@@ -417,8 +445,8 @@ fn half(
             .shadow
             .set(hovered || flash.is_some(), motion::REVIEW_GLOW);
         if state.flashing && flash.is_none() {
-            // The flash's light is a fresh element: the one after it starts
-            // at rest rather than fading.
+            // When a flash ends, the glow goes straight to its resting opacity
+            // instead of fading from the opacity of the flash.
             state.glow = motion::Fade::at(hovered);
         }
         state.flashing = flash.is_some();
@@ -436,8 +464,8 @@ fn half(
     if animating || flashing || hint.read(cx).animating() {
         window.request_animation_frame();
     }
-    // The flash shows the light at full strength, from `brightness(2)` back
-    // to none on `ease-out`.
+    // During the flash the glow is at full opacity, and its brightness goes
+    // from twice the normal brightness back to normal on an ease-out curve.
     let (opacity, step) = match flash {
         Some(flash) => {
             let progress = motion::progress(flash.since.elapsed(), FLASH);
@@ -470,8 +498,8 @@ fn half(
         .left(px(glyph_left))
         .top(px(glyph_top))
         .child(ui::icon(icon, GLYPH, theme::blend(theme.text(), tint, lit)));
-    // `outline: 1px solid rgba(255, 255, 255, 0.75); outline-offset: -3px`,
-    // following the half's rounded outer side.
+    // The focus ring is a 1px line, 3px inside the half's edge, that follows
+    // the rounded outer side of the half.
     let ring = ring.then(|| {
         let round = HEIGHT / 2. - RING_INSET;
         let outline = div()
@@ -511,15 +539,15 @@ fn half(
         .child(shadow)
         .child(glyph)
         .children(ring)
-        // CSS `:hover` and the tooltip stay through a key press under a
-        // still pointer.
+        // The hover state and the tooltip are kept when a key is pressed
+        // while the pointer rests on the half.
         .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
         .on_hover(move |hovered, _, cx| {
             state.update(cx, |state, cx| {
                 state.hovered = *hovered;
                 cx.notify();
             });
-            // The tooltip shows on a disabled button too.
+            // The tooltip is shown on a disabled button too.
             hint.update(cx, |hint, cx| hint.set(*hovered, cx));
         })
         .children(layer);
@@ -549,7 +577,7 @@ mod tests {
         assert!(reviewer.move_on(first, Some(RootId(3))));
         // The same review moves the view only once.
         assert!(!reviewer.move_on(first, Some(RootId(4))));
-        // The next review skips the item still saving.
+        // The next review skips the item whose review is still being saved.
         reviewer.begin(RootId(3));
         assert_eq!(reviewer.following(&items, RootId(3)), Some(Some(RootId(4))));
         assert_eq!(reviewer.preceding(&items, RootId(3)), Some(RootId(1)));
@@ -581,13 +609,15 @@ mod tests {
 
         let ticket = reviewer.begin(RootId(1));
         reviewer.move_on(ticket, Some(RootId(2)));
-        // The view was moved on since: it stays.
+        // The view has been moved on to another item since, so it stays
+        // there.
         assert_eq!(
             reviewer.saved(ticket, RootId(1), false, true, Some(RootId(3))),
             None
         );
 
-        // A later review owns the view.
+        // A later review has moved the view, so the failed save of the earlier
+        // review does not move it back.
         let early = reviewer.begin(RootId(1));
         reviewer.move_on(early, Some(RootId(2)));
         let late = reviewer.begin(RootId(2));
@@ -597,7 +627,8 @@ mod tests {
             None
         );
 
-        // The last item closed the view; still closed, it reopens.
+        // The review of the last item closed the view. The view is still
+        // closed, so it reopens on the item.
         let mut reviewer = Reviewer::default();
         let ticket = reviewer.begin(RootId(1));
         reviewer.move_on(ticket, None);

@@ -1,21 +1,31 @@
-//! Software updates (`updateService.mjs`, `updateRuntime.ts`,
-//! `UpdateModal.tsx`): production's release feed checked by hand (File ›
-//! Check for Updates…, Settings' Check Now) and 15 s after start and every
-//! six hours; what it found, told in a notification and the update dialog;
-//! on Windows and Linux the installer named by the feed downloaded with its
-//! progress and verified against the feed's SHA-512 and size, then
-//! installed as electron-updater installs it (Restart and Install, or when
-//! the app quits with the update waiting); on macOS the release page, as
-//! production opens it. The first start of a version shows that version's
-//! bundled release notes until the dialog is closed, as production does.
+//! Software updates.
 //!
-//! Checks run only where production's would (`app.isPackaged`), see
-//! [`packaged`]; elsewhere the dialog and Settings show production's
-//! "unavailable" state. A debug build is packaged only under the checks'
-//! seam `PICTO_GPUI_NET_ORIGIN`, against its local feed.
-//! `PICTO_GPUI_HOLD_DOWNLOADS` holds or fails the download instead of
-//! fetching the installer, and `PICTO_GPUI_UPDATE_PLATFORM` follows another
-//! system's flow, whose installer is then never started.
+//! The app looks for a newer release in the list of Picto's releases on
+//! GitHub. It does so when the user chooses File › Check for Updates… or
+//! Check Now in Settings, 15 seconds after the app starts, and every six
+//! hours after that. It shows what it found in a notification and in the
+//! update dialog (`dialog.rs`).
+//!
+//! On Windows and Linux the app downloads the installer that the release's
+//! feed names (`feed.rs`), shows the progress of the download, and checks
+//! the downloaded file against the SHA-512 and the size that the feed gives.
+//! The installer is started when the user chooses Restart and Install, or
+//! when the app quits while a downloaded update is waiting. On macOS the app
+//! downloads nothing, and the dialog's button opens the release's page in
+//! the browser.
+//!
+//! The first start of a version shows that version's release notes, which
+//! are built into the app, until the user closes the dialog.
+//!
+//! Only a packaged build checks for updates (see [`packaged`]). In any other
+//! build the dialog and Settings say that update checks are not available.
+//! Three environment variables of `seams.rs` change this, so that the
+//! updates can be checked without a release. With `PICTO_GPUI_NET_ORIGIN` a
+//! debug build counts as packaged and reads the releases and the feed from
+//! that loopback address. With `PICTO_GPUI_HOLD_DOWNLOADS` the installer is
+//! not fetched, and the download stays at a given progress or fails. With
+//! `PICTO_GPUI_UPDATE_PLATFORM` the app follows the steps of another
+//! operating system, and it then never starts the installer.
 pub mod dialog;
 pub mod feed;
 
@@ -28,17 +38,21 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// The version this app reports: production's `package.json` version.
+/// The app's version, which is the `version` in the repository's
+/// `package.json`. The build script sets it.
 pub const VERSION: &str = env!("PICTO_VERSION");
-/// `docs/<version>-release-notes.md`, bundled with the build.
+/// This version's release notes. The build script copies them from
+/// `docs/<version>-release-notes.md`. The text is empty when that file does
+/// not exist.
 const BUNDLED_NOTES: &str = include_str!(concat!(env!("OUT_DIR"), "/release-notes.md"));
-/// `ACKNOWLEDGED_RELEASE_FILE`
+/// The name of the file, in the folder where the app keeps its state, that
+/// holds the version whose release notes the user has closed.
 const ACKNOWLEDGED: &str = "acknowledged-update-release.json";
-/// The first automatic check, after start.
+/// How long after the app starts the first automatic check runs.
 const FIRST_CHECK: Duration = Duration::from_secs(15);
-/// Automatic checks after that.
+/// How long the app waits between one automatic check and the next.
 const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
-/// The notifications' `duration: 10_000`.
+/// How long a notification about an update stays on the screen.
 const NOTICE: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,11 +75,13 @@ pub struct Progress {
     pub total: u64,
 }
 
-/// `UpdateState`
+/// What the app knows about updates at this moment. The update dialog and
+/// Settings show it.
 #[derive(Clone, Debug)]
 pub struct State {
     pub status: Status,
-    /// `darwin`, `win32` or `linux`.
+    /// The operating system whose update steps the app follows: `darwin`,
+    /// `win32` or `linux`.
     pub platform: &'static str,
     pub version: Option<String>,
     pub release_name: Option<String>,
@@ -74,24 +90,28 @@ pub struct State {
     pub release_url: String,
     pub progress: Option<Progress>,
     pub error: Option<String>,
-    /// The verified installer.
+    /// The path of the downloaded installer, once it has been checked
+    /// against the feed.
     pub downloaded: Option<PathBuf>,
 }
 
 impl State {
-    /// A check or download is under way (`busy`).
+    /// Returns whether a check or a download is running.
     pub fn busy(&self) -> bool {
         matches!(self.status, Status::Checking | Status::Downloading)
     }
 
-    /// macOS opens the release page; the others download the installer and
-    /// install it (production's `automaticInstall` is `!mac()`).
+    /// Returns whether the app follows the steps of macOS, where it opens
+    /// the release's page. On Windows and Linux it downloads the installer
+    /// and starts it.
     pub fn mac(&self) -> bool {
         self.platform == "darwin"
     }
 }
 
-/// The system whose update flow this run follows.
+/// Returns the operating system whose update steps the app follows. It is
+/// the one that this process runs on, unless `PICTO_GPUI_UPDATE_PLATFORM`
+/// names another.
 fn platform() -> &'static str {
     match crate::seams::update_platform().as_deref() {
         Some("darwin") => "darwin",
@@ -105,7 +125,8 @@ fn platform() -> &'static str {
     }
 }
 
-/// The system this process runs on, in production's words.
+/// Returns the operating system that this process runs on, as `darwin`,
+/// `win32` or `linux`.
 fn system() -> &'static str {
     match std::env::consts::OS {
         "macos" => "darwin",
@@ -114,16 +135,22 @@ fn system() -> &'static str {
     }
 }
 
-/// Production's `app.isPackaged`, which decides whether there are update
-/// checks at all (else the state is `unavailable`, with its message), for
-/// this app: a release build that is not run from Cargo's build folder
-/// (`target/<profile>/`, `target/<triple>/<profile>/`), and on Linux one
-/// run from an AppImage (`$APPIMAGE`, an absolute path), the only Linux
-/// package production makes and the only one electron-updater installs
-/// over. A debug build never is, except under the checks' seam
-/// `PICTO_GPUI_NET_ORIGIN`, whose loopback feed it then follows as a
-/// packaged build follows the real one; under any other seam, or in a test
-/// build, it is not.
+/// Returns whether this is a packaged build. Only a packaged build checks
+/// for updates. In any other build the status is `Unavailable`, with the
+/// error `UNAVAILABLE`.
+///
+/// A packaged build is a release build whose program is not in Cargo's
+/// build folder (`target/<profile>/` or `target/<triple>/<profile>/`). On
+/// Linux it must also run from an AppImage, whose path `$APPIMAGE` holds,
+/// because the AppImage is the only Linux package of Picto and the only one
+/// that an update can replace.
+///
+/// When `PICTO_GPUI_NET_ORIGIN` is set, a debug build counts as packaged too,
+/// and the app reads the releases and the feed from that loopback address.
+/// On Linux it must still run from an AppImage, unless
+/// `PICTO_GPUI_UPDATE_PLATFORM` makes it follow the steps of another
+/// operating system. When any other variable of `seams.rs` is set, and in a
+/// test build, no build is packaged.
 pub fn packaged() -> bool {
     let appimage = || {
         !(cfg!(target_os = "linux") && platform() == "linux")
@@ -140,7 +167,9 @@ pub fn packaged() -> bool {
     }
 }
 
-/// Whether `exe` is where Cargo builds it.
+/// Returns whether the program `exe` is in Cargo's build folder:
+/// `target/debug/`, `target/release/`, or one of these two under
+/// `target/<triple>/`.
 fn in_build_folder(exe: &Path) -> bool {
     let names: Vec<String> = exe
         .ancestors()
@@ -161,15 +190,18 @@ fn in_build_folder(exe: &Path) -> bool {
     }
 }
 
-/// The unavailable state's error, which production writes in English.
+/// The error text of the status `Unavailable`. It has no key in the
+/// catalogs, so it is English in every language.
 const UNAVAILABLE: &str = en("Update checks are available in packaged builds.");
 
-/// What a check found.
+/// The result of a check.
 enum Found {
     Current,
-    /// macOS: the release, for its page.
+    /// A newer release, on macOS. The app shows it and can open its page.
     Page(Release),
-    /// Windows and Linux: the release, its feed and the installer.
+    /// A newer release, on Windows or Linux: the release, its feed, the
+    /// installer's entry in the feed, and the address that the installer is
+    /// downloaded from.
     Installer {
         release: Release,
         feed: Feed,
@@ -180,21 +212,21 @@ enum Found {
 
 pub struct Updates {
     state: State,
-    /// Run once the check under way has finished.
+    /// The functions to call when the check that is running has finished.
     waiting: Vec<Box<dyn FnOnce(&mut App)>>,
     checking: Option<Task<()>>,
     downloading: Option<Task<()>>,
     _schedule: Option<Task<()>>,
-    /// The last status and version announced (`announced`).
+    /// The status and version that were announced last, so that the same
+    /// status of the same version is announced only once.
     announced: String,
-    /// The verified installer and what the feed says of it, from the last
-    /// download that finished (`downloadedUpdateHelper`).
+    /// The installer of the last download that finished and matched the
+    /// feed, with its entry in the feed.
     ready: Option<(PathBuf, FeedFile)>,
-    /// Restart and Install has started the installer
-    /// (`quitAndInstallCalled`).
+    /// Whether the installer has been started. It is not started a second
+    /// time.
     install_called: bool,
-    /// `autoInstallOnAppQuit`: the waiting update installed as the app
-    /// quits.
+    /// Starts the installer of a downloaded update when the app quits.
     _on_quit: Option<Subscription>,
 }
 
@@ -202,7 +234,7 @@ struct Shared(Entity<Updates>);
 
 impl Global for Shared {}
 
-/// The app's updates, made on first use.
+/// Returns the app's one `Updates` entity. The first call makes it.
 pub fn entity(cx: &mut App) -> Entity<Updates> {
     if let Some(shared) = cx.try_global::<Shared>() {
         return shared.0.clone();
@@ -243,13 +275,14 @@ pub fn entity(cx: &mut App) -> Entity<Updates> {
     updates
 }
 
-/// The update state now.
+/// Returns a copy of the current update state.
 pub fn state(cx: &mut App) -> State {
     entity(cx).read(cx).state.clone()
 }
 
-/// `start`: the release notes of a version started for the first time,
-/// then the automatic checks. Only the app proper calls this.
+/// Shows the release notes when this version starts for the first time,
+/// then starts the automatic checks. It does nothing in a build that is not
+/// packaged. Only `main.rs` calls it, when the app starts.
 pub fn start(cx: &mut App) {
     if !packaged() {
         return;
@@ -272,14 +305,15 @@ pub fn start(cx: &mut App) {
     });
 }
 
-/// Check Now: a check, its outcome in the state.
+/// Runs a check, for Check Now in Settings and Check Again in the dialog.
+/// The result is in the state.
 pub fn check(cx: &mut App) {
     entity(cx).update(cx, |updates, cx| updates.check(None, cx));
 }
 
-/// File › Check for Updates… (`checkForUpdates`): a check, then the
-/// dialog (`menu:show-updates`). Without a library open there is no dialog
-/// to show; the outcome is told in a notification instead.
+/// Does File › Check for Updates…: runs a check and then opens the update
+/// dialog. The dialog belongs to the main window of an open library. When
+/// no library is open, the result is shown in a notification instead.
 pub fn check_from_menu(cx: &mut App) {
     entity(cx).update(cx, |updates, cx| {
         updates.check(
@@ -293,7 +327,8 @@ pub fn check_from_menu(cx: &mut App) {
     });
 }
 
-/// The dialog, in the main window, if a library is open there.
+/// Opens the update dialog in the main window and brings that window to the
+/// front. Returns false, and opens nothing, when no library is open.
 pub fn show_dialog(cx: &mut App) -> bool {
     let Some(shell) = crate::libraries::host::shell(cx) else {
         return false;
@@ -303,7 +338,8 @@ pub fn show_dialog(cx: &mut App) -> bool {
     true
 }
 
-/// The outcome of a check from the menu without the dialog.
+/// Shows the result of a check from the menu in a notification. It is used
+/// when the dialog cannot be opened.
 fn tell(cx: &mut App) {
     let state = state(cx);
     match state.status {
@@ -311,15 +347,16 @@ fn tell(cx: &mut App) {
         Status::Error | Status::Unavailable => {
             crate::ui::notify::error(t("Software Update"), state.error.unwrap_or_default(), cx)
         }
-        // Announced as they arrive.
+        // `publish` showed a notification for a newer version when it set
+        // the status.
         _ => {}
     }
 }
 
-/// `install`: on macOS the release page; elsewhere Restart and Install
-/// (`quitAndInstall(false, true)`): the downloaded installer started as
-/// electron-updater starts it, then the app quits. If it cannot be started,
-/// the app stays and the error is shown.
+/// Does the main button of the dialog. On macOS it opens the release's page.
+/// On Windows and Linux it does Restart and Install: it starts the
+/// downloaded installer and then quits the app. If the installer cannot be
+/// started, the app keeps running and the dialog shows the error.
 pub fn install(cx: &mut App) {
     if state(cx).mac() {
         return open_release(cx);
@@ -327,15 +364,17 @@ pub fn install(cx: &mut App) {
     entity(cx).update(cx, |updates, cx| updates.install(cx));
 }
 
-/// `openRelease`: the release's page (or the releases page) in the
-/// browser.
+/// Opens the release's page in the browser, or the page that lists all
+/// releases when no release is known.
 pub fn open_release(cx: &mut App) {
     let url = state(cx).release_url;
     net::open_in_browser(&url, cx);
 }
 
-/// `acknowledgeInstalled`: the bundled notes have been read; they are not
-/// shown again for this version.
+/// Records that the user closed this version's release notes, by writing
+/// the version to the file `ACKNOWLEDGED`, so that the next start does not
+/// show them again. The status then becomes `Current`. It does nothing
+/// unless the status is `Installed`.
 pub fn acknowledge_installed(cx: &mut App) {
     entity(cx).update(cx, |updates, cx| {
         if updates.state.status != Status::Installed {
@@ -372,9 +411,11 @@ pub fn acknowledge_installed(cx: &mut App) {
     });
 }
 
-/// The off-screen tool's `update <status> [darwin|win32|linux]`: the state
-/// a check would have reached, for pictures (a test build has no checks).
-/// Its notifications show as they would.
+/// Sets the state that a check would have reached. It is for the line
+/// `update <status> [darwin|win32|linux]` of a script that `offscreen.rs`
+/// plays to save pictures of the app. A test build runs no checks, so the
+/// state is set directly. The notifications of the state are shown as they
+/// are after a real check.
 #[cfg(test)]
 pub fn show_for_pictures(status: &str, flow: &str, cx: &mut App) {
     let status = match status {
@@ -448,8 +489,11 @@ impl Updates {
         &self.state
     }
 
-    /// Changes the state, tells whoever shows it, and announces what is
-    /// new (`publish` and `announce`).
+    /// Changes the state and redraws the views that show it. When the state
+    /// has a version, and this status of this version was not announced
+    /// yet, it also announces it: `Installed` opens the dialog, and
+    /// `Available` and `Downloaded` show a notification with a View button
+    /// that opens the dialog.
     fn publish(&mut self, change: impl FnOnce(&mut State), cx: &mut Context<Self>) {
         change(&mut self.state);
         cx.notify();
@@ -473,7 +517,8 @@ impl Updates {
             }
             Status::Available => {
                 self.announced = key;
-                // Production writes the macOS message in English.
+                // The message for macOS has no key in the catalogs, so it is
+                // English in every language.
                 let message = if self.state.mac() {
                     en("Open the release notes to download it.")
                 } else {
@@ -493,7 +538,8 @@ impl Updates {
                 self.announced = key;
                 let options = crate::ui::notify::Options::new(
                     crate::tf!("Picto {value0} is ready", version),
-                    // Production writes it in English.
+                    // This message has no key in the catalogs, so it is
+                    // English in every language.
                     en("Restart to finish updating."),
                 )
                 .duration(NOTICE)
@@ -506,12 +552,14 @@ impl Updates {
         }
     }
 
-    /// `quitAndInstall(false, true)`: not silent, so the installer runs
-    /// the app again afterwards (`autoRunAppAfterInstall`); then the app
-    /// quits (`app.quit()`).
+    /// Does Restart and Install. It starts the installer, not silently and
+    /// with the instruction to start the app again when it has finished,
+    /// and then quits the app.
     fn install(&mut self, cx: &mut Context<Self>) {
         if self.state.status != Status::Downloaded {
-            // Production's `install` throws this to a caller that drops it.
+            // The dialog offers Restart and Install only when the update is
+            // downloaded, so the user does not get here. The message is
+            // written to standard error only.
             eprintln!("picto: The update has not finished downloading.");
             return;
         }
@@ -538,9 +586,10 @@ impl Updates {
         }
     }
 
-    /// `autoInstallOnAppQuit`: the app quits with an update downloaded and
-    /// Restart and Install not chosen: the installer runs silently
-    /// (`install(true, false)`), without starting the app again.
+    /// Runs when the app quits. If an update is downloaded and its
+    /// installer was not started by Restart and Install, it starts the
+    /// installer silently and without the instruction to start the app
+    /// again.
     fn install_on_quit(&mut self) {
         if self.install_called || self.ready.is_none() {
             return;
@@ -552,11 +601,15 @@ impl Updates {
         }
     }
 
-    /// `BaseUpdater.install`: the installer of the last finished download,
-    /// only in a packaged build, only from this app's `updates/` folder and
-    /// only if it is still the file the feed describes, started by the
-    /// system's `doInstall`. `Ok(false)`: another system's flow is being
-    /// followed (`PICTO_GPUI_UPDATE_PLATFORM`), so nothing was started.
+    /// Starts the installer of the last finished download. It does so only
+    /// in a packaged build, only when the file is in this app's `updates/`
+    /// folder, and only when the file still has the SHA-512 and the size
+    /// that the feed gives ([`ready_installer`]). A file that fails this
+    /// check is deleted. `silent` asks the installer to show no window, and
+    /// `run_after` asks it to start the app again when it has finished.
+    /// Returns `Ok(false)`, and starts nothing, when
+    /// `PICTO_GPUI_UPDATE_PLATFORM` makes the app follow the steps of
+    /// another operating system than the one it runs on.
     fn start_installer(&mut self, silent: bool, run_after: bool) -> Result<bool, String> {
         let Some((path, file)) = self.ready.clone() else {
             return Err("No update filepath provided, can't quit and install".to_owned());
@@ -568,7 +621,8 @@ impl Updates {
         let installer = match ready_installer(&path, &folder, &file) {
             Ok(installer) => installer,
             Err(error) => {
-                // Never offered again.
+                // The file is not the downloaded update. It is deleted, and
+                // the state no longer offers it for installing.
                 let _ = std::fs::remove_file(&path);
                 self.ready = None;
                 self.state.downloaded = None;
@@ -592,8 +646,10 @@ impl Updates {
         Ok(true)
     }
 
-    /// `restoreInstalledRelease`: this version's notes, unless they were
-    /// read before.
+    /// Sets the status to `Installed`, with this version's release notes,
+    /// unless the file `ACKNOWLEDGED` says that the user already closed
+    /// them. When this version has no release notes, the status becomes
+    /// `Error`.
     fn restore_installed(&mut self, cx: &mut Context<Self>) {
         let acknowledged = crate::state::location()
             .and_then(|folder| std::fs::read_to_string(folder.join(ACKNOWLEDGED)).ok())
@@ -627,8 +683,10 @@ impl Updates {
         );
     }
 
-    /// `check`: one at a time; none while the notes of a new version are
-    /// shown or the installer downloads. `then` runs once it has finished.
+    /// Starts a check, unless one is already running. No check starts in a
+    /// build that is not packaged, while this version's release notes are
+    /// shown, or while the installer downloads. `then` is called when the
+    /// check has finished, or at once when no check starts.
     fn check(&mut self, then: Option<Box<dyn FnOnce(&mut App)>>, cx: &mut Context<Self>) {
         if !packaged() {
             if let Some(then) = then {
@@ -707,7 +765,8 @@ impl Updates {
                 file,
                 url,
             }) => {
-                // `normalizeInfo`: the feed's words first, the release's next.
+                // The name, the date and the notes are the feed's. Where the
+                // feed has none, they are those of the release on GitHub.
                 self.publish(
                     |state| {
                         state.status = Status::Available;
@@ -730,7 +789,10 @@ impl Updates {
         }
     }
 
-    /// `autoDownload`: the installer, with its progress, verified.
+    /// Downloads the installer in the background and publishes the progress
+    /// of the download. When the download has finished and matches the
+    /// feed, the status becomes `Downloaded`. When it fails or does not
+    /// match, the status becomes `Error`.
     fn download(&mut self, file: FeedFile, url: String, cx: &mut Context<Self>) {
         let total = file.size.unwrap_or(0);
         if let Some(held) = crate::seams::hold_downloads() {
@@ -830,17 +892,19 @@ impl Updates {
     }
 }
 
-/// Where downloaded installers are kept, and the only place one is ever
-/// started from: `updates/` in this app's folder.
+/// Returns the folder where downloaded installers are kept: `updates/` in
+/// the folder where the app keeps its state. An installer is started only
+/// from this folder.
 fn download_folder() -> Result<PathBuf, String> {
     crate::state::location()
         .map(|folder| folder.join("updates"))
         .ok_or_else(|| "This app has no folder to keep the update in.".to_owned())
 }
 
-/// The installer to start: the file at `path`, directly in `folder` under
-/// the name the feed gives it, and still the file the feed describes (its
-/// SHA-512 and size, read again now). Anything else is refused.
+/// Returns the path of the installer to start. `path` must be a file
+/// directly in `folder` with the file name that the feed gives, and the file
+/// must have the SHA-512 and the size that the feed gives. The file is read
+/// again to check this. Returns an error in every other case.
 fn ready_installer(path: &Path, folder: &Path, file: &FeedFile) -> Result<PathBuf, String> {
     let name = file
         .name()
@@ -850,7 +914,8 @@ fn ready_installer(path: &Path, folder: &Path, file: &FeedFile) -> Result<PathBu
     let in_folder = path.file_name() == Some(std::ffi::OsStr::new(&name))
         && canonical(path.parent().unwrap_or(path)).is_some()
         && canonical(path.parent().unwrap_or(path)) == canonical(folder);
-    // A plain file there, not a link to one elsewhere.
+    // The file must be a regular file. A symbolic link to a file in another
+    // folder is refused.
     let plain = std::fs::symlink_metadata(&expected).is_ok_and(|meta| meta.file_type().is_file());
     if !in_folder || !plain {
         return Err(format!(
@@ -865,7 +930,9 @@ fn ready_installer(path: &Path, folder: &Path, file: &FeedFile) -> Result<PathBu
     Ok(expected)
 }
 
-/// `latestAppRelease`, then on Windows and Linux the release's feed.
+/// Asks GitHub for the list of releases and takes the newest release of the
+/// app that is newer than this version. On Windows and Linux it then reads
+/// that release's feed and returns the installer that the feed names.
 async fn find(platform: &'static str) -> Result<Found, String> {
     let client = net::client()?;
     let Some(list) = net::address(feed::RELEASES_API) else {
@@ -923,10 +990,12 @@ async fn find(platform: &'static str) -> Result<Found, String> {
     })
 }
 
-/// Downloads the installer at `address` into `folder` under the name the
-/// feed gives it, reporting progress, and keeps it only if it is the file
-/// the feed describes; a partial or mismatching download is removed. An
-/// installer already there and verified is not downloaded again.
+/// Downloads the installer at `address` into `folder` under the file name
+/// that the feed gives, and sends the progress of the download to
+/// `progress`. The file is kept only when it has the SHA-512 and the size
+/// that the feed gives. An incomplete download and a file that does not
+/// match are deleted. When a file with that name is already in the folder
+/// and matches the feed, nothing is downloaded.
 async fn fetch_installer(
     address: &str,
     folder: &Path,

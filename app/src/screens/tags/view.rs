@@ -37,10 +37,10 @@ impl Render for TagsToolbar {
 }
 
 impl TagsScreen {
-    /// Builds one row of the rail (production's `.namespaceItem`). The row
-    /// shows a 16 px icon in `icon_color`, then `label`, and `count` at its
-    /// right end. `active` is true for the row whose tags the list shows.
-    /// That row is filled with the theme's `surface_active` colour.
+    /// Builds one row of the rail. The row shows a 16 px icon in
+    /// `icon_color`, then `label`, and `count` at its right end. `active` is
+    /// true for the row whose tags the list shows. That row is filled with
+    /// the theme's `surface_active` colour.
     /// Assistive technology reads the row as the label followed by the
     /// count. In that reading the count has the thousands separator of the
     /// system's language, for example "1,234" in English. The caller adds
@@ -141,12 +141,12 @@ impl TagsScreen {
                 .on_click(cx.listener(|this, _, _, cx| this.show(Browse::Starred, cx))),
             )
             .child(
-                // The heading above the rows of the groups (production's
-                // `.railHeading`). It shows the text "Groups(n)" in 12 px
-                // tertiary text, where n is the number of groups that have
-                // a row. At its right end is a 20 px button that opens the
-                // Create tag group dialog. The button is disabled while an
-                // edit of the library is running (`busy`).
+                // The heading above the rows of the groups. It shows the
+                // text "Groups(n)" in 12 px tertiary text, where n is the
+                // number of groups that have a row. At its right end is a
+                // 20 px button that opens the Create tag group dialog. The
+                // button is disabled while an edit of the library is
+                // running (`busy`).
                 div()
                     .h(px(theme::CONTROL_SM))
                     .mt(px(12.))
@@ -202,16 +202,15 @@ impl TagsScreen {
                 ),
             );
         }
-        // The Delete Unused button at the end of the rail (production's
-        // `.cleanupTagsButton`). It shows a trash icon, the text "Delete
-        // Unused" and, at its right end, the number of tags that are
-        // assigned to no item (`unused`). It is enabled when that number is
-        // more than 0 and no edit of the library is running. When it is
-        // enabled, a click opens the dialog that asks whether to delete
-        // those tags (`Dialog::Cleanup`), and while the pointer is over the
-        // button, the button has the hover fill and its text and icon have
-        // the theme's negative colour. When it is disabled, it is drawn at
-        // 35% opacity.
+        // The Delete Unused button at the end of the rail. It shows a trash
+        // icon, the text "Delete Unused" and, at its right end, the number
+        // of tags that are assigned to no item (`unused`). It is enabled
+        // when that number is more than 0 and no edit of the library is
+        // running. When it is enabled, a click opens the dialog that asks
+        // whether to delete those tags (`Dialog::Cleanup`), and while the
+        // pointer is over the button, the button has the hover fill and its
+        // text and icon have the theme's negative colour. When it is
+        // disabled, it is drawn at 35% opacity.
         let enabled = self.unused > 0 && !self.busy;
         let mut cleanup = div()
             .id("delete-unused-tags")
@@ -283,8 +282,8 @@ impl TagsScreen {
             ))
     }
 
-    /// Builds the card of one tag in the list (production's `.tagCard`). The
-    /// card is `width` pixels wide and 26 px tall (`model::ROW_HEIGHT`).
+    /// Builds the card of one tag in the list. The card is `width` pixels
+    /// wide and 26 px tall (`model::ROW_HEIGHT`).
     /// From left to right it shows a 5 px dot in the colour of the tag's
     /// group, the tag's name without the name of its group, a 12 px star
     /// when the tag is starred, and in brackets the number of items the tag
@@ -350,8 +349,7 @@ impl TagsScreen {
             })
             // The card has a fixed width and neither grows nor shrinks, so
             // every card is as wide as one column, also in a row that has
-            // fewer tags than the list has columns (production's
-            // `grid-template-columns: repeat(columns, minmax(0, 1fr))`).
+            // fewer tags than the list has columns.
             .w(px(width))
             .flex_none()
             .h(px(model::ROW_HEIGHT))
@@ -377,10 +375,8 @@ impl TagsScreen {
             )
             .child(name_cell)
             .children(starred.then(|| {
-                // The star is drawn in the theme's text colour. Production's
-                // CSS gives the star `color: var(--color-warning)`, but
-                // production defines no variable of that name, so the star
-                // there has the text colour of the card.
+                // The star is drawn in the theme's text colour, which is
+                // also the colour of the tag's name.
                 ui::icon("tags-star-solid", 12., theme.text())
                     .flex_none()
                     .ml_auto()
@@ -408,13 +404,12 @@ impl TagsScreen {
     }
 
     /// Builds the placeholder that is drawn in place of one tag that is not
-    /// loaded yet (production's `.tagSkeleton`). It is `width` pixels wide
-    /// and 26 px tall (`model::ROW_HEIGHT`), with a corner radius of 6 px.
-    /// Its fill is a pattern that goes from 3% contrast to 8% contrast and
-    /// back to 3% over twice the placeholder's width. The pattern moves
-    /// from left to right by its whole length every 800 ms
-    /// (`motion::TAG_SHIMMER`), on the `ease-in-out` curve, and then starts
-    /// again.
+    /// loaded yet. It is `width` pixels wide and 26 px tall
+    /// (`model::ROW_HEIGHT`), with a corner radius of 6 px. Its fill is a
+    /// pattern that goes from 3% contrast to 8% contrast and back to 3%
+    /// over twice the placeholder's width. The pattern moves from left to
+    /// right by its whole length every 800 ms (`motion::TAG_SHIMMER`),
+    /// eased with `motion::EASE_IN_OUT`, and then starts again.
     ///
     /// `model::shimmer` returns the state of the pattern at the present
     /// moment: the place where the pattern is at its lightest or its
@@ -689,8 +684,7 @@ impl TagsScreen {
 }
 
 /// Returns the element that shows `count` at the right end of the Delete
-/// Unused button, in 11 px tertiary text (production's `.namespaceCount`,
-/// the class of every count in the rail).
+/// Unused button, in 11 px tertiary text.
 fn count_label(count: u64, cx: &App) -> Div {
     div()
         .flex_none()

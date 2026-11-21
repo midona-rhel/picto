@@ -16,14 +16,15 @@ pub fn notify(title: &str, body: &str, cx: &gpui::App) {
     super::system_notification(title, body, cx);
 }
 
-/// `copy_files` in `native/picto-node`: a `DROPFILES` list of the paths
-/// on the clipboard, which Explorer pastes as the files.
+/// Puts a `DROPFILES` list of the paths on the clipboard, in the `CF_HDROP`
+/// format. Explorer pastes the files that the list names.
 pub fn copy_files(paths: &[PathBuf]) -> Result<(), String> {
     let payload = super::drop_files(paths);
-    // SAFETY: the clipboard and global-memory calls with the arguments
-    // they take; the memory is handed to the system only when
-    // `SetClipboardData` takes it, and freed here otherwise.
-    // (GHND: moveable and zeroed.)
+    // SAFETY: The clipboard functions and the global-memory functions are
+    // called with the arguments they document. The memory is allocated with
+    // `GHND`, which makes it moveable and fills it with zeros. The memory
+    // belongs to the system once `SetClipboardData` has accepted it. In every
+    // other case it is freed here.
     unsafe {
         if OpenClipboard(None).is_err() {
             return Err("Could not open the system clipboard".into());
@@ -51,11 +52,12 @@ pub fn copy_files(paths: &[PathBuf]) -> Result<(), String> {
     Ok(())
 }
 
-/// `picto:shell:openWithChooser`: Windows' "Open with" dialog on the
-/// file, from which the user picks the application.
+/// Opens Windows' "Open with" dialog for the file. The user picks the
+/// application in that dialog.
 pub fn open_with_chooser(file: &Path) -> Result<(), String> {
     use std::os::windows::process::CommandExt as _;
-    /// `DETACHED_PROCESS`: the chooser outlives nothing of ours.
+    /// The process creation flag `DETACHED_PROCESS`: `rundll32.exe` does not
+    /// get this process's console.
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     std::process::Command::new("rundll32.exe")
         .arg("shell32.dll,OpenAs_RunDLL")
@@ -66,7 +68,8 @@ pub fn open_with_chooser(file: &Path) -> Result<(), String> {
         .map_err(|error| format!("Could not open the application chooser: {error}"))
 }
 
-/// Windows offers its own chooser instead of a list.
+/// Returns no applications: on Windows the user picks the application in
+/// Windows' own dialog ([`open_with_chooser`]).
 pub fn applications(_file: &Path) -> Vec<Application> {
     Vec::new()
 }
@@ -76,16 +79,17 @@ fn wide(text: &std::ffi::OsStr) -> Vec<u16> {
     text.encode_wide().chain([0]).collect()
 }
 
-/// `ShellExecuteW`: `file` with `parameters` by `operation` (`runas`
-/// asks for administrator rights, `open` is the file's default action).
+/// Starts `file` with `parameters` through `ShellExecuteW`. The operation
+/// `runas` asks the user for administrator rights, and the operation `open`
+/// does the file's default action.
 fn shell_execute(operation: &str, file: &Path, parameters: &str) -> Result<(), String> {
     let (operation, path, parameters) = (
         wide(operation.as_ref()),
         wide(file.as_os_str()),
         wide(parameters.as_ref()),
     );
-    // SAFETY: every pointer is a NUL-terminated wide string that outlives
-    // the call; no window is named.
+    // SAFETY: Every pointer is to a NUL-terminated UTF-16 string that lives
+    // until the call returns. No parent window is given.
     let result = unsafe {
         ShellExecuteW(
             None,
@@ -97,7 +101,8 @@ fn shell_execute(operation: &str, file: &Path, parameters: &str) -> Result<(), S
         )
     }
     .0 as usize;
-    // Above 32 is success; below, the error.
+    // `ShellExecuteW` returns a value above 32 when it succeeded, and an error
+    // code of 32 or less when it failed.
     if result > 32 {
         Ok(())
     } else {
@@ -108,12 +113,16 @@ fn shell_execute(operation: &str, file: &Path, parameters: &str) -> Result<(), S
     }
 }
 
-/// `NsisUpdater.doInstall`: the NSIS installer started with `--updated`,
-/// `/S` when silent and `--force-run` to start the app again afterwards,
-/// detached and without standard streams. Elevated (production's
-/// `elevate.exe`, here the system's `runas`) when the feed says it needs
-/// administrator rights or Windows refuses it without them; opened as a
-/// file (`shell.openPath`) when it cannot be found to run.
+/// Starts the NSIS installer of an update. The installer gets the argument
+/// `--updated`, the argument `/S` when the installation is silent, and the
+/// argument `--force-run` when the app is to be started again afterwards. It
+/// is started as a detached process without standard streams.
+///
+/// The installer is started with administrator rights, through the system's
+/// `runas` operation, when `admin` is set or when Windows refuses to start it
+/// without them. `admin` is set when the update feed says that the installer
+/// needs administrator rights. If Windows does not find the installer as a
+/// program to run, the installer is opened as a file.
 pub fn install_update(
     installer: &Path,
     silent: bool,
@@ -122,7 +131,10 @@ pub fn install_update(
 ) -> Result<(), String> {
     use std::os::windows::process::CommandExt as _;
     use std::process::{Command, Stdio};
-    /// `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`: Node's `detached`.
+    /// The process creation flags `DETACHED_PROCESS` and
+    /// `CREATE_NEW_PROCESS_GROUP`: the installer does not get this process's
+    /// console and is in a process group of its own, so that neither closing
+    /// that console nor Ctrl+C in it ends the installer.
     const DETACHED: u32 = 0x0000_0008 | 0x0000_0200;
     let mut arguments = vec!["--updated"];
     if silent {
@@ -144,9 +156,10 @@ pub fn install_update(
         .spawn()
     {
         Ok(_) => Ok(()),
-        // `EACCES` / `UNKNOWN`: access denied, or elevation required.
+        // Windows error 5 says that access is denied, and error 740 says that
+        // the operation requires elevation.
         Err(error) if matches!(error.raw_os_error(), Some(5 | 740)) => elevated(),
-        // `ENOENT`
+        // The installer was not found as a program to run.
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             shell_execute("open", installer, "")
         }
@@ -154,7 +167,7 @@ pub fn install_update(
     }
 }
 
-/// Only Linux runs from an AppImage.
+/// Returns `None`: only the Linux build runs from an AppImage.
 pub fn app_image() -> Option<PathBuf> {
     None
 }

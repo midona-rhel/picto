@@ -8,34 +8,34 @@ type ToggleHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
 /// How a check box is filled.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mark {
-    /// Not ticked: the control surface colour inside a ring.
+    /// The box is not ticked. It is filled with the control surface colour and
+    /// has a ring.
     Empty,
-    /// `OverlayShell`'s `.checkBoxChecked`: filled with the primary text
-    /// colour, with a tick in the app's background colour.
+    /// The box is ticked. It is filled with the primary text colour and has a
+    /// tick in the app's background colour. The pickers and the tag and folder
+    /// dialogs use this mark.
     Checked,
-    /// Filled with the primary colour, inside a ring of black at 10%, with a
-    /// white tick. A ticked check box in Settings, and `FolderTree`'s
-    /// `.checkSelected`.
+    /// The box is ticked. It is filled with the primary colour, inside a ring
+    /// of black at 10%, and has a white tick. A ticked check box in Settings
+    /// looks like this, and so does a chosen folder in a list of folders.
     Selected,
-    /// A filter includes it: green with a white tick and no ring. The
-    /// Electron app's `.checkBoxFilterChecked` is the primary colour, the
-    /// same blue as an ordinary ticked box. Green is used here so that
-    /// "included by the filter" is told apart from "ticked", and so that it
-    /// pairs with the red of `Excluded`.
+    /// A filter includes it. The box is green with a white tick and no ring.
+    /// Green is used, and not the primary colour of an ordinary ticked box, so
+    /// that "included by the filter" can be told apart from "ticked", and so
+    /// that it goes with the red of `Excluded`.
     Included,
-    /// `.checkBoxExcluded`: a filter excludes it. The negative colour with
-    /// a white cross.
+    /// A filter excludes it. The box has the negative colour and a white
+    /// cross.
     Excluded,
 }
 
 /// Which of the two sizes of check box.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Size {
-    /// `OverlayShell.module.css` `.checkBox`: 14px. Until it is filled it has
-    /// a ring in the pressed overlay colour.
+    /// 14px. Until it is filled it has a ring in the pressed overlay colour.
     Compact,
-    /// The indicator of `Settings.module.css` `.checkboxItem`: 16px. Until it
-    /// is ticked it has a ring in `--color-contrast-30`.
+    /// 16px. Until it is ticked it has a ring in `Theme::contrast(30.)`. The
+    /// rows of [`Check`] use this size.
     Regular,
 }
 
@@ -103,8 +103,8 @@ impl RenderOnce for CheckBox {
         };
         let base = base.bg(fill).border_color(border);
         match glyph {
-            // `::after { inset: 3px }`: the dot is 3px inside the border, and
-            // the border is black at 10%.
+            // A radio button's dot lies 3px inside the border, and has a 1px
+            // line of black at 10% around it.
             Some((_, color)) if self.round => base.child(
                 div()
                     .absolute()
@@ -124,12 +124,12 @@ impl RenderOnce for CheckBox {
     }
 }
 
-/// A row with a check box or a radio button and its label (`.checkboxItem` in
-/// `Settings.module.css`): a 16px indicator and the label. Under the pointer
-/// the row gets a fill that fades in over 100 ms. The row starts 6px to the
-/// left of its place in the layout, so that the indicator lines up with the
-/// text above it and the fill has space around the indicator. A disabled row
-/// is drawn at half strength and does not react to clicks.
+/// A row with a check box or a radio button and its label: a 16px indicator
+/// and the label. Under the pointer the row gets a fill that fades in over 100
+/// ms. The row starts 6px to the left of its place in the layout, so that the
+/// indicator lines up with the text above it and the fill has space around the
+/// indicator. A disabled row is drawn at half strength and does not react to
+/// clicks.
 #[derive(IntoElement)]
 pub struct Check {
     id: ElementId,
@@ -176,8 +176,8 @@ impl RenderOnce for Check {
         // chosen, as in a browser. A disabled row is not a Tab stop.
         let focus = (!self.disabled && (!self.radio || self.checked))
             .then(|| super::focus::control(&self.id, window, cx));
-        // `.checkboxItem > input:focus-visible + .checkboxIndicator`: a 1px
-        // ring in the primary colour, 2px outside the indicator.
+        // The focus ring is 1px wide, in the primary colour, 2px outside the
+        // indicator.
         let ring = focus.as_ref().and_then(|focus| {
             focus.ring(
                 super::focus::Ring {
@@ -217,8 +217,8 @@ impl RenderOnce for Check {
             .aria_disabled(self.disabled)
             .relative()
             .min_h(px(26.))
-            // `margin-left: -6px` on a row as wide as its container: the row
-            // is moved to the left and keeps its width.
+            // The negative left margin moves the row 6px to the left, and the
+            // right margin of 6px makes it keep its width.
             .ml(px(-6.))
             .mr(px(6.))
             .pl(px(6.))

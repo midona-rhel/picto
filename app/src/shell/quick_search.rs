@@ -1,8 +1,7 @@
 //! The Quick Search panel. It is a panel in the middle of the main window,
 //! over a dimmed backdrop, with a search field and a list. The user types a
-//! name and chooses a row with the keyboard or the pointer.
-//! The Electron app has no such panel. The structure and the measurements
-//! were chosen for this app and are listed in `quick_search/view.rs`.
+//! name and chooses a row with the keyboard or the pointer. The parts of the
+//! panel and their measurements are listed in `quick_search/view.rs`.
 //!
 //! The list holds four kinds of rows, and it lists the best matches of
 //! every kind in groups, one group for each kind. Opened with the Go to

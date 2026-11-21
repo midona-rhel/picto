@@ -1,33 +1,38 @@
-//! A row of a rail of views: a mark or a group's dot, a name cut short
-//! with an ellipsis, a count at the end, and the chosen row's fill. A button
-//! read as its name and count, pressed while its view is shown. Each
-//! production stylesheet that draws one is a [`Look`], as glyph buttons
-//! are, since their sizes, paddings and strengths differ.
+//! A row of a rail of views: a mark or a group's dot, a name that is cut off
+//! with an ellipsis, a count at the end, and a fill when the row is chosen.
+//! For assistive technology the row is a button whose name is the row's name
+//! and count, and it is pressed while its view is shown. The app's rails
+//! differ in sizes, paddings and strengths, so each rail is a [`Look`].
 use crate::theme;
 use crate::theme::Text as _;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
-/// Which production class the row ports.
+/// Which rail the row belongs to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Look {
-    /// `SelectionModalShell.module.css` `.sidebarItem` (the Add Tags and
-    /// Folders dialogs): 28px, 10px either side, the chosen row filled and
-    /// ringed, the subtle overlay under the pointer; the dot at 60% and the
-    /// count at half strength until the row is chosen or under the pointer.
+    /// The rail of the Add Tags dialog and the Folders dialog. The row is 28px
+    /// high with 10px of padding on the left and the right. The chosen row has
+    /// the active surface colour and a 1px line inside its edge. Another row
+    /// has the subtle overlay under the pointer. The dot is at 60% and the
+    /// count at half strength, until the row is chosen or under the pointer.
     SelectionModal,
-    /// `TagPicker.module.css` `.sidebarItem`: 24px on a 24px line, the mark
-    /// bringing its own margins, 8px on the right; the hover surface under
-    /// the pointer unless chosen; the count at 70% until then.
+    /// The rail of the tag picker. The row is 24px high with a 24px line
+    /// height, no padding on the left (the mark has its own margins) and 8px
+    /// on the right. A row that is not chosen has the hover surface colour
+    /// under the pointer. The count is at 70% until the row is chosen or under
+    /// the pointer.
     Picker,
-    /// `AiTaggerPanel.module.css` `.sidebarItem`: 24px, 8px either side,
-    /// the name at most 122px; the hover surface under the pointer, chosen
-    /// or not; disabled at 45%.
+    /// The rail of the AI tagger panel. The row is 24px high with 8px of
+    /// padding on the left and the right, and the name is at most 122px wide.
+    /// The row has the hover surface colour under the pointer, whether it is
+    /// chosen or not. A disabled row is drawn at 45%.
     AiTagger,
-    /// `TagsScreen.module.css` `.namespaceItem`: the small control's height
-    /// and line, 8px in from the rail and 6px inside, the 16px icon and the
-    /// name together on the left and the count on the right; the hover
-    /// surface under the pointer outranks the chosen fill.
+    /// The list of namespaces on the Tags screen. The row is as high as a
+    /// small control (`theme::CONTROL_SM`) and has that line height. It is 8px
+    /// in from the rail's edges and has 6px of padding. The 16px icon and the
+    /// name are together on the left, and the count is on the right. Under the
+    /// pointer the row has the hover surface colour, also when it is chosen.
     Namespace,
 }
 
@@ -45,7 +50,7 @@ pub struct RailItem {
     name_width: Option<f32>,
 }
 
-/// A row named `label` showing `count`.
+/// Returns a row with the name `label` and the count `count`.
 pub fn rail_item(
     id: impl Into<ElementId>,
     look: Look,
@@ -69,43 +74,46 @@ pub fn rail_item(
 }
 
 impl RailItem {
-    /// The hover group of the row, for a mark that brightens with it.
+    /// Returns the name of the row's hover group. A mark that changes while
+    /// the pointer is over the row uses it.
     pub fn group(&self) -> SharedString {
         self.group.clone()
     }
-    /// The row's view is the one shown.
+    /// Sets whether the row's view is the one that is shown.
     pub fn active(mut self, active: bool) -> Self {
         self.active = active;
         self
     }
-    /// The row cannot be chosen.
+    /// Sets whether the row cannot be chosen.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
     }
-    /// An icon, a check box or a dot of the caller's before the name.
+    /// Sets what is drawn before the name: an icon, a check box or a dot that
+    /// the caller made.
     pub fn mark(mut self, mark: impl IntoElement) -> Self {
         self.mark = Some(mark.into_any_element());
         self
     }
-    /// A group's 10px dot in `color` before the name (`.sidebarDot`).
+    /// Draws a 10px dot in `color` before the name. The dot is the colour of
+    /// the group that the row stands for.
     pub fn dot(mut self, color: Option<u32>) -> Self {
         self.dot = color;
         self
     }
-    /// The name's widest.
+    /// Sets the largest width of the name.
     pub fn name_width(mut self, width: f32) -> Self {
         self.name_width = Some(width);
         self
     }
-    /// What assistive technology reads, when it is not the name and the
-    /// count shown.
+    /// Sets what assistive technology reads for the row, when that is not the
+    /// name and the count that the row shows.
     pub fn accessible_name(mut self, name: impl Into<SharedString>) -> Self {
         self.name = Some(name.into());
         self
     }
 
-    /// The row, for the caller to give its click.
+    /// Returns the row's element. The caller adds the click handler.
     pub fn build(self, cx: &App) -> Stateful<Div> {
         let theme = theme::theme(cx);
         let (look, active, group) = (self.look, self.active, self.group.clone());
@@ -143,7 +151,8 @@ impl RailItem {
                     .whitespace_nowrap();
                 if active {
                     row = row.bg(theme.surface_active()).child(
-                        // `outline: 1px solid var(--color-contrast-25)`, inside.
+                        // A 1px line in `Theme::contrast(25.)` just inside the
+                        // row's edge.
                         div()
                             .absolute()
                             .inset_0()

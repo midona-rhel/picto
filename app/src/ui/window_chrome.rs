@@ -4,10 +4,9 @@
 //! - On macOS the app draws a rim along the window's edge ([`rim`]).
 //! - A window that hides the system's window buttons gets a close button of
 //!   its own ([`close_button`]).
-//! - On Windows and Linux the windows have no system frame, as in
-//!   production. There the app draws the minimise, maximise and close
-//!   buttons ([`caption_buttons`]), and on Linux also the edges that resize
-//!   the window ([`resize_edges`]).
+//! - On Windows and Linux the windows have no system frame. There the app
+//!   draws the minimise, maximise and close buttons ([`caption_buttons`]),
+//!   and on Linux also the edges that resize the window ([`resize_edges`]).
 //! - The system's blur of what is behind a window is asked for here: for a
 //!   pop-up menu ([`system_blur_behind`]) and for the main window's sidebar
 //!   and inspector ([`show_rail_material`]).
@@ -25,8 +24,8 @@ use gpui::*;
 /// the system's window buttons (the traffic lights) stay, and
 /// `traffic_lights` gives their position when it is not `None`. The app
 /// decides which parts of the window drag it. On Linux the window asks for
-/// client-side decorations, because production's windows have no frame
-/// there (`frame: false`).
+/// client-side decorations, so that the window manager draws no frame and
+/// no titlebar around it.
 pub fn frameless(
     title: impl Into<SharedString>,
     traffic_lights: Option<Point<Pixels>>,
@@ -43,11 +42,10 @@ pub fn frameless(
         // window of the app opens without taking keyboard focus.
         focus: !crate::seams::background(),
         // A window that does not have keyboard focus goes on drawing at the
-        // display's refresh rate, as Electron's windows do. GPUI's default
-        // would limit it to 30 frames a second. This matters for a video in
-        // a detail window, and for the main window's thumbnails and
-        // progress bars while the Settings window or a detail window has
-        // keyboard focus.
+        // display's refresh rate. GPUI's default would limit it to 30 frames
+        // a second. This matters for a video in a detail window, and for the
+        // main window's thumbnails and progress bars while the Settings
+        // window or a detail window has keyboard focus.
         inactive_frame_interval: None,
         ..Default::default()
     }
@@ -75,29 +73,26 @@ pub const DECORATIONS: Option<WindowDecorations> =
 
 /// The left padding of a titlebar's left block, in pixels. On macOS it is
 /// 74px, which keeps the block's controls to the right of the traffic
-/// lights (`.titlebarLeftMac` in production). On Windows and Linux it is 8px
-/// (`.titlebarLeft`).
+/// lights. On Windows and Linux it is 8px.
 pub const TITLEBAR_INSET: f32 = if cfg!(target_os = "macos") { 74. } else { 8. };
 
 /// Returns the window's rim: a rounded outline along the window's edge,
 /// drawn over everything else in the window with the glass edge colours
-/// (`ui::glass_edges`). It corresponds to `.shellMac::after` in production,
-/// which draws it on macOS only, and so does this app. A window in full
-/// screen has no rim, because the rim's rounded corners would be drawn
-/// inside the display's own corners; production draws the rim in full
-/// screen too.
+/// (`ui::glass_edges`). It is drawn on macOS only. A window in full screen
+/// has no rim, because the rim's rounded corners would be drawn inside the
+/// display's own corners.
 pub fn rim(window: &Window, cx: &App) -> Option<impl IntoElement + use<>> {
     (cfg!(target_os = "macos") && !window.is_fullscreen()).then(|| {
         deferred(super::glass_edges(theme::WINDOW_RADIUS, cx)).with_priority(super::layer::CHROME)
     })
 }
 
-/// Whether the app draws the window's minimise, maximise and close buttons
-/// (`WindowControls` in production). It never draws them on macOS. It always
-/// draws them on Windows, where these windows hide the system titlebar. On
-/// Linux it draws them while the window has client-side decorations. An X11
-/// desktop without a compositor does not grant those, and the window then
-/// keeps the window manager's frame and buttons.
+/// Returns whether the app draws the window's minimise, maximise and close
+/// buttons. It never draws them on macOS. It always draws them on Windows,
+/// where these windows hide the system titlebar. On Linux it draws them
+/// while the window has client-side decorations. An X11 desktop without a
+/// compositor does not grant those, and the window then keeps the window
+/// manager's frame and buttons.
 fn draws_caption_buttons(window: &Window) -> bool {
     if cfg!(target_os = "macos") {
         false
@@ -109,13 +104,12 @@ fn draws_caption_buttons(window: &Window) -> bool {
 }
 
 /// Returns the minimise, maximise and close buttons for a titlebar, or
-/// `None` when the app does not draw them ([`draws_caption_buttons`]). They
-/// correspond to `WindowControls` in production. Each button is 28px wide
-/// and there is no gap between them. On Windows each button is declared to
-/// the system as a caption button (`WindowControlArea`), so the system
-/// carries out the click and shows its snap layouts over the maximise
-/// button. On Linux a click asks the window manager to minimise, maximise
-/// or close the window.
+/// `None` when the app does not draw them ([`draws_caption_buttons`]). Each
+/// button is 28px wide and there is no gap between them. On Windows each
+/// button is declared to the system as a caption button
+/// (`WindowControlArea`), so the system carries out the click and shows its
+/// snap layouts over the maximise button. On Linux a click asks the window
+/// manager to minimise, maximise or close the window.
 pub fn caption_buttons(id: &str, window: &Window) -> Option<Div> {
     if !draws_caption_buttons(window) {
         return None;
@@ -302,9 +296,8 @@ pub fn hide_window_buttons(window: &Window) {
 }
 
 /// Makes the system keep the window's content at the aspect ratio `ratio`
-/// (width divided by height) while the user resizes the window, as
-/// Electron's `setAspectRatio` does. It works on macOS only and does nothing
-/// on Windows and Linux.
+/// (width divided by height) while the user resizes the window. It works on
+/// macOS only and does nothing on Windows and Linux.
 pub fn lock_aspect_ratio(window: &Window, ratio: f64) {
     #[cfg(target_os = "macos")]
     macos::with_ns_window(window, |ns_window| {
@@ -314,19 +307,19 @@ pub fn lock_aspect_ratio(window: &Window, ratio: f64) {
     let _ = (window, ratio);
 }
 
-/// Whether [`set_always_on_top`] works on this system. It works on macOS and
-/// Windows. On Linux it does not: GPUI gives the app no handle to the X11
-/// connection, which is needed to set `_NET_WM_STATE_ABOVE`, and Wayland has
-/// no request for it. The control that would call it is therefore not shown
-/// on Linux.
+/// Returns whether [`set_always_on_top`] works on this system. It works on
+/// macOS and Windows. On Linux it does not: GPUI gives the app no handle to
+/// the X11 connection, which is needed to set `_NET_WM_STATE_ABOVE`, and
+/// Wayland has no request for it. The control that would call it is
+/// therefore not shown on Linux.
 pub const fn can_stay_on_top() -> bool {
     cfg!(any(target_os = "macos", target_os = "windows"))
 }
 
 /// Keeps the window above other windows when `on_top` is true, and puts it
-/// back among them when `on_top` is false. Electron's `setAlwaysOnTop` does
-/// the same with its default level, `floating`. It does nothing on Linux
-/// ([`can_stay_on_top`]).
+/// back among them when `on_top` is false. On macOS it gives the window the
+/// level `NSFloatingWindowLevel`, and on Windows it makes the window
+/// topmost. It does nothing on Linux ([`can_stay_on_top`]).
 pub fn set_always_on_top(window: &Window, on_top: bool) {
     #[cfg(target_os = "windows")]
     crate::platform::windows::set_topmost(window, on_top);
@@ -347,14 +340,14 @@ pub fn order_out(window: &Window) {
     let _ = window;
 }
 
-/// Whether [`system_blur_behind`] blurs what is behind a pop-up window. It
-/// does so on macOS only. macOS is the one system on which the app's menus
-/// are pop-up windows (`ui::menu::presentation`), and the blur there comes
-/// from an `NSVisualEffectView` under the menu's panel. On Windows and
-/// Linux a menu is drawn inside its window, as production's renderer draws
-/// it. There the menu's panel blurs what the window has drawn behind it,
-/// except on Windows, where GPUI draws no such blur and the panel has a
-/// more opaque fill instead.
+/// Returns whether [`system_blur_behind`] blurs what is behind a pop-up
+/// window. It does so on macOS only. macOS is the one system on which the
+/// app's menus are pop-up windows (`ui::menu::presentation`), and the blur
+/// there comes from an `NSVisualEffectView` under the menu's panel. On
+/// Windows and Linux a menu is drawn inside the window that opened it.
+/// There the menu's panel blurs what the window has drawn behind it, except
+/// on Windows, where GPUI draws no such blur and the panel has a more
+/// opaque fill instead.
 pub const fn system_blurs() -> bool {
     cfg!(target_os = "macos")
 }
@@ -399,11 +392,11 @@ pub fn place_system_blur(window: &Window, panel: Bounds<Pixels>, radius: f32, al
     let _ = (window, panel, radius, alpha);
 }
 
-/// The setting for the system's frosted material behind the sidebar and the
-/// inspector, as the main window follows it. In Settings > General >
-/// Appearance it is the switch "Frosted glass sidebar and inspector" on
-/// macOS and "Acrylic sidebar and inspector" on Windows. It is off until
-/// the user turns it on.
+/// Holds whether the main window shows the system's frosted material behind
+/// its sidebar and its inspector. The user turns the material on in
+/// Settings > General > Appearance, with the switch "Frosted glass sidebar
+/// and inspector" on macOS and "Acrylic sidebar and inspector" on Windows.
+/// It is off until the user turns it on.
 ///
 /// `wanted` is what the user chose. `supported` is whether the system can
 /// blur what is behind the main window, as the window last reported it.
@@ -432,7 +425,7 @@ pub fn want_rail_material(wanted: bool, cx: &mut App) {
     }
 }
 
-/// Whether the system can blur what is behind the main window, as
+/// Returns whether the system can blur what is behind the main window, as
 /// [`show_rail_material`] last found it. It is `false` until a library has
 /// been opened in the main window, and always `false` on Linux. The
 /// Settings window shows the switch for the material only while this is
@@ -442,8 +435,8 @@ pub fn rail_material_supported(cx: &App) -> bool {
         .is_some_and(|material| material.supported)
 }
 
-/// Whether the main window is showing the system's frosted material behind
-/// its sidebar and inspector. While it is, those two are filled with
+/// Returns whether the main window is showing the system's frosted material
+/// behind its sidebar and inspector. While it is, those two are filled with
 /// [`rail_fill`], and the rest of the window is drawn opaque.
 pub fn rails_translucent(cx: &App) -> bool {
     cx.try_global::<RailMaterial>()
@@ -460,8 +453,8 @@ pub fn rails_translucent(cx: &App) -> bool {
 const RAIL_OPACITY_DARK: f32 = 0.8;
 const RAIL_OPACITY_LIGHT: f32 = 0.85;
 
-/// The colour that fills the sidebar and the inspector. It is the theme's
-/// rail colour. While the main window shows the frosted material
+/// Returns the colour that fills the sidebar and the inspector. It is the
+/// theme's rail colour. While the main window shows the frosted material
 /// ([`rails_translucent`]), the colour is partly transparent
 /// ([`RAIL_OPACITY_DARK`], [`RAIL_OPACITY_LIGHT`]), so that the blurred
 /// picture of what is behind the window shows through it.
@@ -530,18 +523,17 @@ pub fn bring_all_to_front(cx: &mut App) {
     }
 }
 
-/// Returns the close button of a window that draws its own, which is
-/// `WindowCloseButton` in production. It is the shared icon button with its
-/// window-close look: a 28px square with a thin 16px cross.
-// a11y: the window's buttons are the shared icon buttons, named by their
-// tooltips or as `WindowCloseButton` names itself.
+/// Returns the close button of a window that draws its own. It is the
+/// shared icon button with the look `Look::WindowClose`: a 28px square with
+/// a thin 16px cross.
+// a11y: the window's buttons are the shared icon buttons. Each is named by
+// its tooltip, and this close button is named "Close".
 pub fn close_button(
     id: impl Into<ElementId>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> super::icon_button::IconButton {
-    // The button's accessible name is "Close", which is the default
-    // `ariaLabel` of production's `WindowCloseButton`. A caller can give it
-    // another name.
+    // The button's accessible name is "Close". A caller can give it another
+    // name.
     super::icon_button(id, "window-close")
         .look(super::icon_button::Look::WindowClose)
         .name(crate::i18n::t("Close"))

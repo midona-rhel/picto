@@ -1,6 +1,5 @@
-//! The viewer toolbar (`ViewerToolbar` in `GridToolbar.tsx`). While an item
-//! is open in the viewer, it is shown in the titlebar where the grid toolbar
-//! normally is.
+//! The viewer toolbar. While an item is open in the viewer, it is shown in
+//! the titlebar where the grid toolbar normally is.
 //!
 //! On the left are the back button, the breadcrumb (only while a collection
 //! is being edited) and the item's position in the results, for example
@@ -115,8 +114,7 @@ impl ViewerToolbar {
                 .shortcut_for("view.fitWindow", cx)
                 .into(),
         );
-        // This menu has no search row. Production's `GridToolbar.tsx` opens
-        // it with `showSearch: false`.
+        // This menu has no search row.
         let menu = cx.new(|cx| Menu::new(entries, position, cx).search(false));
         self.menu.open(menu, window, cx, |this, _, action, _, cx| {
             this.surface.update(cx, |surface, cx| match action {
@@ -131,11 +129,12 @@ impl ViewerToolbar {
         });
     }
 
-    /// `.viewerBreadcrumb`: the name of the place the collection was opened
-    /// from (`parent`), a slash, and the collection's name (`current`). A
-    /// click on the parent's name closes the viewer. The breadcrumb is at
-    /// most `min(420px, 42vw)` wide, and a name that does not fit is cut off
-    /// with an ellipsis.
+    /// Builds the breadcrumb: the name of the place the collection was
+    /// opened from (`parent`), a slash, and the collection's name
+    /// (`current`). A click on the parent's name closes the viewer. The
+    /// breadcrumb is at most 420px wide, or 42% of the window's width when
+    /// that is less, and a name that does not fit is cut off with an
+    /// ellipsis.
     fn breadcrumb(
         &self,
         parent: SharedString,
@@ -180,14 +179,12 @@ impl Render for ViewerToolbar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
         // What the toolbar shows for a collection depends on how the
-        // collection is displayed (`GroupSurface`'s display controls in
-        // production). In the reader, the toolbar has the "Edit group"
-        // button. In the editor, it has the breadcrumb, and it has no
-        // position counter and no "Previous" and "Next" buttons. In both,
-        // the zoom controls are left out. When one member is open by itself
-        // (production's `MediaView` over the members), "Previous" and "Next"
-        // step through the members and the back button returns to the
-        // collection.
+        // collection is displayed. In the reader, the toolbar has the "Edit
+        // group" button. In the editor, it has the breadcrumb, and it has no
+        // position counter and no "Previous" and "Next" buttons. In both, the
+        // zoom controls are left out. When one member is open by itself,
+        // "Previous" and "Next" step through the members and the back button
+        // returns to the collection.
         let (mode, member_open) = self
             .viewer
             .upgrade()
@@ -260,8 +257,7 @@ impl Render for ViewerToolbar {
             left = left.child(self.breadcrumb(parent, current, window, cx));
         }
         if let Some(index) = index {
-            // The position counter, for example "3 / 120"
-            // (`TitlebarCounter` in production).
+            // The position counter, for example "3 / 120".
             left = left.child(
                 div()
                     .ml(px(4.))
@@ -284,12 +280,11 @@ impl Render for ViewerToolbar {
             center = center.child(
                 zoom::section(cx)
                     .child(
-                        // The zoom percentage (`.zoomLabel`). A click opens
-                        // the zoom menu. A right-click sets the zoom to "Fit
-                        // to window" when it is at 100%, and to 100%
-                        // otherwise. Production's element is a
-                        // `<span role="button">`, so assistive technology
-                        // reads it as a button named by the percentage.
+                        // The zoom percentage. A click opens the zoom menu. A
+                        // right-click sets the zoom to "Fit to window" when it
+                        // is at 100%, and to 100% otherwise. Assistive
+                        // technology reads it as a button named by the
+                        // percentage.
                         div()
                             .id("viewer-zoom-label")
                             .role(Role::Button)
@@ -356,8 +351,7 @@ impl Render for ViewerToolbar {
         // which shows all the members at once.
         right = right.when(!editing, |right| {
             right.child(
-                // The group that holds the "Previous" and "Next" buttons
-                // (`TitlebarControlGroup` in production).
+                // The group that holds the "Previous" and "Next" buttons.
                 div()
                     .flex()
                     .items_center()
@@ -391,8 +385,7 @@ impl Render for ViewerToolbar {
             .relative()
             .size_full()
             // The same padding as the grid toolbar: 8px on the left and
-            // 16px on the right. In production the titlebar gives 8px on
-            // each side and the toolbar itself adds 8px more on the right.
+            // 16px on the right.
             .pl(px(8.))
             .pr(px(16.))
             .flex()

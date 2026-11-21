@@ -1,13 +1,15 @@
-//! Pictures the app decodes itself (thumbnails, originals, page drawings)
-//! are drawn from GPUI's sprite atlas, where every window keeps each one
-//! until it is told to let go. This is the one way to let go.
+//! Removes pictures from GPUI's sprite atlas. The pictures the app decodes
+//! itself (thumbnails, originals, drawings of document pages) are drawn from
+//! that atlas, and every window keeps each picture there until it is told to
+//! remove it. All code that removes one calls `release` in this file.
 use gpui::{App, RenderImage};
 use std::sync::Arc;
 
-/// Takes a picture nothing draws any more out of the sprite atlas of every
-/// window. Done once no window is being updated: the window that is drawing
-/// or handling input is out of the app's list meanwhile, so a release made
-/// there would not reach it and the picture would stay.
+/// Removes a picture that nothing draws any more from the sprite atlas of
+/// every window. The removal is deferred until no window is being updated:
+/// while a window draws or handles input, it is not in the app's list of
+/// windows, so a removal made at that moment would not reach it and the
+/// picture would stay in its atlas.
 pub fn release(image: Arc<RenderImage>, cx: &mut App) {
     cx.defer(move |cx| {
         #[cfg(test)]
@@ -20,8 +22,8 @@ pub fn release(image: Arc<RenderImage>, cx: &mut App) {
     });
 }
 
-/// Whether any window's atlas still holds the picture. The atlases answer
-/// this only in test builds, where the off-screen tool runs.
+/// Returns whether any window's atlas still holds the picture. GPUI can
+/// answer this only in test builds, which is where the off-screen tool runs.
 #[cfg(test)]
 fn held(image: &RenderImage, cx: &mut App) -> bool {
     cx.windows().into_iter().any(|window| {
@@ -57,9 +59,9 @@ mod tests {
         )]))
     }
 
-    /// A picture let go of while its own window is being updated (from a
-    /// listener, or while the window draws) leaves that window's atlas, as
-    /// one let go of from outside any window does.
+    /// Checks that a picture released while its own window is being updated
+    /// (from a listener, or while the window draws) is removed from that
+    /// window's atlas, as a picture released outside any window is.
     #[test]
     fn a_picture_released_inside_its_window_leaves_the_atlas() {
         let mut cx = TestAppContext::single();
@@ -94,8 +96,9 @@ mod tests {
         assert!(!held(&mut cx));
     }
 
-    /// Why `release` waits: GPUI's own `drop_image` without the window,
-    /// called while that window is updated, misses it.
+    /// Shows why `release` defers the removal: GPUI's `drop_image`, called
+    /// without a window while the picture's window is being updated, leaves
+    /// the picture in that window's atlas.
     #[test]
     fn dropping_a_picture_inside_its_window_without_it_misses_it() {
         let mut cx = TestAppContext::single();

@@ -1,25 +1,30 @@
-//! Originals for tiles too large for their thumbnail (`thumbnailPipeline.ts`,
-//! `thumbnailPlan.ts`). A thumbnail's long edge is 512 pixels; a tile that
-//! needs more than that, and has been on screen for a fifth of a second,
-//! whether the grid is moving or not, gets its original decoded to exactly
-//! the size the tile shows.
+//! Originals for tiles that are too large for their thumbnail. A thumbnail's
+//! long edge is 512 pixels. A still image whose tile draws more pixels than
+//! its thumbnail holds, and that has been in the viewport for a fifth of a
+//! second, gets its original decoded to exactly the size the tile shows.
+//! This happens whether the grid is scrolling or not.
 use gpui::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// The long edge thumbnails are stored at.
+/// The length in pixels of the long edge that thumbnails are stored with.
 pub const THUMBNAIL_LONG_EDGE: f32 = 512.;
-/// How long a tile is on screen before its original is read: the same
-/// wait the viewers give an item ([`crate::motion::ORIGINAL_DELAY`]).
+/// How long a tile must be in the viewport before its original is read. The
+/// viewers wait the same time before they read an item's original
+/// ([`crate::motion::ORIGINAL_DELAY`]).
 pub const DWELL: Duration = crate::motion::ORIGINAL_DELAY;
-/// Originals decoded at once. They are large, and the grid stays responsive
-/// only if they do not crowd out everything else.
+/// The number of originals decoded at the same time. Originals are large,
+/// and decoding more of them at once would slow down the rest of the app.
 const CONCURRENCY: usize = 2;
 
-/// The pixels to decode an original to for a tile (`fullQualityDecodeSize`):
-/// what the tile shows at this display scale, never more than the source has.
+/// Returns the width and the height in pixels to decode an original to for
+/// a tile: the size at which the tile shows the picture at the display scale
+/// `scale`, and never more than the source has. With `contain` the picture
+/// fits inside the tile, and without it the picture covers the tile. When
+/// the size of the source is unknown, the tile's own size in pixels is
+/// returned.
 pub fn decode_size(
     tile: (f32, f32),
     source: Option<(u32, u32)>,
@@ -45,9 +50,9 @@ pub fn decode_size(
     }
 }
 
-/// Whether a tile should show its original (`shouldLoadFullQualityOriginal`):
-/// a still image, not a GIF or JPEG XL, that the tile draws with more pixels
-/// than its thumbnail holds.
+/// Whether a tile should show its original. It should when the item is a
+/// still image other than a GIF or a JPEG XL, and the tile draws it with
+/// more pixels than its thumbnail holds.
 pub fn wants_original(
     mime: &str,
     tile: (f32, f32),
@@ -69,7 +74,8 @@ pub fn wants_original(
     }
 }
 
-/// One tile in the viewport that should show its original.
+/// A tile in the viewport that should show its original: the item's content
+/// hash, the path of the original, and the size to decode it to.
 pub struct Want {
     pub hash: String,
     pub path: PathBuf,
@@ -77,20 +83,22 @@ pub struct Want {
 }
 
 enum Entry {
-    /// Being decoded at this size. After a zoom, the decode at the previous
-    /// size stays on screen until this one lands.
+    /// The original is being decoded at `size`. `showing` is the picture
+    /// decoded at an earlier size. It stays on screen until the new one is
+    /// ready, which happens after the user changes the size of the tiles.
     Loading {
         size: (u32, u32),
         showing: Option<Arc<RenderImage>>,
         _decode: Task<()>,
     },
     Ready((u32, u32), Arc<RenderImage>),
-    /// The original could not be read or decoded; the thumbnail stays.
+    /// The original could not be read or decoded. The tile keeps its
+    /// thumbnail.
     Failed,
 }
 
 impl Entry {
-    /// The image this entry has on screen, if any.
+    /// Returns the picture that this entry has on screen, if it has one.
     fn image(&self) -> Option<Arc<RenderImage>> {
         match self {
             Entry::Ready(_, image) => Some(image.clone()),
@@ -101,10 +109,12 @@ impl Entry {
 }
 
 pub struct Originals {
-    /// Since when each wanted tile has been in the viewport without leaving.
+    /// For each wanted tile, by content hash, the time since which it has
+    /// been in the viewport without leaving it.
     seen: HashMap<String, Instant>,
     entries: HashMap<String, Entry>,
-    /// Paints again when the next tile's dwell is over.
+    /// A timer that draws the grid again when the next tile has been in the
+    /// viewport for `DWELL`.
     wake: Option<Task<()>>,
 }
 
@@ -125,14 +135,17 @@ impl Originals {
         }
     }
 
-    /// The decoded original for a tile, once it is ready.
+    /// Returns the decoded original of the item with the content hash
+    /// `hash`, once it is ready.
     pub fn get(&self, hash: &str) -> Option<Arc<RenderImage>> {
         self.entries.get(hash)?.image()
     }
 
-    /// The tiles in the viewport that should show their original. One that
-    /// has left is let go and its dwell starts over when it returns; one
-    /// that has stayed long enough is decoded, a couple at a time.
+    /// Takes the tiles in the viewport that should show their original. The
+    /// original of a tile that has left the viewport is released, and the
+    /// tile waits for `DWELL` again when it comes back. A tile that has been
+    /// in the viewport for `DWELL` has its original decoded, and at most
+    /// `CONCURRENCY` originals are decoded at the same time.
     pub fn plan(&mut self, wants: Vec<Want>, cx: &mut Context<Self>) {
         let now = Instant::now();
         self.seen
@@ -161,7 +174,9 @@ impl Originals {
                 Some(Entry::Failed) => continue,
                 None => None,
             };
-            // A zoom changes the size wanted; the old decode shows meanwhile.
+            // The size wanted changes when the user changes the size of the
+            // tiles. The picture decoded at the old size is shown until the
+            // new one is ready.
             if current == Some(want.size) {
                 continue;
             }
@@ -177,12 +192,14 @@ impl Originals {
             loading += 1;
             let (hash, path, size) = (want.hash, want.path, want.size);
             let decode = cx.background_executor().spawn(async move {
-                // A JPEG decodes at the tile's size, not its own.
+                // A JPEG is decoded at a reduced size that still covers the
+                // tile's size, which takes less time and memory than decoding
+                // it at its full size.
                 let image = crate::viewer::scaled::decode(&path, size, false).ok()?;
                 let mut pixels = image
                     .resize_exact(size.0, size.1, image::imageops::FilterType::CatmullRom)
                     .into_rgba8();
-                // GPUI's images are blue-green-red.
+                // GPUI expects each pixel as blue, green, red and alpha.
                 for pixel in pixels.chunks_exact_mut(4) {
                     pixel.swap(0, 2);
                 }
@@ -194,7 +211,8 @@ impl Originals {
             let task = cx.spawn(async move |this, cx| {
                 let decoded = decode.await;
                 let _ = this.update(cx, |this: &mut Self, cx| {
-                    // Only if the tile is still waiting for exactly this.
+                    // The result is used only if the tile still waits for a
+                    // decode at this size.
                     let waiting = matches!(
                         this.entries.get(&key),
                         Some(Entry::Loading { size: wanted, .. }) if *wanted == size
@@ -205,7 +223,8 @@ impl Originals {
                     let previous = this.entries.remove(&key).and_then(|entry| entry.image());
                     let entry = match (decoded, previous.clone()) {
                         (Some(image), _) => Entry::Ready(size, image),
-                        // A failed re-decode keeps what was showing.
+                        // When the decode at a new size fails, the picture that
+                        // was showing is kept.
                         (None, Some(image)) => Entry::Ready(size, image),
                         (None, None) => Entry::Failed,
                     };
@@ -243,17 +262,19 @@ mod tests {
 
     #[test]
     fn an_original_is_decoded_to_what_the_tile_shows() {
-        // A 4000×3000 source in a 400×300 tile on a 2× display.
+        // A 4000×3000 source in a 400×300 tile on a 2× display is decoded to
+        // 800×600.
         assert_eq!(
             decode_size((400., 300.), Some((4000, 3000)), false, 2.),
             (800, 600)
         );
-        // Never more than the source has.
+        // The size is never more than the source has.
         assert_eq!(
             decode_size((400., 300.), Some((600, 450)), false, 2.),
             (600, 450)
         );
-        // Cover fills the tile, contain fits inside it.
+        // Without `contain` the picture covers the tile, and with it the
+        // picture fits inside the tile.
         assert_eq!(
             decode_size((300., 300.), Some((4000, 2000)), false, 1.),
             (600, 300)
@@ -262,15 +283,16 @@ mod tests {
             decode_size((300., 300.), Some((4000, 2000)), true, 1.),
             (300, 150)
         );
-        // Unknown source: the tile's own pixels.
+        // When the size of the source is unknown, the tile's own size in
+        // pixels is used.
         assert_eq!(decode_size((200.5, 100.), None, false, 2.), (401, 200));
     }
 
     #[test]
     fn only_a_tile_that_outgrows_its_thumbnail_gets_the_original() {
         let source = Some((4000, 3000));
-        // 512px thumbnail of 4000×3000 is 512×384. A 250×188 tile at 2× needs
-        // 500×376: the thumbnail is enough.
+        // The 512 px thumbnail of a 4000×3000 source is 512×384. A 250×188
+        // tile at 2× needs 500×376, so the thumbnail is enough.
         assert!(!wants_original(
             "image/jpeg",
             (250., 187.5),
@@ -278,7 +300,7 @@ mod tests {
             false,
             2.
         ));
-        // A 300×225 tile at 2× needs 600×450: it is not.
+        // A 300×225 tile at 2× needs 600×450, so the thumbnail is not enough.
         assert!(wants_original(
             "image/jpeg",
             (300., 225.),
@@ -286,7 +308,8 @@ mod tests {
             false,
             2.
         ));
-        // A source no larger than its thumbnail never upgrades.
+        // A source that is no larger than its thumbnail never has its original
+        // decoded.
         assert!(!wants_original(
             "image/png",
             (600., 600.),
@@ -294,7 +317,8 @@ mod tests {
             false,
             2.
         ));
-        // Animated and JPEG XL originals are never decoded here, nor video.
+        // The originals of GIFs, of JPEG XL pictures and of videos are never
+        // decoded here.
         assert!(!wants_original(
             "image/gif",
             (600., 600.),

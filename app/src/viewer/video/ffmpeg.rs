@@ -1,10 +1,16 @@
-//! Video that the platform's player does not take (WebM and Matroska above
-//! all), decoded by the `ffmpeg` binary Picto already bundles for thumbnails
-//! and waveforms (`core/src/media_processing/ffmpeg_path.rs`, fetched by
-//! `scripts/download-ffmpeg.sh`). One process writes raw BGRA frames at a
-//! constant rate, which are uploaded as images; another writes the sound as
-//! 32-bit float samples for the audio engine, whose clock the pictures
-//! follow. Seeking restarts both at the new position.
+//! The video backend that plays a file with the `ffmpeg` program. It plays
+//! the videos that the platform's own player does not play, which are
+//! mostly WebM and Matroska. Picto ships with `ffmpeg` and `ffprobe` for
+//! making thumbnails and waveforms: `scripts/download-ffmpeg.sh` downloads
+//! them, and `core/src/media_processing/ffmpeg_path.rs` finds them for the
+//! core.
+//!
+//! One `ffmpeg` process writes the video's frames as raw BGRA pixels at a
+//! constant frame rate, and the frames are drawn as images. A second
+//! process writes the sound as 32-bit float samples, which the audio engine
+//! (`audio.rs`) plays. A frame is shown when the playback position of the
+//! sound reaches the frame's time. A seek ends both processes and starts
+//! new ones at the new position.
 use super::audio::{Analysis, Engine, OpenSource, Source};
 use super::backend::{Backend, Frame, Status};
 use gpui::RenderImage;
@@ -14,17 +20,24 @@ use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Instant;
 
-/// The rate the sound is asked for; the engine fits it to the device.
+/// The sample rate at which `ffmpeg` is asked to write the sound. The audio
+/// engine converts it to the sample rate of the output device.
 const AUDIO_RATE: u32 = 48_000;
-/// Decoded frames held ahead of the clock.
+/// How many decoded frames may wait to be shown. The thread that reads the
+/// frames from `ffmpeg` stops reading while this many are waiting.
 const FRAMES_AHEAD: usize = 3;
 
-/// How often a scrub may restart the decoders: a seek that comes sooner
-/// waits and is applied once this has passed (the last one wins).
+/// The shortest time between two restarts of the `ffmpeg` processes. A seek
+/// that comes sooner after a restart is kept, and it is carried out once
+/// this time has passed. When several seeks come in that time, only the
+/// last one is carried out.
 const SEEK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
-/// [`find_binary`], looked up once per name: a scrub starts processes
-/// often, and the search walks folders and `PATH`.
+/// Returns the path of the program `name`, which is `ffmpeg` or `ffprobe`,
+/// or `None` when it is not found. The search (`find_binary`) is made once
+/// for each name and its result is kept. The search looks through folders
+/// and `PATH`, and a drag of the progress bar starts processes up to ten
+/// times a second.
 pub fn binary(name: &str) -> Option<PathBuf> {
     static FOUND: Mutex<Vec<(String, Option<PathBuf>)>> = Mutex::new(Vec::new());
     let mut found = FOUND
@@ -38,8 +51,8 @@ pub fn binary(name: &str) -> Option<PathBuf> {
     path
 }
 
-/// A command for a bundled binary that opens no console window on Windows
-/// (`CREATE_NO_WINDOW`, as the application core's own ffmpeg calls do).
+/// Returns a command that runs `program`. On Windows the command is set to
+/// open no console window (`CREATE_NO_WINDOW`).
 fn command(program: &Path) -> Command {
     #[allow(unused_mut)]
     let mut command = Command::new(program);
@@ -52,9 +65,13 @@ fn command(program: &Path) -> Command {
     command
 }
 
-/// Where the bundled binaries are, by the rules of `ffmpeg_path.rs`:
-/// `PICTO_FFMPEG_DIR`, then `vendor/ffmpeg/` in the working directory or
-/// above the executable, then `PATH`.
+/// Searches for the program `name` and returns its path, or `None` when it
+/// is not found. It looks in the folder that the environment variable
+/// `PICTO_FFMPEG_DIR` names, then in `vendor/ffmpeg/` in the working
+/// directory and in the seven folders above it, then in `vendor/ffmpeg/` in
+/// the executable's folder and in the eight folders above it, and then in
+/// the folders of `PATH`. On Windows `.exe` is added to the name. The
+/// places are those of `core/src/media_processing/ffmpeg_path.rs`.
 fn find_binary(name: &str) -> Option<PathBuf> {
     let name = if cfg!(target_os = "windows") {
         format!("{name}.exe")
@@ -93,23 +110,32 @@ fn find_binary(name: &str) -> Option<PathBuf> {
     })
 }
 
-/// What `ffprobe` says about the file.
+/// What `ffprobe` reports about a video file.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Info {
-    /// The picture's size as shown: rotation applied.
+    /// The width of the picture as it is shown, in pixels: after the
+    /// video's rotation is applied, and rounded down to an even number.
     pub width: u32,
+    /// The height of the picture as it is shown, in pixels, rounded down to
+    /// an even number.
     pub height: u32,
+    /// The frame rate, in frames a second.
     pub fps: f64,
+    /// The length in seconds, or 0 when `ffprobe` reports none.
     pub duration: f64,
+    /// True when the file has an audio stream.
     pub audio: bool,
-    /// The YCbCr matrix the picture is converted to RGB with, as the
-    /// scaler names it.
+    /// The YCbCr matrix with which the picture is converted to RGB, by the
+    /// name that `ffmpeg`'s scale filter has for it.
     pub matrix: &'static str,
 }
 
-/// The scaler's matrix for a stream's `color_space`. A stream that does not
-/// say is taken as BT.709, as Chromium takes it (the scaler's own default is
-/// BT.601, which draws reds and blues more saturated than production).
+/// Returns the name that `ffmpeg`'s scale filter has for the matrix of the
+/// `color_space` that `ffprobe` reports for a video stream. A stream that
+/// names no colour space, or one that is not listed here, is converted with
+/// BT.709, as web browsers convert it. The scale filter's own default is
+/// BT.601, which would draw the reds and blues of a BT.709 video more
+/// saturated than they are.
 pub fn color_matrix(color_space: Option<&str>) -> &'static str {
     match color_space {
         Some("bt470bg" | "smpte170m" | "bt601") => "bt601",
@@ -120,7 +146,13 @@ pub fn color_matrix(color_space: Option<&str>) -> &'static str {
     }
 }
 
-/// Reads `ffprobe -of json` output.
+/// Reads the JSON that `ffprobe -of json` writes and returns what the
+/// player needs from it. The frame rate is the average frame rate of the
+/// video stream, or its base frame rate when the average is missing. It is
+/// 30 when neither is given or the rate is above 240. The width and the
+/// height are swapped when the stream is rotated by 90° or 270°. Returns
+/// an error when the JSON cannot be read, when the file has no video
+/// stream, or when the stream has no picture size.
 pub fn parse_probe(json: &str) -> Result<Info, String> {
     let probe: serde_json::Value =
         serde_json::from_str(json).map_err(|error| format!("ffprobe: {error}"))?;
@@ -169,7 +201,9 @@ pub fn parse_probe(json: &str) -> Result<Info, String> {
         .or_else(|| seconds(&video["duration"]))
         .unwrap_or(0.);
     Ok(Info {
-        // Even sizes keep 4:2:0 sources from being padded by the scaler.
+        // The width and the height are rounded down to even numbers, so
+        // that the scale filter does not pad a video whose colour is
+        // subsampled 4:2:0.
         width: width & !1,
         height: height & !1,
         fps,
@@ -179,6 +213,8 @@ pub fn parse_probe(json: &str) -> Result<Info, String> {
     })
 }
 
+/// Runs `ffprobe` on the file `path` and returns what it reports. Returns
+/// an error when `ffprobe` is not found, cannot be run or fails.
 fn probe(path: &Path) -> Result<Info, String> {
     let ffprobe = binary("ffprobe").ok_or("Picto's bundled ffprobe was not found")?;
     let output = command(&ffprobe)
@@ -203,11 +239,15 @@ fn probe(path: &Path) -> Result<Info, String> {
     parse_probe(&String::from_utf8_lossy(&output.stdout))
 }
 
-/// A child process killed when dropped; the reaping happens off the caller's
-/// thread.
+/// A child process that is killed when this value is dropped. A new thread
+/// then waits for the process to end, so that the thread that dropped the
+/// value does not wait.
 struct Process(Option<Child>);
 
 impl Process {
+    /// Starts `ffmpeg` with the arguments `arguments` before the input file
+    /// `path` and the arguments `after` behind it. Returns the process and
+    /// its standard output.
     fn spawn(
         arguments: &[String],
         path: &Path,
@@ -241,17 +281,26 @@ impl Drop for Process {
     }
 }
 
-/// Pictures from `start`, one per `1 / fps` seconds.
+/// The frames of the video from one position on. An `ffmpeg` process writes
+/// them, one for each `1 / fps` seconds, and a thread reads them.
 struct VideoStream {
+    /// The `ffmpeg` process. It is kept so that it is killed when the
+    /// stream is dropped.
     _process: Process,
+    /// The frames that the thread has read, each with its time in seconds.
     frames: mpsc::Receiver<(f64, Arc<RenderImage>)>,
-    /// The next frame, read ahead of its time.
+    /// The next frame. It has been taken from `frames`, but its time has
+    /// not come yet.
     pending: Option<(f64, Arc<RenderImage>)>,
-    /// The process has no more frames.
+    /// True once the thread that reads the frames has ended and all its
+    /// frames have been taken from `frames`.
     done: bool,
 }
 
 impl VideoStream {
+    /// Starts an `ffmpeg` process that decodes the first video stream of
+    /// `path` from `start` seconds on, with the frame rate, the size and
+    /// the colour matrix of `info`, and a thread that reads its frames.
     fn start(path: &Path, info: &Info, start: f64) -> Result<Self, String> {
         let (process, mut stdout) = Process::spawn(
             &["-ss".into(), format!("{start:.3}")],
@@ -304,8 +353,12 @@ impl VideoStream {
         })
     }
 
-    /// The latest frame due by `clock`, if any arrived since the last call.
-    /// With `first`, the first frame is taken whatever its time.
+    /// Returns the frame to show at the playback position `clock`: the
+    /// latest frame whose time is not after `clock`. Earlier frames that
+    /// have arrived are skipped. Returns `None` when no such frame has
+    /// arrived since the last call. When `first` is true, the next frame is
+    /// taken whatever its time, and later frames only if their time has
+    /// come.
     fn due(&mut self, clock: f64, first: bool) -> Option<Arc<RenderImage>> {
         let mut shown = None;
         loop {
@@ -330,7 +383,9 @@ impl VideoStream {
     }
 }
 
-/// The sound as an audio source: a process per position.
+/// The sound of the video as a source for the audio engine. An `ffmpeg`
+/// process writes the samples. A seek ends the process and starts a new one
+/// at the new position.
 struct AudioStream {
     path: PathBuf,
     duration: Option<f64>,
@@ -338,6 +393,9 @@ struct AudioStream {
 }
 
 impl AudioStream {
+    /// Starts an `ffmpeg` process that writes the first audio stream of
+    /// `path` from `start` seconds on, as stereo 32-bit float samples at
+    /// 48,000 Hz.
     fn start(path: &Path, start: f64) -> Result<(Process, ChildStdout), String> {
         Process::spawn(
             &["-ss".into(), format!("{start:.3}")],
@@ -397,15 +455,21 @@ impl Source for AudioStream {
     }
 }
 
-/// The wall clock the pictures follow when there is no sound to follow.
+/// The playback position of a video while it has no sound whose position it
+/// can follow. It is computed from the time that has passed.
 #[derive(Clone, Copy)]
 struct Clock {
+    /// The position, in seconds, at the moment `since`.
     base: f64,
+    /// The moment from which the position advances, or `None` while
+    /// playback is paused.
     since: Option<Instant>,
+    /// The playback rate.
     rate: f64,
 }
 
 impl Clock {
+    /// Returns the position now, in seconds.
     fn now(&self) -> f64 {
         self.base
             + self
@@ -413,40 +477,60 @@ impl Clock {
                 .map_or(0., |since| since.elapsed().as_secs_f64() * self.rate)
     }
 
+    /// Sets the position to `position`. It advances from now on when
+    /// `running` is true, and stays there when it is false.
     fn set(&mut self, position: f64, running: bool) {
         self.base = position;
         self.since = running.then(Instant::now);
     }
 }
 
-/// Whether the decoders may restart, `since` the last restart (none yet).
+/// Returns true when the `ffmpeg` processes may be restarted for a seek.
+/// `since` is the time since the last restart, or `None` when there has
+/// been no restart. It must be at least `SEEK_INTERVAL`.
 fn seek_due(since: Option<std::time::Duration>) -> bool {
     since.is_none_or(|since| since >= SEEK_INTERVAL)
 }
 
-/// Video through the bundled `ffmpeg`.
+/// The backend that plays a video with the `ffmpeg` program that Picto
+/// ships with.
 pub struct FfmpegPlayer {
     path: PathBuf,
+    /// Where the thread that runs `ffprobe` puts its result.
     probe: Arc<Mutex<Option<Result<Info, String>>>>,
+    /// What `ffprobe` reported, once `ready` has taken the result.
     info: Option<Info>,
     error: Option<String>,
+    /// The stream of frames, or `None` before the file has been probed.
     video: Option<VideoStream>,
+    /// The audio engine, or `None` when the file has no sound or has not
+    /// been probed yet.
     audio: Option<Engine>,
     clock: Clock,
     playing: bool,
-    /// The position asked for before the file was probed.
+    /// The position of the last seek, in seconds. The sound and the frames
+    /// start there when the file has been probed.
     target: f64,
+    /// The volume that is given to the audio engine. It is 0 while the
+    /// player is muted.
     volume: f32,
     rate: f32,
-    /// A new stream's first frame is shown whatever its time.
+    /// True from the start of a stream of frames until its first frame has
+    /// been taken. That frame is shown whatever its time.
     awaiting_first: bool,
-    /// A position asked for that the decoders have not been restarted at
-    /// yet, and when they last were.
+    /// The position of a seek for which the processes have not been
+    /// restarted yet, or `None` when there is no such seek.
     pending_seek: Option<f64>,
+    /// The moment the processes were last started or restarted, or `None`
+    /// before the first time.
     last_restart: Option<Instant>,
 }
 
 impl FfmpegPlayer {
+    /// Makes a player for the file `path` and starts a thread that runs
+    /// `ffprobe` on it. Returns an error when `ffmpeg` is not found. The
+    /// sound and the frames are started later, by `ready`, when `ffprobe`
+    /// has finished.
     pub fn open(path: &Path) -> Result<Self, String> {
         if binary("ffmpeg").is_none() {
             return Err("Picto's bundled ffmpeg was not found".into());
@@ -479,7 +563,11 @@ impl FfmpegPlayer {
         })
     }
 
-    /// Picks up the probe once it is done and starts the streams.
+    /// Returns true when the file has been probed. The first time the
+    /// result of `ffprobe` is there, it starts the audio engine, if the
+    /// file has sound, and the stream of frames, both at the position of
+    /// the last seek. When `ffprobe` failed, it records the error and
+    /// returns false.
     fn ready(&mut self) -> bool {
         if self.info.is_some() {
             return true;
@@ -506,7 +594,8 @@ impl FfmpegPlayer {
                     self.audio = Some(engine);
                 }
                 self.info = Some(info);
-                // Both start where the last seek asked.
+                // The sound and the frames both start at the position of
+                // the last seek, so no seek is left to carry out.
                 self.pending_seek = None;
                 self.last_restart = Some(Instant::now());
                 self.restart_video(self.target);
@@ -519,10 +608,14 @@ impl FfmpegPlayer {
         }
     }
 
-    /// Restarts the sound and the pictures at the position last asked for,
-    /// unless they were restarted less than [`SEEK_INTERVAL`] ago; then it
-    /// waits for a later call (each frame makes one), so a scrub runs at
-    /// most ten restarts a second and always ends at its last position.
+    /// Carries out the seek that is waiting, if there is one: it restarts
+    /// the sound and the frames at the seek's position. It does nothing
+    /// when the processes were restarted less than 100 ms
+    /// ([`SEEK_INTERVAL`]) ago. The seek then stays waiting, and a later
+    /// call carries it out. `status` calls this function each time the
+    /// player is drawn. So a drag of the progress bar restarts the
+    /// processes at most ten times a second, and the last position of the
+    /// drag is always carried out.
     fn apply_seek(&mut self) {
         let Some(seconds) = self.pending_seek else {
             return;
@@ -540,6 +633,8 @@ impl FfmpegPlayer {
         }
     }
 
+    /// Ends the stream of frames and starts a new one at `position`. An
+    /// error in starting it is recorded.
     fn restart_video(&mut self, position: f64) {
         let Some(info) = &self.info else {
             return;
@@ -552,7 +647,10 @@ impl FfmpegPlayer {
         self.awaiting_first = true;
     }
 
-    /// The sound's clock while it runs, else the wall clock.
+    /// Returns the playback position in seconds. It is the position of the
+    /// audio engine while the engine's output device is open and has no
+    /// error, and the position of `clock` otherwise. It is not more than
+    /// the length of the video.
     fn position(&self) -> f64 {
         let position = match &self.audio {
             Some(audio) if audio.running() => audio.position(),
@@ -564,6 +662,10 @@ impl FfmpegPlayer {
         }
     }
 
+    /// Returns true when the video has reached its end: the last frame has
+    /// been shown, and the audio engine has played the sound to its end.
+    /// While the audio engine is not running, the position of `clock` must
+    /// have reached the length of the video in its place.
     fn ended(&self) -> bool {
         let Some(info) = &self.info else {
             return false;
@@ -634,7 +736,8 @@ impl Backend for FfmpegPlayer {
         self.apply_seek();
         let ended = self.ended();
         if ended && self.playing {
-            // Stopped at the end, as a media element is.
+            // The video has reached its end while playing, so playback
+            // stops at the position it has reached.
             let position = self.position();
             self.playing = false;
             self.clock.set(position, false);
@@ -643,8 +746,9 @@ impl Backend for FfmpegPlayer {
             }
         }
         let info = self.info.clone();
-        // A sound that cannot be played leaves the pictures on the wall
-        // clock rather than failing the video.
+        // Only the player's own error is reported. An error of the audio
+        // engine is not: the video then plays without sound, and its
+        // position is the one of `clock`.
         let error = self.error.clone();
         Status {
             position: self.position(),
@@ -721,9 +825,12 @@ mod tests {
         assert_eq!(color_matrix(Some("bt2020nc")), "bt2020");
     }
 
-    /// Plays a video named by `PICTO_GPUI_TEST_WEBM` through the bundled
-    /// ffmpeg for a moment and checks that frames of the probed size arrive
-    /// with advancing times, and that a seek moves the clock.
+    /// Plays the video named by the environment variable
+    /// `PICTO_GPUI_TEST_WEBM` with `ffmpeg` until ten frames have arrived.
+    /// It checks that each frame has the size that `ffprobe` reported, that
+    /// the position does not go back from one frame to the next and is
+    /// later at the tenth frame than at the first, and that after a seek to
+    /// 5 s the position is within 0.2 s of 5 s.
     #[test]
     #[ignore = "needs a video in PICTO_GPUI_TEST_WEBM and the bundled ffmpeg"]
     fn real_webm_produces_frames() {

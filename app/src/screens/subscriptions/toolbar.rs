@@ -1,12 +1,12 @@
 //! What the Subscriptions screen draws outside its own area of the window, as
 //! the grid and the other screens do. There are three parts. The first is the
 //! screen's buttons at the right end of the titlebar: Add, Add Gallery and
-//! Accounts while the screen shows its subscription cards, and Run now, Hold
-//! and the "More actions" menu button while it shows one subscription's page.
-//! The second is the count of subscriptions, which is shown after the screen's
-//! title in the titlebar. The third is the rail of a subscription's page,
-//! which is drawn where the inspector is for the grid and shows that
-//! subscription's counters, schedule and destination.
+//! Accounts while the screen shows its tiles, and Run now, Hold and the "More
+//! actions" menu button while it shows one subscription's page. The second is
+//! the count of subscriptions, which is shown after the screen's title in the
+//! titlebar. The third is the rail of a subscription's page, which is drawn
+//! where the inspector is for the grid and shows that subscription's
+//! counters, schedule and destination.
 use super::{SubscriptionsScreen, format, place_of};
 use crate::i18n::t;
 use crate::ui::{self, action_button::Look};
@@ -15,12 +15,12 @@ use gpui::*;
 /// The width, in pixels, that the titlebar's space for the screen's controls
 /// must have for the buttons to show their labels. `PAGE_LABELLED` is for the
 /// buttons of a subscription's page and `HOME_LABELLED` is for the buttons
-/// shown over the subscription cards. That space starts after the Back and
-/// Forward buttons and runs to the right end of the toolbar. The scope title
-/// covers the toolbar's left half, so it lies over the left part of the space.
-/// When the space is narrower than this, each button shows only its icon and
-/// puts its label in its tooltip. The grid's toolbar does something similar:
-/// it hides its zoom control, and then its search field, when it is narrow.
+/// shown over the tiles. That space starts after the Back and Forward buttons
+/// and runs to the right end of the toolbar. The scope title covers the
+/// toolbar's left half, so it lies over the left part of the space. When the
+/// space is narrower than this, each button shows only its icon and puts its
+/// label in its tooltip. The grid's toolbar does something similar: it hides
+/// its zoom control, and then its search field, when it is narrow.
 const PAGE_LABELLED: f32 = 360.;
 const HOME_LABELLED: f32 = 420.;
 
@@ -154,10 +154,10 @@ impl SubscriptionsScreen {
         }
     }
 
-    /// The text of the count. It is "No subscriptions yet" when there are no
-    /// subscription cards, the number selected out of the total (for example
-    /// "2 of 5 selected") when more than one card is selected, and otherwise
-    /// the number of subscription cards (for example "5 subscriptions").
+    /// Returns the text of the count. It is "No subscriptions yet" when
+    /// there are no tiles, the number selected out of the total (for example
+    /// "2 of 5 selected") when more than one tile is selected, and otherwise
+    /// the number of tiles (for example "5 subscriptions").
     fn count_note(&self) -> String {
         let count = self.cards().len();
         let selected = self.selected.len();
@@ -174,9 +174,9 @@ impl SubscriptionsScreen {
         }
     }
 
-    /// Builds the titlebar buttons shown over the subscription cards: Add, Add
-    /// Gallery and Accounts. The count is not drawn here; the view that
-    /// [`note`] creates draws it after the screen's title.
+    /// Builds the titlebar buttons shown over the tiles: Add, Add Gallery
+    /// and Accounts. The count is not drawn here; the view that [`note`]
+    /// creates draws it after the screen's title.
     fn home_titlebar(&mut self, bar: Div, labelled: bool, cx: &mut Context<Self>) -> Div {
         let gallery_running = self.gallery_running();
         bar.child(div().flex_1())

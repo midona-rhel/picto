@@ -1,7 +1,8 @@
-//! Drags in the sidebar: a folder or smart-folder row dragged within its
-//! tree to reorder or nest it (`Sidebar.tsx`'s folder drag), and items
-//! dragged from the grid onto All, Inbox, Trash or a folder
-//! (`dragState.ts`, `dragController.executeDrop`).
+//! This file handles the two kinds of drag in the sidebar. The row of a
+//! folder or smart folder can be dragged within its tree, which moves the
+//! node before, after or inside another node. Items dragged from the grid
+//! can be dropped on the rows All, Inbox and Trash and on the row of a
+//! folder.
 use super::{Sidebar, folder_id, smart_folder_id, tree};
 use crate::grid::drag::{self, DragEvent, ItemDrag};
 use crate::i18n::t;
@@ -14,8 +15,9 @@ use picto_library::{FolderId, Lifecycle, SmartFolderId};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-/// Where the rows that take drops were last painted, by node id, and the
-/// list's visible area, so the pointer can be matched to a row.
+/// Holds the bounds at which each row was last painted, by row id, and the
+/// bounds of the visible part of the list. They are used to find the row
+/// that is under the pointer.
 #[derive(Clone, Default)]
 pub struct RowBounds {
     rows: Rc<RefCell<Vec<(String, Bounds<Pixels>)>>>,
@@ -23,12 +25,14 @@ pub struct RowBounds {
 }
 
 impl RowBounds {
-    /// Forgets the rows before the list is drawn again.
+    /// Removes the recorded bounds of all rows. This is called before the
+    /// list is drawn again.
     pub fn clear(&self) {
         self.rows.borrow_mut().clear();
     }
 
-    /// An element over a row that records where the row is.
+    /// Returns an element that covers a row and records the row's bounds
+    /// under `id` when it is laid out.
     pub fn recorder(&self, id: String) -> impl IntoElement {
         let rows = self.rows.clone();
         canvas(
@@ -39,7 +43,8 @@ impl RowBounds {
         .inset_0()
     }
 
-    /// An element over the list that records its visible area.
+    /// Returns an element that covers the list and records the bounds of
+    /// the visible part of the list when it is laid out.
     pub fn list_recorder(&self) -> impl IntoElement {
         let list = self.list.clone();
         canvas(move |bounds, _, _| list.set(bounds), |_, _, _, _| {})
@@ -47,7 +52,8 @@ impl RowBounds {
             .inset_0()
     }
 
-    /// Where a row was last drawn, and the list's visible area.
+    /// Returns the bounds at which the row `id` was last drawn, and the
+    /// bounds of the visible part of the list.
     pub fn row(&self, id: &str) -> Option<(Bounds<Pixels>, Bounds<Pixels>)> {
         self.rows
             .borrow()
@@ -56,9 +62,11 @@ impl RowBounds {
             .map(|(_, bounds)| (*bounds, self.list.get()))
     }
 
-    /// The row under the pointer, among those `accepts`, and how far down
-    /// the row the pointer is, from 0 to 1. Rows scrolled out of the list's
-    /// view take nothing.
+    /// Returns the row under the pointer for which `accepts` returns true.
+    /// With the row it returns how far down the row the pointer is, from 0
+    /// at the row's top edge to 1 at its bottom edge. Returns `None` when
+    /// the pointer is outside the visible part of the list, so a row that is
+    /// scrolled out of view is never returned.
     pub fn hit(
         &self,
         position: Point<Pixels>,
@@ -78,7 +86,9 @@ impl RowBounds {
     }
 }
 
-/// A folder or smart-folder row being dragged.
+/// Holds the row of a folder or smart folder that is being dragged: the
+/// node's id, the pointer's position, and the label, icon and colour that
+/// the picture of the row under the pointer shows.
 pub struct NodeDrag {
     pub node: String,
     pub position: Point<Pixels>,
@@ -87,16 +97,18 @@ pub struct NodeDrag {
     tint: Option<Rgba>,
 }
 
-/// What a grid drop onto a row does: the lifecycle a system row stands for,
-/// or the folder.
+/// What a drop of items from the grid on a row does. A drop on All, Inbox
+/// or Trash gives the items that lifecycle, and a drop on a folder adds the
+/// items to the folder.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GridDrop {
     Lifecycle(Lifecycle),
     Folder(FolderId),
 }
 
-/// The rows that take items from the grid: All, Inbox and Trash by the
-/// lifecycle they show, and every folder.
+/// Returns what a drop of items from the grid on the row `node` does, or
+/// `None` when the row does not accept items. The rows All, Inbox and Trash
+/// and the row of every folder accept items.
 pub fn grid_drop(node: &str) -> Option<GridDrop> {
     match node {
         "system:active" => Some(GridDrop::Lifecycle(Lifecycle::Active)),
@@ -106,9 +118,10 @@ pub fn grid_drop(node: &str) -> Option<GridDrop> {
     }
 }
 
-/// `dragController.executeDrop`'s library work for items dropped on a
-/// target: a folder adds them, and makes them active when they came from
-/// the Inbox or the Trash; All, Inbox and Trash set their lifecycle.
+/// Returns the function that changes the library for items dropped on
+/// `target`. A drop on a folder adds the items to the folder, and also
+/// makes them active when they were dragged from the Inbox or the Trash. A
+/// drop on All, Inbox or Trash gives the items that lifecycle.
 fn drop_work(
     items: &ItemDrag,
     target: GridDrop,
@@ -131,8 +144,9 @@ fn drop_work(
     }
 }
 
-/// Items dropped on a folder anywhere but the sidebar (a subfolder tile in
-/// the grid), as a drop on the folder's row does.
+/// Adds the dropped `items` to `folder`, as a drop on the folder's row in
+/// the sidebar does. The grid calls this when items are dropped on a
+/// subfolder tile.
 pub fn drop_into_folder(
     session: &Entity<crate::session::Session>,
     items: ItemDrag,
@@ -146,8 +160,9 @@ pub fn drop_into_folder(
 }
 
 impl Sidebar {
-    /// Follows the grid's drag: the row under the pointer that takes items
-    /// shows the drop look, and takes them when they are dropped.
+    /// Handles an event of a drag of items from the grid. While the pointer
+    /// moves, the row under it that accepts items is drawn highlighted. When
+    /// the items are dropped on such a row, the drop is carried out.
     pub(super) fn grid_drag(
         &mut self,
         event: &DragEvent,
@@ -192,9 +207,8 @@ impl Sidebar {
         }
     }
 
-    /// `dragController.executeDrop`: a folder adds the items, and makes
-    /// them active when they came from the Inbox or the Trash; All, Inbox
-    /// and Trash set their lifecycle.
+    /// Carries out a drop of `items` from the grid on `target` in the
+    /// library (`drop_work`), then reads the grid's results again.
     fn drop_items(
         &mut self,
         items: ItemDrag,
@@ -214,8 +228,10 @@ impl Sidebar {
         );
     }
 
-    /// A left press on a folder or smart-folder row, which becomes a drag
-    /// once the pointer moves 5px.
+    /// Records a press of the left mouse button on the row of a folder or
+    /// smart folder. The press becomes a drag once the pointer has moved 5px
+    /// from where it was pressed. A row that is being renamed is not
+    /// dragged.
     pub(super) fn press_node(
         &mut self,
         node: String,
@@ -230,7 +246,10 @@ impl Sidebar {
         cx.notify();
     }
 
-    /// The pointer moved with the button held after a press on a row.
+    /// Handles a move of the pointer while the left button is held after a
+    /// press on a row. It starts the drag once the pointer has moved 5px,
+    /// and then keeps `drop` set to the row under the pointer on which the
+    /// dragged node can be dropped.
     fn node_drag_moved(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         if self.node_drag.is_none() {
             let Some((node, from)) = self.press.clone() else {
@@ -285,8 +304,10 @@ impl Sidebar {
         cx.notify();
     }
 
-    /// The button came up: a drag over a row moves the dragged node, or the
-    /// selection it is part of, as `planSidebarTreeDrop` plans it.
+    /// Handles the release of the left button. When a drag ends over a row
+    /// on which the dragged node can be dropped, the node is moved there in
+    /// the library. When the dragged node is one of several selected nodes,
+    /// all of them are moved (`tree::plan_drop`).
     fn node_drag_released(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.press = None;
         let Some(dragged) = self.node_drag.take() else {
@@ -354,8 +375,9 @@ impl Sidebar {
         }
     }
 
-    /// While a row is pressed or dragged, the pointer is followed anywhere
-    /// in the window and the release heard there, as pointer capture does.
+    /// Returns an element that, while a row is pressed or dragged, receives
+    /// every move of the pointer and the release of the left button
+    /// anywhere in the window. Returns `None` at other times.
     pub(super) fn drag_capture(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.press.is_none() && self.node_drag.is_none() {
             return None;
@@ -393,8 +415,9 @@ impl Sidebar {
         )
     }
 
-    /// The drag ghost: a highlighted row 200px wide under the pointer, with
-    /// the grabbing cursor over the whole window.
+    /// Draws the picture of the dragged row that follows the pointer: a
+    /// highlighted row 200px wide with the node's icon and label. While it
+    /// is shown, the pointer is the closed hand over the whole window.
     pub(super) fn drag_ghost(&self, window: &Window, cx: &App) -> Option<AnyElement> {
         let dragged = self.node_drag.as_ref()?;
         let theme = theme::theme(cx);
@@ -447,8 +470,8 @@ impl Sidebar {
     }
 }
 
-/// `foldersController.moveMany`: each folder under the new parent, then the
-/// parent's children in the planned order.
+/// Moves each of the folders `moving` under `parent`, then puts the
+/// children of `parent` in the order `ordered`.
 fn move_folders(
     library: &picto_library::Library,
     moving: &[FolderId],
@@ -464,7 +487,8 @@ fn move_folders(
     Ok(())
 }
 
-/// `smartFoldersController.moveMany`.
+/// Moves each of the smart folders `moving` under `parent`, then puts the
+/// children of `parent` in the order `ordered`.
 fn move_smart_folders(
     library: &picto_library::Library,
     moving: &[SmartFolderId],

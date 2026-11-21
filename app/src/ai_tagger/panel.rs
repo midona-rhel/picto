@@ -1,7 +1,6 @@
-//! The review panel (`AiTaggerPanel.tsx` in its `OverlayShell`): the items
-//! to tag, the models to run, each item's suggested tags with their
-//! confidences, and Apply, which writes the checked tags as one undoable
-//! edit.
+//! The review panel. It holds the items to tag, the models to run, and each
+//! item's suggested tags with their confidences. Apply writes the checked tags
+//! as one edit that can be undone.
 use super::review::{self, Overrides, WINDOW};
 use crate::grid::thumbnails::Thumbnails;
 use crate::motion;
@@ -18,20 +17,22 @@ use picto_library::{LabColor, MediaId, RootDetails, RootId};
 use serde_json::json;
 use std::collections::HashMap;
 
-/// 780 × 540 with the rail, 590 × 540 without.
+/// The panel's width while its sidebar is shown. `NARROW` is its width while
+/// the sidebar is hidden, and `HEIGHT` is its height.
 pub(super) const WIDE: f32 = 780.;
 pub(super) const NARROW: f32 = 590.;
 pub(super) const HEIGHT: f32 = 540.;
 
-/// Which of an item's tags the list shows.
+/// Which of the reviewed item's tags the list shows: the tags at or above the
+/// cutoff (`Suggested`) or the tags below it (`Below`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ViewMode {
     Suggested,
     Below,
 }
 
-/// An item as the review shows it (`ReviewRoot`): its image members, and
-/// the one its preview shows.
+/// An item as the review shows it: its name, its images, and the image that
+/// the preview shows.
 #[derive(Clone, Debug)]
 pub(super) struct ReviewRoot {
     pub label: String,
@@ -41,8 +42,9 @@ pub(super) struct ReviewRoot {
     pub preview_color: Option<LabColor>,
 }
 
-/// `reviewRoot`: an item with at least one image, previewed by its cover
-/// if that is an image, else by its first image.
+/// Returns the [`ReviewRoot`] of an item, or `None` if the item has no image.
+/// The preview shows the item's cover if the cover is an image, and the item's
+/// first image otherwise.
 fn review_root(details: &RootDetails) -> Option<ReviewRoot> {
     let images = details
         .media
@@ -57,7 +59,7 @@ fn review_root(details: &RootDetails) -> Option<ReviewRoot> {
         .into_iter()
         .find(|name| !name.is_empty())
         .cloned()
-        // i18n: production writes it in English
+        // i18n: an item's fallback name, English in every language
         .unwrap_or_else(|| format!("Item {}", details.root.root_id.0));
     Some(ReviewRoot {
         label,
@@ -68,7 +70,9 @@ fn review_root(details: &RootDetails) -> Option<ReviewRoot> {
     })
 }
 
-/// How far a run has gone: models × items done, and the item analysed now.
+/// How far a run has gone. `total` is the number of chosen models times the
+/// number of items, `done` is how many of these are finished, and `current` is
+/// the item that is being analysed now.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Progress {
     pub done: usize,
@@ -84,28 +88,33 @@ pub struct AiTagger {
     opening: Option<ui::popover::Opening>,
     pub(super) geometry: Geometry,
     pub(super) pinned: bool,
-    /// Opened centred over the window, as a dialog is (from a menu or the
-    /// shortcut over the grid), rather than docked beside the inspector.
+    /// Whether the panel was opened centred over the window, as a dialog is.
+    /// This is the case when it was opened from a menu or with the shortcut
+    /// over the grid. Otherwise it is docked beside the inspector.
     pub(super) centred: bool,
     pub(super) sidebar: bool,
-    /// The panel's width (200ms) and the rail's fade.
+    /// The animation of the panel's width when the sidebar is shown or hidden.
+    /// `rail_shown` is the animation of the sidebar's opacity.
     pub(super) width_fade: motion::Fade,
     pub(super) rail_shown: motion::Fade,
-    /// What the review is of; `None` follows the grid's selection, as the
-    /// panel opened by the grid, its menu or the inspector does.
+    /// The items that the review was opened on. `None` means that the review
+    /// follows the grid's selection, which is the case when the panel was
+    /// opened from the grid, the grid's menu or the inspector.
     explicit: Option<SelectionTarget>,
     target: Option<SelectionTarget>,
-    /// Bumped by every opening, run and close, so an answer for an earlier
-    /// one is dropped.
+    /// A counter that every opening, run and close increases. An answer that
+    /// belongs to an earlier value of the counter is ignored.
     generation: u64,
     pub(super) models: Vec<AiModelStatus>,
-    /// The models chosen, in the order they run.
+    /// The slugs of the chosen models, in the order in which they run.
     pub(super) run_models: Vec<String>,
     pub(super) predictions: Vec<RootPrediction>,
-    /// The items with images, in the destination's order.
+    /// The reviewed items that have images, in the order that the library
+    /// gives them (`ordered_image_selection`).
     pub(super) items: Vec<RootId>,
     pub(super) resolved: bool,
-    /// Items read so far, and those the thumbnail rail shows.
+    /// The items that were read so far. `rail` holds the ids of the items
+    /// whose thumbnails are shown.
     roots: HashMap<RootId, ReviewRoot>,
     pub(super) rail: Vec<RootId>,
     pub(super) active: Option<RootId>,
@@ -114,7 +123,7 @@ pub struct AiTagger {
     pub(super) running: bool,
     pub(super) applying: bool,
     pub(super) error: Option<String>,
-    /// The cutoff in whole percent.
+    /// The cutoff, in whole percent.
     pub(super) confidence: u32,
     pub(super) view: ViewMode,
     pub(super) overrides: Overrides,
@@ -141,7 +150,8 @@ impl AiTagger {
                     cx.notify();
                 }
             }),
-            // Opened on the selection, the review follows it.
+            // A review that was opened on the grid's selection starts again
+            // when the selection changes.
             cx.subscribe(&session, |this, _, change: &Change, cx| {
                 if *change == Change::Selection {
                     this.selection_changed(cx);
@@ -198,8 +208,10 @@ impl AiTagger {
         NARROW + (WIDE - NARROW) * self.width_fade.value_with(motion::EASE_DEFAULT)
     }
 
-    /// Opens beside the inspector at `anchor` (or centred) on `target`, or
-    /// on the grid's selection, which it then follows.
+    /// Opens the panel. With an `anchor` it is placed beside the inspector at
+    /// that point, and without one it is centred over the window. It reviews
+    /// `target`, or, if `target` is `None`, the grid's selection, which it
+    /// then follows.
     pub fn open(
         &mut self,
         anchor: Option<Point<f32>>,
@@ -212,9 +224,11 @@ impl AiTagger {
         }
         let view = window.viewport_size();
         self.centred = anchor.is_none();
-        // A dialog has neither the pin nor the sidebar's button: one pinned
-        // by a docked review would have no backdrop to close it by, and one
-        // whose sidebar was hidden no way to choose its models.
+        // The centred panel has neither the pin button nor the sidebar button.
+        // So a pin or a hidden sidebar that a docked review left behind is
+        // reset here. A pinned panel could not be closed by a click on the
+        // backdrop, and a panel with a hidden sidebar would give no way to
+        // choose the models.
         if self.centred {
             self.pinned = false;
             self.sidebar = true;
@@ -246,9 +260,9 @@ impl AiTagger {
         cx.notify();
     }
 
-    /// Stops what the review was doing and lets the models go
-    /// (`aiTaggerUnload`), as production does whenever the panel closes or
-    /// its items change.
+    /// Stops what the review is doing and tells the core to unload the models
+    /// (`ai.review.unload`). It is called when the panel closes and when the
+    /// reviewed items change.
     fn end(&mut self, cx: &mut Context<Self>) {
         self.generation += 1;
         self.running = false;
@@ -258,8 +272,9 @@ impl AiTagger {
             .dispatch("ai.review.unload", json!({}));
     }
 
-    /// The grid's selection changed: a review that follows it starts again
-    /// on the new items.
+    /// Starts the review again on the new items after the grid's selection has
+    /// changed. It does nothing while the panel is closed, or for a review
+    /// that was opened on items of its own.
     fn selection_changed(&mut self, cx: &mut Context<Self>) {
         if !self.is_open() || self.explicit.is_some() {
             return;
@@ -272,8 +287,10 @@ impl AiTagger {
         }
     }
 
-    /// Starts a review afresh: the models and thresholds, the items with
-    /// images, and the models last chosen.
+    /// Starts a review from the beginning. It clears the results of the
+    /// previous review, and then reads the models and the thresholds, the
+    /// reviewed items that have images, and the models that were chosen in the
+    /// last review.
     fn start(&mut self, cx: &mut Context<Self>) {
         self.generation += 1;
         let generation = self.generation;
@@ -336,10 +353,11 @@ impl AiTagger {
         cx.notify();
     }
 
-    // ── Items ───────────────────────────────────────────────────
+    // The functions below read the items and choose the item that is shown.
 
-    /// Reads the items `ids` not read yet; those without an image are left
-    /// out of the answer.
+    /// Reads the details of those of `ids` that were not read before. The
+    /// answer holds every id, with `None` for an item that has no image or
+    /// could not be read.
     fn read_roots(
         &self,
         ids: Vec<RootId>,
@@ -359,7 +377,9 @@ impl AiTagger {
         })
     }
 
-    /// Keeps what was read, at most a few windows of it.
+    /// Stores the items that were read. When more than four times [`WINDOW`]
+    /// items are stored, the items whose thumbnails are not shown are removed
+    /// first.
     fn keep_roots(&mut self, roots: &[(RootId, Option<ReviewRoot>)]) {
         if self.roots.len() > 4 * WINDOW {
             let rail = self.rail.clone();
@@ -372,7 +392,8 @@ impl AiTagger {
         }
     }
 
-    /// The thumbnails around the item reviewed, read if they are not yet.
+    /// Sets the row of thumbnails to the items around the reviewed item, and
+    /// reads those of them that were not read before.
     fn load_rail(&mut self, cx: &mut Context<Self>) {
         let Some(active) = self.active else {
             self.rail.clear();
@@ -405,8 +426,9 @@ impl AiTagger {
         self.roots.get(&id)
     }
 
-    /// Shows the item `delta` places on (`view.prevImage`, `view.nextImage`
-    /// and the arrows beside the counter).
+    /// Shows the item that is `delta` places after the reviewed one. The
+    /// shortcuts `view.prevImage` and `view.nextImage` and the arrow buttons
+    /// beside the counter call it.
     pub(super) fn move_active(&mut self, delta: isize, cx: &mut Context<Self>) {
         if self.items.is_empty() {
             return;
@@ -436,10 +458,11 @@ impl AiTagger {
             .unwrap_or(0)
     }
 
-    // ── Models and running ──────────────────────────────────────
+    // The functions below choose the models and run them.
 
-    /// A model chosen or left out, remembered for the next review
-    /// (`aiTaggerManualModelSlugs`).
+    /// Adds a model to the chosen models or removes it, and saves the choice
+    /// in the setting `ai_tagger_manual_model_slugs`, so that the next review
+    /// starts with it.
     pub(super) fn toggle_model(&mut self, slug: &str, cx: &mut Context<Self>) {
         review::toggle_model(&mut self.run_models, slug);
         let chosen = self.run_models.clone();
@@ -452,8 +475,8 @@ impl AiTagger {
         cx.notify();
     }
 
-    /// `runPredict`: each chosen model in turn over every item, one image
-    /// at a time, so the list fills in as answers arrive.
+    /// Runs each chosen model in turn over every item, one image at a time, so
+    /// that the list fills while the answers arrive.
     pub(super) fn run(&mut self, cx: &mut Context<Self>) {
         if self.running || self.run_models.is_empty() || self.items.is_empty() {
             return;
@@ -583,7 +606,8 @@ impl AiTagger {
             }
             let error = stopped
                 .or_else(|| review::failure(unprepared, failed, total, first_failure.as_deref()));
-            // The backend the models ran on, for the footer.
+            // The status is read again, because it now names the backend that
+            // the models ran on, which the footer shows.
             let Ok(status) = this.update(cx, |this, cx| super::status(this.session.read(cx)))
             else {
                 return;
@@ -598,7 +622,7 @@ impl AiTagger {
                     models
                         .and_then(|models| review::backend(&models, &this.run_models))
                         .or(this.backend.take())
-                        // i18n: production's default, not translated
+                        // i18n: a backend's name, English in every language
                         .unwrap_or_else(|| "CPU".into()),
                 );
                 this.running = false;
@@ -609,7 +633,8 @@ impl AiTagger {
         .detach();
     }
 
-    // ── Choosing and applying ───────────────────────────────────
+    // The functions below set the cutoff, check tags and apply the checked
+    // tags.
 
     pub(super) fn cutoff(&self) -> f32 {
         self.confidence as f32 / 100.
@@ -634,8 +659,8 @@ impl AiTagger {
         cx.notify();
     }
 
-    /// Writes the checked tags of every item as one undoable edit, then
-    /// closes unless pinned (`applyChecked`).
+    /// Writes the checked tags of every item as one edit that can be undone.
+    /// Afterwards it closes the panel, unless the panel is pinned.
     pub(super) fn apply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let assignments = review::assignments(
             &self.predictions,
@@ -675,8 +700,9 @@ impl AiTagger {
         );
     }
 
-    /// Answers the arrows, Enter and Tab from anywhere in the panel: the
-    /// side arrows step through the items while the filter is empty.
+    /// Handles a navigation key that was pressed anywhere in the panel. The
+    /// left and right arrows show the previous and the next item while the
+    /// filter field is empty. Returns whether the key was handled.
     pub(super) fn navigate(&mut self, key: Nav, cx: &mut Context<Self>) -> bool {
         match key {
             Nav::Left | Nav::Right if self.query.is_empty() => {

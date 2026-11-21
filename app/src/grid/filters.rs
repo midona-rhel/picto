@@ -1,27 +1,29 @@
-//! The grid's filters as the filter bar edits them (`ItemFilters` in
-//! `itemFilters.ts`), how they become the library's filter expression
-//! (`compileGridQuery`), how many are set (`countActiveGridFilters`), and the
-//! labels the bar's controls show (`GridFilterMenu.tsx`).
+//! The grid's filters as the filter bar edits them, how they become the
+//! library's filter expression, how many of them are set, and the labels
+//! that the filter bar's controls show.
 use crate::i18n::{en, t};
 use picto_library::predicate::{FilterClause, FilterExpr, SetMatchMode};
 use picto_library::{FolderId, LabColor, Rating, TagId};
 
-/// `DEFAULT_COLOR_DELTA_E`, `MINIMUM_COLOR_DELTA_E`, `MAXIMUM_COLOR_DELTA_E`.
+/// The tolerance of the colour filter, as a delta E: the tolerance used
+/// when the user has not changed it, and the smallest and the largest
+/// tolerance the user can set.
 pub const DEFAULT_DELTA_E: f32 = 16.;
 pub const MINIMUM_DELTA_E: f32 = 4.;
 pub const MAXIMUM_DELTA_E: f32 = 32.;
 
 const DAY_MS: i64 = 86_400_000;
 
-/// A tag chosen in the filter, with the name its label shows.
+/// A tag chosen in the filter, with the name that its label shows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TagChoice {
     pub tag_id: u32,
     pub name: String,
 }
 
-/// The filter bar's state. Dates are UTC milliseconds: an "after" is the
-/// first moment included, a "before" the first moment left out.
+/// The values of the filters that the filter bar edits. Dates are UTC
+/// milliseconds. An "after" date is the first moment that is included, and
+/// a "before" date is the first moment that is left out.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Filters {
     pub include_tags: Vec<TagChoice>,
@@ -30,12 +32,13 @@ pub struct Filters {
     pub include_folders: Vec<u32>,
     pub exclude_folders: Vec<u32>,
     pub folder_mode: SetMatchMode,
-    /// Stars, 0 for unrated, in the order they were chosen.
+    /// The ratings chosen, as numbers of stars, where 0 stands for unrated,
+    /// in the order in which they were chosen.
     pub ratings: Vec<u8>,
-    /// MIME types, or families written `image/*`.
+    /// The MIME types chosen. A whole family is written as `image/*`.
     pub include_mimes: Vec<String>,
     pub exclude_mimes: Vec<String>,
-    /// `#RRGGBB`.
+    /// The colour, written as `#RRGGBB`.
     pub color: Option<String>,
     pub color_delta_e: f32,
     pub imported_after: Option<i64>,
@@ -53,7 +56,8 @@ pub struct Filters {
 }
 
 impl Default for Filters {
-    /// `createEmptyItemFilters`.
+    /// Returns filters with nothing set. Both match modes are `Any`, and the
+    /// colour tolerance is `DEFAULT_DELTA_E`.
     fn default() -> Self {
         Self {
             include_tags: Vec::new(),
@@ -83,8 +87,8 @@ impl Default for Filters {
     }
 }
 
-/// The filter fields the bar can show (`PinnedFilter`), in the order of
-/// the pin menu and of the bar.
+/// The filter fields that the filter bar can show, in the order in which
+/// the pin menu and the bar list them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Field {
     Color,
@@ -112,7 +116,8 @@ impl Field {
         Field::Duration,
         Field::Size,
     ];
-    /// `DEFAULT_PINNED_FILTERS`.
+    /// The fields that are pinned to the bar when no list of pinned fields
+    /// is stored.
     pub const DEFAULT_PINNED: [Field; 5] = [
         Field::Color,
         Field::Tags,
@@ -136,7 +141,8 @@ impl Field {
         }
     }
 
-    /// `PinnedFilter`: the name production stores the field under.
+    /// Returns the name under which the field is stored in the list of
+    /// pinned fields. Picto 0.6.19 and earlier stored the same names.
     pub fn id(self) -> &'static str {
         match self {
             Field::Color => "color",
@@ -158,8 +164,9 @@ impl Field {
 }
 
 impl Filters {
-    /// `countActiveGridFilters`: each tag, folder, rating and type counts
-    /// once; a colour, each date range and each numeric range count once.
+    /// Returns the number of filters that are set. Each tag, folder, rating
+    /// and type counts as one. A colour, each date range, each numeric range
+    /// and the resolution count as one each.
     pub fn count(&self) -> usize {
         self.ratings.len()
             + self.include_mimes.len()
@@ -183,8 +190,8 @@ impl Filters {
             || self.max_height.is_some()
     }
 
-    /// Whether a field holds a value, which keeps its control on the bar
-    /// when it is not pinned.
+    /// Whether a field holds a value. A field that holds a value keeps its
+    /// control on the bar even when it is not pinned.
     pub fn is_set(&self, field: Field) -> bool {
         match field {
             Field::Color => self.color.is_some(),
@@ -200,7 +207,7 @@ impl Filters {
         }
     }
 
-    /// Clears one field, as its control's clear button does.
+    /// Clears one field. The clear button of the field's control calls this.
     pub fn clear(&mut self, field: Field) {
         match field {
             Field::Color => self.color = None,
@@ -242,8 +249,9 @@ impl Filters {
         }
     }
 
-    /// The bar's filters as `compileGridQuery` builds them, every clause
-    /// required. The search text is not part of it; the grid adds it.
+    /// Returns the library's filter expression for these filters. An item
+    /// must match every clause of it. The search text is not part of the
+    /// expression; the grid adds it.
     pub fn to_expr(&self) -> FilterExpr {
         let mut values = Vec::new();
         let clause = FilterExpr::Clause;
@@ -337,8 +345,9 @@ impl Filters {
         FilterExpr::All(values)
     }
 
-    /// The facet query's filters: these without the type filter, so the
-    /// type menu offers every type the rest of the filters leave.
+    /// Returns these filters without the type filter. The query that finds
+    /// the types among the items uses them, so that the type menu offers
+    /// every type that the other filters leave.
     pub fn without_types(&self) -> Filters {
         Filters {
             include_mimes: Vec::new(),
@@ -347,7 +356,8 @@ impl Filters {
         }
     }
 
-    /// Chooses or unchooses a rating, keeping the order chosen.
+    /// Adds a rating to the chosen ratings, or removes it if it is chosen.
+    /// The ratings keep the order in which they were chosen.
     pub fn toggle_rating(&mut self, stars: u8) {
         match self.ratings.iter().position(|value| *value == stars) {
             Some(at) => {
@@ -357,8 +367,9 @@ impl Filters {
         }
     }
 
-    /// A left click on a type: includes it, or no longer, and never
-    /// excludes it.
+    /// Applies a left click on a type in the type menu: includes the type,
+    /// or stops including it if it is included. Afterwards the type is not
+    /// excluded.
     pub fn toggle_mime(&mut self, mime: &str) {
         match self.include_mimes.iter().position(|value| value == mime) {
             Some(at) => {
@@ -369,8 +380,9 @@ impl Filters {
         self.exclude_mimes.retain(|value| value != mime);
     }
 
-    /// A right click on a type: excludes it, or no longer, and never
-    /// includes it.
+    /// Applies a right click on a type in the type menu: excludes the type,
+    /// or stops excluding it if it is excluded. Afterwards the type is not
+    /// included.
     pub fn toggle_excluded_mime(&mut self, mime: &str) {
         self.include_mimes.retain(|value| value != mime);
         match self.exclude_mimes.iter().position(|value| value == mime) {
@@ -381,10 +393,12 @@ impl Filters {
         }
     }
 
-    // ── Labels ──────────────────────────────────────────────────
+    // The functions below write the filters for a saved filter, read them
+    // back, and make the labels of the filter bar's controls.
 
-    /// The filters as a saved filter keeps them (`serializeFilters`), under
-    /// `ItemFilters`' names; dates are milliseconds rather than ISO text.
+    /// Returns the filters as JSON, which is how a saved filter stores them.
+    /// The field names are the ones that Picto 0.6.19 and earlier used.
+    /// Dates are written as UTC milliseconds.
     pub fn to_json(&self) -> serde_json::Value {
         let tags = |tags: &[TagChoice]| {
             tags.iter()
@@ -418,7 +432,9 @@ impl Filters {
         })
     }
 
-    /// `deserializeFilters`: what is missing or unreadable is left empty.
+    /// Reads filters from the JSON of a saved filter. A field that is
+    /// missing or cannot be read is left not set. This includes a date that
+    /// is written as text instead of as milliseconds.
     pub fn from_json(value: &serde_json::Value) -> Filters {
         use serde_json::Value;
         let get = |key: &str| value.get(key);
@@ -493,8 +509,9 @@ impl Filters {
         }
     }
 
-    /// The control's label for a field: its name while empty, else what it
-    /// holds.
+    /// Returns the label of a field's control: the field's name while the
+    /// field is not set, and otherwise a text that shows the values it
+    /// holds. `folder_name` returns the name of the folder with an id.
     pub fn label(&self, field: Field, folder_name: impl Fn(u32) -> Option<String>) -> String {
         match field {
             Field::Color => self
@@ -624,7 +641,8 @@ fn rating(stars: u8) -> Rating {
     }
 }
 
-/// Splits `image/*` families from exact types.
+/// Returns the MIME clause for a list of types. Entries written as
+/// `image/*` become families, and the other entries become exact types.
 fn mime_clause(entries: &[String]) -> FilterClause {
     let mut values = Vec::new();
     let mut families = Vec::new();
@@ -637,7 +655,8 @@ fn mime_clause(entries: &[String]) -> FilterClause {
     FilterClause::Mime { values, families }
 }
 
-/// `hexToLab` in `labColor.ts`: sRGB to CIE Lab under D65.
+/// Converts an sRGB colour written as `#RRGGBB` or `#RGB` to CIE Lab with
+/// the D65 white point.
 pub fn hex_to_lab(value: &str) -> LabColor {
     let hex = value.trim_start_matches('#');
     let normalized = if hex.len() == 3 {
@@ -675,8 +694,10 @@ pub fn hex_to_lab(value: &str) -> LabColor {
     }
 }
 
-/// The type menu's rows: families first, then exact types, each sorted by
-/// label; the types offered are the facet's and any already chosen.
+/// Returns the rows of the type menu: first the families and then the exact
+/// types, each list sorted by label. The types offered are those in
+/// `facets`, which the library found among the items, and those already
+/// chosen in `filters`.
 pub fn type_rows(facets: &[String], filters: &Filters) -> (Vec<String>, Vec<String>) {
     let chosen = || filters.include_mimes.iter().chain(&filters.exclude_mimes);
     let mut types = facets
@@ -698,7 +719,8 @@ pub fn type_rows(facets: &[String], filters: &Filters) -> (Vec<String>, Vec<Stri
     (families, types)
 }
 
-/// `scaledValue`: a whole number of units, with up to two decimals.
+/// Returns `value` divided by `divisor` as text: a whole number when it
+/// divides evenly, and otherwise a number with up to two decimals.
 pub fn scaled_value(value: u64, divisor: u64) -> String {
     let whole = value / divisor;
     let remainder = value % divisor;
@@ -710,7 +732,9 @@ pub fn scaled_value(value: u64, divisor: u64) -> String {
     format!("{whole}.{digits}")
 }
 
-/// `rangeLabel`: `min–max unit`, the name while neither end is set.
+/// Returns the label of a numeric range, `min–max unit`, with `0` for a
+/// minimum that is not set and `∞` for a maximum that is not set. Returns
+/// `label`, the field's name, while neither end is set.
 pub fn range_label(
     label: &str,
     minimum: Option<u64>,
@@ -726,21 +750,23 @@ pub fn range_label(
     format!("{min}–{max} {unit}")
 }
 
-/// A UTC day as `YYYY-MM-DD`.
+/// Returns the UTC day of a time in milliseconds, written as `YYYY-MM-DD`.
 pub fn day_key(ms: i64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
         .map(|date| date.format(crate::text::date_format::DAY).to_string())
         .unwrap_or_default()
 }
 
-/// Midnight UTC of a `YYYY-MM-DD` day.
+/// Returns the time in milliseconds of midnight UTC at the start of a day
+/// written as `YYYY-MM-DD`.
 pub fn day_start(key: &str) -> Option<i64> {
     let date = chrono::NaiveDate::parse_from_str(key, crate::text::date_format::DAY).ok()?;
     Some(date.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis())
 }
 
-/// `dateRangeLabel`: the first and last days included, `…` for an open
-/// end; the name while neither is set.
+/// Returns the label of a date range: the first and the last day included,
+/// with `…` for an end that is not set. Returns `label`, the field's name,
+/// while neither end is set.
 pub fn date_range_label(label: &str, after: Option<i64>, before: Option<i64>) -> String {
     if after.is_none() && before.is_none() {
         return label.to_owned();
@@ -750,15 +776,17 @@ pub fn date_range_label(label: &str, after: Option<i64>, before: Option<i64>) ->
     format!("{first}–{last}")
 }
 
-/// The presets of a date menu (`setDays`): a span of days ending at the
-/// start of the day `end_offset` days after today, in UTC.
+/// Returns the range of a date preset: `days` days that end at the start of
+/// the UTC day that is `end_offset` days after today. `now_ms` is the
+/// current time.
 pub fn date_preset(now_ms: i64, days: i64, end_offset: i64) -> (i64, i64) {
     let today = now_ms.div_euclid(DAY_MS) * DAY_MS;
     let end = today + end_offset * DAY_MS;
     (end - days * DAY_MS, end)
 }
 
-/// The date menu's presets: label, days, and the end's offset from today.
+/// The presets of a date menu, each with its label, its number of days, and
+/// the number of days from today to its end.
 // i18n: translated where drawn (menu rows)
 pub const DATE_PRESETS: [(&str, i64, i64); 6] = [
     ("Today", 1, 1),
@@ -769,8 +797,9 @@ pub const DATE_PRESETS: [(&str, i64, i64); 6] = [
     ("Last 365 Days", 365, 1),
 ];
 
-/// A date range editor's fields as days: the first included day and the
-/// last included day.
+/// Returns the two days that a date range editor shows for a range: the
+/// first day included and the last day included. A day is an empty text
+/// when its end of the range is not set.
 pub fn range_days(after: Option<i64>, before: Option<i64>) -> (String, String) {
     (
         after.map(day_key).unwrap_or_default(),
@@ -780,8 +809,8 @@ pub fn range_days(after: Option<i64>, before: Option<i64>) -> (String, String) {
     )
 }
 
-/// The range a date editor commits for its two days: from the start of the
-/// first to the start of the day after the last.
+/// Returns the range that a date range editor emits for its two days: from
+/// the start of the first day to the start of the day after the last day.
 pub fn range_from_days(first: &str, last: &str) -> (Option<i64>, Option<i64>) {
     (
         day_start(first),
@@ -789,9 +818,10 @@ pub fn range_from_days(first: &str, last: &str) -> (Option<i64>, Option<i64>) {
     )
 }
 
-/// `integerOrNull`: a non-negative number typed in a range field, in the
-/// unit chosen, as a whole number of the base unit; empty or invalid is no
-/// bound.
+/// Reads a number typed in a range field. `text` is in the unit chosen, and
+/// `multiplier` is the number of base units in that unit. Returns the
+/// amount as a whole number of base units, or `None` when the text is
+/// empty, is not a number or is negative.
 pub fn amount(text: &str, multiplier: u64) -> Option<u64> {
     let text = text.trim();
     if text.is_empty() {
@@ -801,7 +831,7 @@ pub fn amount(text: &str, multiplier: u64) -> Option<u64> {
     (value.is_finite() && value >= 0.).then(|| (value * multiplier as f64).round() as u64)
 }
 
-/// `SetMatchMode` as `ItemFilters` writes it.
+/// Returns the name under which a match mode is written in a saved filter.
 fn mode_name(mode: SetMatchMode) -> &'static str {
     match mode {
         // i18n: a value, not shown
@@ -862,7 +892,7 @@ mod tests {
                 mode: SetMatchMode::All
             })
         );
-        // Excluded tags and folders leave out any of them.
+        // An item that has any of the excluded tags is left out.
         assert_eq!(
             values[1],
             not(FilterClause::Tags {
@@ -932,7 +962,7 @@ mod tests {
                 maximum: None
             })
         );
-        // The tolerance is held to its range.
+        // The tolerance is limited to at most `MAXIMUM_DELTA_E`.
         let FilterExpr::Clause(FilterClause::Color { color, delta_e }) = &values[11] else {
             panic!("a colour clause last");
         };
@@ -957,8 +987,8 @@ mod tests {
             max_height: Some(5),
             ..Filters::default()
         };
-        // Two tags, a folder, a rating, a colour, a date range, a duration
-        // range and a resolution range.
+        // The count is 8: two tags, a folder, a rating, a colour, a date range,
+        // a duration range and a resolution range.
         assert_eq!(filters.count(), 8);
         filters.clear(Field::Tags);
         filters.clear(Field::Resolution);
@@ -974,7 +1004,8 @@ mod tests {
         filters.toggle_excluded_mime("image/gif");
         assert_eq!(filters.include_mimes, ["image/png"]);
         assert_eq!(filters.exclude_mimes, ["image/gif"]);
-        // Excluding an included type moves it; including an excluded one too.
+        // Excluding an included type stops including it, and including an
+        // excluded type stops excluding it.
         filters.toggle_excluded_mime("image/png");
         assert!(filters.include_mimes.is_empty());
         filters.toggle_mime("image/gif");
@@ -1053,7 +1084,7 @@ mod tests {
 
     #[test]
     fn dates_are_whole_utc_days() {
-        // 2025-11-13 15:00 UTC.
+        // The time is 2025-11-13 15:00 UTC.
         let now = 1_763_046_000_000;
         assert_eq!(day_key(now), "2025-11-13");
         let (start, end) = date_preset(now, 1, 1);
@@ -1066,10 +1097,10 @@ mod tests {
             (day_key(start), day_key(end)),
             ("2025-11-12".into(), "2025-11-13".into())
         );
-        // Seven days: today and the six before it.
+        // The last seven days are today and the six days before it.
         let (start, end) = date_preset(now, 7, 1);
         assert_eq!(day_key(start), "2025-11-07");
-        // The label shows the last day included.
+        // The label shows the last day that is included.
         assert_eq!(
             date_range_label("Date Imported", Some(start), Some(end)),
             "2025-11-07–2025-11-13"
@@ -1121,7 +1152,7 @@ mod tests {
     }
 
     #[test]
-    fn fields_are_stored_by_production_names() {
+    fn fields_are_stored_by_the_earlier_versions_names() {
         for field in Field::ALL {
             assert_eq!(Field::from_id(field.id()), Some(field));
         }

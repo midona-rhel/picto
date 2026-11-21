@@ -1,7 +1,5 @@
 //! The handlers for the keyboard shortcuts that act on the main window's
-//! content: the grid, the viewer, the sidebar and the toolbar. They do what
-//! the handlers in production's `GridScreen`, `AppShell`, `Sidebar` and
-//! application menu do.
+//! content: the grid, the viewer, the sidebar and the toolbar.
 //!
 //! The shortcut registry names each shortcut with an id such as
 //! `view.quicklook` or `file.delete`. `crate::keymap` binds the keys of each
@@ -11,8 +9,8 @@
 //! `shell/menu_commands.rs` and `shell/mod.rs`.
 //!
 //! A handler that has nothing to act on calls `cx.propagate()`. GPUI then
-//! offers the key press to the next handler, which is what happens to a key
-//! that no handler takes in production.
+//! offers the key press to the next handler, as it does with a key press
+//! that no handler takes.
 use super::Shell;
 use crate::app_menu::ScopeKind;
 use crate::grid::menu::Action as Row;
@@ -60,10 +58,10 @@ impl Shell {
     }
 
     /// Handles the shortcuts that open a built-in destination: All, Inbox,
-    /// Untagged or Trash, as production's `menu:navigate` message does. It
-    /// opens the sidebar destination whose scope is `wanted`. A destination
-    /// that is a screen, or that shows the All scope in a shuffled order,
-    /// is not a match. If no destination matches, it passes the key on.
+    /// Untagged or Trash. It opens the sidebar destination whose scope is
+    /// `wanted`. A destination that is a screen, or that shows the All
+    /// scope in a shuffled order, is not a match. If no destination
+    /// matches, it passes the key on.
     fn show_scope(&mut self, wanted: ItemScope, cx: &mut Context<Self>) {
         let index = self
             .session
@@ -122,7 +120,7 @@ impl Shell {
 
     /// Handles the `file.delete` shortcut in the grid. With no item selected
     /// it passes the key on. Otherwise what the key does depends on the
-    /// destination shown, as production's `gridRemovalAction` decides it:
+    /// destination shown:
     ///
     /// - In a folder, this handler passes the key on, because there the
     ///   key belongs to the `file.removeFromFolder` shortcut.
@@ -143,10 +141,10 @@ impl Shell {
     /// clipboard, not their paths.
     ///
     /// While the viewer or Quick Look is open, it copies the file that is
-    /// shown. Over the grid it copies the files of the selected items
-    /// (production's `copyTarget`), but only when each item was selected
-    /// individually. A selection made with Select All or as a range is not
-    /// copied and the key is passed on, as in production.
+    /// shown. Over the grid it copies the files of the selected items, but
+    /// only when each item was selected individually. A selection made
+    /// with Select All or as a range is not copied and the key is passed
+    /// on.
     fn copy_files_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.viewing(cx) {
             self.act_on_selection(Row::CopyFile, window, cx);
@@ -189,11 +187,10 @@ impl Shell {
     /// to Folder rows. With no item selected it passes the key on.
     ///
     /// Over the grid it opens the Add Tags dialog or the Folders dialog for
-    /// the selected items, as production's `GridScreen` does. While the
-    /// viewer is open it opens the inspector's tag picker or folder picker
-    /// instead, as production's `useViewerEntityContextMenu` does. That
-    /// picker is placed beside the inspector, 80 px below the inspector's
-    /// top, or in the centre of the window when the inspector is hidden.
+    /// the selected items. While the viewer is open it opens the
+    /// inspector's tag picker or folder picker instead. That picker is
+    /// placed beside the inspector, 80 px below the inspector's top, or in
+    /// the centre of the window when the inspector is hidden.
     pub(super) fn pick(&mut self, picker: Picker, window: &mut Window, cx: &mut Context<Self>) {
         let (empty, viewer) = {
             let session = self.session.read(cx);
@@ -232,9 +229,8 @@ impl Shell {
     /// viewer or Quick Look is open, it rejects the item being viewed if
     /// that item is in the Inbox, the same as a click on the Reject button
     /// of the Inbox review controls. Otherwise it rejects the selected
-    /// items (production's `rejectTarget`). A rejected item is moved to the
-    /// Trash or deleted permanently, whichever "Rejected items" in
-    /// Settings › Inbox & Deleting is set to.
+    /// items. A rejected item is moved to the Trash or deleted permanently,
+    /// whichever "Rejected items" in Settings › Inbox & Deleting is set to.
     pub(super) fn reject(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.viewing(cx) {
             self.review_key(crate::viewer::review::Decision::Reject, window, cx);

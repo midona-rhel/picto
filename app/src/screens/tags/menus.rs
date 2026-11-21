@@ -1,5 +1,5 @@
-//! The Tags screen's context menus: a tag's and a group's, and what their
-//! rows do.
+//! The context menus of the Tags screen: the menu of a tag and the menu of a
+//! group, and what their rows do.
 use super::dialogs::Dialog;
 use super::{Browse, MenuTarget, TagsScreen, dialogs};
 use crate::tags::Common;
@@ -28,7 +28,9 @@ impl TagsScreen {
         self.menu_target = Some(target);
     }
 
-    /// `openTagContextMenu`, with `buildCommonTagContextEntries`.
+    /// Opens the context menu of `tag` at `position`. It has the rows that
+    /// every tag context menu has (`crate::tags::common_menu`), and after
+    /// them the rows Edit Tag, Merge Into… and Delete Tag.
     pub(super) fn open_tag_menu(
         &mut self,
         tag: TagRecord,
@@ -52,7 +54,9 @@ impl TagsScreen {
         self.open_menu(entries, MenuTarget::Tag(tag), position, window, cx);
     }
 
-    /// `openGroupContextMenu`
+    /// Opens the context menu of `group` at `position`. Its rows are Show
+    /// Tags in Group, Rename Group…, the colour picker for the group's
+    /// colour, and Delete Group.
     pub(super) fn open_group_menu(
         &mut self,
         group: TagNamespaceRecord,
@@ -90,7 +94,9 @@ impl TagsScreen {
                 match crate::tags::run_common(action, value, &tag, cx) {
                     Some(Common::Filter) => self.show_items(tag.tag_id, cx),
                     Some(Common::Move(next)) => self.rename_tag(&tag, next, false, cx),
-                    // The preferences shown follow the star at once.
+                    // The row starred or unstarred the tag, or copied its
+                    // name. The screen takes over the changed list of
+                    // starred tags at once.
                     Some(Common::Done) => self.follow_settings(cx),
                     None => match action {
                         "edit" => self.open_editor(tag, None, window, cx),

@@ -307,9 +307,8 @@ impl MediaSurface {
     }
 
     /// Decodes a JPEG XL original on a background thread with the
-    /// `jxl-oxide` crate and shows it in place of its thumbnail. The
-    /// Electron app does the same in `JpegXlViewer.tsx` with the jsquash
-    /// decoder.
+    /// `jxl-oxide` crate and shows it in place of its thumbnail. If the
+    /// file cannot be decoded, the error is shown instead.
     pub(super) fn decode_jpeg_xl(&mut self, key: String, path: PathBuf, cx: &mut Context<Self>) {
         let decode = cx.background_executor().spawn(async move {
             document::pages::decode_jpeg_xl(&path).map(document::render_image)

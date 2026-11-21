@@ -1,65 +1,64 @@
-//! The drawing order of everything that floats over the window, as
-//! production's layer tokens give it (`tokens.css` `--layer-*`: overlay <
-//! modal < menu < tooltip < drag overlay < notification), with the few
-//! literal `z-index` values production sets outside that scale put in
-//! between. Every `deferred(...).with_priority(...)` takes its priority from
-//! here.
+//! The drawing order of everything that is drawn over the rest of the window.
+//! From bottom to top the main layers are: overlay, dialog, menu, tooltip, the
+//! picture that follows a drag, and notification. A few more layers lie
+//! between them. Every `deferred(...).with_priority(...)` takes its priority
+//! from here.
 //!
-//! GPUI draws all deferred elements of a frame as one list sorted by
-//! priority, however they are nested (`Window::paint_deferred_draws`): a
-//! deferred element inside another is not drawn above it unless its
-//! priority is at least as high (on a tie, the inner one comes later and
-//! wins). So a floating thing that can open inside another (a tooltip in a
-//! dialog, a select's list in a popover) needs the higher layer here, as a
-//! portal in production needs the higher `z-index`. The values only order;
-//! the gaps leave room for dialogs stacked one over another.
+//! GPUI draws all deferred elements of a frame as one list sorted by priority,
+//! however they are nested (`Window::paint_deferred_draws`). A deferred
+//! element inside another is not drawn above it unless its priority is at
+//! least as high (on a tie, the inner one is drawn later and is on top). So
+//! something that can open inside another deferred element (a tooltip in a
+//! dialog, a select's list in a popover) needs the higher number here. Only
+//! the order of the values matters. The gaps between them leave room for
+//! dialogs that are opened one over another.
 
-/// `--layer-overlay`: a field's expanded overlay and the inspector's list
-/// of sources, over the page they belong to.
+/// A field's expanded overlay and the inspector's list of sources, which are
+/// drawn over the page they belong to.
 pub const OVERLAY: usize = 10;
 
-/// The tag and folder pickers' panel (`OverlayShell`) opened from the
-/// inspector or the filter bar. Production draws it on `--layer-modal` with
-/// the dialogs; it stays under them here, so that a dialog opened while a
-/// pinned picker is up covers it, as the later portal does.
+/// The panel of the tag picker and of the folder picker, opened from the
+/// inspector or the filter bar. It is below the dialogs, so that a dialog that
+/// is opened while a pinned picker is open covers the picker.
 pub const PANEL: usize = 15;
 
-/// `--layer-modal`: a dialog and its backdrop. A dialog opened over another
-/// one takes `DIALOG + 1` (and so on).
+/// A dialog and its backdrop. A dialog that is opened over another one takes
+/// `DIALOG + 1`, the next one `DIALOG + 2`, and so on.
 pub const DIALOG: usize = 20;
 
-/// The Inbox review pill (`InboxReviewControls`, `--layer-modal`), over
-/// the dialog a reject asks, which it waits on.
+/// The Inbox review pill. It is above the dialogs, so that it is drawn over
+/// the dialog that asks the user to confirm a rejection while the pill waits
+/// for the answer.
 pub const REVIEW: usize = 24;
 
-/// `calc(--layer-modal + 1)`: what a dialog opens over itself: a tag
-/// field's suggestions, and a picker opened from a dialog's button (with
-/// the dialogs it opens at `OVER_DIALOG + 1`).
+/// What a dialog opens over itself: the suggestions of a tag field, and a
+/// picker that is opened from a button in the dialog. A dialog that such a
+/// picker opens takes `OVER_DIALOG + 1`.
 pub const OVER_DIALOG: usize = 25;
 
-/// `--layer-menu`: context menus, a select's list, the library switcher.
+/// Context menus, the list of a select, and the library switcher.
 pub const MENU: usize = 30;
 
-/// A day picker's calendar and the smart-folder dialog's icon and colour
-/// popovers (`z-index` 9998 to 10021 in production): over the dialogs and
-/// menus they open from.
+/// The calendar of a day picker, and the icon and colour popovers of the
+/// smart-folder dialog. They are above the dialogs and menus that they are
+/// opened from.
 pub const POPOVER: usize = 35;
 
-/// `--layer-tooltip`: tooltips, over whatever their control is on.
+/// Tooltips, which are above whatever their control is drawn on.
 pub const TOOLTIP: usize = 40;
 
-/// `--layer-drag-overlay`: the picture that follows a drag.
+/// The picture that follows the pointer during a drag.
 pub const DRAG: usize = 50;
 
-/// The grid's hover preview (`HoverPreviewPortal`, `z-index` 200002).
+/// The grid's hover preview.
 pub const PREVIEW: usize = 55;
 
-/// `--layer-notification`: notifications, over every other layer here
-/// but the window's rim.
+/// Notifications, which are above every other layer here except the window's
+/// rim.
 pub const NOTIFICATION: usize = 60;
 
-/// The window's rim (`window_chrome::rim`, `.shellMac::after`), over
-/// everything the window draws.
+/// The window's rim (`window_chrome::rim`), which is above everything else
+/// that the window draws.
 pub const CHROME: usize = 100;
 
 #[cfg(test)]
@@ -67,7 +66,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn layers_follow_production_order() {
+    fn layers_follow_the_earlier_versions_order() {
         let order = [
             OVERLAY,
             PANEL,
@@ -83,9 +82,10 @@ mod tests {
             CHROME,
         ];
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
-        // A few dialogs can stack before they reach the review pill.
+        // Three dialogs can be opened one over another before their priority
+        // reaches that of the review pill.
         assert!(DIALOG + 3 < REVIEW);
-        // A tooltip shows over every surface its control can sit on.
+        // A tooltip is drawn above every surface that its control can be on.
         for surface in [OVERLAY, PANEL, DIALOG, OVER_DIALOG, MENU, POPOVER] {
             assert!(TOOLTIP > surface);
         }

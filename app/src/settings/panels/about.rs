@@ -1,4 +1,6 @@
-//! The About section: the version, the update check and the links.
+//! The About section of the Settings window. It shows the app's logo, name
+//! and version, a card with the button that checks for updates and with the
+//! licence, and three links.
 use super::version;
 use crate::i18n::t;
 use crate::settings::pieces::{block, card, row, separator, title, value};
@@ -8,8 +10,10 @@ use crate::theme::Text as _;
 use crate::ui::{self, action_button::Look};
 use gpui::*;
 
-/// `.searchResult`-like bordered link of the About panel (`.aboutLinks
-/// button`): it lightens and its border strengthens under the pointer.
+/// Draws one of the three links of the About section: a box 54px high with
+/// a border, which holds an icon, `text` and the glyph of an external link.
+/// While the pointer is on the box, its background is the hover colour and
+/// its border is stronger. A click calls `open`.
 fn about_link(
     id: &'static str,
     icon: &'static str,
@@ -58,8 +62,7 @@ impl SettingsWindow {
         };
         let year = chrono::Datelike::year(&chrono::Local::now());
         vec![
-            // `.aboutPanel`'s 620px limit loses to `.panelContent`'s
-            // `max-width: 100%`, which comes later in the stylesheet.
+            // The section is as wide as the panel that shows it.
             div()
                 .w_full()
                 .flex()
@@ -89,14 +92,16 @@ impl SettingsWindow {
                                     div()
                                         .mt(px(3.))
                                         .mb(px(7.))
-                                        // Mantine's body `line-height: 1.55`.
+                                        // The line has the line height of
+                                        // body text.
                                         .line_height(px(theme::TEXT_MD * 1.55))
                                         .text_color(theme.text_secondary())
                                         .child(t("Personal media library and organization.")),
                                 )
                                 .child(
-                                    // An inline span on the paragraph's 20.15px
-                                    // strut, which its own 18.6px line lowers.
+                                    // The line of the version is 20.6px
+                                    // high, and its text starts 4px below
+                                    // the top of the line.
                                     div()
                                         .h(px(20.6))
                                         .pt(px(4.))
@@ -130,7 +135,8 @@ impl SettingsWindow {
                         .child(about_link(
                             "github",
                             "settings-brand-github",
-                            // `{t("Project on GitHub ")}` before the link glyph
+                            // The key in `en.json` ends with a space, which
+                            // is removed here.
                             t("Project on GitHub ").trim_end(),
                             |cx| {
                                 crate::desktop::open_link(
@@ -143,17 +149,21 @@ impl SettingsWindow {
                         .child(about_link(
                             "release-notes",
                             "refresh",
-                            // `{t("Release notes ")}` before the link glyph
+                            // The key in `en.json` ends with a space, which
+                            // is removed here.
                             t("Release notes ").trim_end(),
-                            // `openUpdateRelease`: the release found, else
-                            // the releases page.
+                            // This link opens the page of the release that
+                            // the last check for updates found. When the
+                            // check found none, it opens the page that
+                            // lists the releases.
                             crate::updates::open_release,
                             cx,
                         ))
                         .child(about_link(
                             "license",
                             "settings-scale",
-                            // `{t("Open-source license ")}` before the link glyph
+                            // The key in `en.json` ends with a space, which
+                            // is removed here.
                             t("Open-source license ").trim_end(),
                             |cx| {
                                 crate::desktop::open_link(

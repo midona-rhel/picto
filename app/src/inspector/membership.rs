@@ -1,11 +1,13 @@
-//! The rules the inspector's tag and folder edits share: a click adds or
-//! removes one tag or folder for every item the inspector describes, and
-//! some edits change what the grid's destination holds.
+//! Holds the rules that the inspector's tag edits and folder edits share. A
+//! click adds one tag or folder to every item the inspector describes, or
+//! removes it from every one. Some edits change which items the grid's
+//! destination holds.
 use picto_library::query::ItemScope;
 use std::collections::BTreeSet;
 
-/// Takes `item` out of `set`, or puts it in; true when it went in, which is
-/// whether the items gain it or lose it.
+/// Removes `item` from `set` if it is there, and inserts it if it is not.
+/// Returns true if it was inserted, which means the items gain the tag or
+/// folder, and false if it was removed, which means they lose it.
 pub fn toggle<T: Ord>(set: &mut BTreeSet<T>, item: T) -> bool {
     if set.remove(&item) {
         false
@@ -15,9 +17,11 @@ pub fn toggle<T: Ord>(set: &mut BTreeSet<T>, item: T) -> bool {
     }
 }
 
-/// `toggleTag` and `toggleFolder` in the Add Tags and Folders dialogs: a
-/// click on something the items have marks it to come off, or no longer;
-/// on anything else, to go on, or no longer. The marks keep their order.
+/// Records a click on a tag in the Add Tags dialog or on a folder in the
+/// Folders dialog. `members` holds what the items already have. A click on a
+/// member puts it in `remove`, and a second click takes it out of `remove`
+/// again. A click on anything else does the same with `add`. Both lists keep
+/// the order of the clicks.
 pub fn mark<T: Ord>(members: &BTreeSet<T>, add: &mut Vec<T>, remove: &mut Vec<T>, item: T) {
     let flip = |list: &mut Vec<T>, item: T| match list.iter().position(|known| *known == item) {
         Some(at) => {
@@ -33,19 +37,20 @@ pub fn mark<T: Ord>(members: &BTreeSet<T>, add: &mut Vec<T>, remove: &mut Vec<T>
     }
 }
 
-/// What an edit changes.
+/// Says what kind of data an edit changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Touches {
     Tags,
     Folders,
-    /// Notes or source addresses, which only the text search reads.
+    /// Notes or source addresses. Only the text search reads them.
     Text,
 }
 
-/// Whether an edit can change which items the grid's destination holds, so
-/// it is fetched again: Untagged by tags, a folder and Uncategorized by
-/// memberships, a smart folder and a filtered grid by either, and a search
-/// by anything it reads.
+/// Returns true if an edit can change which items the grid's destination
+/// holds, in which case the grid's items are fetched again. During a search
+/// every edit can. Otherwise an edit of tags can for Untagged and for a
+/// smart folder, an edit of folders can for Uncategorized, a folder and a
+/// smart folder, and both can for a filtered grid.
 pub fn changes_results(
     scope: &ItemScope,
     filtered: bool,
@@ -82,14 +87,15 @@ mod tests {
 
     #[test]
     fn a_click_adds_what_is_missing_and_removes_what_is_there() {
-        // A multi-selection's shared folders: 3 is on every item.
+        // `shared` holds the folders that every item of a selection of several
+        // items is in. Folder 3 is one of them, so a click removes it.
         let mut shared = BTreeSet::from([3, 7]);
         assert!(!toggle(&mut shared, 3));
         assert_eq!(shared, BTreeSet::from([7]));
-        // 5 was on some items or none: a click puts it on every one.
+        // Folder 5 is not in the set, so a click adds it to every item.
         assert!(toggle(&mut shared, 5));
         assert_eq!(shared, BTreeSet::from([5, 7]));
-        // Clicking again takes it off every one.
+        // A second click on folder 5 removes it from every item.
         assert!(!toggle(&mut shared, 5));
         let mut names = BTreeSet::new();
         assert!(toggle(&mut names, "species:cat".to_owned()));
@@ -106,7 +112,7 @@ mod tests {
             (&add[..], &remove[..]),
             (&["dog", "bird"][..], &["cat"][..])
         );
-        // A second click takes the mark back.
+        // A second click on "dog" and on "cat" takes each out of its list again.
         mark(&members, &mut add, &mut remove, "dog");
         mark(&members, &mut add, &mut remove, "cat");
         assert_eq!((&add[..], remove.is_empty()), (&["bird"][..], true));

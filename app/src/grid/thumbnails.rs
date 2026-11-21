@@ -2,15 +2,14 @@
 //! keeps the thumbnails from one frame to the next.
 //!
 //! On every frame the grid gives [`Thumbnails::plan`] the list of thumbnails
-//! its tiles need, with the most important first, in the order
-//! `thumbnailPlan.ts` gives them in production ([`load_order`]). The cache
-//! starts reading and decoding thumbnails from the front of that list, at most
-//! six at a time (`CONCURRENCY`). It cancels a load that has not finished when
-//! the grid no longer needs that thumbnail, which happens when the user
-//! scrolls past it. A decoded thumbnail that the grid no longer needs stays in
-//! the cache, so that scrolling back to it needs no new load. When the decoded
-//! thumbnails take more memory than the budget allows ([`budget`]), the ones
-//! used longest ago are removed.
+//! its tiles need, with the most important first. [`load_order`] gives that
+//! order. The cache starts reading and decoding thumbnails from the front of
+//! the list, at most six at a time (`CONCURRENCY`). It cancels a load that has
+//! not finished when the grid no longer needs that thumbnail, which happens
+//! when the user scrolls past it. A decoded thumbnail that the grid no longer
+//! needs stays in the cache, so that scrolling back to it needs no new load.
+//! When the decoded thumbnails take more memory than the budget allows
+//! ([`budget`]), the ones used longest ago are removed.
 use crate::i18n::{en, t};
 use gpui::*;
 use std::{
@@ -160,7 +159,6 @@ pub fn budget(window: (f32, f32)) -> usize {
 }
 
 /// The number of thumbnails that are read and decoded at the same time.
-/// `thumbnailDecodeWorker.ts` in production also runs six.
 const CONCURRENCY: usize = 6;
 /// The number of missing thumbnails that are made at the same time. It is only
 /// two because making one is slow: a Flash movie is played for five seconds
@@ -193,11 +191,11 @@ pub fn load_order(tiles: &[(f32, f32)], view_top: f32, view_height: f32) -> Vec<
 }
 
 /// Returns the `.png` path to try when the `.jpg` thumbnail at `jpeg` cannot
-/// be read: the same path with the extension `.png`. This follows
-/// `find_thumbnail_path`, the rule of production's media protocol. A thumbnail
-/// is normally the `.jpg` the library writes. When there is no `.jpg`, it is
-/// the `.png` that is written for audio waveforms, for captured frames, and by
-/// older libraries.
+/// be read: the same path with the extension `.png`. The library looks for a
+/// thumbnail in the same order (`find_thumbnail_path` in the `core` crate). A
+/// thumbnail is normally the `.jpg` the library writes. When there is no
+/// `.jpg`, it is the `.png` that is written for audio waveforms, for captured
+/// frames, and by older libraries.
 pub fn png_for(jpeg: &Path) -> PathBuf {
     jpeg.with_extension("png")
 }
@@ -221,28 +219,26 @@ pub fn present(jpeg: &Path) -> Option<PathBuf> {
 }
 
 /// Returns the path a thumbnail file is renamed to while the thumbnail is
-/// being made again, as `regenerateThumbnail` does in production. It is the
-/// thumbnail's own path with `.<process>.<stamp>.regenerate-backup` added to
-/// the end, so the backup is in the same folder. The caller passes this
-/// process's id as `process` and the current time in milliseconds as `stamp`,
-/// which keeps the name different from the name of any other backup.
+/// being made again. It is the thumbnail's own path with
+/// `.<process>.<stamp>.regenerate-backup` added to the end, so the backup is
+/// in the same folder. The caller passes this process's id as `process` and
+/// the current time in milliseconds as `stamp`, which keeps the name
+/// different from the name of any other backup.
 pub fn backup_for(thumbnail: &Path, process: u32, stamp: u128) -> PathBuf {
     let mut name = thumbnail.as_os_str().to_owned();
     name.push(format!(".{process}.{stamp}.regenerate-backup"));
     PathBuf::from(name)
 }
 
-/// Makes the thumbnail of one file, as `scheduleThumbnailAfterMiss` does in
-/// production. Returns whether a thumbnail file exists afterwards.
+/// Makes the thumbnail of one file. Returns whether a thumbnail file exists
+/// afterwards.
 ///
 /// First it sends the application the command `media.render_thumbnail_now` for
-/// the file and waits for the answer. Production's media protocol does the
-/// same when a thumbnail is missing. If there is still no thumbnail file, and
+/// the file and waits for the answer. If there is still no thumbnail file, and
 /// the file is of a type the application cannot make a thumbnail of but this
 /// app draws itself (Flash, PDF and the other paged documents, see
 /// `rendered::draws`), it draws the thumbnail to the `.png` beside `jpeg`. The
-/// Electron main process does this in `renderExternalThumbnail`. The drawing
-/// runs on a background thread.
+/// drawing runs on a background thread.
 ///
 /// The thumbnail is drawn only when the session's library is the one open in
 /// the window (`libraries::writable`), and only to a path inside that
@@ -304,10 +300,9 @@ pub fn set_aside(root: &Path, previous: &Path, backup: &Path) -> Result<(), Stri
     std::fs::rename(previous, backup).map_err(|error| error.to_string())
 }
 
-/// Makes the thumbnails of `files` again, one file after another. This is the
-/// command `media.regenerate_thumbnails` as the Electron main process carries
-/// it out in `regenerateThumbnail`. Each entry of `files` is a file's content
-/// hash and its type.
+/// Makes the thumbnails of `files` again, one file after another. The menu
+/// command "Regenerate Thumbnail" calls it. Each entry of `files` is a file's
+/// content hash and its type.
 ///
 /// For each file, the existing thumbnail is renamed to a backup name. A new
 /// thumbnail is then made by the application, or drawn by this app for Flash
@@ -317,11 +312,10 @@ pub fn set_aside(root: &Path, previous: &Path, backup: &Path) -> Result<(), Stri
 /// thumbnail reads it again.
 ///
 /// The first file that fails stops the files after it. Its error is shown in
-/// an error notification titled "Menu action failed", as production's menu
-/// shows it. Files are written only when the session's library is the one open
-/// in the window, and only inside that library's folder. When that library is
-/// not the one open, nothing is done and the notification says
-/// "No library is open."
+/// an error notification titled "Menu action failed". Files are written only
+/// when the session's library is the one open in the window, and only inside
+/// that library's folder. When that library is not the one open, nothing is
+/// done and the notification says "No library is open."
 pub fn regenerate(
     session: &gpui::Entity<crate::session::Session>,
     files: Vec<(String, String)>,
@@ -468,12 +462,11 @@ impl Thumbnails {
         }
     }
 
-    /// Makes the thumbnails that could not be read, for the tiles on screen
-    /// (`scheduleThumbnailAfterMiss` in production). `missing` lists the files
-    /// of those tiles, and the caller passes the current list on every frame.
-    /// At most two thumbnails are made at the same time (`RENDERS`), each file
-    /// is tried only once, and a file whose tile leaves the screen before its
-    /// turn is not made.
+    /// Makes the thumbnails that could not be read, for the tiles on screen.
+    /// `missing` lists the files of those tiles, and the caller passes the
+    /// current list on every frame. At most two thumbnails are made at the
+    /// same time (`RENDERS`), each file is tried only once, and a file whose
+    /// tile leaves the screen before its turn is not made.
     ///
     /// When a thumbnail has been made, its failed entry is removed from the
     /// cache, so that the next frame reads the new file. When the attempt for
@@ -563,10 +556,8 @@ impl Thumbnails {
     /// Removes a thumbnail from the cache, both its `.jpg` entry and its
     /// `.png` entry, and releases their decoded pictures from the sprite
     /// atlas. It is called when the thumbnail file has been written again or
-    /// written for the first time (`picto:thumbnail-changed` in production),
-    /// so that the next frame that needs the thumbnail reads the new file. The
-    /// Electron grid's thumbnail pipeline invalidates its copy in the same
-    /// case.
+    /// written for the first time, so that the next frame that needs the
+    /// thumbnail reads the new file.
     pub fn forget(&mut self, jpeg: &Path, cx: &mut App) {
         for resource in [
             Resource::Path(jpeg.into()),

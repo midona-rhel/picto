@@ -1,7 +1,11 @@
-//! `BatchRenameModal`: new names for several items at once, either from a
-//! format (`*` keeps the old name, `%N`… numbers them) or by replacing a
-//! piece of every name, with a preview of each old and new name. Rename
-//! writes them all as one edit (`items.rename_many`), announced with Undo.
+//! The batch rename dialog. It gives several items new names at once, in
+//! one of two modes. In the Format mode every new name is built from a
+//! format, in which `*` stands for the item's old name and `%N`, `%NN`,
+//! `%NNN` or `%NNNN` for a sequence number. In the Replace mode a piece of
+//! text is replaced in every name. The dialog lists each old name beside its
+//! new name. The Rename button writes all the names as one edit, which the
+//! history records as `items.rename_many`, and a notification with an Undo
+//! button reports the edit.
 use crate::i18n::t;
 use crate::session::{Report, Reread, Session};
 use crate::theme::Text as _;
@@ -13,13 +17,16 @@ use crate::{theme, ui};
 use gpui::*;
 use picto_library::RootId;
 
-/// `.previewRow`: 6px above and below a 20px line, and its 1px rule.
+/// The height of a row of the preview list, in pixels: a 20px line of text
+/// with 6px of padding above and below it, and a 1px line under the row.
 const ROW: f32 = 33.;
-/// `.preview`'s `max-height`.
+/// The greatest height of the preview list with its border, in pixels. A
+/// list with more rows than fit scrolls.
 const PREVIEW_MAX: f32 = 240.;
-/// The format a dialog opens with.
+/// The format that the dialog shows each time it opens.
 const DEFAULT_FORMAT: &str = "New Name - %N";
-/// The longest name the library takes, in UTF-16 units as production counts.
+/// The greatest length of a name, counted in UTF-16 code units. Picto 0.6.19
+/// and earlier counted the length in these units.
 const LONGEST: usize = 255;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,15 +35,17 @@ pub enum Mode {
     Replace,
 }
 
-/// An item to rename, as the grid has it.
+/// An item to rename: its id and its current name.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
     pub id: RootId,
     pub name: String,
 }
 
-/// `%N`, `%NN`, `%NNN` and `%NNNN` (`/%N{1,4}/g`): the sequence number,
-/// padded with zeros to as many digits as the token has `N`s.
+/// Returns `text` with each number token replaced by `sequence`. The tokens
+/// are `%N`, `%NN`, `%NNN` and `%NNNN`. The number is padded with zeros to
+/// as many digits as the token has `N`s. A fifth `N` is not part of the
+/// token and stays in the text.
 fn numbered(text: &str, sequence: u64) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -51,10 +60,15 @@ fn numbered(text: &str, sequence: u64) -> String {
     out
 }
 
-/// `buildBatchRenamePreview`: each item's new name, trimmed. A format puts
-/// the old name where `*` is, then numbers from `start_at`; a replacement
-/// swaps every occurrence of `pattern`, and leaves names alone while there
-/// is nothing to find.
+/// Returns the new name of each of `items`, with the white space removed
+/// from both of its ends.
+///
+/// In the Format mode `pattern` is the format. Each `*` in it is replaced by
+/// the item's old name, and then each number token is replaced by the item's
+/// sequence number, which is `start_at` for the first item and one more for
+/// each item after it. In the Replace mode every occurrence of `pattern` in
+/// the old name is replaced by `replacement`, and the name is left as it is
+/// while `pattern` is empty.
 pub fn preview(
     items: &[Item],
     mode: Mode,
@@ -79,7 +93,9 @@ pub fn preview(
         .collect()
 }
 
-/// Whether Rename is off: nothing to find, or a name empty or too long.
+/// Returns whether the Rename button is disabled. It is disabled in the
+/// Replace mode while the text to find is empty, and in both modes while a
+/// new name is empty or longer than `LONGEST`.
 pub fn invalid(mode: Mode, pattern: &str, names: &[String]) -> bool {
     (mode == Mode::Replace && pattern.is_empty())
         || names
@@ -87,7 +103,10 @@ pub fn invalid(mode: Mode, pattern: &str, names: &[String]) -> bool {
             .any(|name| name.is_empty() || name.encode_utf16().count() > LONGEST)
 }
 
-/// "Start at" as production reads it: `Math.max(0, parseInt(value) || 0)`.
+/// Returns the number that the text of the "Start at" field stands for. The
+/// number is read from the digits at the start of `text`, after any white
+/// space and a `+` sign, and what follows the digits is ignored. The result
+/// is 0 when there are no digits there and when the text starts with `-`.
 pub fn start_at(text: &str) -> u64 {
     let text = text.trim_start();
     let (negative, digits) = match text.strip_prefix('-') {
@@ -104,7 +123,8 @@ pub fn start_at(text: &str) -> u64 {
 struct Open {
     items: Vec<Item>,
     mode: Mode,
-    /// The edit is on its way; Rename waits for it.
+    /// True while the edit that writes the names is running. The Rename
+    /// button is disabled during that time.
     busy: bool,
 }
 
@@ -112,7 +132,7 @@ struct Open {
 pub struct BatchRename {
     session: Entity<Session>,
     dialog: ui::modal::Host<Open>,
-    /// Where the keyboard goes back to.
+    /// The focus handle that gets the keyboard focus when the dialog closes.
     back: FocusHandle,
     pattern: Entity<TextInput>,
     replacement: Entity<TextInput>,
@@ -134,7 +154,9 @@ impl BatchRename {
         for input in [&pattern, &replacement] {
             subscriptions.push(cx.observe(input, |_, _, cx| cx.notify()));
         }
-        // The field always shows the number it is read as.
+        // The "Start at" field always shows the number that `start_at`
+        // reads from it. When the user types anything else, the field's text
+        // is replaced by that number.
         subscriptions.push(cx.observe(&start, |_, input, cx| {
             let text = input.read(cx).value();
             let read = start_at(&text).to_string();
@@ -161,7 +183,9 @@ impl BatchRename {
         }
     }
 
-    /// Opens on `items`, from the defaults every time.
+    /// Opens the dialog on `items` in the Format mode, with the default
+    /// format, an empty replacement and "Start at" set to 1. It does nothing
+    /// for fewer than two items.
     pub fn open(&mut self, items: Vec<Item>, cx: &mut Context<Self>) {
         if items.len() < 2 {
             return;
@@ -190,9 +214,11 @@ impl BatchRename {
         if let Some(open) = self.dialog.content_mut() {
             open.mode = mode;
         }
-        // Find shares the format's text, as one field in production.
+        // The Find field of the Replace mode and the format field of the
+        // Format mode are the same text input, so the text stays when the
+        // mode changes. Only the placeholder differs.
         self.pattern.update(cx, |input, _| {
-            // i18n: a placeholder; the field shows it in the language
+            // i18n: a placeholder, which the field translates when it draws it
             input.set_placeholder(if mode == Mode::Replace { "Find" } else { "" })
         });
         cx.notify();
@@ -208,8 +234,9 @@ impl BatchRename {
         )
     }
 
-    /// Rename: every new name in one edit; the dialog closes once it is
-    /// written and stays, with a notification, when it fails.
+    /// Carries out the Rename button: writes every new name in one edit.
+    /// The dialog closes when the edit has been written. When the edit
+    /// fails, the session shows a notification and the dialog stays open.
     fn rename(&mut self, cx: &mut Context<Self>) {
         let Some(open) = self.dialog.content() else {
             return;
@@ -365,8 +392,9 @@ impl Render for BatchRename {
     }
 }
 
-/// `.preview`: each old name, in the tertiary colour, beside its new one,
-/// at most 240px tall before it scrolls.
+/// Builds the preview list. Each row shows an item's old name in the
+/// tertiary text colour and, beside it, the new name. The list with its
+/// border is at most 240px tall, and it scrolls when it has more rows.
 fn preview_list(
     scroll: &UniformListScrollHandle,
     items: &[Item],
@@ -376,8 +404,8 @@ fn preview_list(
     let old: Vec<String> = items.iter().map(|item| item.name.clone()).collect();
     let count = old.len();
     let height = (count as f32 * ROW - 1.).min(PREVIEW_MAX - 2.);
-    // The dialog's body sets the secondary colour, which the new names
-    // keep; the old ones are a step fainter.
+    // The new names are drawn in the secondary text colour, which is the
+    // colour of the dialog's body, and the old names in the tertiary colour.
     let (tertiary, secondary, rule) = (
         theme.text_tertiary(),
         theme.text_secondary(),

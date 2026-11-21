@@ -1,9 +1,9 @@
-//! Notifications, as production's `notifications.ts` keeps them and its
-//! `NotificationHost.tsx` draws them: one at a time, a new one taking the
-//! place of the one shown, each leaving after four seconds or when its close
-//! button is pressed. Call [`error`], [`warning`], [`info`] or [`success`]
-//! from anywhere a `cx` is, an async result's included; the main window's
-//! [`Host`] draws whatever is current above everything else.
+//! Keeps and draws the app's notifications. One notification is shown at a
+//! time, and a new one replaces the one that is shown. A notification is
+//! removed after four seconds, or when its close button is pressed. Call
+//! [`error`], [`warning`], [`info`] or [`success`] from any place that has a
+//! `cx`, including the handling of an async task's result. The main window's
+//! [`Host`] draws the current notification above everything else.
 use crate::i18n::t;
 use crate::theme::{self, Text as _};
 use crate::{motion, ui};
@@ -13,7 +13,8 @@ use gpui::*;
 use std::rc::Rc;
 use std::time::Duration;
 
-/// `NotificationTone`.
+/// The kind of a notification. It sets the notification's icon and the icon's
+/// colour, and whether assistive technology announces it at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
     Error,
@@ -25,7 +26,7 @@ pub enum Tone {
 impl Tone {
     pub const ALL: [Tone; 4] = [Tone::Error, Tone::Warning, Tone::Info, Tone::Success];
 
-    /// The name the settings store it under.
+    /// Returns the name under which the settings store the tone.
     pub fn name(self) -> &'static str {
         match self {
             Tone::Error => "error",
@@ -39,7 +40,7 @@ impl Tone {
         Self::ALL.into_iter().find(|tone| tone.name() == name)
     }
 
-    /// `toneIcons`.
+    /// Returns the name of the tone's icon.
     fn icon(self) -> &'static str {
         match self {
             Tone::Error => "notify-error",
@@ -59,15 +60,16 @@ impl Tone {
     }
 }
 
-/// A notification's button (`action`): pressing it runs it and dismisses
-/// the notification.
+/// A notification's button. Pressing the button calls `run` and dismisses the
+/// notification.
 #[derive(Clone)]
 pub struct Action {
     pub label: SharedString,
     pub run: Rc<dyn Fn(&mut Window, &mut App)>,
 }
 
-/// `AppNotification`.
+/// One notification: its tone, its title, its message and, when it has one,
+/// its button.
 #[derive(Clone)]
 pub struct Notification {
     pub id: u64,
@@ -78,8 +80,8 @@ pub struct Notification {
 }
 
 impl Notification {
-    /// What the line reads: the title, then the message after a dash when
-    /// there is one.
+    /// Returns the text of the notification's line: the title and, when there
+    /// is a message, a dash and the message.
     pub fn text(&self) -> SharedString {
         line(&self.title, &self.message)
     }
@@ -93,7 +95,7 @@ fn line(title: &str, message: &str) -> SharedString {
     }
 }
 
-/// `ShowNotificationOptions`: what to show, for [`show`].
+/// What a notification shows and for how long. It is passed to [`show`].
 pub struct Options {
     title: SharedString,
     message: SharedString,
@@ -111,13 +113,15 @@ impl Options {
         }
     }
 
-    /// How long it stays (`duration`), instead of the usual time.
+    /// Sets how long the notification stays, in place of the usual four
+    /// seconds.
     pub fn duration(mut self, duration: Duration) -> Self {
         self.duration = duration;
         self
     }
 
-    /// A button after the text.
+    /// Adds a button with the label `label` after the text. Pressing it calls
+    /// `run`.
     pub fn action(
         mut self,
         label: impl Into<SharedString>,
@@ -131,8 +135,8 @@ impl Options {
     }
 }
 
-/// `NotificationPopupPreferences`: whether pop-ups show at all, and which
-/// tones do (Settings › Notifications).
+/// The user's choices in Settings › Notifications: whether notifications are
+/// shown at all, and which tones are shown.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Popups {
     pub enabled: bool,
@@ -154,12 +158,13 @@ impl Popups {
     }
 }
 
-/// The current notification and the pop-up preferences.
+/// Holds the current notification and the user's choices in Settings ›
+/// Notifications.
 pub struct Notifications {
     current: Option<Notification>,
     next_id: u64,
     popups: Popups,
-    /// Dismisses the current notification once its time is up.
+    /// The task that dismisses the current notification when its time is up.
     expiry: Option<Task<()>>,
 }
 
@@ -175,7 +180,8 @@ impl Notifications {
             message: options.message,
             action: options.action,
         });
-        // Its time starts now, whether or not the pop-up is shown.
+        // The notification's time starts now, whether or not the settings let
+        // it be shown.
         self.expiry = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(duration).await;
             let _ = this.update(cx, |this, cx| this.dismiss(id, cx));
@@ -195,7 +201,7 @@ impl Notifications {
         }
     }
 
-    /// The current notification, if the preferences let it show.
+    /// Returns the current notification if the settings let it be shown.
     fn visible(&self) -> Option<&Notification> {
         self.current
             .as_ref()
@@ -207,7 +213,8 @@ struct Global(Entity<Notifications>);
 
 impl gpui::Global for Global {}
 
-/// The app's notifications, made the first time they are needed.
+/// Returns the app's notifications. They are created the first time this is
+/// called.
 fn notifications(cx: &mut App) -> Entity<Notifications> {
     if let Some(global) = cx.try_global::<Global>() {
         return global.0.clone();
@@ -222,17 +229,20 @@ fn notifications(cx: &mut App) -> Entity<Notifications> {
     entity
 }
 
-/// `showNotification`: shows a notification in place of the current one.
+/// Shows a notification in place of the current one.
 pub fn show(tone: Tone, options: Options, cx: &mut App) {
     notifications(cx).update(cx, |this, cx| this.show(tone, options, cx));
 }
 
-/// The text production's `showErrorNotification` shows instead of the
-/// library's own when a folder would be nested too deep, and as a warning.
+/// The words in the library's error message when a folder would be nested too
+/// deep. [`error`] shows an error with these words as a warning that has its
+/// own title and text.
 pub const FOLDER_DEPTH_LIMIT: &str = "folders may be nested at most 8 levels deep";
 
-/// What an error shows as: a folder nested too deep is a warning with
-/// production's own words.
+/// Returns the tone and the contents that an error is shown with. An error
+/// about a folder that would be nested too deep is shown as a warning that
+/// explains the limit. Every other error is shown with its own title and
+/// message.
 fn error_options(title: SharedString, message: SharedString) -> (Tone, Options) {
     if message.contains(FOLDER_DEPTH_LIMIT) {
         return (
@@ -248,35 +258,37 @@ fn error_options(title: SharedString, message: SharedString) -> (Tone, Options) 
     (Tone::Error, Options::new(title, message))
 }
 
-/// `showErrorNotification`.
+/// Shows an error with the title `title` and the message `message`.
 pub fn error(title: impl Into<SharedString>, message: impl Into<SharedString>, cx: &mut App) {
     let (tone, options) = error_options(title.into(), message.into());
     show(tone, options, cx);
 }
 
-/// `showWarningNotification`.
+/// Shows a warning with the title `title` and the message `message`.
 pub fn warning(title: impl Into<SharedString>, message: impl Into<SharedString>, cx: &mut App) {
     show(Tone::Warning, Options::new(title, message), cx);
 }
 
-/// `showInfoNotification`.
+/// Shows a piece of information with the title `title` and the message
+/// `message`.
 pub fn info(title: impl Into<SharedString>, message: impl Into<SharedString>, cx: &mut App) {
     show(Tone::Info, Options::new(title, message), cx);
 }
 
-/// `showSuccessNotification`.
+/// Shows a notification of success with the title `title` and the message
+/// `message`.
 pub fn success(title: impl Into<SharedString>, message: impl Into<SharedString>, cx: &mut App) {
     show(Tone::Success, Options::new(title, message), cx);
 }
 
-/// `dismissNotification`: closes the notification `id` if it is the one
-/// shown.
+/// Closes the notification `id` if it is the one that is shown.
 pub fn dismiss(id: u64, cx: &mut App) {
     notifications(cx).update(cx, |this, cx| this.dismiss(id, cx));
 }
 
-/// `configureNotificationPopups`: which tones pop up. Names that are not a
-/// tone are ignored.
+/// Sets the user's choices from Settings › Notifications: whether
+/// notifications are shown, and which tones are shown. A name in `tones` that
+/// is not a tone's name is ignored.
 pub fn configure<'a>(enabled: bool, tones: impl IntoIterator<Item = &'a str>, cx: &mut App) {
     let popups = Popups {
         enabled,
@@ -290,10 +302,11 @@ pub fn configure<'a>(enabled: bool, tones: impl IntoIterator<Item = &'a str>, cx
     });
 }
 
-/// Where a notification is drawn when it has got `shown` of the way in (1
-/// in place, 0 gone, eased): how far above its place it is, and its
-/// opacity. The curve overshoots, so a leaving notification rises a little
-/// past 48 points before it is removed.
+/// Returns where a notification is drawn when it is `shown` of the way in (1
+/// is in place, 0 is gone; the caller has applied the easing curve): how many
+/// points above its place it is, and its opacity. The curve overshoots, so a
+/// notification that is being removed rises a little past 48 points before it
+/// is removed.
 pub fn frame(shown: f32) -> (f32, f32) {
     (
         motion::NOTIFICATION_RISE * (1. - shown),
@@ -301,22 +314,21 @@ pub fn frame(shown: f32) -> (f32, f32) {
     )
 }
 
-/// `NotificationHost`: draws the current notification centred under the
-/// titlebar, above everything else in the window (`--layer-notification`).
-/// It appears at once, and rises and fades out over 400 ms when it is
-/// dismissed or its time is up.
+/// Draws the current notification centred under the titlebar, above everything
+/// else in the window (`layer::NOTIFICATION`). A notification appears at once.
+/// When it is dismissed or its time is up, it rises and fades out over 400 ms.
 pub struct Host {
     notifications: Entity<Notifications>,
-    /// The notification on screen, which stays while it leaves.
+    /// The notification that is drawn. It stays here while it fades out.
     displayed: Option<Notification>,
     shown: motion::Fade,
-    /// Removes the notification once it has left.
+    /// The task that removes the notification when its fade-out has ended.
     removal: Option<Task<()>>,
     _observe: Subscription,
 }
 
-/// The layer notifications are drawn on, above every other deferred layer
-/// (menus, pickers, tooltips, dialogs).
+/// The drawing order of notifications, which is above every other deferred
+/// layer (menus, pickers, tooltips, dialogs).
 const LAYER: usize = super::layer::NOTIFICATION;
 
 impl Host {
@@ -334,14 +346,16 @@ impl Host {
         host
     }
 
-    /// Follows the current notification, as the host's effects do.
+    /// Makes `displayed` match the current notification. A new notification is
+    /// shown at once. When there is no current notification any more, the
+    /// fade-out of the displayed one starts.
     fn follow(&mut self, cx: &mut Context<Self>) {
         let visible = self.notifications.read(cx).visible().cloned();
         match visible {
             Some(notification) => {
-                // A notification is drawn in place at once, a first one and
-                // one that arrives while the last is leaving alike, as
-                // production's host shows them.
+                // A notification is drawn in place at once. This holds for the
+                // first one, and for one that arrives while the last one is
+                // fading out.
                 self.removal = None;
                 self.shown = motion::Fade::at(true);
                 self.displayed = Some(notification);
@@ -369,10 +383,11 @@ impl Host {
 
 impl Render for Host {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // `NotificationHost`'s layer is a live region, there whether or not
-        // a notification shows, so assistive technology announces each one
-        // as it arrives: at once for an error or warning, politely
-        // otherwise.
+        // The region is a live region, and it is there whether or not a
+        // notification is shown, so assistive technology announces each
+        // notification as it arrives. An error or a warning is announced at
+        // once. The other tones are announced when the assistive technology
+        // has finished what it is saying.
         let region = |urgent: bool| {
             div()
                 .id("notification-region")
@@ -392,7 +407,8 @@ impl Render for Host {
         }
         let theme = theme::theme(cx);
         let (rise, opacity) = frame(self.shown.value_with(motion::NOTIFICATION_EASE));
-        // `max-width: min(640px, calc(100vw - 24px))`.
+        // The notification is at most 640px wide, and at most the window's
+        // width less 24px.
         let width = window.viewport_size().width;
         let max_width = px(640.).min(width - px(24.));
         let id = notification.id;
@@ -432,7 +448,8 @@ impl Render for Host {
                     .hover(|style| style.bg(theme.hover_overlay()).opacity(1.))
                     .on_click(move |_, _, cx| dismiss(id, cx))
             })
-            // `.close::before`: the 16px rule 12px before the button.
+            // A line 1px wide and 16px high, 12px to the left of the close
+            // button.
             .child(
                 div()
                     .absolute()
@@ -451,12 +468,13 @@ impl Render for Host {
             .min_w(px(100.))
             .max_w(max_width)
             .h(px(theme::NOTIFICATION_HEIGHT))
-            // `padding: 0 8px` inside the 1px glass edge, which CSS lays
-            // out as a border and GPUI draws over the contents.
+            // The contents have 8px of padding on each side inside the 1px
+            // glass edge. GPUI draws the edge over the contents, so the
+            // padding here is 9px.
             .px(px(9.))
             .overflow_hidden()
             .opacity(opacity)
-            // `pointer-events: none` while it leaves.
+            // A notification that is fading out takes no clicks.
             .when(!leaving, |panel| panel.occlude())
             .child(
                 ui::icon(
@@ -519,7 +537,8 @@ mod tests {
         cx.update(|cx| info("Second", "New failure", cx));
         cx.run_until_parked();
         assert_eq!(current(&mut cx).as_deref(), Some("Second — New failure"));
-        // The first one's time no longer counts.
+        // The time that had passed for the first notification does not count
+        // for the second.
         cx.executor().advance_clock(Duration::from_millis(3999));
         cx.run_until_parked();
         assert_eq!(current(&mut cx).as_deref(), Some("Second — New failure"));
@@ -538,7 +557,7 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_nested_too_deep_is_a_warning_in_production_words() {
+    fn a_folder_nested_too_deep_is_a_warning_in_the_earlier_versions_words() {
         let (tone, options) = error_options(
             "Could not move folder".into(),
             "folders may be nested at most 8 levels deep".into(),
@@ -575,7 +594,9 @@ mod tests {
     fn a_leaving_notification_rises_48_points_and_fades() {
         assert_eq!(frame(1.), (0., 1.));
         assert_eq!(frame(0.), (48., 0.));
-        // The curve's overshoot carries it past its end, not below zero.
+        // The curve's overshoot makes `shown` negative near the end. The
+        // notification then rises past 48 points, and its opacity stays at
+        // zero.
         let (rise, opacity) = frame(-0.03);
         assert!(rise > 48.);
         assert_eq!(opacity, 0.);

@@ -1,26 +1,31 @@
-//! The menu's pure arithmetic: the rows as drawn, search and the arrow keys'
-//! steps, row heights, and where panels and submenus are placed.
+//! Holds the menu's calculations that need no window: which rows are drawn,
+//! which rows a search finds, which row the arrow keys reach next, the
+//! heights of rows, and where panels and submenus are placed.
 use super::{
     EMPTY_HEIGHT, Entry, GAP, MARGIN, PADDING, SEPARATOR, SUBMENU_GAP, SUBMENU_LIFT, SWATCH_ROW,
 };
 use crate::theme;
 use gpui::*;
 
-/// Where an entry is: a row of the menu, or a row of one of its submenus.
+/// Says where an entry is. For an entry of the menu itself, `top` is its
+/// index in the menu's entries and `child` is `None`. For an entry of a
+/// submenu, `top` is the index of the submenu and `child` is the entry's
+/// index in the submenu's children.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Path {
     pub(super) top: usize,
     pub(super) child: Option<usize>,
 }
 
-/// One line of a panel as drawn.
+/// One row that a panel draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Row {
     Entry(Path),
     Separator,
-    /// A swatch row: not a stop for the arrow keys, nor found by a search.
+    /// A row of colour swatches. The arrow keys do not stop on it and a
+    /// search does not find it.
     Swatches(Path),
-    /// A view entry and its height in pixels.
+    /// An entry that holds a view, and the view's height in pixels.
     View(Path, u32),
 }
 
@@ -58,10 +63,11 @@ impl Rect {
             h: (self.bottom().min(other.bottom()) - y).max(0.),
         }
     }
-    /// A submenu's window: its `panel` with `room` around it for the drawn
-    /// shadow, except on the side of the menu it opened from. A window takes
-    /// the pointer over all of itself, so room laid over the parent would
-    /// leave the parent's edge, where its arrows are, dead to the pointer.
+    /// Returns the rectangle of a submenu's pop-up window: its `panel` with
+    /// `room` around it for the panel's shadow, cut off at the edge of the
+    /// `parent` panel that the submenu opened from. A window receives the
+    /// pointer over its whole area, so a window that lay over the parent's
+    /// edge would keep the pointer from the chevrons at that edge.
     pub(super) fn submenu_window(panel: Rect, parent: Rect, room: f32, area: Rect) -> Rect {
         let mut window = panel.outset(room).intersect(area);
         if panel.x >= parent.right() {
@@ -86,10 +92,11 @@ impl Rect {
     }
 }
 
-/// `placeMenu`: the panel's corner at the pointer, moved inward so the
-/// panel keeps the margin from every edge of the area: a panel placed over
-/// the pointer and kept inside, by the one rule that places floating panels.
-/// The height is the panel's full height, before any maximum.
+/// Returns where the top-left corner of a panel of `w` × `h` goes for a menu
+/// opened at `pointer`. The corner is at the pointer, moved inward as far as
+/// the panel needs to keep `MARGIN` from every edge of `area`.
+/// `popover::place` does the placing, as it does for every floating panel.
+/// `h` is the full height of the panel's rows, before the height is limited.
 pub(super) fn place(pointer: (f32, f32), w: f32, h: f32, area: Rect) -> (f32, f32) {
     use crate::ui::popover::{self, Placement, Side};
     let anchor = Bounds::new(
@@ -105,9 +112,11 @@ pub(super) fn place(pointer: (f32, f32), w: f32, h: f32, area: Rect) -> (f32, f3
     (at.x + area.x, at.y + area.y)
 }
 
-/// `placeMenu`'s `transform-origin` for the panel `place` puts there: the
-/// corner at the pointer, or the right or bottom edge where the panel was
-/// moved inward from that edge. Fractions of the width and height.
+/// Returns the point that a panel placed by `place` is scaled about, as
+/// fractions of its width and height. It is the top-left corner, (0, 0),
+/// when the panel fits at the pointer. The x is 1 when the panel was moved
+/// inward from the right edge, and the y is 1 when it was moved inward from
+/// the bottom edge.
 pub(super) fn origin(pointer: (f32, f32), w: f32, h: f32, area: Rect) -> (f32, f32) {
     (
         if pointer.0 + w > area.right() - MARGIN {
@@ -123,9 +132,11 @@ pub(super) fn origin(pointer: (f32, f32), w: f32, h: f32, area: Rect) -> (f32, f
     )
 }
 
-/// `SubmenuPanel`'s placement: 4px right of the parent panel and 3px above
-/// its row, on the parent's left instead when it would cross the margin on
-/// the right, then moved up or down to keep the margin.
+/// Returns where the top-left corner of a submenu's panel goes: 4px to the
+/// right of the `parent` panel and 3px above the top of its row. When the
+/// panel would then cross the margin at the right edge of `area`, it goes
+/// 4px to the left of the parent instead. It is then moved up or down so
+/// that it keeps the margin at the bottom and at the top.
 pub(super) fn place_submenu(parent: Rect, row_top: f32, w: f32, h: f32, area: Rect) -> (f32, f32) {
     let mut x = parent.right() + SUBMENU_GAP;
     let mut y = row_top - SUBMENU_LIFT;
@@ -138,8 +149,11 @@ pub(super) fn place_submenu(parent: Rect, row_top: f32, w: f32, h: f32, area: Re
     (x, y.max(area.y + MARGIN))
 }
 
-/// `cleanSeparators`: no separator first, last or twice in a row. A
-/// submenu's rows leave out nested submenus, which are not drawn.
+/// Returns the rows that are drawn for `entries`. A separator is left out
+/// when it would be the first row, the last row, or directly after another
+/// separator. `parent` is the index of the submenu whose children `entries`
+/// are, and `None` for the menu's own entries. A submenu inside a submenu is
+/// left out, because submenus do not nest.
 pub(super) fn clean(entries: &[Entry], parent: Option<usize>) -> Vec<Row> {
     let mut rows = Vec::new();
     for (index, entry) in entries.iter().enumerate() {
@@ -155,7 +169,8 @@ pub(super) fn clean(entries: &[Entry], parent: Option<usize>) -> Vec<Row> {
         };
         match entry {
             Entry::Separator => {
-                // After any row, a swatch row or a view included.
+                // A separator is kept after any other kind of row, also after a
+                // row of swatches and after a view.
                 if rows.last().is_some_and(|row| *row != Row::Separator) {
                     rows.push(Row::Separator);
                 }
@@ -172,9 +187,13 @@ pub(super) fn clean(entries: &[Entry], parent: Option<usize>) -> Vec<Row> {
     rows
 }
 
-/// `menuSearchScore`: a label that starts with the query, then one that
-/// contains it, then the label and keywords containing it, then the query's
-/// letters in order with the fewest gaps. Lower is better.
+/// Returns how well `query` matches an entry, or `None` when it does not
+/// match. A lower score is a better match. `text` is the entry's label
+/// followed by its keywords. The best match is a label that starts with the
+/// query (0). Next is a label that contains the query (10 plus the position
+/// of the query). Next is `text` containing the query (100 plus the
+/// position). Last is `text` containing the query's letters in order with
+/// other letters between them (200 plus the number of letters between).
 fn score(text: &str, label: &str, query: &str) -> Option<usize> {
     if label.starts_with(query) {
         return Some(0);
@@ -200,10 +219,11 @@ fn score(text: &str, label: &str, query: &str) -> Option<usize> {
     (found == query.len()).then_some(200 + gap)
 }
 
-/// `searchMenuEntries`: every enabled item and submenu whose label or
-/// keywords match, best first and in menu order among equals. Submenu rows
-/// are searched too, so a match inside one is a row that can be chosen
-/// directly.
+/// Returns the entries that the search text `raw` finds: every item that is
+/// not disabled and every submenu whose label or keywords match. The best
+/// matches are first, and entries with the same score keep the order they
+/// have in the menu. The children of a submenu are searched too, so a child
+/// that matches is a row of the results and can be chosen there.
 pub(super) fn search(entries: &[Entry], raw: &str) -> Vec<Path> {
     let query = raw.trim().to_lowercase();
     if query.is_empty() {
@@ -240,7 +260,8 @@ pub(super) fn search(entries: &[Entry], raw: &str) -> Vec<Path> {
         visit(entry, Path { top, child: None });
         if let Entry::Submenu(submenu) = entry {
             for (child, entry) in submenu.children.iter().enumerate() {
-                // A submenu inside a submenu has no row to show it.
+                // A submenu inside a submenu is never drawn, so it is not
+                // searched.
                 if !matches!(entry, Entry::Submenu(_)) {
                     visit(
                         entry,
@@ -257,8 +278,10 @@ pub(super) fn search(entries: &[Entry], raw: &str) -> Vec<Path> {
     matches.into_iter().map(|(_, _, path)| path).collect()
 }
 
-/// The row the arrow keys reach next among the rows that can be stopped
-/// on, wrapping at the ends.
+/// Returns the row that the arrow keys reach next from `current`. `stops`
+/// says for each row whether the keys stop on it. After the last such row
+/// comes the first, and before the first comes the last. When the keys stop
+/// on no row, `current` is returned.
 pub(super) fn step(stops: &[bool], current: Option<usize>, forward: bool) -> Option<usize> {
     let rows = (0..stops.len())
         .filter(|index| stops[*index])
@@ -285,7 +308,9 @@ fn row_height(row: &Row) -> f32 {
     }
 }
 
-/// `.items`: its padding, rows and gaps, or the empty-result line.
+/// Returns the height of the area that holds a panel's rows: its padding,
+/// the rows and the gaps between them. With no rows, it is the padding, plus
+/// the height of the "No results" line when `empty_line` is set.
 pub(super) fn items_height(rows: &[Row], empty_line: bool) -> f32 {
     if rows.is_empty() {
         return 2. * PADDING + if empty_line { EMPTY_HEIGHT } else { 0. };
@@ -293,7 +318,8 @@ pub(super) fn items_height(rows: &[Row], empty_line: bool) -> f32 {
     2. * PADDING + rows.iter().map(row_height).sum::<f32>() + GAP * (rows.len() - 1) as f32
 }
 
-/// Where a row starts below the top of its panel's items area.
+/// Returns how far the top of the row at `index` is below the top of the
+/// area that holds the panel's rows.
 pub(super) fn row_offset(rows: &[Row], index: usize) -> f32 {
     PADDING
         + rows[..index.min(rows.len())]
@@ -351,13 +377,16 @@ mod tests {
     #[test]
     fn search_ranks_label_starts_then_contains_then_keywords_then_letters() {
         let entries = grid_like();
-        // "co": both copies start with it; earlier in the menu first.
+        // Both "Copy" rows start with "co". The one that is earlier in the
+        // menu comes first.
         assert_eq!(search(&entries, "co"), vec![top(3), top(4)]);
-        // "name": inside a label.
+        // "name" is inside a label. Spaces around the search text are
+        // ignored.
         assert_eq!(search(&entries, " Name "), vec![top(4)]);
-        // "folder": a keyword only.
+        // "folder" is only a keyword of "Reveal in Finder".
         assert_eq!(search(&entries, "folder"), vec![top(1)]);
-        // "mvt": the letters of "Move to Trash" in order, with gaps.
+        // "mvt" are letters of "Move to Trash" in order, with other letters
+        // between them.
         assert_eq!(search(&entries, "mvt"), vec![top(8)]);
         assert_eq!(score("move to trash", "move to trash", "move"), Some(0));
         assert_eq!(score("copy name", "copy name", "name"), Some(15));
@@ -417,7 +446,8 @@ mod tests {
 
     #[test]
     fn arrows_step_over_separators_and_disabled_rows_and_stop_on_submenus() {
-        // open, reveal, ─, copy path, copy name, ─, Set Rating ›, delete (disabled), trash
+        // The rows are: open, reveal, a separator, copy path, copy name, a
+        // separator, the Set Rating submenu, delete (disabled), trash.
         let stops = [true, true, false, true, true, false, true, false, true];
         assert_eq!(step(&stops, None, true), Some(0));
         assert_eq!(step(&stops, None, false), Some(8));
@@ -427,7 +457,7 @@ mod tests {
         assert_eq!(step(&stops, Some(8), true), Some(0));
         assert_eq!(step(&stops, Some(0), false), Some(8));
         assert_eq!(step(&stops, Some(8), false), Some(6));
-        // Nothing to stop on leaves the highlight where it was.
+        // When the keys stop on no row, the highlight stays where it was.
         assert_eq!(step(&[false, false], Some(1), true), Some(1));
     }
 
@@ -450,12 +480,15 @@ mod tests {
             w: 1000.,
             h: 800.,
         };
-        // Room at the pointer: from the top-left corner, at the pointer.
+        // The panel fits at the pointer, so it is scaled about its top-left
+        // corner.
         assert_eq!(origin((100., 100.), 270., 300., area), (0., 0.));
-        // Moved in from the right edge: from the right; from the bottom too.
+        // A panel that was moved in from the right edge is scaled about its
+        // right edge. One that was also moved in from the bottom edge is
+        // scaled about its bottom-right corner.
         assert_eq!(origin((900., 100.), 270., 300., area), (1., 0.));
         assert_eq!(origin((900., 700.), 270., 300., area), (1., 1.));
-        // Exactly at the margin still fits.
+        // A panel that ends exactly at the margin still fits.
         assert_eq!(
             origin(
                 (1000. - 270. - MARGIN, 800. - 300. - MARGIN),
@@ -465,7 +498,7 @@ mod tests {
             ),
             (0., 0.)
         );
-        // The scaled frame then keeps that corner where `place` put it.
+        // The scaled frame keeps that corner where `place` put it.
         let (x, y) = place((900., 700.), 270., 300., area);
         let (dx, dy, w, h) = crate::motion::scaled_frame(270., 300., 0.96, (1., 1.));
         assert!((x + dx + w - (x + 270.)).abs() < 1e-3);
@@ -480,17 +513,17 @@ mod tests {
             w: 1000.,
             h: 800.,
         };
-        // Room at the pointer.
+        // The panel fits at the pointer.
         assert_eq!(place((100., 100.), 270., 300., area), (100., 100.));
-        // Near the right and bottom edges it moves left and up.
+        // Near the right and bottom edges the panel is moved left and up.
         assert_eq!(
             place((900., 700.), 270., 300., area),
             (1000. - 270. - MARGIN, 800. - 300. - MARGIN)
         );
-        // Taller than the area: held at the top margin.
+        // A panel that is taller than the area starts at the top margin.
         assert_eq!(place((50., 50.), 270., 900., area).1, MARGIN);
-        // An area that does not start at zero, like a display's usable part
-        // below the menu bar.
+        // This area does not start at zero, like the usable part of a
+        // display below the menu bar.
         let display = Rect {
             x: 0.,
             y: 25.,
@@ -518,13 +551,15 @@ mod tests {
             place_submenu(parent, 160., 150., 200., area),
             (100. + 270. + 4., 157.)
         );
-        // Too close to the right edge: on the parent's left.
+        // The parent is too close to the right edge, so the submenu opens on
+        // the parent's left.
         let right = Rect { x: 700., ..parent };
         assert_eq!(
             place_submenu(right, 160., 150., 200., area),
             (700. - 150. - 4., 157.)
         );
-        // Low rows move up to keep the margin; high ones down.
+        // The submenu of a row near the bottom is moved up to keep the
+        // margin, and the submenu of a row near the top is moved down.
         assert_eq!(
             place_submenu(parent, 700., 150., 200., area).1,
             800. - 200. - MARGIN
@@ -546,8 +581,8 @@ mod tests {
             w: 270.,
             h: 400.,
         };
-        // To the right: the window starts at the parent's edge, and keeps
-        // its room on the other three sides.
+        // The submenu is to the right of its parent. Its window starts at
+        // the parent's right edge and has the room on the other three sides.
         let panel = Rect {
             x: 374.,
             y: 157.,
@@ -557,7 +592,8 @@ mod tests {
         let window = Rect::submenu_window(panel, parent, 40., area);
         assert_eq!((window.x, window.y), (370., 117.));
         assert_eq!((window.right(), window.bottom()), (564., 397.));
-        // To the left: it ends at the parent's edge.
+        // The submenu is to the left of its parent. Its window ends at the
+        // parent's left edge.
         let parent = Rect { x: 700., ..parent };
         let panel = Rect { x: 546., ..panel };
         let window = Rect::submenu_window(panel, parent, 40., area);

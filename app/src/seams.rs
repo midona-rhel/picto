@@ -1,19 +1,20 @@
-//! The environment variables the checks use to drive and observe the app
-//! (README, "Checks"). Each is read in debug builds only: a release build
-//! answers as though none were set, and holds neither their names nor the
-//! code behind them, so nothing that can set a shipped app's environment can
-//! make it take input from a file, keep painting while covered, hold its
-//! network commands or keep its state somewhere else.
+//! Reads the environment variables that the checks use to drive and observe
+//! the app (README, "Checks"). Each of them is read in debug builds only. A
+//! release build answers as though none was set, and contains neither the
+//! names of the variables nor the code behind them. So nothing that can set
+//! the environment of a shipped app can make it take input from a file, keep
+//! painting while covered, hold back its network commands or keep its state
+//! in another folder.
 //!
-//! Every build reads the owner's debugging aids, `PICTO_GPUI_FPS`
+//! Every build reads the two variables for debugging, `PICTO_GPUI_FPS`
 //! (`meter.rs`) and `PICTO_GPUI_STATS` (`stats.rs`), and the variables that
-//! configure the app on any machine (`PICTO_FFMPEG_DIR`, the platform's
-//! own). The off-screen tool's variables (`offscreen.rs`) and the tests'
-//! exist in test builds only.
+//! configure the app on any machine (`PICTO_FFMPEG_DIR` and the platform's
+//! own). The variables of the off-screen tool (`offscreen.rs`) and of the
+//! tests exist in test builds only.
 use std::path::PathBuf;
 
-/// The variable's value in a debug build; nothing in a release build, which
-/// does not hold the name.
+/// Returns the value of the variable in a debug build. In a release build it
+/// returns `None`, and the name of the variable is not compiled in.
 macro_rules! seam {
     ($name:literal) => {{
         #[cfg(debug_assertions)]
@@ -24,89 +25,93 @@ macro_rules! seam {
     }};
 }
 
-/// `PICTO_GPUI_POINTER=<file or FIFO>`: input lines to play into the main
-/// window (`pointer.rs`).
+/// Returns the file or FIFO that `PICTO_GPUI_POINTER=<file or FIFO>` names.
+/// The app reads input lines from it and plays them into the main window
+/// (`pointer.rs`).
 #[cfg(debug_assertions)]
 pub fn pointer_file() -> Option<PathBuf> {
     seam!("PICTO_GPUI_POINTER").map(PathBuf::from)
 }
 
-/// `PICTO_GPUI_BACKGROUND`: the main window opens without the keyboard and
-/// keeps drawing while covered (`covered.rs`).
+/// Returns whether `PICTO_GPUI_BACKGROUND` is set. The main window then opens
+/// without taking the keyboard, and keeps drawing while it is covered
+/// (`covered.rs`).
 pub fn background() -> bool {
     seam!("PICTO_GPUI_BACKGROUND").is_some()
 }
 
-/// `PICTO_GPUI_WINDOW=<width>x<height>`: the main window opens centred at
-/// that size, which is then not kept, so a picture compares pixel for pixel
-/// with the Electron window's.
+/// Returns the size that `PICTO_GPUI_WINDOW=<width>x<height>` names. The main
+/// window then opens centred at exactly that size, and the size is not saved,
+/// so that every picture taken of the window has the same size.
 pub fn exact_window() -> Option<(f32, f32)> {
     window_size(&seam!("PICTO_GPUI_WINDOW")?.to_string_lossy())
 }
 
-/// `1213x865` as a width and a height.
+/// Parses a text such as `1213x865` into a width and a height.
 fn window_size(value: &str) -> Option<(f32, f32)> {
     let (width, height) = value.split_once('x')?;
     Some((width.trim().parse().ok()?, height.trim().parse().ok()?))
 }
 
-/// `PICTO_GPUI_MENU=window`: pop-up menus are drawn inside the window on
-/// the Mac too (`ui::menu::presentation`).
+/// Returns whether `PICTO_GPUI_MENU=window` is set. Pop-up menus are then
+/// drawn inside the window on macOS too (`ui::menu::presentation`).
 pub fn menus_in_window() -> bool {
     seam!("PICTO_GPUI_MENU").is_some_and(|value| value == "window")
 }
 
-/// `PICTO_GPUI_APP_MENU=window`: the window carries the application menu
-/// button on the Mac too (`app_menu::in_window`).
+/// Returns whether `PICTO_GPUI_APP_MENU=window` is set. The window then has
+/// the application menu button on macOS too (`app_menu::in_window`).
 pub fn app_menu_in_window() -> bool {
     seam!("PICTO_GPUI_APP_MENU").is_some_and(|value| value == "window")
 }
 
-/// `PICTO_GPUI_STATE=<folder>`: what the user arranges is kept there
-/// instead of in the app's own folder (`state.rs`).
+/// Returns the folder that `PICTO_GPUI_STATE=<folder>` names. The app then
+/// keeps its state in that folder instead of in its own folder (`state.rs`).
 pub fn state_folder() -> Option<PathBuf> {
     seam!("PICTO_GPUI_STATE")
         .filter(|folder| !folder.is_empty())
         .map(PathBuf::from)
 }
 
-/// `PICTO_GPUI_INSPECTOR=<width>`: the inspector opens at that width
-/// whatever was kept.
+/// Returns the width that `PICTO_GPUI_INSPECTOR=<width>` names. The inspector
+/// then opens at that width, whatever width was saved.
 pub fn inspector_width() -> Option<f32> {
     seam!("PICTO_GPUI_INSPECTOR")?.to_str()?.trim().parse().ok()
 }
 
-/// `PICTO_GPUI_HOLD_RUNS`: the Subscriptions screen writes its commands
-/// down and answers those that would start network work instead of sending
-/// them.
+/// Returns whether `PICTO_GPUI_HOLD_RUNS` is set. The Subscriptions screen
+/// then records each of its commands. A command that would start network work
+/// is not sent; the screen answers it itself.
 pub fn hold_runs() -> bool {
     seam!("PICTO_GPUI_HOLD_RUNS").is_some()
 }
 
-/// `PICTO_GPUI_LOGIN_ORIGIN=http://127.0.0.1:<port>`: every site login's
-/// addresses move onto that origin (path and query kept), and the sign-in
-/// window loads nothing outside it, so a sign-in is driven end to end
-/// against local pages and never reaches a real site (`logins::sites`).
-/// Only a loopback `http:` origin is taken.
+/// Returns the origin that `PICTO_GPUI_LOGIN_ORIGIN=http://127.0.0.1:<port>`
+/// names. The addresses of every site login are then moved onto that origin,
+/// with their path and query kept, and the sign-in window loads nothing
+/// outside it. A check can then run a whole sign-in against local pages
+/// without reaching a real site (`logins::sites`). Only a loopback `http:`
+/// origin is accepted.
 pub fn login_origin() -> Option<String> {
     loopback_origin(seam!("PICTO_GPUI_LOGIN_ORIGIN")?.to_str()?)
 }
 
-/// `PICTO_GPUI_NET_ORIGIN=http://127.0.0.1:<port>`: the update feed and its
-/// downloads, the search engines' pages and the site icons are fetched from
-/// that origin instead, each address with its host as the first part of the
-/// path (`https://tineye.com/` is `<origin>/tineye.com/`), so the checks
-/// run every request against local fixtures (`net`). Only a loopback
-/// `http:` origin is taken.
+/// Returns the origin that `PICTO_GPUI_NET_ORIGIN=http://127.0.0.1:<port>`
+/// names. The update feed and its downloads, the pages of the search engines
+/// and the site icons are then requested from that origin. The host of each
+/// address becomes the first part of its path: `https://tineye.com/` becomes
+/// `<origin>/tineye.com/`. The checks answer every request from a local
+/// server in this way (`net`). Only a loopback `http:` origin is accepted.
 pub fn net_origin() -> Option<String> {
     loopback_origin(seam!("PICTO_GPUI_NET_ORIGIN")?.to_str()?)
 }
 
-/// `PICTO_GPUI_NET_CHECK=<folder>`: with `PICTO_GPUI_NET_ORIGIN`, the app
-/// serves the update feed, the search engines' pages and the site icons
-/// itself at that origin, runs the update check and download, a search on
-/// every engine and the icons' fetch against them, writes what happened to
-/// the folder and quits (`net_check`).
+/// Returns the folder that `PICTO_GPUI_NET_CHECK=<folder>` names. Together
+/// with `PICTO_GPUI_NET_ORIGIN`, the app then serves the update feed, the
+/// pages of the search engines and the site icons itself at that origin. It
+/// runs the update check and the download, a search on every engine and the
+/// requests for the icons against them, writes what happened to the folder
+/// and quits (`net_check`).
 #[cfg(debug_assertions)]
 pub fn net_check() -> Option<PathBuf> {
     seam!("PICTO_GPUI_NET_CHECK")
@@ -114,16 +119,17 @@ pub fn net_check() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// `PICTO_GPUI_UPDATE_PLATFORM=darwin|win32|linux`: the update check
-/// follows that system's flow (production's `platform`) on any machine, so
-/// one machine can show every system's (`updates`).
+/// Returns the system that `PICTO_GPUI_UPDATE_PLATFORM=darwin|win32|linux`
+/// names. The update check then follows the steps of that system on any
+/// machine, so that one machine can show the steps of every system
+/// (`updates`).
 pub fn update_platform() -> Option<String> {
     seam!("PICTO_GPUI_UPDATE_PLATFORM")
         .and_then(|value| value.into_string().ok())
         .filter(|value| matches!(value.as_str(), "darwin" | "win32" | "linux"))
 }
 
-/// The origin of `value` when it is a loopback `http:` address.
+/// Returns the origin of `value` when `value` is a loopback `http:` address.
 fn loopback_origin(value: &str) -> Option<String> {
     let url = url::Url::parse(value).ok()?;
     let loopback = match url.host()? {
@@ -134,10 +140,11 @@ fn loopback_origin(value: &str) -> Option<String> {
     (url.scheme() == "http" && loopback).then(|| url.origin().ascii_serialization())
 }
 
-/// `PICTO_GPUI_LOGIN_CHECK=<folder>`: with `PICTO_GPUI_LOGIN_ORIGIN`, the
-/// app signs in to a login it serves itself at that origin, in the
-/// system's sign-in window, writes what happened and pictures of the
-/// window to the folder, and quits (`logins::check`).
+/// Returns the folder that `PICTO_GPUI_LOGIN_CHECK=<folder>` names. Together
+/// with `PICTO_GPUI_LOGIN_ORIGIN`, the app then signs in to a login that it
+/// serves itself at that origin, in the system's sign-in window. It writes
+/// what happened and pictures of the window to the folder, and quits
+/// (`logins::check`).
 #[cfg(debug_assertions)]
 pub fn login_check() -> Option<PathBuf> {
     seam!("PICTO_GPUI_LOGIN_CHECK")
@@ -145,21 +152,24 @@ pub fn login_check() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// `PICTO_GPUI_SILENT`: every player and Flash movie starts muted.
+/// Returns whether `PICTO_GPUI_SILENT` is set. Every video player and every
+/// Flash movie then starts muted.
 pub fn silent() -> bool {
     seam!("PICTO_GPUI_SILENT").is_some()
 }
 
-/// `PICTO_GPUI_APP_DATA=<folder>`: the application data the core keeps
-/// outside a library (its AI models, in `models/`) is there instead of
-/// beside the copy (`application::application_data`).
+/// Returns the folder that `PICTO_GPUI_APP_DATA=<folder>` names. The
+/// application data that the core keeps outside a library (its AI models, in
+/// `models/`) is then in that folder instead of in its usual place
+/// (`application::application_data`).
 pub fn app_data() -> Option<PathBuf> {
     seam!("PICTO_GPUI_APP_DATA")
         .filter(|folder| !folder.is_empty())
         .map(PathBuf::from)
 }
 
-/// Every variable above, which drive, observe or redirect the app.
+/// Lists every variable above. Each of them drives, observes or redirects the
+/// app.
 #[cfg(debug_assertions)]
 const ALL: [&str; 16] = [
     "PICTO_GPUI_POINTER",
@@ -180,11 +190,12 @@ const ALL: [&str; 16] = [
     "PICTO_GPUI_NET_CHECK",
 ];
 
-/// The automation seam active in this process, if any: one of the
-/// variables above set, or a test build (the off-screen tool, the dialogs'
-/// answers and the record of desktop requests live there). A process with
-/// one never opens a library the user keeps (`crate::libraries`). A release
-/// build has none.
+/// Returns the automation seam that is active in this process, if there is
+/// one: the name of the first variable above that is set, or "a test build"
+/// in a test build, which holds the off-screen tool, the queue of dialog
+/// answers and the record of desktop requests. A process with an automation
+/// seam never opens a library the user keeps (`crate::libraries`). A release
+/// build has no automation seam.
 pub fn automation() -> Option<&'static str> {
     if cfg!(test) {
         return Some("a test build");
@@ -200,19 +211,21 @@ pub fn automation() -> Option<&'static str> {
     }
 }
 
-/// How a held model download answers (`PICTO_GPUI_HOLD_DOWNLOADS`).
+/// Says how a held download of an AI model answers
+/// (`PICTO_GPUI_HOLD_DOWNLOADS`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HeldDownload {
-    /// It never finishes; the model reports this share downloaded (0–1)
-    /// until Cancel ends it.
+    /// The download never finishes. The model reports this share (0 to 1) as
+    /// downloaded until Cancel ends the download.
     Progress(f64),
-    /// It fails at once.
+    /// The download fails at once.
     Fail,
 }
 
-/// `PICTO_GPUI_HOLD_DOWNLOADS[=<percent>|fail]`: AI model downloads are
-/// written down and answered by the app instead of sent to the core, which
-/// would fetch the model from the network (`ai_tagger::commands`).
+/// Returns what `PICTO_GPUI_HOLD_DOWNLOADS[=<percent>|fail]` names. Downloads
+/// of AI models are then recorded and answered by the app. They are not sent
+/// to the core, which would fetch the model from the network
+/// (`ai_tagger::commands`).
 pub fn hold_downloads() -> Option<HeldDownload> {
     held_download(&seam!("PICTO_GPUI_HOLD_DOWNLOADS")?.to_string_lossy())
 }

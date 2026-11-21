@@ -9,21 +9,22 @@ type ChangeHandler = Rc<dyn Fn(f64, &mut App) + 'static>;
 /// Which slider to draw.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Look {
-    /// `.rangeInput` in `Settings.module.css`: a 200px, 3px track at the
-    /// primary border colour with a 12px round thumb in the text colour.
+    /// The slider of Settings: a track 200px long and 3px high in the primary
+    /// border colour, with a round 12px thumb in the text colour.
     Settings,
-    /// `.toleranceSlider`: the Settings track in the primary colour up to
-    /// the thumb, and a thumb with a border and a small shadow.
+    /// The tolerance slider of the colour editor. It is the same as
+    /// `Settings`, except that the track is in the primary colour from its
+    /// left end to the thumb, and the thumb has a border and a small shadow.
     Filled,
-    /// `.rangeInput` in a dialog (`GlassModal.module.css`): as wide as its
-    /// container, a 4px track at the primary border colour, and a 14px
-    /// thumb in the primary colour that overhangs the track's 4px of
-    /// layout.
+    /// The slider of a dialog: as wide as its container, with a track 4px high
+    /// in the primary border colour and a 14px thumb in the primary colour.
+    /// The element is laid out with the track's height of 4px, and the thumb
+    /// is drawn beyond that above and below.
     Dialog,
 }
 
-/// A range input: a press on the track moves the thumb there, and dragging
-/// moves it in steps.
+/// A slider. A press on the track moves the thumb there, and dragging moves it
+/// in steps.
 #[derive(IntoElement)]
 pub struct Slider {
     id: ElementId,
@@ -33,7 +34,7 @@ pub struct Slider {
     step: f64,
     width: f32,
     look: Look,
-    /// Its accessible name (the range input's `aria-label`).
+    /// The name that assistive technology gives the slider.
     name: Option<SharedString>,
     on_change: Option<ChangeHandler>,
 }
@@ -53,7 +54,7 @@ pub fn slider(id: impl Into<ElementId>, value: f64, min: f64, max: f64, step: f6
 }
 
 impl Slider {
-    /// The track's length, for the few sliders that are not 200px.
+    /// Sets the track's length, for the few sliders that are not 200px long.
     pub fn width(mut self, width: f32) -> Self {
         self.width = width;
         self
@@ -64,13 +65,14 @@ impl Slider {
         self
     }
 
-    /// What assistive technology calls the slider.
+    /// Sets the name that assistive technology gives the slider.
     pub fn name(mut self, name: impl Into<SharedString>) -> Self {
         self.name = Some(name.into());
         self
     }
 
-    /// Called with each new value while the thumb moves.
+    /// Sets the handler that is called with each new value while the thumb
+    /// moves.
     pub fn on_change(mut self, handler: impl Fn(f64, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(handler));
         self
@@ -79,12 +81,15 @@ impl Slider {
 
 const WIDTH: f32 = 200.;
 const THUMB: f32 = 12.;
-/// The dialog look's thumb and track.
+/// The diameter of the thumb of the dialog look. `DIALOG_TRACK` is the height
+/// of its track.
 const DIALOG_THUMB: f32 = 14.;
 const DIALOG_TRACK: f32 = 4.;
 
-/// The value at `x` pixels along the track, snapped to the step. The thumb's
-/// centre travels from half a thumb in at each end, as Chromium draws it.
+/// Returns the value at `x` pixels along a track that is `width` long, rounded
+/// to the nearest step. The thumb's centre moves between half a thumb's width
+/// from the left end and half a thumb's width from the right end. Those two
+/// positions are `min` and `max`.
 fn value_along(x: f32, width: f32, thumb: f32, min: f64, max: f64, step: f64) -> f64 {
     let travel = width - thumb;
     let along = ((x - thumb / 2.) / travel).clamp(0., 1.) as f64;
@@ -124,7 +129,8 @@ impl RenderOnce for Slider {
         if let Some(name) = self.name {
             root = root.aria_label(name);
         }
-        // Assistive technology steps it as the arrow keys do, or sets it.
+        // Assistive technology can raise or lower the value by one step, as
+        // the arrow keys do, or set a value.
         if let Some(handler) = handler.clone() {
             let (up, down, set) = (handler.clone(), handler.clone(), handler);
             root = root
@@ -142,8 +148,10 @@ impl RenderOnce for Slider {
                 });
         }
         let root = if dialog {
-            // The track's 4px are the element's layout; the thumb hangs
-            // over it, centred, and its travel is the track less a thumb.
+            // The element is laid out with the track's height of 4px. The
+            // thumb is centred on the track and is drawn beyond it above and
+            // below. The thumb moves over the track's length less the thumb's
+            // width.
             root.w_full()
                 .h(px(DIALOG_TRACK))
                 .rounded(px(2.))
@@ -178,8 +186,8 @@ impl RenderOnce for Slider {
                         .h(px(3.))
                         .rounded(px(2.))
                         .bg(theme.border())
-                        // The filled part runs to the thumb's place along the
-                        // whole track, as `--tolerance-progress` does.
+                        // The filled part runs from the track's left end to
+                        // the value's position as a share of the whole track.
                         .when(filled, |track| {
                             track.child(
                                 div()
@@ -239,8 +247,8 @@ impl RenderOnce for Slider {
             .absolute()
             .left_0()
             .right_0()
-            // The dialog's thumb overhangs its track, and takes presses
-            // where it overhangs.
+            // The dialog's thumb is higher than its track, and the area that
+            // handles presses is as high as the thumb.
             .top(px(if dialog {
                 (DIALOG_TRACK - DIALOG_THUMB) / 2.
             } else {
@@ -248,7 +256,8 @@ impl RenderOnce for Slider {
             }))
             .h(px(thumb)),
         );
-        // `<input type="range">`'s keys; it draws no ring.
+        // The slider's keys are the arrow keys, Page Up, Page Down, Home and
+        // End. The slider draws no focus ring.
         let moved = move |key: SliderKey| {
             let keyed = keyed.clone();
             move |cx: &mut App| {
@@ -307,7 +316,8 @@ mod tests {
 
     #[test]
     fn the_track_maps_to_stepped_values() {
-        // The thumb's centre is 6px in at either end.
+        // The thumb's centre is 6px from the end of the track at `min` and at
+        // `max`.
         assert_eq!(value_at(0., 100., 600., 50.), 100.);
         assert_eq!(value_at(6., 100., 600., 50.), 100.);
         assert_eq!(value_at(194., 100., 600., 50.), 600.);

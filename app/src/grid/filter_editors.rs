@@ -1,7 +1,7 @@
-//! The editors the filter bar's menus hold (`GridFilterMenu.tsx`): a
-//! numeric range with its unit, the resolution's two ranges, a date range,
-//! and the field that names a saved filter. Each is a view a menu row
-//! draws; each tells the bar what was committed.
+//! The editors that the filter bar's menus hold: a numeric range with its
+//! unit, the two ranges of the resolution, a date range, and the field that
+//! names a saved filter. Each editor is a view that a menu row draws, and
+//! each emits an event that tells the filter bar what the user entered.
 use super::filters;
 use crate::i18n::t;
 use crate::theme;
@@ -14,31 +14,38 @@ use crate::ui::{
 use gpui::*;
 use std::time::Duration;
 
-/// `useDeferredFilterCommit`: typing settles for 100 ms before it filters.
+/// How long after the last change to a range field the range is applied to
+/// the grid, so that the grid does not filter again on every keystroke.
 const SETTLE: Duration = Duration::from_millis(100);
 
-/// `.rangeEditor`: two fields with a dash between and the unit after, at
-/// least 36px tall.
+/// The smallest height of a range editor: two fields with a dash between
+/// them and the unit after them.
 pub const RANGE_HEIGHT: f32 = 36.;
-/// `.resolutionEditor`: two labelled ranges 6px apart, 4px above and below.
+/// The height of the resolution editor: two labelled ranges 6 px apart,
+/// with 4 px above and below.
 pub const RESOLUTION_HEIGHT: f32 = 4. + RANGE_HEIGHT + 6. + RANGE_HEIGHT + 4.;
-/// `.dateEditor`: a caption line, 3px, the 26px button, 4px above and below.
+/// The height of the date editor: a caption line of 13 px, a gap of 3 px
+/// and the 26 px button, with 4 px above and below.
 pub const DATE_HEIGHT: f32 = 4. + 13. + 3. + theme::CONTROL_SM + 4.;
-/// `.saveFilterEditor`: a 28px row inside 4px of padding.
+/// The height of the editor that saves a filter: a row of 28 px with 4 px
+/// of padding above and below.
 pub const SAVE_HEIGHT: f32 = 4. + theme::CONTROL_MD + 4.;
 
-/// A range committed, in the base unit.
+/// Emitted when the user has entered a range. Holds the minimum and the
+/// maximum in the base unit. An end is `None` when its field is empty or
+/// does not hold a number.
 pub struct RangeCommitted(pub Option<u64>, pub Option<u64>);
 
-/// `NumericRangeEditor`: Min and Max in the unit chosen.
+/// Edits a numeric range: a Min field and a Max field, in the unit chosen.
 pub struct RangeEditor {
     min: Entity<TextInput>,
     max: Entity<TextInput>,
-    /// The units offered, each with how many base units it is. One unit is
-    /// shown as a label; more as a select.
+    /// The units offered, each with the number of base units it stands for.
+    /// A single unit is shown as a label, and several are shown as a select.
     units: Vec<(&'static str, u64)>,
     unit: usize,
-    /// The range last scheduled, so a repaint of a field schedules nothing.
+    /// The range that was last scheduled to be emitted. A notification from a
+    /// field that leaves the range the same schedules nothing.
     scheduled: (Option<u64>, Option<u64>),
     settle: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -75,7 +82,7 @@ impl RangeEditor {
             max,
             units,
             unit,
-            // What the fields show, which may be rounded in this unit.
+            // The range the fields show, which may be rounded in this unit.
             scheduled: (
                 minimum.and_then(|value| {
                     filters::amount(&filters::scaled_value(value, multiplier), multiplier)
@@ -165,7 +172,8 @@ impl Render for RangeEditor {
     }
 }
 
-/// `ResolutionEditor`: Width and Height, each a range in pixels.
+/// Edits the resolution: a range for the width and a range for the height,
+/// each in pixels.
 pub struct ResolutionEditor {
     pub width: Entity<RangeEditor>,
     pub height: Entity<RangeEditor>,
@@ -194,11 +202,11 @@ impl Render for ResolutionEditor {
     }
 }
 
-/// A date range committed: the first moment included and the first left
-/// out.
+/// Emitted when the user has chosen a date range. Holds the first moment
+/// that is included and the first moment that is left out.
 pub struct DatesCommitted(pub Option<i64>, pub Option<i64>);
 
-/// `DateRangeEditor`: From and To, each a day.
+/// Edits a date range: a From day and a To day.
 pub struct DateRangeEditor {
     first: String,
     last: String,
@@ -212,7 +220,8 @@ impl DateRangeEditor {
         Self { first, last }
     }
 
-    /// Shows a range chosen elsewhere, such as a preset.
+    /// Shows a range that was chosen outside this editor, for example with a
+    /// preset.
     pub fn set_range(&mut self, after: Option<i64>, before: Option<i64>, cx: &mut Context<Self>) {
         let (first, last) = filters::range_days(after, before);
         if (first.as_str(), last.as_str()) != (self.first.as_str(), self.last.as_str()) {
@@ -274,11 +283,12 @@ impl Render for DateRangeEditor {
     }
 }
 
-/// A name to save the current filters under.
+/// Emitted when the user asks to save the current filters. Holds the name
+/// to save them under.
 pub struct SaveRequested(pub String);
 
-/// `.saveFilterEditor`: the name and Save, which is offered once there is
-/// a name and something to save.
+/// The field for the name of a saved filter and the Save button. The button
+/// works once the field holds a name and a filter is set.
 pub struct SaveFilterEditor {
     name: Entity<TextInput>,
     /// Whether any filter is set.
@@ -341,7 +351,7 @@ impl Render for SaveFilterEditor {
         button = if enabled {
             button
                 .cursor_pointer()
-                // `--color-active-overlay`.
+                // The button's background while the pointer is over it.
                 .hover(move |style| style.bg(theme.contrast(14.)))
                 .on_click(cx.listener(|this, _, _, cx| this.save(cx)))
         } else {

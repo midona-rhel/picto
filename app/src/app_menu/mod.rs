@@ -1,20 +1,21 @@
-//! The application menu, as production's `electron/windows/menu.mjs` builds
-//! it on macOS: the same menus, titles, order, separators and accelerators,
-//! with the rows that depend on the selection and the destination enabled
-//! by its rules (the command context of `applicationMenuRuntime.ts`).
+//! The application menu. Its menus, their titles, their order, their
+//! separators and their keys are the ones that Picto 0.6.19 and earlier
+//! had. Some rows depend on the selection and on the destination that the
+//! grid shows; [`MenuContext`] holds what they depend on.
 //!
-//! AppKit asks, as a menu opens or a key equivalent arrives, whether each
-//! row's action can be performed (`App::is_action_available`), and that,
-//! not the row's `disabled` flag, enables the row. So a row is enabled
-//! exactly when something handles its action where the keyboard is: the
-//! window commands and the Edit menu's text commands are handled app-wide
-//! here; the commands on the selection are handled on the main window's
-//! root only while production's rule holds (`shell/menu_commands.rs`).
+//! On macOS, AppKit asks whether each row's action can be performed
+//! (`App::is_action_available`) when a menu opens and when a key equivalent
+//! arrives. The answer enables the row; the row's `disabled` flag does not.
+//! A row is therefore enabled exactly when something handles its action
+//! where the keyboard focus is. This file handles the window commands and
+//! the Edit menu's text commands for the whole app. The main window's root
+//! element handles the commands on the selection, and only while the row's
+//! rule holds (`shell/menu_commands.rs`).
 //!
-//! The accelerators come from the shortcut registry through the keymap, so
-//! a shortcut rebound in Settings shows its new keys here:
-//! `crate::keymap::install` adds [`accelerators`] to its bindings and sets
-//! the menu again.
+//! The keys of the rows come from the shortcut registry through the keymap.
+//! A shortcut that the user changes in Settings therefore shows its new
+//! keys here: `crate::keymap::install` adds [`accelerators`] to its
+//! bindings and sets the menu again.
 use crate::keymap::{self, Scope};
 use crate::settings::registry::{KeyboardPreset, Overrides};
 use gpui::*;
@@ -34,7 +35,7 @@ actions!(
         Hide,
         HideOthers,
         ShowAllApps,
-        // The Library menu's rows (`crate::libraries`).
+        // The next five actions are rows of the Library menu.
         LibraryManager,
         NewLibrary,
         OpenLibrary,
@@ -61,7 +62,7 @@ actions!(
         ShowTags,
         OpenInNewWindow,
         ShowDuplicates,
-        // Shows or hides the log window (`menu:toggle-diagnostics`).
+        // Shows or hides the log window.
         LogWindow,
         ToggleFullScreen,
         Minimize,
@@ -70,29 +71,36 @@ actions!(
     ]
 );
 
-/// Move to Trash. Its row carries the Delete key only outside a folder,
-/// where Remove from Folder has it, so the two rows are told apart.
+/// The action of the Move to Trash row. `keyed` says whether the row shows
+/// the keys of the shortcut `file.delete`. It shows them outside a folder.
+/// Inside a folder the row has no keys, because by default the Remove from
+/// Folder row has the same keys there. The field makes the row with keys and
+/// the row without keys two different actions, so that the keys are bound
+/// to the first one only.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = app_menu, no_json)]
 pub struct MoveToTrash {
     pub keyed: bool,
 }
 
-/// Remove from Folder, keyed inside a folder only.
+/// The action of the Remove from Folder row. `keyed` says whether the row
+/// shows the keys of the shortcut `file.removeFromFolder`. It shows them
+/// inside a folder, unless the items shown are in the Trash.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = app_menu, no_json)]
 pub struct RemoveFromFolder {
     pub keyed: bool,
 }
 
-/// A row of Recent Libraries: the library at `path`.
+/// The action of a row of the Recent Libraries submenu. It opens the library
+/// at `path`.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = app_menu, no_json)]
 pub struct OpenRecentLibrary {
     pub path: String,
 }
 
-/// A library Recent Libraries lists (`buildRecentLibrariesMenu`).
+/// One library that the Recent Libraries submenu lists.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Recent {
     pub path: String,
@@ -101,15 +109,17 @@ pub struct Recent {
     pub current: bool,
 }
 
-/// Set Rating's rows, 0 for No Rating.
+/// The action of a row of the Set Rating submenu. `stars` is the rating that
+/// the row sets. The row No Rating has 0.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = app_menu, no_json)]
 pub struct SetRating {
     pub stars: u8,
 }
 
-/// The system the menu is built for: production's template differs on
-/// macOS (`isMac`) and, in a few role rows, between Windows and Linux.
+/// The operating system that the menu is built for. The menus on macOS
+/// differ from the menus on Windows and Linux. Between Windows and Linux,
+/// the Quit row and the row that shows a file in the file manager differ.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Platform {
     Mac,
@@ -130,11 +140,9 @@ impl Platform {
         matches!(self, Platform::Mac)
     }
 
-    /// The row that shows a file in the system's file browser: production's
-    /// "Reveal in Finder" on the Mac and "Show in Explorer" on Windows. On
-    /// Linux production also writes "Show in Explorer", which names a
-    /// Windows program; it says "Show in File Manager" where it means the
-    /// same elsewhere (the Library Manager), which is used here.
+    /// Returns the title of the row that shows a file in the system's file
+    /// manager: "Reveal in Finder" on macOS, "Show in Explorer" on Windows
+    /// and "Show in File Manager" on Linux.
     pub const fn reveal_title(self) -> &'static str {
         match self {
             Platform::Mac => "Reveal in Finder",
@@ -143,8 +151,8 @@ impl Platform {
         }
     }
 
-    /// Electron's `quit` role's title: "Quit Picto" in the Mac's app menu,
-    /// "Exit" on Windows, "Quit" on Linux.
+    /// Returns the title of the Quit row: "Quit Picto" on macOS, "Exit" on
+    /// Windows and "Quit" on Linux.
     pub const fn quit_title(self) -> &'static str {
         match self {
             Platform::Mac => "Quit Picto",
@@ -153,8 +161,9 @@ impl Platform {
         }
     }
 
-    /// Quit's keys, as Electron's `quit` role has them: ⌘Q on the Mac,
-    /// Ctrl+Q on Linux, and none on Windows, where Alt+F4 is the system's.
+    /// Returns the keys of the Quit row: ⌘Q on macOS and Ctrl+Q on Linux. On
+    /// Windows the row has no keys, because Alt+F4 closes a window there and
+    /// Windows handles those keys itself.
     pub const fn quit_keys(self) -> Option<&'static str> {
         match self {
             Platform::Mac | Platform::Linux => Some("Mod+Q"),
@@ -163,7 +172,7 @@ impl Platform {
     }
 }
 
-/// The destination's kind (`gridScopeAtom`'s `kind`).
+/// The kind of the destination that the grid shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ScopeKind {
     #[default]
@@ -176,8 +185,8 @@ pub enum ScopeKind {
     Other,
 }
 
-/// The lifecycle the selection shares, or the destination's
-/// (`statusFilter`).
+/// The lifecycle state of an item: in the Inbox, in the library or in the
+/// Trash.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     Inbox,
@@ -195,28 +204,41 @@ impl From<picto_library::Lifecycle> for Status {
     }
 }
 
-/// What production's renderer tells the menu (`menuContext`).
+/// What the application menu needs to know about the main window: the
+/// selection, the destination and the open library. The titles of the rows
+/// and the rules that enable them are worked out from it
+/// (`Shell::menu_context` fills it in).
+///
+/// `scope` is the kind of the destination that the grid shows. `status` is
+/// the lifecycle state that the rows act on. It is the Trash or the Inbox
+/// when the destination is the Trash or the Inbox. Otherwise it is the
+/// state that all selected items have, or `None` when they differ or
+/// nothing is selected (`GridScope::menu_status`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct MenuContext {
-    /// How many items are selected while the grid is the destination
-    /// (`selectionCount`); 0 while a screen shows.
+    /// The number of selected items while the grid is shown. It is 0 while
+    /// a screen is shown in place of the grid.
     pub selection: u64,
-    /// The one item chosen by itself, and whether it is a collection
-    /// (`singleSelected`, `singleKind`).
+    /// `Some` when exactly one item is selected and it was selected by
+    /// itself, not by Select All or as part of a range. The value says
+    /// whether that item is a collection.
     pub single: Option<bool>,
     pub scope: ScopeKind,
     pub status: Option<Status>,
-    /// Every selected item was chosen one by one and is loaded
-    /// (`canRename`, `canCopyNames`).
+    /// Whether every selected item was selected by itself and is loaded.
+    /// Rename and Copy Name are enabled only then, because they need the
+    /// items' names.
     pub names: bool,
-    /// ...and every one is a file with a thumbnail
-    /// (`canRegenerateThumbnails`).
+    /// Whether `names` holds and every selected item is a media file with a
+    /// content hash. Regenerate Thumbnail is enabled only then.
     pub thumbnails: bool,
-    /// No task holds imports back (`canImport`).
+    /// Whether an import can start now. It is false while a running task
+    /// blocks imports (`crate::imports::blocked`).
     pub import: bool,
     /// The open library's name.
     pub library: Option<String>,
-    /// The libraries Recent Libraries lists, pinned ones first.
+    /// The libraries that the Recent Libraries submenu lists, with the
+    /// pinned ones first.
     pub recent: Vec<Recent>,
 }
 
@@ -241,7 +263,8 @@ impl MenuContext {
         self.selection > 0
     }
 
-    /// One file, not a collection (`singleMedia`).
+    /// Returns whether exactly one item is selected and it is a media file,
+    /// not a collection.
     pub fn single_media(&self) -> bool {
         self.single == Some(false)
     }
@@ -270,8 +293,9 @@ impl MenuContext {
         !matches!(self.scope, ScopeKind::Folder | ScopeKind::SmartFolder)
     }
 
-    /// The contexts whose menus between them hold every row, for binding
-    /// every row's keys.
+    /// Returns four contexts whose menus together contain every row that
+    /// the menu can have. [`accelerators`] builds the menu for each of them
+    /// to find every row that needs a key binding.
     fn variants() -> [MenuContext; 4] {
         let selected = |scope, status| MenuContext {
             selection: 2,
@@ -288,8 +312,9 @@ impl MenuContext {
     }
 }
 
-/// The menu's state: the context it was last set for, and the main window,
-/// which Close Window hides rather than closes.
+/// The state of the menu: the context that the menu was last set for, the
+/// main window, and whether Close Window has hidden the main window. On
+/// macOS, Close Window hides the main window and does not close it.
 #[derive(Default)]
 struct Current {
     context: MenuContext,
@@ -303,14 +328,15 @@ fn current(cx: &mut App) -> &mut Current {
     cx.default_global::<Current>()
 }
 
-/// The context the menu shows.
+/// Returns the context that the menu was last set for.
 pub fn context(cx: &App) -> MenuContext {
     cx.try_global::<Current>()
         .map(|current| current.context.clone())
         .unwrap_or_default()
 }
 
-/// Sets the menu for this context. Returns whether it changed.
+/// Sets the menu for `context`. Returns whether the context differs from the
+/// one before.
 pub fn set_context(context: MenuContext, cx: &mut App) -> bool {
     if current(cx).context == context {
         return false;
@@ -327,14 +353,15 @@ pub fn set_menus(cx: &mut App) {
     cx.set_menus(gpui_menus(&context));
 }
 
-/// The main window, for the rows production sends to it whichever window
-/// has the keyboard, and for Close Window.
+/// Records which window is the main window. Subscriptions… shows the main
+/// window whichever window has the keyboard focus, and Close Window hides
+/// the main window on macOS where it closes any other window.
 pub fn set_main_window(window: AnyWindowHandle, cx: &mut App) {
     current(cx).main = Some(window);
 }
 
-/// The Dock icon was clicked: the main window that Close Window hid comes
-/// back, as production makes a main window again.
+/// Shows the main window again if Close Window hid it. macOS calls this
+/// when the user clicks the app's icon in the Dock.
 pub fn reopen(cx: &mut App) {
     let current = current(cx);
     if !current.main_hidden {
@@ -347,11 +374,12 @@ pub fn reopen(cx: &mut App) {
     }
 }
 
-/// `focusMainWindow`: the main window comes back if Close Window hid it,
-/// out of the Dock or taskbar if minimised, and in front with the
-/// keyboard, as when the app is asked to open files. With
-/// `PICTO_GPUI_BACKGROUND` it stays behind and says so, so a check never
-/// takes the keyboard from the user.
+/// Brings the main window to the front and gives it the keyboard focus. A
+/// main window that Close Window hid is shown again, and a minimised one is
+/// restored. While the environment variable `PICTO_GPUI_BACKGROUND` is set,
+/// the window stays where it is and a line on standard error says so. A
+/// test run sets the variable so that it does not take the keyboard focus
+/// from the user.
 pub fn bring_forward(cx: &mut App) {
     if crate::seams::background() {
         eprintln!("picto: the main window would come forward (held back in the background)");
@@ -365,7 +393,7 @@ pub fn bring_forward(cx: &mut App) {
     cx.activate(true);
 }
 
-/// Whether a text field has the window's keyboard.
+/// Returns whether a text field has the keyboard focus in `window`.
 pub fn in_text_field(window: &Window) -> bool {
     window
         .context_stack()
@@ -373,9 +401,11 @@ pub fn in_text_field(window: &Window) -> bool {
         .any(|context| context.contains("TextInput"))
 }
 
-/// Whether a key the menu received was typed into a text field: the field
-/// keeps its editing keys (⌘⌫ deletes to the line's start), as a Chromium
-/// field does before production's menu sees them.
+/// Returns whether the keys that ran a row of the menu were typed into a
+/// text field. That is the case when a text field has the keyboard focus
+/// and the platform modifier (⌘ on macOS) is held. The caller then leaves
+/// the keys to the field, where ⌘⌫ deletes to the start of the line, and
+/// does not delete the selected items.
 pub fn typed_in_text_field(window: &Window) -> bool {
     in_text_field(window) && window.modifiers().platform
 }
@@ -390,8 +420,9 @@ fn on_active(cx: &mut App, work: impl FnOnce(&mut Window, &mut App) + 'static) {
     }
 }
 
-/// An Edit command: to the focused text field, as the native Edit menu's
-/// are, or else to the window.
+/// Performs a row of the Edit menu. When a text field has the keyboard
+/// focus, it dispatches `in_field`, which is the field's own action. When
+/// none has, it dispatches `otherwise`, which acts on the window's content.
 fn edit(cx: &mut App, in_field: Option<Box<dyn Action>>, otherwise: Option<Box<dyn Action>>) {
     on_active(cx, move |window, cx| {
         let action = if in_text_field(window) {
@@ -405,12 +436,12 @@ fn edit(cx: &mut App, in_field: Option<Box<dyn Action>>, otherwise: Option<Box<d
     });
 }
 
-/// Close Window: Settings closes as its close button closes it, dropping
-/// its draft; a detail window closes; on macOS the main window is hidden,
-/// as production's closes while the app keeps running (it does not quit
-/// when its last window closes, and the Dock icon brings a main window
-/// back). On Windows and Linux the main window closes, which quits the app
-/// ([`quit_with_main_window`]).
+/// Performs Close Window on the window that has the keyboard focus. The
+/// Settings window closes as its close button closes it, which discards its
+/// unsaved changes. A detail window closes. On macOS the main window is
+/// hidden and the app keeps running; a click on the Dock icon shows the
+/// window again ([`reopen`]). On Windows and Linux the main window closes,
+/// which quits the app ([`quit_with_main_window`]).
 fn close_window(cx: &mut App) {
     let Some(handle) = cx.active_window() else {
         return;
@@ -432,11 +463,11 @@ fn close_window(cx: &mut App) {
     });
 }
 
-/// Off macOS the app ends with its main window, however that closes (its
-/// close button, Close, Alt+F4, the window manager), as production quits
-/// when its windows are all closed there (`window-all-closed`). Production
-/// leaves a detail or Settings window open on its own after the main one
-/// closes; here they go with it, since they show the main window's library.
+/// Makes the app quit when its main window closes, on Windows and Linux. It
+/// does not matter how the window closes: by its close button, by the Close
+/// row, by Alt+F4 or by the window manager. A detail window or the Settings
+/// window that is still open closes with the app, because it shows the
+/// library of the main window. On macOS this function does nothing.
 pub fn quit_with_main_window(cx: &mut App) {
     if Platform::CURRENT.is_mac() {
         return;
@@ -450,8 +481,9 @@ pub fn quit_with_main_window(cx: &mut App) {
     .detach();
 }
 
-/// The app-wide commands: the Picto menu's, the window commands and the
-/// Edit menu's text commands.
+/// Registers the handlers of the actions that work in every window: the
+/// rows of the "Picto" menu, the rows of the Library menu, Check for
+/// Updates…, the window commands and the Edit menu's text commands.
 pub fn bind(cx: &mut App) {
     cx.default_global::<Current>();
     cx.on_action(|_: &About, cx| cx.defer(|cx| crate::settings::open_at("about", cx)));
@@ -460,8 +492,9 @@ pub fn bind(cx: &mut App) {
     cx.on_action(|_: &ShowAllApps, cx| cx.unhide_other_apps());
     cx.on_action(|_: &CloseWindow, cx| close_window(cx));
     cx.on_action(|_: &Minimize, cx| on_active(cx, |window, _| window.minimize_window()));
-    // Settings is neither zoomable nor full-screen in production
-    // (`maximizable: false`, `fullscreenable: false`).
+    // The Settings window can be neither zoomed nor shown full screen, so
+    // Zoom and Toggle Full Screen do nothing while it has the keyboard
+    // focus.
     cx.on_action(|_: &Zoom, cx| {
         let settings = cx
             .active_window()
@@ -481,8 +514,9 @@ pub fn bind(cx: &mut App) {
     cx.on_action(|_: &BringAllToFront, cx| {
         crate::ui::window_chrome::bring_all_to_front(cx);
     });
-    // Subscriptions… goes to the main window from any window
-    // (`sendToMainWindow`).
+    // Subscriptions… shows the Subscriptions screen in the main window and
+    // brings that window to the front, whichever window the row was chosen
+    // in.
     cx.on_action(|_: &Subscriptions, cx| {
         cx.defer(move |cx| {
             let Some(shell) = crate::libraries::host::shell(cx) else {
@@ -496,9 +530,9 @@ pub fn bind(cx: &mut App) {
             }
         });
     });
-    // The Library menu, from any window.
+    // The rows of the Library menu work in every window.
     cx.on_action(|_: &LibraryManager, cx| cx.defer(crate::libraries::manager::open));
-    // `New Library…` opens the Library Manager, as production's does.
+    // New Library… opens the Library Manager, where a library is created.
     cx.on_action(|_: &NewLibrary, cx| cx.defer(crate::libraries::manager::open));
     cx.on_action(|_: &OpenLibrary, cx| cx.defer(crate::libraries::host::open_dialog));
     cx.on_action(|action: &OpenRecentLibrary, cx| {
@@ -511,13 +545,12 @@ pub fn bind(cx: &mut App) {
         });
     });
     cx.on_action(|_: &ClearRecentLibraries, cx| cx.defer(crate::libraries::clear_history));
-    // A check, then the update dialog (`checkForUpdates`), from any window.
+    // Check for Updates… looks for a newer version and then opens the
+    // update dialog. It works in every window.
     cx.on_action(|_: &CheckForUpdates, cx| cx.defer(crate::updates::check_from_menu));
     cx.on_action(|_: &EditCut, cx| edit(cx, Some(Box::new(crate::ui::text_input::Cut)), None));
-    // Outside a text field, Copy puts the files themselves on the
-    // clipboard, as ⌘C over the grid, the viewer and a detail window does.
-    // (Production's row only copies text; chosen with the pointer over the
-    // grid it copies nothing.)
+    // Outside a text field, Copy puts the selected files on the clipboard,
+    // as ⌘C does over the grid, in the viewer and in a detail window.
     cx.on_action(|_: &EditCopy, cx| {
         edit(
             cx,
@@ -539,8 +572,8 @@ pub fn bind(cx: &mut App) {
             Some(Box::new(crate::shell::SelectAll)),
         )
     });
-    // In a text field Undo and Redo are the field's own; elsewhere they
-    // walk the library's history.
+    // In a text field, Undo and Redo undo and redo the typing in that
+    // field. Elsewhere they undo and redo the changes to the library.
     cx.on_action(|_: &EditUndo, cx| {
         edit(
             cx,
@@ -557,9 +590,11 @@ pub fn bind(cx: &mut App) {
     });
 }
 
-/// An action by its name, for the off-screen tool's `action` lines: the
-/// menu's rows that carry a value take it after the name
-/// (`app_menu::SetRating 3`, `app_menu::MoveToTrash true`).
+/// Returns the action that `line` names, for the `action` lines of an
+/// off-screen script (`offscreen.rs`). An action that holds a value takes
+/// the value after its name, as in `app_menu::SetRating 3` and
+/// `app_menu::MoveToTrash true`. Returns `None` when no action has that
+/// name or the value cannot be read.
 #[cfg(test)]
 pub fn named(line: &str, cx: &App) -> Option<Box<dyn Action>> {
     let (name, value) = line.split_once(' ').unwrap_or((line, ""));

@@ -92,7 +92,8 @@ fn normalize(path: &Path) -> PathBuf {
 /// What the command line asks for.
 #[derive(Debug, PartialEq)]
 pub enum Launch {
-    /// `--make-copy <library>`
+    /// `--make-copy <library>`: make a disposable copy of the library at
+    /// this path.
     MakeCopy(PathBuf),
     /// `<copy> [files…]`: open the copy that the guard accepted, and then
     /// the files given after it.

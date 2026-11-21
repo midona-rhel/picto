@@ -1,12 +1,16 @@
-//! macOS and Windows: the web view as a child of a GPUI window of its own,
-//! with the system's title bar ("Login: <service>"), white beneath the page
-//! as production's window is, filling the window as it is resized.
+//! The sign-in window on macOS and Windows. The web view is a child of a
+//! GPUI window that is opened for it. The window has the system's title
+//! bar, with the title "Login: <service>", and a white background behind
+//! the page. The web view always fills the window, also after the window
+//! is resized.
 //!
-//! The web view is made from a task of its own, outside any GPUI update:
-//! WebView2 waits for its environment and controller by running the
-//! thread's messages, which run GPUI's own tasks and window events; those
-//! borrow the app, which must not be borrowed already. A page asked for
-//! before the web view is there is loaded once it is.
+//! The web view is made in a task of its own and not inside a GPUI update.
+//! WebView2 processes the thread's messages while it waits for its
+//! environment and its controller. Those messages run GPUI's own tasks and
+//! window events, which borrow the app, and the app cannot be borrowed a
+//! second time while an update already borrows it. A page that is to be
+//! loaded before the web view exists is remembered and loaded when the web
+//! view has been made.
 use super::{Event, Options};
 use gpui::*;
 use std::cell::{Cell, RefCell};
@@ -18,33 +22,34 @@ type Slot = Rc<RefCell<Option<wry::WebView>>>;
 pub struct Hosted {
     handle: WindowHandle<Host>,
     view: Slot,
-    /// The page to load once the web view is made.
+    /// The address to load when the web view has been made.
     pending: Rc<RefCell<Option<String>>>,
-    /// The window has closed (the user, or the login); a web view made
-    /// after that is dropped at once.
+    /// Whether the window has been closed, by the user or by the login. A
+    /// web view that is made after that is dropped immediately.
     gone: Rc<Cell<bool>>,
-    /// What watches the web view's main-frame load failures, kept as long
-    /// as the window.
+    /// The observer that reports the failed loads of the web view's main
+    /// frame. It is kept for as long as the window is open.
     #[cfg(target_os = "macos")]
     failures: Rc<RefCell<Option<super::macos::Failures>>>,
-    /// WebView2's user data, a fresh folder per window, removed with it.
+    /// The folder of WebView2's user data. Every window gets a new, empty
+    /// folder, which is removed when the window closes.
     #[cfg(target_os = "windows")]
     data: Option<tempfile::TempDir>,
     _build: Task<()>,
 }
 
-/// The GPUI view the web view sits in.
+/// The root view of the GPUI window that holds the web view.
 pub struct Host {
     view: Slot,
-    /// The size the web view was last given, in screen points.
+    /// The size that the web view was last given, in the system's points.
     placed: Cell<Option<(f32, f32)>>,
 }
 
 impl Render for Host {
     fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        // The web view fills the window's content in the system's points,
-        // whatever the interface zoom (GPUI lays the window out divided by
-        // it).
+        // The web view is sized in the system's points so that it fills
+        // the window's content at every interface zoom. GPUI's own sizes
+        // are divided by the zoom, so `content_size` multiplies by it.
         let size = content_size(window);
         if self.placed.get() != Some(size) {
             if let Some(view) = self.view.borrow().as_ref() {
@@ -76,7 +81,8 @@ fn bounds((width, height): (f32, f32)) -> wry::Rect {
     }
 }
 
-/// A window's handle, kept to build the web view outside GPUI's update.
+/// The raw handle of the GPUI window. It is kept so that the web view can
+/// be built as a child of the window outside a GPUI update.
 struct Parent(rwh::RawWindowHandle);
 
 impl rwh::HasWindowHandle for Parent {
@@ -107,7 +113,7 @@ impl Hosted {
                         traffic_light_position: None,
                     }),
                     focus: false,
-                    // Shown once its first page has loaded (`ready-to-show`).
+                    // The window is shown when its first page has loaded.
                     show: false,
                     inactive_frame_interval: None,
                     ..Default::default()
@@ -117,8 +123,9 @@ impl Hosted {
                     let events = closed.clone();
                     let slot_on_close = slot.clone();
                     window.on_window_should_close(cx, move |_, _| {
-                        // The web view leaves its parent before the window
-                        // goes.
+                        // The web view is dropped here, so that it is
+                        // removed from the window before the window is
+                        // destroyed.
                         gone_on_close.set(true);
                         slot_on_close.borrow_mut().take();
                         super::closed();
@@ -188,8 +195,9 @@ impl Hosted {
                 if gone.get() {
                     return;
                 }
-                // Not inside `cx.update`: nothing of the app is borrowed
-                // while WebView2 runs the thread's messages.
+                // The web view is built here and not inside `cx.update`,
+                // so that the app is not borrowed while WebView2 processes
+                // the thread's messages.
                 #[cfg(target_os = "windows")]
                 let builder = {
                     use wry::WebViewBuilderExtWindows as _;
@@ -197,9 +205,9 @@ impl Hosted {
                         wry::WebViewBuilder::new_with_web_context(&mut context),
                         &options,
                     )
-                    // Electron's windows have no menu of their own on a
-                    // right-click; WebView2's (Back, Reload, Inspect…) is
-                    // turned off. A page's own menu still shows.
+                    // WebView2's own context menu (Back, Reload, Inspect
+                    // and so on) is turned off. A menu that the page itself
+                    // shows on a right-click still appears.
                     .with_default_context_menus(false)
                 };
                 #[cfg(target_os = "macos")]
@@ -209,7 +217,8 @@ impl Hosted {
                     .build_as_child(&parent)
                     .map_err(|error| describe(&error));
                 match built {
-                    // Closed while it was being made.
+                    // The window was closed while the web view was being
+                    // made, so the web view is dropped.
                     Ok(_) if gone.get() => {}
                     Ok(web_view) => {
                         #[cfg(target_os = "macos")]
@@ -224,7 +233,8 @@ impl Hosted {
                         }
                         *view.borrow_mut() = Some(web_view);
                         let _ = handle.update(cx, |host, window, cx| {
-                            // The window may have changed size meanwhile.
+                            // The window may have been resized while the
+                            // web view was being made.
                             let size = content_size(window);
                             if let Some(view) = host.view.borrow().as_ref() {
                                 let _ = view.set_bounds(bounds(size));
@@ -237,8 +247,8 @@ impl Hosted {
                         let _ = options.events.unbounded_send(Event::Unavailable(error));
                     }
                 }
-                // WebView2 has made its environment; the context is no
-                // longer needed.
+                // WebView2 has made its environment by now, so the context
+                // is no longer needed.
                 #[cfg(target_os = "windows")]
                 drop(context);
             }
@@ -260,7 +270,8 @@ impl Hosted {
         self.view.borrow().as_ref().map(work)
     }
 
-    /// Loads `url`, or keeps it for when the web view is made.
+    /// Loads `url`. If the web view has not been made yet, `url` is
+    /// remembered and loaded when it has.
     pub fn load(&self, url: &str) {
         match self.view.borrow().as_ref() {
             Some(view) => super::load_into(view, url),
@@ -280,7 +291,7 @@ impl Hosted {
         });
     }
 
-    /// Asks the window to close as its close button does.
+    /// Closes the window the way its close button does.
     #[cfg(debug_assertions)]
     pub fn close_as_user(&self, cx: &mut App) {
         let _ = self.handle.update(cx, |_, window, _| {
@@ -291,7 +302,7 @@ impl Hosted {
         });
     }
 
-    /// Saves a picture of the window as it is on the screen.
+    /// Saves a picture of the window, as it is on the screen, at `path`.
     #[cfg(debug_assertions)]
     pub fn capture(&self, path: &std::path::Path, cx: &mut App) -> Result<(), String> {
         self.handle
@@ -305,8 +316,8 @@ impl Hosted {
     }
 
     pub fn close(self, cx: &mut App) {
-        // The web view goes first, so it never outlives the window it sits
-        // in.
+        // The web view is dropped before the window is removed, so that it
+        // never exists without the window that holds it.
         self.view.borrow_mut().take();
         #[cfg(target_os = "macos")]
         self.failures.borrow_mut().take();
@@ -318,7 +329,8 @@ impl Hosted {
     }
 }
 
-/// Removes the window, once.
+/// Removes the window. Does nothing if the window has already been closed
+/// or removed.
 fn remove(handle: WindowHandle<Host>, gone: &Cell<bool>, cx: &mut App) {
     if gone.replace(true) {
         return;
@@ -327,7 +339,9 @@ fn remove(handle: WindowHandle<Host>, gone: &Cell<bool>, cx: &mut App) {
     let _ = handle.update(cx, |_, window, _| window.remove_window());
 }
 
-/// What the user is told when the system has no web view to sign in with.
+/// Returns the message that the user is shown when the web view could not
+/// be made. On Windows a WebView2 error is reported as the missing WebView2
+/// Runtime.
 fn describe(error: &wry::Error) -> String {
     #[cfg(target_os = "windows")]
     if let wry::Error::WebView2Error(_) = error {

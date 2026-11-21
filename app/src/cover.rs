@@ -2,8 +2,9 @@
 //! database, cropped to the square the user framed.
 use std::path::{Path, PathBuf};
 
-/// The frame stored in `.picto-library-cover.json`: where the square is
-/// centred, in thousandths of the image, and how far it is zoomed in.
+/// Holds the frame stored in `.picto-library-cover.json`: the point of the
+/// image the square is centred on, in thousandths of the image's width and
+/// height, and the zoom in percent.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Crop {
     pub focus_x: f32,
@@ -21,19 +22,21 @@ impl Default for Crop {
     }
 }
 
-/// The square of the source image the cover shows, as `(x, y, side)` in
-/// source pixels. `subscriptionCoverGeometry` lays the image out so that it
-/// covers the square, enlarged by the zoom, and slides it so the focus point
-/// moves toward the centre without uncovering an edge.
+/// Returns the square of the source image that the cover shows, as
+/// `(x, y, side)` in source pixels. The image is scaled so that it covers
+/// the square and then enlarged by the zoom. It is then moved so that the
+/// focus point is as near the square's centre as it can be while the image
+/// still covers the whole square.
 pub fn square(width: f32, height: f32, crop: Crop) -> (f32, f32, f32) {
     let aspect = width / height;
     let zoom = (crop.zoom / 100.).max(1.);
-    // The displayed image, in units of the square's side.
+    // The width and height of the displayed image, in units of the square's
+    // side.
     let across = aspect.max(1.) * zoom;
     let down = (1. / aspect).max(1.) * zoom;
     let centre_x = 0.5 + (0.5 - crop.focus_x / 1000.) * (across - 1.);
     let centre_y = 0.5 + (0.5 - crop.focus_y / 1000.) * (down - 1.);
-    // The square's top-left corner within the displayed image, then to
+    // The square's top-left corner within the displayed image, converted to
     // source pixels.
     let scale = width / across;
     let side = scale.min(width).min(height);
@@ -42,14 +45,16 @@ pub fn square(width: f32, height: f32, crop: Crop) -> (f32, f32, f32) {
     (x, y, side)
 }
 
-/// Writes the cropped cover into `scratch` and returns its path, or the
-/// uncropped cover's when it has no frame or cannot be read.
+/// Writes the cropped cover into the folder `scratch` and returns its path.
+/// Returns the path of the uncropped cover when the cover cannot be decoded
+/// or the cropped one cannot be written, and `None` when the library has no
+/// cover.
 pub fn prepare(library: &Path, scratch: &Path) -> Option<PathBuf> {
     prepare_into(library, &scratch.join("library-cover.png"))
 }
 
-/// The same, writing the cropped cover to `target`. Only `target` is
-/// written; the library's folder is only read.
+/// Does the same as `prepare`, but writes the cropped cover to the file
+/// `target`. It writes only `target` and only reads the library's folder.
 pub fn prepare_into(library: &Path, target: &Path) -> Option<PathBuf> {
     let source = ["jpg", "png"]
         .into_iter()
@@ -100,10 +105,11 @@ mod tests {
             focus_y: 500.,
             zoom: 200.,
         };
-        // Twice the zoom shows half the side, still centred.
+        // A zoom of 200 percent shows a square of half the side, still
+        // centred.
         assert_eq!(square(400., 400., crop), (100., 100., 200.));
-        // A focus at the left edge slides the square fully left, and no
-        // further.
+        // A focus at the left edge moves the square to the image's left
+        // edge and not past it.
         let left = Crop {
             focus_x: 0.,
             ..crop

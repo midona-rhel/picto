@@ -1,14 +1,15 @@
 //! This module holds the app's settings. `SettingsModel` is the one model of
 //! the settings, and the whole app reads it. The application settings and
-//! the grid's default view are loaded from the library and saved to it, in
-//! the rows where production stores them. The Settings window, which
-//! corresponds to production's `Settings.tsx`, edits a draft of the model.
-//! The draft reaches the rest of the app when the user applies it with the
-//! Save & Close button or the Apply button, as in production. Three choices
-//! are shown before that. A language is shown and stored as soon as it is
-//! chosen (`SettingsModel::choose_locale`). A theme and the frosted material
-//! of the sidebar and the inspector are shown as soon as they are chosen,
-//! and closing the window without saving puts the saved ones back.
+//! the grid's default view are loaded from the library and saved to it.
+//! They are in the same rows of the library in which Picto 0.6.19 and
+//! earlier stored them, so that a library keeps its settings. The Settings
+//! window edits a draft of the model. The draft reaches the rest of the app
+//! when the user applies it with the Save & Close button or the Apply
+//! button. Three choices are shown before that. A language is shown and
+//! stored as soon as it is chosen (`SettingsModel::choose_locale`). A theme
+//! and the frosted material of the sidebar and the inspector are shown as
+//! soon as they are chosen, and closing the window without saving puts the
+//! saved ones back.
 pub mod model;
 mod panels;
 mod pieces;
@@ -34,19 +35,16 @@ pub struct Settings {
     /// The grid's default view. It is stored in the `grid:defaults` row of
     /// the library's `view_pref` table.
     pub grid: GridDefaults,
-    // Production keeps the next four fields in the renderer's localStorage,
-    // under the keys `picto-keyboard-preset`, `picto:locale`,
-    // `picto:audio-visualization` and `picto-shortcut-overrides`. What is in
-    // localStorage belongs to one machine, so this app keeps the four in its
-    // own state (`crate::state`) and not in the library.
+    // The next four fields are choices for one machine, not for one
+    // library, so they are kept in the app's own state (`crate::state`) and
+    // not in the library.
     pub keyboard: KeyboardPreset,
     pub locale: &'static str,
     pub audio_visualization: &'static str,
     pub shortcuts: Overrides,
 }
 
-/// The values that the audio visualization setting can have. They are the
-/// values of production's `AUDIO_VISUALIZATION_OPTIONS`.
+/// The values that the audio visualization setting can have.
 const VISUALIZATIONS: [&str; 4] = ["none", "spectrum", "oscilloscope", "orbit"];
 
 impl Settings {
@@ -100,9 +98,8 @@ impl Settings {
 }
 
 /// Returns the keyboard preset and the rebound shortcuts that are stored in
-/// the app's state. Reading the rebound shortcuts corresponds to
-/// production's `loadOverrides`. A binding of a shortcut that is no longer
-/// in `registry::SHORTCUT_DEFS` is left out.
+/// the app's state. A binding of a shortcut that is no longer in
+/// `registry::SHORTCUT_DEFS` is left out.
 pub fn keyboard(cx: &App) -> (KeyboardPreset, Overrides) {
     let state = crate::state::get(cx);
     let overrides = state
@@ -218,8 +215,8 @@ impl SettingsModel {
     /// Shows the language with the code `code` in every window at once and
     /// stores the choice in the app's state, whether or not the rest of the
     /// draft is saved. The Settings window calls this when the user chooses
-    /// a language. It corresponds to production's `setLocale`. It does
-    /// nothing when `code` is not the code of a language the app has.
+    /// a language. It does nothing when `code` is not the code of a language
+    /// the app has.
     pub fn choose_locale(&mut self, code: &'static str, cx: &mut Context<Self>) {
         let Some(locale) = crate::i18n::Locale::normalize(code) else {
             return;
@@ -236,20 +233,19 @@ impl SettingsModel {
     }
 
     /// Changes an applied setting at once, without the Settings window. The
-    /// sidebar's menus change settings this way, for example. It corresponds
-    /// to production's `settingsController.patchSettings`. `change` is made
-    /// to the applied settings and to the draft, so an open Settings window
-    /// shows the same change. The fields that changed are written to the
-    /// library with the command `settings.patch`, and `Applied` is emitted
-    /// so that the app follows the change.
+    /// sidebar's menus change settings this way, for example. `change` is
+    /// made to the applied settings and to the draft, so an open Settings
+    /// window shows the same change. The fields that changed are written to
+    /// the library with the command `settings.patch`, and `Applied` is
+    /// emitted so that the app follows the change.
     pub fn apply_now(&mut self, change: impl Fn(&mut AppSettings), cx: &mut Context<Self>) {
         self.apply_now_reporting(change, None, cx);
     }
 
     /// Does what [`SettingsModel::apply_now`] does. If the write to the
     /// library fails and `failure` is given, it also shows an error
-    /// notification whose title is `failure`, as production's callers of
-    /// `patchSettings` do, for example "Unable to update Quick Access".
+    /// notification whose title is `failure`, for example "Unable to update
+    /// Quick Access".
     pub fn apply_now_reporting(
         &mut self,
         change: impl Fn(&mut AppSettings),
@@ -331,7 +327,8 @@ impl SettingsModel {
             )?;
             Ok::<(), picto_library::LibraryError>(())
         });
-        // "Saving…" shows only for a save that takes longer than this.
+        // The Save & Close button reads "Saving…" only when the save takes
+        // longer than `SAVING_MESSAGE_DELAY`.
         cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(crate::motion::SAVING_MESSAGE_DELAY)
@@ -378,8 +375,8 @@ impl SettingsModel {
                 if saved {
                     this.saved = draft;
                     this.reset_views = false;
-                    // The grid reads its saved view again, in place: the
-                    // selection and the scroll stay.
+                    // The grid reads its saved view again. The selection
+                    // and the scroll position stay as they are.
                     this.session
                         .update(cx, |session, cx| session.refresh_results(cx));
                     cx.emit(Applied);
@@ -420,8 +417,7 @@ pub fn init(session: Entity<Session>, cx: &mut App) {
         crate::theme::show(&scheme, cx);
         crate::ui::window_chrome::want_rail_material(saved.app.rail_material(), cx);
         // The applied settings also decide whether notifications pop up
-        // and which tones of notification do. This corresponds to
-        // production's `configureNotificationPopups`.
+        // and which tones of notification do.
         let (enabled, tones) = {
             let app = &model.read(cx).saved.app;
             (
@@ -448,8 +444,7 @@ pub fn current(cx: &App) -> &AppSettings {
     &cx.global::<SettingsGlobal>().model.read(cx).saved.app
 }
 
-/// Opens the Settings window, or brings it forward if it is open. It
-/// corresponds to production's `openSettingsWindow`.
+/// Opens the Settings window, or brings it forward if it is open.
 pub fn open(cx: &mut App) {
     if !cx.has_global::<SettingsGlobal>() {
         return;
@@ -471,8 +466,8 @@ pub fn open(cx: &mut App) {
 
 /// Opens the Settings window showing the section with the id `panel`. If
 /// the window is already open, it is brought forward and changes to that
-/// section. It corresponds to production's `openSettingsWindow(panel)`. The
-/// About command of the app's menu opens the section `about` this way.
+/// section. The About command of the app's menu opens the section `about`
+/// this way.
 pub fn open_at(panel: &str, cx: &mut App) {
     open(cx);
     if let Some(handle) = cx

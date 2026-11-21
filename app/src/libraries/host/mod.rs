@@ -1,19 +1,17 @@
 //! This module holds the open library and decides what the main window
-//! shows, as `libraryHostService.mjs` and `LibraryGate.tsx` do in the
-//! Electron app. The main window shows either the gate or the shell of the
-//! open library. The gate is what the window shows while no library is open
-//! and while one is opening. The module opens a library, switches to another
-//! library (`switchLibrary`) and closes the open one. It asks for the user's
-//! consent before it opens a library the user keeps. While another Picto is
-//! running and a library the user keeps is open, it shows a notice that
-//! blocks the window.
+//! shows. The main window shows either the gate or the shell of the open
+//! library. The gate is what the window shows while no library is open and
+//! while one is opening. The module opens a library, switches to another
+//! library and closes the open one. It asks for the user's consent before
+//! it opens a library the user keeps. While another Picto is running and a
+//! library the user keeps is open, it shows a notice that blocks the
+//! window.
 //!
 //! A switch does these things in this order. It closes the detail windows,
-//! the Settings window and the log window; the Electron app leaves them
-//! open, and their commands then reach the library that is opened next. It
-//! shows the gate's loading state. It closes the library (`close_library`)
-//! on a thread of its own. It opens the next library in a new shell, as the
-//! Electron app mounts its whole window again under the new library's key.
+//! the Settings window and the log window, because their commands would
+//! otherwise reach the library that is opened next. It shows the gate's
+//! loading state. It closes the library (`close_library`) on a thread of
+//! its own. It opens the next library in a new shell.
 use super::admission::{self, Decision, Origin, Probes, Refusal};
 use super::{Kind, history};
 use crate::application::Application;
@@ -175,8 +173,9 @@ fn attach(
         host.main = Some(main);
         host.incoming = Some(incoming);
     });
-    // The first time this app runs, the libraries that the Electron app
-    // lists are copied into this app's list. No library is opened.
+    // The first time this app runs, `seed::once` fills this app's list of
+    // libraries from the list of Picto 0.6.19 or earlier, if such a list
+    // is found. No library is opened.
     super::seed::once(cx);
 }
 
@@ -227,10 +226,10 @@ pub fn update_shell(
     });
 }
 
-/// Does Open Library… (`openLibraryDialog` in the Electron app). The user
-/// chooses a folder in the system's dialog. A folder whose name ends in
-/// `.library` is opened if the rules of `admission` allow it. For any other
-/// folder the "Invalid Library" error is shown.
+/// Does Open Library…. The user chooses a folder in the system's dialog. A
+/// folder whose name ends in `.library` is opened if the rules of
+/// `admission` allow it. For any other folder the "Invalid Library" error is
+/// shown.
 pub fn open_dialog(cx: &mut App) {
     let chosen = crate::prompt::file_or_folder(en("Select a .library folder"), cx);
     cx.spawn(async move |cx| {
@@ -260,10 +259,10 @@ pub fn open_dialog(cx: &mut App) {
     .detach();
 }
 
-/// Creates a library at `path`, which the user chose (`createLibrary` in the
-/// Electron app). This function makes the folder, and the application core
-/// creates the library in it when it opens it. The user is not asked for
-/// consent, because the user has just made this library in this app.
+/// Creates a library at `path`, which the user chose. This function makes
+/// the folder, and the application core creates the library in it when it
+/// opens it. The user is not asked for consent, because the user has just
+/// made this library in this app.
 pub fn create(path: PathBuf, cx: &mut App) {
     let probes = host(cx).read(cx).probes.clone();
     if let Err(refusal) = admission::admit_new(&path, &super::facts(), &*probes) {
@@ -410,11 +409,9 @@ pub fn request(path: &Path, origin: Origin, cx: &mut App) {
 
 /// Called at start when no library was named. Opens the library this app had
 /// open last, if this process may open it at all (`listed`). When that
-/// library is no longer at its path, it shows the Electron app's "Library
-/// Not Found" question (`handleMissingLibrary`), with the buttons Locate…,
-/// Remove from List and Cancel. The Electron app first opens the first
-/// library of its history that still exists. This app opens at start only
-/// the library it had open last, and asks when that library is missing.
+/// library is no longer at its path, it shows the "Library Not Found"
+/// question, with the buttons Locate…, Remove from List and Cancel. It does
+/// not open another library of the history in its place.
 pub fn start_last(cx: &mut App) {
     let last = crate::state::get(cx).last_library.clone();
     let Some(last) = last.filter(|last| super::listed(last, &super::facts())) else {
@@ -433,9 +430,8 @@ pub fn start_last(cx: &mut App) {
     }
 }
 
-/// Does Locate… for a library that is missing (`handleMissingLibrary` and
-/// `relocateLibrary` in the Electron app). The user chooses a folder in the
-/// system's dialog. The library is looked for in that folder itself and
+/// Does Locate… for a library that is missing. The user chooses a folder in
+/// the system's dialog. The library is looked for in that folder itself and
 /// inside it under the missing library's name (`located`). When it is found,
 /// the list of libraries is changed to name the new path. With `open` set,
 /// the library is then opened under the same rules as any other library the
@@ -443,8 +439,8 @@ pub fn start_last(cx: &mut App) {
 /// apply to the new path, so the user is asked again.
 pub fn locate(missing: PathBuf, open: bool, cx: &mut App) {
     let basename = missing.file_name().unwrap_or_default().to_owned();
-    // The Electron app's dialog shows this text as its message. The system's
-    // dialog here shows it as the prompt of its button.
+    // The system's folder dialog shows this text as the prompt of its
+    // button.
     let chosen = crate::prompt::folder(
         &format!(
             "Select the folder containing {}",
@@ -460,9 +456,8 @@ pub fn locate(missing: PathBuf, open: bool, cx: &mut App) {
             let Some(found) = super::located(&folder, &basename) else {
                 return fail(
                     en("Library Not Found").to_owned(),
-                    // The Electron app's main process writes this message in
-                    // English and has no translation key for it, so it is
-                    // not translated here.
+                    // The locale files have no key for this message, so it
+                    // is shown in English in every language.
                     format!(
                         "\"{}\" was not found in the selected folder.",
                         basename.to_string_lossy()
@@ -663,9 +658,9 @@ fn start_with(
                     check_picto(cx);
                 }
                 Err(error) => {
-                    // The library did not open (`library-open-failed` in the
-                    // Electron app). The main window shows the gate again,
-                    // and the Library Manager opens and shows the reason.
+                    // The library did not open. The main window shows the
+                    // gate again, and the Library Manager opens and shows
+                    // the reason.
                     close(cx);
                     fail(en("Could not open Picto Library").to_owned(), error, cx);
                     super::manager::open(cx);
@@ -697,8 +692,9 @@ pub fn close(cx: &mut App) {
     }
 }
 
-/// Stops the open library's workers and checkpoints it before the process
-/// ends, as the Electron app closes its library before quitting.
+/// Stops the open library's workers and checkpoints the library before the
+/// process ends (`Application::close`). The shell's session is disconnected
+/// from the library first.
 pub fn close_for_quit(cx: &mut App) {
     let host = host(cx);
     let open = host.update(cx, |host, _| host.open.take());
@@ -789,9 +785,9 @@ pub fn title(root: &Path, kind: Kind) -> String {
 /// What the gate shows.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Gate {
-    /// No library is open (`closed`).
+    /// No library is open.
     Closed,
-    /// A library is opening (`loading`). The text is the library's name.
+    /// A library is opening. The text is the library's name.
     Loading(String),
 }
 

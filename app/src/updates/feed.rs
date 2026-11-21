@@ -1,21 +1,27 @@
-//! Production's release feed, read as `updateService.mjs` and
-//! electron-updater read it: GitHub's list of releases, the newest
-//! application release newer than this version, and that release's
-//! `latest.yml` (Windows) or `latest-linux.yml` (Linux), which names the
-//! installer, its SHA-512 and its size.
+//! Reads what GitHub and a release's feed say about Picto's releases. The
+//! update check reads GitHub's list of releases and takes the newest release
+//! of the app that is newer than this version. On Windows and Linux it then
+//! reads that release's feed file, `latest.yml` or `latest-linux.yml`, which
+//! names the installer, its SHA-512 and its size.
+//!
+//! The feed has the format that electron-builder writes and that
+//! electron-updater reads. `package.sh` writes it in that format, because an
+//! Electron-based Picto (version 0.6.19 or earlier) reads the same file with
+//! electron-updater when it updates itself to this app.
 use base64::Engine as _;
 use serde_json::Value;
 use sha2::{Digest as _, Sha512};
 
-/// `RELEASES_API`
+/// The address of GitHub's list of Picto's 20 newest releases, as JSON.
 pub const RELEASES_API: &str =
     "https://api.github.com/repos/midona-rhel/picto/releases?per_page=20";
-/// `RELEASES_PAGE`
+/// The address of the web page that lists Picto's releases.
 pub const RELEASES_PAGE: &str = "https://github.com/midona-rhel/picto/releases";
-/// `RELEASE_DOWNLOADS`
+/// The start of the address of every file of a release. The release's tag
+/// and the file's name follow it.
 pub const RELEASE_DOWNLOADS: &str = "https://github.com/midona-rhel/picto/releases/download";
 
-/// A release from GitHub's list.
+/// Holds one release from GitHub's list of releases.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Release {
     pub tag: String,
@@ -25,9 +31,10 @@ pub struct Release {
     pub html_url: Option<String>,
 }
 
-/// `latestAppRelease`: the first release in GitHub's order (newest first)
-/// that is an application release (`APP_RELEASE_TAG`, not a draft) newer
-/// than `current`.
+/// Returns the first release in `releases` that is a release of the app, is
+/// not a draft, and is newer than the version `current`. GitHub lists the
+/// newest release first. A release of the app is one whose tag
+/// `is_app_tag` accepts.
 pub fn latest_app_release(releases: &Value, current: &str) -> Option<Release> {
     releases.as_array()?.iter().find_map(|entry| {
         let tag = entry.get("tag_name")?.as_str()?;
@@ -52,8 +59,11 @@ pub fn latest_app_release(releases: &Value, current: &str) -> Option<Release> {
     })
 }
 
-/// `APP_RELEASE_TAG`: `v1.2.3`, optionally with a pre-release and build
-/// part (`v0.6.1-alpha`), and nothing else (not `ai-models-v2`).
+/// Returns whether `tag` is the tag of a release of the app: three numbers
+/// separated by dots, with or without a `v` before them, and optionally a
+/// pre-release part after `-` and a build part after `+`. `v1.2.3` and
+/// `v0.6.1-alpha` are such tags. The repository also has releases that are
+/// not the app, with tags such as `ai-models-v2`.
 fn is_app_tag(tag: &str) -> bool {
     let tag = tag.strip_prefix('v').unwrap_or(tag);
     let (rest, build) = match tag.split_once('+') {
@@ -83,7 +93,9 @@ enum Part {
     Text(String),
 }
 
-/// `versionParts`
+/// Splits a version at each `.` and `-`, after removing a `v` at its start.
+/// A part made of digits only becomes a number, and any other part becomes
+/// a text.
 fn parts(version: &str) -> Vec<Part> {
     version
         .strip_prefix('v')
@@ -96,9 +108,10 @@ fn parts(version: &str) -> Vec<Part> {
         .collect()
 }
 
-/// `isNewer`: compared part by part; a missing part counts as 0, a number
-/// is newer than a word (`0.6.1` after `0.6.1-alpha`), words compare as
-/// text.
+/// Returns whether the version `candidate` is newer than `current`. The
+/// versions are compared part by part (`parts`). A missing part counts as
+/// the number 0. A number is newer than a text, so `0.6.1` is newer than
+/// `0.6.1-alpha`. Two texts are compared as text.
 pub fn is_newer(candidate: &str, current: &str) -> bool {
     let (left, right) = (parts(candidate), parts(current));
     for index in 0..left.len().max(right.len()) {
@@ -117,8 +130,10 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
     false
 }
 
-/// The feed file electron-updater reads on each system, beside the
-/// release's assets; macOS has none (production opens the release page).
+/// Returns the name of the feed file among a release's files for the
+/// operating system `platform`: `latest.yml` for Windows and
+/// `latest-linux.yml` for Linux. Returns `None` for macOS, where the app
+/// reads no feed and opens the release's page.
 pub fn feed_file(platform: &str) -> Option<&'static str> {
     match platform {
         "win32" => Some("latest.yml"),
@@ -127,8 +142,8 @@ pub fn feed_file(platform: &str) -> Option<&'static str> {
     }
 }
 
-/// The address of `file` in the release tagged `tag` (the generic feed's
-/// `url`, `<downloads>/<tag>/`).
+/// Returns the address of the file `file` of the release tagged `tag`:
+/// `RELEASE_DOWNLOADS`, then the tag, then the file's name.
 pub fn asset_url(tag: &str, file: &str) -> String {
     let base = format!(
         "{RELEASE_DOWNLOADS}/{}/",
@@ -140,7 +155,7 @@ pub fn asset_url(tag: &str, file: &str) -> String {
         .unwrap_or_else(|_| format!("{base}{file}"))
 }
 
-/// What a feed file says of the update.
+/// Holds what a feed file says about an update.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Feed {
     pub version: String,
@@ -155,14 +170,15 @@ pub struct FeedFile {
     pub url: String,
     pub sha512: String,
     pub size: Option<u64>,
-    /// `isAdminRightsRequired`: the Windows installer is started elevated
-    /// (`NsisUpdater.doInstall`).
+    /// The feed's `isAdminRightsRequired`. When it is true, the Windows
+    /// installer is started with administrator rights.
     pub admin: bool,
 }
 
 impl FeedFile {
-    /// The installer's file name: the last part of its `url`, which must be
-    /// a plain name.
+    /// Returns the installer's file name, which is the last part of the path
+    /// of `url`. Returns `None` when that part is empty, is `..`, or holds a
+    /// backslash.
     pub fn name(&self) -> Option<String> {
         self.url
             .split(['?', '#'])
@@ -173,9 +189,11 @@ impl FeedFile {
     }
 }
 
-/// Reads the YAML electron-builder writes: top-level `key: value` lines,
-/// the `files:` list, block-scalar release notes, and the older `path` and
-/// `sha512` of a feed without `files`.
+/// Reads a feed file. It reads only the parts of YAML that electron-builder
+/// writes in a feed: `key: value` lines at the top level, the list under
+/// `files:`, release notes written as a block (`|` or `>`), and, in a feed
+/// without `files`, the top-level `path` and `sha512` that older feeds have.
+/// Returns an error when the feed names no version.
 pub fn parse_feed(text: &str) -> Result<Feed, String> {
     let mut feed = Feed::default();
     let (mut path, mut sha512) = (None, None);
@@ -269,8 +287,9 @@ fn scalar(value: &str) -> String {
     value.to_owned()
 }
 
-/// The installer electron-updater takes on each system: the `.exe` on
-/// Windows (`NsisUpdater`), the `.AppImage` on Linux (`AppImageUpdater`).
+/// Returns the entry of the feed that is the installer for the operating
+/// system `platform`: the first file whose name ends in `.exe` for Windows,
+/// or in `.AppImage` for Linux, ignoring case. Returns `None` for macOS.
 pub fn installer<'a>(feed: &'a Feed, platform: &str) -> Option<&'a FeedFile> {
     let extension = match platform {
         "win32" => ".exe",
@@ -284,9 +303,11 @@ pub fn installer<'a>(feed: &'a Feed, platform: &str) -> Option<&'a FeedFile> {
     })
 }
 
-/// Whether the downloaded bytes are the file the feed describes: its
-/// SHA-512 (base64, as electron-builder writes it) and, where the feed
-/// gives it, its size.
+/// Checks that a downloaded file is the one that the feed describes.
+/// `bytes_sha512` is the SHA-512 of the file and `length` is its size in
+/// bytes. The SHA-512 must be equal to the feed's, which is written in
+/// base64. The size must be equal to the feed's when the feed gives one.
+/// Returns an error that says what differs.
 pub fn verify(bytes_sha512: &[u8], length: u64, file: &FeedFile) -> Result<(), String> {
     if let Some(size) = file.size
         && size != length
@@ -306,7 +327,8 @@ pub fn verify(bytes_sha512: &[u8], length: u64, file: &FeedFile) -> Result<(), S
     Ok(())
 }
 
-/// A running SHA-512, fed as the download arrives.
+/// Returns a new SHA-512 hasher. The caller gives it the bytes of a download
+/// as they arrive.
 pub fn hasher() -> Sha512 {
     Sha512::new()
 }
