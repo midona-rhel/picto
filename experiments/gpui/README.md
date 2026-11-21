@@ -880,7 +880,9 @@ pictures-linux`). There is no macOS job.
 
 The workflow runs for every pull request into `dev` that changes
 `experiments/gpui/`, `core/`, `picto-library/` or `picto-sources/`, and it
-can be started by hand for any branch from the Actions page.
+can be started by hand for any branch from the Actions page. It also runs
+when such a change arrives on `dev`. That run saves the build cache that
+the runs of pull requests start from.
 
 The job builds once. `cargo test --no-run` builds the test program and the
 app together, and every later step starts one of those two programs

@@ -9,8 +9,23 @@ name: GPUI experiment
 # It runs for every pull request into `dev` that changes the app or one of
 # the shared crates the app is built from, and it can be started by hand for
 # any branch.
+#
+# It also runs when such a change arrives on `dev` itself. A run for a pull
+# request can read the build cache that a run on `dev` saved, but not the
+# cache of another pull request. Without the runs on `dev`, the first run of
+# every pull request would compile about 1,100 packages from nothing, which
+# takes close to an hour on Windows.
 on:
   pull_request:
+    branches:
+      - dev
+    paths:
+      - "experiments/gpui/**"
+      - "picto-library/**"
+      - "picto-sources/**"
+      - "core/**"
+      - ".github/workflows/gpui-experiment.yml"
+  push:
     branches:
       - dev
     paths:
