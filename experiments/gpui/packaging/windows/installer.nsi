@@ -214,6 +214,11 @@ Function ElevateForAllUsers
     Return
   ${EndIf}
   ${GetParameters} $R1
+  ; The parameters do not hold `/D=`, so a folder given with it is passed on
+  ; here. It must be the last parameter.
+  ${If} $givenFolder != ""
+    StrCpy $R1 "$R1 /D=$givenFolder"
+  ${EndIf}
   ClearErrors
   ExecShellWait "runas" "$EXEPATH" "/allusers $R1"
   ${IfNot} ${Errors}

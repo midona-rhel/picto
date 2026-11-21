@@ -135,8 +135,10 @@ jobs:
 
       # The installer is compiled with NSIS, which the Windows runner image
       # has. This step fails here, with a clear message, if a later image
-      # does not have it.
-      - name: Find NSIS (Windows)
+      # does not have it. It also compiles the installer's script once with
+      # an empty file in place of the program, so that a mistake in the
+      # script is found now and not after the release build.
+      - name: Find NSIS and compile the installer's script (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
@@ -148,6 +150,17 @@ jobs:
           fi
           echo "makensis: $makensis"
           MSYS_NO_PATHCONV=1 "$makensis" -VERSION
+          echo
+          stand_in="$RUNNER_TEMP/installer-stand-in"
+          mkdir -p "$stand_in/files/resources"
+          : > "$stand_in/files/Picto.exe"
+          cp build/picto-pack.ico "$stand_in/files/resources/"
+          MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "$makensis" -V2 -INPUTCHARSET UTF8 \
+            -DVERSION=0.0.0 -DVERSION_NUMBERS=0.0.0.0 -DESTIMATED_SIZE_KB=1 \
+            "-DSOURCE=$(cygpath -w "$stand_in/files")" \
+            "-DOUTPUT=$(cygpath -w "$stand_in/setup.exe")" \
+            "-DICON=$(cygpath -w "$PWD/build/icon.ico")" \
+            "$(cygpath -w "$PWD/experiments/gpui/packaging/windows/installer.nsi")"
 
       - name: Download FFmpeg binaries
         shell: bash
