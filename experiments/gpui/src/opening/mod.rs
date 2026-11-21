@@ -1,17 +1,19 @@
-//! Files the system asks the app to open, as production's main process takes
-//! them (`associatedFileService.mjs`, `open-file`, `second-instance`): the
-//! command line, a second launch on the same copy ([`instance`]), and on
-//! macOS `application:openURLs:` (Open With, a drop on the Dock icon,
-//! `open -a`). Production opens two kinds and ignores every other file:
-//! `.picto-pack` archives, which go to the pack's import dialog one at a
-//! time, and `.library` folders, which it switches to.
+//! This module handles the files that the system asks the app to open.
+//! They arrive in three ways: on the command line, from a second launch on
+//! the same copy ([`instance`]), and on macOS through
+//! `application:openURLs:` (Open With, a drop on the Dock icon, `open -a`).
+//!
+//! The app acts on two kinds of files and ignores every other file. A
+//! `.picto-pack` archive goes to the pack's import dialog, one archive at a
+//! time. A `.library` folder that is not the open library is refused with a
+//! notification ([`accept`]).
 pub mod instance;
 
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
-/// What an opened file is (`ASSOCIATED_SUFFIXES`).
+/// The kind of a file that the app acts on, which its name's ending gives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
     Pack,
@@ -25,9 +27,11 @@ pub struct Associated {
     pub path: PathBuf,
 }
 
-/// `classifyAssociatedFile`: a `.picto-pack` or `.library` path or `file:`
-/// address, made absolute against `working_directory`; flags (`-…`), other
-/// files and anything unreadable are `None`.
+/// Returns the file that `value` names, when `value` is the path or the
+/// `file:` address of a `.picto-pack` or a `.library`. A relative path is
+/// made absolute against `working_directory`. Returns `None` for an argument
+/// that starts with `-`, for a file of another kind and for an address that
+/// cannot be read.
 pub fn classify(value: &str, working_directory: &Path) -> Option<Associated> {
     if value.is_empty() || value.starts_with('-') {
         return None;
@@ -53,8 +57,8 @@ pub fn classify(value: &str, working_directory: &Path) -> Option<Associated> {
     Some(Associated { kind, path })
 }
 
-/// `associatedFilesFromArguments`: the opened files among `values`, each
-/// once, in order. Arguments that are not text are skipped.
+/// Returns the files among `values` that the app acts on, in the order
+/// given. A file that is named more than once is returned once.
 pub fn from_arguments<S: AsRef<str>>(values: &[S], working_directory: &Path) -> Vec<Associated> {
     let mut seen = HashSet::new();
     values
@@ -64,7 +68,9 @@ pub fn from_arguments<S: AsRef<str>>(values: &[S], working_directory: &Path) -> 
         .collect()
 }
 
-/// `path.normalize`: `.` dropped and `..` taken back, by the text alone.
+/// Returns `path` without its `.` components, and with each `..` component
+/// removed together with the component before it. Only the text of the path
+/// is used; the file system is not read.
 fn normalize(path: &Path) -> PathBuf {
     let mut normal = PathBuf::new();
     for component in path.components() {
@@ -88,18 +94,19 @@ fn normalize(path: &Path) -> PathBuf {
 pub enum Launch {
     /// `--make-copy <library>`
     MakeCopy(PathBuf),
-    /// `<copy> [--detach | files…]`: the copy the guard accepted, opened (or
-    /// detached and left), with the files given after it.
+    /// `<copy> [files…]`: open the copy that the guard accepted, and then
+    /// the files given after it.
     Open {
         copy: PathBuf,
-        detach: bool,
-        /// The arguments after the copy, as text, for the instance that
-        /// opens them (this one, or the one already open on the copy).
+        /// The arguments after the copy, as text. The instance that has the
+        /// copy open opens them: this process, or a process that was started
+        /// earlier.
         rest: Vec<String>,
     },
-    /// No copy: files for the instance already open, as a file manager
-    /// launches the app with only the file. `refused` is why the first
-    /// argument is not a copy, for when no instance is open.
+    /// The first argument is not a copy, so all arguments are files. A file
+    /// manager starts the app this way, with only the file. `refused` says
+    /// why the first argument is not a copy. It is printed when no running
+    /// instance can take the files.
     HandOver { files: Vec<String>, refused: String },
 }
 
@@ -127,11 +134,7 @@ pub fn parse(
     }
     let rest = arguments.map(text).collect::<Result<Vec<_>, _>>()?;
     match guard(Path::new(&first)) {
-        Ok(copy) => Ok(Launch::Open {
-            copy,
-            detach: rest.first().is_some_and(|next| next == "--detach"),
-            rest,
-        }),
+        Ok(copy) => Ok(Launch::Open { copy, rest }),
         Err(refused) => {
             let mut files = vec![text(first)?];
             files.extend(rest);
@@ -140,19 +143,22 @@ pub fn parse(
     }
 }
 
-/// What reaches the running app to open: files, and whether the window
-/// comes forward (a second launch, as `focusMainWindow`; the files of this
-/// launch's own command line do not need it).
+/// The files that the running app is asked to open at one time. `forward`
+/// says whether the main window is brought to the front afterwards. It is
+/// `true` for files from a second launch or from the system, and `false` for
+/// the files of this launch's own command line, whose window is opening
+/// anyway.
 #[derive(Debug)]
 pub struct Incoming {
     pub entries: Vec<Associated>,
     pub forward: bool,
 }
 
-/// Opens what arrived, as `drainAssociatedFiles` does: each pack is queued
-/// for its import dialog, a library is the open one (nothing to do) or
-/// refused (a file the system hands over never opens a library here,
-/// `libraries::admission`), and the main window comes forward.
+/// Opens the files of `incoming`. Each pack is queued for its import
+/// dialog. For a library that is the open one, nothing is done. Any other
+/// library is refused with a notification, because a file that the system
+/// hands over never opens a library (`libraries::admission`). Then the main
+/// window is brought to the front, if `incoming.forward` asks for that.
 pub fn accept(incoming: Incoming, cx: &mut gpui::App) {
     let root = crate::libraries::host::current(cx).map(|(root, _)| root);
     for entry in incoming.entries {
@@ -168,11 +174,10 @@ pub fn accept(incoming: Incoming, cx: &mut gpui::App) {
                     .canonicalize()
                     .is_ok_and(|path| Some(&path) == root.as_ref());
                 if !same {
-                    // TODO: open another library (production's
-                    // `switchLibrary`); the app opens only the copy it was
-                    // started on.
-                    // Production's main process writes the title in
-                    // English, without a key.
+                    // TODO: open the other library. The app does not
+                    // switch to a library that the system hands over.
+                    // The notification's title has no key in the
+                    // translation files, so it is shown in English.
                     crate::ui::notify::error(
                         crate::i18n::en("Could not open Picto Library"),
                         format!(
@@ -272,16 +277,7 @@ mod tests {
             parse(arguments(&["x/Copy.library", "a.picto-pack"]), guard),
             Ok(Launch::Open {
                 copy: PathBuf::from("/canonical/Copy.library"),
-                detach: false,
                 rest: vec!["a.picto-pack".into()],
-            })
-        );
-        assert_eq!(
-            parse(arguments(&["x/Copy.library", "--detach"]), guard),
-            Ok(Launch::Open {
-                copy: PathBuf::from("/canonical/Copy.library"),
-                detach: true,
-                rest: vec!["--detach".into()],
             })
         );
         assert_eq!(

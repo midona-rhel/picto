@@ -106,14 +106,14 @@ impl Locale {
     /// The source text of this language's catalog.
     fn source(self) -> &'static str {
         match self {
-            Locale::En => include_str!("../../../../src/i18n/locales/en.json"),
-            Locale::De => include_str!("../../../../src/i18n/locales/de.json"),
-            Locale::Es => include_str!("../../../../src/i18n/locales/es.json"),
-            Locale::Pt => include_str!("../../../../src/i18n/locales/pt.json"),
-            Locale::Fr => include_str!("../../../../src/i18n/locales/fr.json"),
-            Locale::ZhCn => include_str!("../../../../src/i18n/locales/zh-CN.json"),
-            Locale::Ja => include_str!("../../../../src/i18n/locales/ja.json"),
-            Locale::Fi => include_str!("../../../../src/i18n/locales/fi.json"),
+            Locale::En => include_str!("locales/en.json"),
+            Locale::De => include_str!("locales/de.json"),
+            Locale::Es => include_str!("locales/es.json"),
+            Locale::Pt => include_str!("locales/pt.json"),
+            Locale::Fr => include_str!("locales/fr.json"),
+            Locale::ZhCn => include_str!("locales/zh-CN.json"),
+            Locale::Ja => include_str!("locales/ja.json"),
+            Locale::Fi => include_str!("locales/fi.json"),
         }
     }
 }

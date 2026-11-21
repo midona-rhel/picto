@@ -52,8 +52,6 @@
 #   21 the Inbox, which the script opened by pressing Enter on the first
 #      row, the command Inbox. The picture shows that the panel has closed
 #      and that the Inbox is open.
-reload
-size 1213 865
 wait 800
 shot 01-grid
 move 450 150

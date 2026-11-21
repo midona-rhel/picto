@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 
+// Certifies one subscription source against the real site. It runs the
+// ignored test `live_subscription_source_persistence_certification` of
+// `core/tests/subscription_source_readiness.rs` with the site, the query
+// and the report's path in environment variables. `--help` prints what the
+// test proves and how credentials are given.
+
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getStaticAuthLoginRoutes } from '../electron/windows/authSessions.mjs';
-import { verifyAuthRoute } from './verify-auth-routes.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -26,7 +30,6 @@ JSON evidence report.
 Use --credential-file for unattended certification without touching the OS
 keychain. Use --allow-keychain only for an explicitly attended local run; it
 requires a stored credential and records keychain authentication in the report.
-The configured direct-site login route is checked before certification starts.
 Source support and credential requirements are owned by the backend registry.`);
   process.exit(0);
 }
@@ -43,13 +46,6 @@ if (!site || !query) {
 if (!Number.isSafeInteger(postLimit) || postLimit < 1) {
   console.error('--post-limit must be a positive integer.');
   process.exit(2);
-}
-
-const authRoute = getStaticAuthLoginRoutes().find((entry) => entry.site === site);
-if (authRoute) {
-  const routeResult = await verifyAuthRoute(authRoute);
-  console.log(`auth_route_${routeResult.status}: ${routeResult.detail}`);
-  if (routeResult.status === 'failed') process.exit(1);
 }
 
 const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-');

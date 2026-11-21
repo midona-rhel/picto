@@ -187,14 +187,7 @@ fn plays_a_script() {
     // The library opens and the first page and its thumbnails arrive.
     settle(&mut cx, window, Duration::from_secs(3), lazy);
     for line in script.lines().map(str::trim) {
-        // `size`, `js` and `reload` are for the Electron reference
-        // (`reference.mjs`), which takes the same scripts.
-        if line.is_empty()
-            || line.starts_with('#')
-            || line == "reload"
-            || line.starts_with("size ")
-            || line.starts_with("js ")
-        {
+        if line.is_empty() || line.starts_with('#') {
             continue;
         }
         if let Some(name) = line.strip_prefix("shot ") {

@@ -13,10 +13,12 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  verify-renderer:
-    name: verify:renderer
+  # Runs the tests of the scripts in `scripts/`: the release gate, the branch
+  # policy and the macOS signing code.
+  verify-scripts:
+    name: verify:scripts
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -26,20 +28,11 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Install root dependencies
+      - name: Install the scripts' packages
         run: npm ci
 
-      - name: Check localization
-        run: npm run check:localization
-
-      - name: Typecheck renderer
-        run: npx tsc -p tsconfig.json --noEmit
-
-      - name: Test renderer
-        run: npm run test -- --run
-
-      - name: Check command parity
-        run: npm run check:command-parity
+      - name: Test the scripts
+        run: npm test
 
   verify-rust:
     name: verify:rust
@@ -51,8 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # release-audit is a Node script, but this job does not install the
-      # renderer dependency tree.
+      # `release-audit.mjs` runs on Node.js and needs no npm packages.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24

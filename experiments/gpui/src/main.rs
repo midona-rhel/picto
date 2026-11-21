@@ -75,12 +75,11 @@ pub fn set_app_menus(cx: &mut App) {
     app_menu::set_menus(cx);
 }
 
-/// Sets the app's own `AppleFontSmoothing` preference to 0. The Electron
-/// app draws its text with `-webkit-font-smoothing: antialiased`, which does
-/// not thicken the strokes. GPUI thickens light text on a dark background
-/// unless this preference is 0, so it is set before any text is drawn.
+/// Sets the app's own `AppleFontSmoothing` preference to 0. Unless this
+/// preference is 0, GPUI draws light text on a dark background with thicker
+/// strokes than the font has, so it is set before any text is drawn.
 #[cfg(target_os = "macos")]
-fn match_chromium_text_weight() {
+fn turn_off_font_smoothing() {
     use core_foundation::{base::TCFType, number::CFNumber, string::CFString};
     use core_foundation_sys::preferences::{
         CFPreferencesSetAppValue, kCFPreferencesCurrentApplication,
@@ -144,11 +143,10 @@ fn prepare(cx: &mut App) {
 }
 
 /// Returns where the main window opens. With `PICTO_GPUI_WINDOW=1213x865`
-/// the window is centred at exactly that size, so that a picture of it can
-/// be compared pixel for pixel with a picture of the Electron app's window.
-/// Otherwise the window opens where it was last, if that place is on a
-/// display that is still connected (`getSavedMainWindowState`), and else
-/// centred at the default size.
+/// the window is centred at exactly that size, so that every picture taken
+/// of it has the same size. Otherwise the window opens where it was last, if
+/// that place is on a display that is still connected, and else centred at
+/// the default size.
 fn main_window_bounds(cx: &App) -> WindowBounds {
     let exact = seams::exact_window();
     let centred = |width: f32, height: f32| {
@@ -194,8 +192,7 @@ fn main_window_bounds(cx: &App) -> WindowBounds {
 
 /// Saves the main window's normal bounds and whether it is maximised. For
 /// a window in full screen, the bounds saved are the ones it returns to when
-/// full screen ends, as the Electron app's `getNormalBounds` gives them, and
-/// the window opens at those bounds next time.
+/// full screen ends, and the window opens at those bounds next time.
 fn remember_window(window: &Window, cx: &mut App) {
     if seams::exact_window().is_some() {
         return;
@@ -261,9 +258,9 @@ fn printed_version(bundled_ffmpeg: Option<&std::path::Path>) -> bool {
 ///
 /// An update on Linux starts the new AppImage while the old app is still
 /// quitting, and sets `APPIMAGE_SILENT_INSTALL` for it
-/// (`desktop::install_update`; the Electron app's updater does the same). A
-/// launch with that variable waits up to 30 seconds for the old app to end
-/// before it gives up.
+/// (`desktop::install_update`; the updater of Picto 0.6.19 and earlier, which
+/// electron-updater provided, does the same). A launch with that variable
+/// waits up to 30 seconds for the old app to end before it gives up.
 fn exit_if_another_picto_runs() {
     let patience = if std::env::var_os("APPIMAGE_SILENT_INSTALL").is_some() {
         std::time::Duration::from_secs(30)
@@ -288,8 +285,7 @@ fn main() {
     // The application core and the source providers look for `ffmpeg` and
     // `ffprobe` in the folder `PICTO_FFMPEG_DIR` names before they look
     // anywhere else. A packaged app has both programs beside itself, so it
-    // names its own folder, as the Electron app does when it is packaged. A
-    // value the user set is kept.
+    // names its own folder. A value the user set is kept.
     if let Some(folder) = &bundled_ffmpeg
         && std::env::var_os("PICTO_FFMPEG_DIR").is_none()
     {
@@ -298,9 +294,9 @@ fn main() {
         unsafe { std::env::set_var("PICTO_FFMPEG_DIR", folder) };
     }
     // Only one Picto runs at a time. A release build that finds another
-    // Picto running, whether it is this app or the Electron app, does not
-    // start. A debug build does not look: several debug builds run at once
-    // on purpose, each on its own disposable copy.
+    // Picto running does not start. That includes Picto 0.6.19 and earlier,
+    // whose program has the same name. A debug build does not look: several
+    // debug builds run at once on purpose, each on its own disposable copy.
     if !cfg!(debug_assertions) {
         exit_if_another_picto_runs();
     }
@@ -311,7 +307,7 @@ fn main() {
     }
     diagnostics::install_logger();
     #[cfg(target_os = "macos")]
-    match_chromium_text_weight();
+    turn_off_font_smoothing();
     let working_directory = std::env::current_dir().unwrap_or_default();
     let mut arguments: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     // With `--allow-real-libraries` as the first argument, a debug or test
@@ -324,10 +320,10 @@ fn main() {
     }
     libraries::set_flag(flag);
     // The first argument is the root of a disposable copy that `run.sh` or
-    // `--make-copy` made. The files after it are opened as the Electron app
-    // opens them (`opening`), and so are the files a file manager starts the
-    // app with when there is no copy. With no argument the app opens the
-    // library it had open last, or shows the gate.
+    // `--make-copy` made. The files after it are opened (`opening`), and so
+    // are the files a file manager starts the app with when there is no
+    // copy. With no argument the app opens the library it had open last, or
+    // shows the gate.
     let launch = if arguments.is_empty() {
         None
     } else {
@@ -358,22 +354,7 @@ fn main() {
             }
             return;
         }
-        // `--detach` after the copy stops the copy from carrying on the
-        // real library's cloud sync, watched folders and queued runs, and
-        // then the program ends. `reference.sh` uses it before it opens the
-        // copy with the Electron app, which would otherwise resume that
-        // work. A folder without the marker is refused
-        // (`application::detach`).
-        Some(opening::Launch::Open {
-            copy, detach: true, ..
-        }) => {
-            if let Err(error) = application::detach(&copy, false) {
-                eprintln!("picto: {error}");
-                std::process::exit(2);
-            }
-            return;
-        }
-        Some(opening::Launch::Open { copy, rest, .. }) => {
+        Some(opening::Launch::Open { copy, rest }) => {
             let request = opening::instance::Request {
                 cwd: working_directory.clone(),
                 args: rest.clone(),
@@ -520,7 +501,7 @@ fn run(
                     covered::keep_painting(window);
                     cx.new(|cx| {
                         // The window's place and size are saved whenever
-                        // they change (`queueSaveMainWindowState`).
+                        // they change.
                         cx.observe_window_bounds(window, |_, window, cx| {
                             remember_window(window, cx)
                         })
@@ -543,10 +524,9 @@ fn run(
             .unwrap();
         libraries::host::boot(window, incoming, initial, cx);
         // Before the process ends, the workers are stopped and the library
-        // is checkpointed, as the Electron app closes its library before it
-        // quits. This is registered after the window opened, so that the
-        // session's own quit handler, which saves a pending view change,
-        // runs first.
+        // is checkpointed. This is registered after the window opened, so
+        // that the session's own quit handler, which saves a pending view
+        // change, runs first.
         cx.on_app_quit(move |cx| {
             state::flush(cx);
             libraries::host::close_for_quit(cx);
@@ -568,7 +548,7 @@ fn run(
         #[cfg(debug_assertions)]
         net_check::start(cx);
         // The files the app was asked to open are opened once the window
-        // exists, as the Electron app's `drainAssociatedFiles` opens them.
+        // exists.
         cx.spawn(async move |cx| {
             use futures::StreamExt as _;
             while let Some(incoming) = arrived.next().await {
