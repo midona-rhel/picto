@@ -133,8 +133,18 @@ pub fn size_for_columns(container_width: f32, columns: usize, gap: f32) -> f32 {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Zoom {
     /// The grid and waterfall layouts: the grid has `count` columns, and the
-    /// zoom allows at most `most` columns at this width.
-    Columns { count: usize, most: usize },
+    /// zoom allows at most `most` columns at this width. `exact` and `span`
+    /// are the same two numbers before they are rounded to whole columns:
+    /// how many tiles of the current size fit in the width, and how many
+    /// tiles of [`SMALLEST_TILE`] fit. The zoom control places its knob with
+    /// them, because they change evenly while the grid is made wider or
+    /// narrower, and the whole numbers change in jumps.
+    Columns {
+        count: usize,
+        most: usize,
+        exact: f32,
+        span: f32,
+    },
     /// The justified layout: the target row height in pixels.
     Height(f32),
 }
@@ -144,10 +154,16 @@ pub enum Zoom {
 pub fn zoom(container_width: f32, target_size: f32, gap: f32, mode: ViewMode) -> Zoom {
     match mode {
         ViewMode::Justified => Zoom::Height(target_size.clamp(SMALLEST_TILE, TALLEST_ROW)),
-        ViewMode::Grid | ViewMode::Waterfall => Zoom::Columns {
-            count: columns(container_width, target_size, gap),
-            most: most_columns(container_width, gap),
-        },
+        ViewMode::Grid | ViewMode::Waterfall => {
+            let fit = |size: f32| f64::from(container_width - gap) / f64::from(size + gap);
+            let span = fit(SMALLEST_TILE).max(1.);
+            Zoom::Columns {
+                count: columns(container_width, target_size, gap),
+                most: most_columns(container_width, gap),
+                exact: fit(target_size.max(SMALLEST_TILE)).clamp(1., span) as f32,
+                span: span as f32,
+            }
+        }
     }
 }
 
@@ -169,7 +185,7 @@ pub fn zoom_step(
         return None;
     }
     match zoom(container_width, target_size, gap, mode) {
-        Zoom::Columns { count, most } => {
+        Zoom::Columns { count, most, .. } => {
             let next = if larger { count - 1 } else { count + 1 };
             (1..=most)
                 .contains(&next)

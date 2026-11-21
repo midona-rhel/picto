@@ -8,7 +8,9 @@
 //! columns the grid can have at its current width. The smallest tiles (the
 //! most columns) are at the left end and one column is at the right end. Each
 //! position gives a different number of columns, and no number of columns is
-//! left out. In the justified layout, which has a target row height and no
+//! left out. The knob's place on the track follows the size of the tiles, so
+//! it moves only slightly, and only in one direction, while the grid is made
+//! wider or narrower without a change of zoom. In the justified layout, which has a target row height and no
 //! columns, the knob's position is that height and it can be anywhere on the
 //! track. Production's control sets a tile size from 150 to 900 in steps of 10
 //! in every layout.
@@ -41,8 +43,15 @@ pub enum Changed {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Value {
     /// The grid has `count` columns, and the zoom allows at most `most`
-    /// columns at the grid's current width.
-    Columns { count: usize, most: usize },
+    /// columns at the grid's current width. `exact` and `span` are the same
+    /// two numbers before they are rounded to whole columns
+    /// (`layout::Zoom::Columns`). The knob is placed with them.
+    Columns {
+        count: usize,
+        most: usize,
+        exact: f32,
+        span: f32,
+    },
     /// The justified layout's target row height in pixels. `least` and `most`
     /// are the ends of the track.
     Height { height: f32, least: f32, most: f32 },
@@ -134,8 +143,12 @@ impl Value {
         match self {
             // A grid too narrow for two columns has one knob position. It is
             // drawn at the right end, where one column always is.
-            Value::Columns { most, .. } if most <= 1 => 1.,
-            Value::Columns { count, most } => most.saturating_sub(count) as f32 / (most - 1) as f32,
+            Value::Columns { most, span, .. } if most <= 1 || span <= 1. => 1.,
+            // The whole numbers `count` and `most` each change in a jump at
+            // a different width, so a knob placed with them moved left and
+            // right by turns while the grid was resized. The numbers before
+            // rounding change evenly with the width.
+            Value::Columns { exact, span, .. } => (span - exact) / (span - 1.),
             Value::Height {
                 height,
                 least,
@@ -152,10 +165,16 @@ impl Value {
     /// half a unit of its 0 to 100 track.
     fn at(self, along: f32) -> Self {
         match self {
-            Value::Columns { most, .. } => Value::Columns {
-                count: most - (along * most.saturating_sub(1) as f32).round() as usize,
-                most,
-            },
+            Value::Columns { most, span, .. } => {
+                let count = (span - along * (span - 1.).max(0.)).round() as usize;
+                let count = count.clamp(1, most.max(1));
+                Value::Columns {
+                    count,
+                    most,
+                    exact: count as f32,
+                    span,
+                }
+            }
             Value::Height { least, most, .. } => Value::Height {
                 height: (least + (most - least) * along).round(),
                 least,
@@ -173,7 +192,7 @@ impl Value {
     fn at_end(self, larger: bool) -> bool {
         match (self, larger) {
             (Value::Columns { count, .. }, true) => count <= 1,
-            (Value::Columns { count, most }, false) => count >= most,
+            (Value::Columns { count, most, .. }, false) => count >= most,
             (Value::Height { height, most, .. }, true) => height >= most,
             (Value::Height { height, least, .. }, false) => height <= least,
             (Value::Percent(percent), true) => percent >= PERCENT_MAXIMUM,
@@ -187,7 +206,7 @@ impl Value {
     /// end, where the smallest tiles are, starting at 1.
     fn numbers(self) -> (f64, f64, f64) {
         match self {
-            Value::Columns { count, most } => {
+            Value::Columns { count, most, .. } => {
                 ((most + 1).saturating_sub(count) as f64, 1., most as f64)
             }
             Value::Height {
@@ -210,7 +229,12 @@ impl Zoom {
     /// buttons are disabled until then.
     pub fn new() -> Self {
         Self {
-            value: Value::Columns { count: 1, most: 1 },
+            value: Value::Columns {
+                count: 1,
+                most: 1,
+                exact: 1.,
+                span: 1.,
+            },
             dragging: Rc::new(Cell::new(false)),
         }
     }

@@ -24,7 +24,7 @@ use crate::ui::{
 };
 use gpui::*;
 use picto_library::{TagNamespaceRecord, TagRecord};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 /// `PAGE_SIZE`: how many tags are loaded at a time.
@@ -109,6 +109,11 @@ pub struct TagDialog {
     namespaces: Vec<TagNamespaceRecord>,
     /// `entityTagKeys`: the tags of the item the inspector shows.
     entity: BTreeSet<String>,
+    /// How many items have each tag that the Selected view can list: the
+    /// tags of the item the inspector shows and the tags clicked in this
+    /// dialog. The Selected view builds its rows from tag names alone, and
+    /// takes each row's count from here.
+    counts: HashMap<String, u64>,
     /// `checked` and `unchecked`: the tags ticked and the tags unticked in
     /// this dialog, in the order they were clicked.
     add: Vec<String>,
@@ -140,6 +145,7 @@ impl TagDialog {
             pager: TagPager::new(PAGE),
             namespaces: Vec::new(),
             entity: BTreeSet::new(),
+            counts: HashMap::new(),
             add: Vec::new(),
             remove: Vec::new(),
             view: View::All,
@@ -151,11 +157,15 @@ impl TagDialog {
         }
     }
 
-    /// Opens the dialog for `selected` items, with the tags of the shown item
-    /// ticked, an empty search field and nothing marked. The tags that were
-    /// loaded last stay in the list until the new ones arrive.
-    pub fn open(&mut self, entity: BTreeSet<String>, selected: usize, cx: &mut Context<Self>) {
-        self.entity = entity;
+    /// Opens the dialog for `selected` items, with `tags`, the tags of the
+    /// shown item, ticked, an empty search field and nothing marked. The tags
+    /// that were loaded last stay in the list until the new ones arrive.
+    pub fn open(&mut self, tags: &[TagRecord], selected: usize, cx: &mut Context<Self>) {
+        self.entity = tags.iter().map(name).collect();
+        self.counts = tags
+            .iter()
+            .map(|tag| (name(tag), tag.active_count))
+            .collect();
         self.selected = selected;
         self.query.clear();
         self.search.update(cx, |search, cx| search.clear(cx));
@@ -246,21 +256,28 @@ impl TagDialog {
         } else {
             &self.entity
         };
-        display_tags(
+        let mut rows = display_tags(
             &self.view,
             &self.pager.tags,
             entity,
             &self.session.read(cx).recent_tags,
-        )
+        );
+        if self.view == View::Selected {
+            for row in &mut rows {
+                if let Some(count) = self.counts.get(&name(row)) {
+                    row.active_count = *count;
+                }
+            }
+        }
+        rows
     }
 
-    fn toggle(&mut self, tag: &str, cx: &mut Context<Self>) {
-        super::membership::mark(
-            &self.entity,
-            &mut self.add,
-            &mut self.remove,
-            tag.to_owned(),
-        );
+    /// Ticks or unticks `tag`, and remembers how many items have it, so that
+    /// the Selected view can show that number beside it.
+    fn toggle(&mut self, tag: &TagRecord, cx: &mut Context<Self>) {
+        let full = name(tag);
+        self.counts.insert(full.clone(), tag.active_count);
+        super::membership::mark(&self.entity, &mut self.add, &mut self.remove, full);
         cx.notify();
     }
 
@@ -297,7 +314,7 @@ impl TagDialog {
             }
             Key::Confirm => {
                 if let Some(tag) = rows.get(self.focus_index.unwrap_or(0)) {
-                    self.toggle(&name(tag), cx);
+                    self.toggle(tag, cx);
                 }
             }
             Key::Next => {
@@ -478,6 +495,7 @@ impl TagDialog {
                     .child(format!("{}:", tag.namespace)),
             );
         }
+        let clicked = tag.clone();
         let label = if tag.subname.is_empty() {
             full.clone()
         } else {
@@ -502,7 +520,7 @@ impl TagDialog {
             MouseButton::Left,
             cx.listener(|this, _, window, cx| this.leave_search(window, cx)),
         )
-        .on_click(cx.listener(move |this, _, _, cx| this.toggle(&full, cx)))
+        .on_click(cx.listener(move |this, _, _, cx| this.toggle(&clicked, cx)))
     }
 
     fn list(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {

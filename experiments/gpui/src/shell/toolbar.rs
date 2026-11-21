@@ -125,8 +125,9 @@ impl Toolbar {
                         this.show_zoom(cx);
                         cx.notify();
                     }
-                    // At another width the same tile size gives another
-                    // number of columns, so the zoom control's knob moves.
+                    // At another width the same tile size gives other column
+                    // numbers, so the zoom control is given the grid's zoom
+                    // again.
                     Change::GridWidth => this.show_zoom(cx),
                     _ => {}
                 },
@@ -152,7 +153,17 @@ impl Toolbar {
     /// row height in the justified layout.
     fn show_zoom(&mut self, cx: &mut Context<Self>) {
         let value = match self.session.read(cx).zoom() {
-            layout::Zoom::Columns { count, most } => zoom::Value::Columns { count, most },
+            layout::Zoom::Columns {
+                count,
+                most,
+                exact,
+                span,
+            } => zoom::Value::Columns {
+                count,
+                most,
+                exact,
+                span,
+            },
             layout::Zoom::Height(height) => zoom::Value::Height {
                 height,
                 least: layout::SMALLEST_TILE,
