@@ -94,10 +94,13 @@ impl NativeSourceAdapter for ArchiveSource {
                         .await
                 }
             };
-            // Resuming: the cursor names the next post (when it was known) and
-            // the last one handled. The listing may have shifted since, by
-            // any amount, so find them again, walking back from the cursor's
-            // page with fresh copies, and continue from there.
+            // When a run resumes, the cursor names the next post (when it
+            // was known) and the last post that was handled. Posts may have
+            // been added or deleted since then, which moves every later post
+            // to another position. The two posts are therefore searched for
+            // again, starting on the cursor's page and going back one page at
+            // a time with newly fetched pages, and the run continues from
+            // where they are found.
             if let Some(anchor) = decode_cursor_anchor(self.0, &creator, request.cursor.as_deref())?
             {
                 let mut offset = cursor.offset;
@@ -227,14 +230,17 @@ impl NativeSourceAdapter for ArchiveSource {
     }
 }
 
-/// A listing's posts: the API answers with a bare array or `{"posts": [...]}`.
+/// Returns the posts of a listing response. The API answers either with an
+/// array of posts or with an object whose `posts` field holds that array.
 fn page_posts(page: &Value) -> Option<&Vec<Value>> {
     page.as_array()
         .or_else(|| page.get("posts").and_then(Value::as_array))
 }
 
-/// A listing's posts, or why the response isn't a page: posts present, at
-/// most a page of them, each with an id and from this creator.
+/// Returns the posts of a listing response after checking that it is a
+/// page: it has a list of posts, the list is no longer than one page, and
+/// every post has an id and belongs to this creator. Otherwise it returns the
+/// error that says which of these checks failed.
 fn checked_page<'a>(
     provider: ArchiveProvider,
     creator: &CreatorLocator,
@@ -267,8 +273,8 @@ fn page_len(page: &Value) -> usize {
     page_posts(page).map_or(0, Vec::len)
 }
 
-/// The request with its cursor pointing at `index` of the page at `offset`,
-/// so the anchor lookup lands there.
+/// Returns a copy of the request whose cursor points at post `index` of the
+/// page at `offset`, so that the search for the resume position starts there.
 fn resume_at(
     provider: ArchiveProvider,
     creator: &CreatorLocator,
@@ -462,7 +468,9 @@ fn detail_url(
         ],
         "",
     )?;
-    // Cached detail/profile responses can ignore identity encoding and arrive as raw gzip.
+    // The archive's cache can return a stored post or profile response as
+    // raw gzip even when the request asked for no compression. The extra
+    // query parameter makes the URL one that the cache has not stored.
     url.query_pairs_mut().append_pair("_picto", "1");
     Ok(url)
 }
@@ -594,8 +602,10 @@ pub(super) fn decode_cursor(
         parts[5],
         parts[6],
     )?;
-    // Older cursors moved to the next page one post early (offset 49, 98...),
-    // which the API now refuses. The same position, on a page boundary:
+    // Older cursors moved to the next page one post early (offset 49, 98
+    // and so on), and the API now refuses those offsets. The position is
+    // converted here to the same post counted from a multiple of the page
+    // length.
     let position = offset
         .checked_add(index)
         .ok_or_else(|| invalid_cursor(provider))?;
@@ -888,11 +898,22 @@ fn flat_tags(value: Option<&Value>) -> Vec<String> {
     }
 }
 
+/// One file that a post lists, before it is decided whether it can be
+/// downloaded.
 #[derive(Debug, Clone)]
 struct MediaCandidate {
+    /// Where the archive stores the file: a path on the media host, or an
+    /// absolute URL. A file that has only a `temp_url` uses that URL here.
     path: String,
     name: Option<String>,
     server: Option<String>,
+    /// The `temp_url` of the file: a signed, expiring URL that serves the
+    /// original. When it is present the file is downloaded from it and not
+    /// from `path`.
+    temp_url: Option<String>,
+    /// The archive marks a file `preview_only` when it has stored a preview
+    /// under `path` and not the original.
+    preview_only: bool,
 }
 
 fn post_media(
@@ -937,6 +958,8 @@ fn post_media(
         candidates.push(MediaCandidate {
             name: file_name_from_path(&path),
             server: None,
+            temp_url: None,
+            preview_only: false,
             path,
         });
     }
@@ -954,13 +977,20 @@ fn post_media(
     let mut seen = BTreeSet::new();
     let mut media = Vec::new();
     for candidate in candidates {
+        // A `preview_only` file without a `temp_url` has no original to
+        // download. Its `path` answers 404 on the media host.
+        if candidate.preview_only && candidate.temp_url.is_none() {
+            continue;
+        }
         if is_preview_candidate(&candidate) {
             continue;
         }
         let url = media_url(provider, &candidate)?;
+        // The query of a `temp_url` is a signature that differs on every
+        // request, so it is left out when two entries are compared.
         let identity = content_hash(&candidate.path)
             .map(|hash| format!("hash:{hash}"))
-            .unwrap_or_else(|| format!("url:{url}"));
+            .unwrap_or_else(|| format!("url:{}", url.split(['?', '#']).next().unwrap_or(&url)));
         if !seen.insert(identity) {
             continue;
         }
@@ -1024,7 +1054,10 @@ fn push_candidate(
     servers: &BTreeMap<String, String>,
 ) {
     let Some(value) = value else { return };
-    let Some(path) = text(value, "path").or_else(|| value.as_str()) else {
+    let temp_url = text(value, "temp_url");
+    // An entry with neither a `path` nor a `temp_url` is a file the archive
+    // has not made available yet, and it is left out.
+    let Some(path) = text(value, "path").or_else(|| value.as_str()).or(temp_url) else {
         return;
     };
     let path = normalized_path(path);
@@ -1033,6 +1066,11 @@ fn push_candidate(
         server: text(value, "server")
             .map(ToOwned::to_owned)
             .or_else(|| servers.get(&path).cloned()),
+        temp_url: temp_url.map(ToOwned::to_owned),
+        preview_only: value
+            .get("preview_only")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         path,
     });
 }
@@ -1041,7 +1079,17 @@ fn normalized_path(path: &str) -> String {
     path.trim().replace('\\', "/")
 }
 
+/// The URL the file is downloaded from: its `temp_url` when it has one, with
+/// the signed query kept, and otherwise the URL built from its `path`. A
+/// `temp_url` that ends in `.m3u8` is an HLS playlist, which the downloader
+/// recognises by that ending.
 fn media_url(provider: ArchiveProvider, candidate: &MediaCandidate) -> Result<String, SourceError> {
+    if let Some(temp_url) = candidate.temp_url.as_deref() {
+        let url = Url::parse(temp_url)
+            .map_err(|_| invalid_response(provider, "post contains an invalid media URL"))?;
+        validate_media_host(provider, &url)?;
+        return Ok(url.to_string());
+    }
     if let Ok(url) = Url::parse(&candidate.path) {
         validate_media_host(provider, &url)?;
         return Ok(url.to_string());
@@ -1088,7 +1136,7 @@ fn inline_paths(content: &str) -> Vec<String> {
     INLINE
         .get_or_init(|| {
             Regex::new(
-                r#"(?i)src\s*=\s*[\"'](?:https?://(?:[a-z0-9-]+\.)?pawchive\.(?:pw|st))?((?:/data)?/(?:inline/|[0-9a-f]{2}/[0-9a-f]{2}/)[^\"'?#\s]+)"#,
+                r#"(?i)src\s*=\s*[\"'](?:https?://(?:[a-z0-9-]+\.)?pawchive\.(?:pw|st))?((?:/data)?/(?:inline/|[0-9a-f]{2,4}/[0-9a-f]{2}/)[^\"'?#\s]+)"#,
             )
             .expect("valid archive inline-media regex")
         })
@@ -1097,10 +1145,13 @@ fn inline_paths(content: &str) -> Vec<String> {
         .collect()
 }
 
+/// The SHA-256 hash in a stored file's path, for example
+/// `/4a/1c/<64 hex digits>.png`. The first directory has two to four hex
+/// digits and the second has two.
 fn content_hash(path: &str) -> Option<&str> {
     static HASH: OnceLock<Regex> = OnceLock::new();
     HASH.get_or_init(|| {
-        Regex::new(r"(?i)/(?:[0-9a-f]{2})/(?:[0-9a-f]{2})/([0-9a-f]{64})(?:\.|$)")
+        Regex::new(r"(?i)/(?:[0-9a-f]{2,4})/(?:[0-9a-f]{2})/([0-9a-f]{64})(?:\.|$)")
             .expect("valid content hash regex")
     })
     .captures(path)

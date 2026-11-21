@@ -285,6 +285,19 @@ pub static SITES: &[SiteEntry] = &[
         credential_types: NO_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
+    SiteEntry {
+        id: "onlyhaven",
+        domain: "cum.st",
+        credential_owner_site_id: "onlyhaven",
+        name: "OnlyHaven",
+        example_query: "onlyfans:12345",
+        supports_query: false,
+        supports_account: true,
+        auth_required_for_full_access: false,
+        auth_strictly_required: false,
+        credential_types: NO_CREDENTIAL_TYPES,
+        oauth_provider: None,
+    },
 ];
 
 /// Look up a supported site by its exact ID.
@@ -332,6 +345,7 @@ pub fn build_url(site_id: &str, query: &str) -> Option<String> {
         "safebooru" => build_booru_url("https://safebooru.org/index.php?page=post&s=list", query),
         "e621" => build_booru_url("https://e621.net/posts", query),
         "ehentai" => normalize_ehentai_gallery_url(query).ok(),
+        "onlyhaven" => picto_sources::providers::onlyhaven::creator_url(query).ok(),
         "pawchive" => normalize_archive_creator_url(query, "pawchive.pw").ok(),
         _ => None,
     }
@@ -1008,6 +1022,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn onlyhaven_accepts_creators_without_requiring_a_login() {
+        let site = site_by_id("onlyhaven").unwrap();
+        assert!(site.supports_account);
+        assert!(!site.supports_query);
+        assert!(!site.auth_strictly_required);
+        assert!(site.credential_types.is_empty());
+        assert_eq!(
+            build_url("onlyhaven", "patreon:42").as_deref(),
+            Some("https://cum.st/creators/patreon/42")
+        );
+        assert!(build_url("onlyhaven", "https://example.test/creators/patreon/42").is_none());
+    }
+
+    #[test]
     fn production_registry_contains_exactly_the_supported_sources() {
         let ids: HashSet<_> = SITES.iter().map(|site| site.id).collect();
         assert_eq!(
@@ -1032,9 +1060,10 @@ mod tests {
                 "e621",
                 "ehentai",
                 "pawchive",
+                "onlyhaven",
             ])
         );
-        assert_eq!(SITES.len(), 19);
+        assert_eq!(SITES.len(), 20);
     }
 
     #[test]

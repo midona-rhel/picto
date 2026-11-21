@@ -1,0 +1,98 @@
+[
+  {
+    "id": 6360238,
+    "created_at": "2026-11-20T16:58:50.553-05:00",
+    "updated_at": "2026-11-20T17:02:11.004-05:00",
+    "change_seq": 70000001,
+    "files": {
+      "meta": {
+        "md5": "4667e8118159b612601f1b72ae010693",
+        "ext": "png",
+        "size": 5354344,
+        "duration": null,
+        "has_sample": true
+      },
+      "original": {
+        "width": 2000,
+        "height": 3000,
+        "url": "https://static1.e621.net/data/46/67/4667e8118159b612601f1b72ae010693.png"
+      },
+      "preview": {
+        "width": 100,
+        "height": 150,
+        "jpg": "https://static1.e621.net/data/preview/46/67/4667e8118159b612601f1b72ae010693.jpg",
+        "webp": "https://static1.e621.net/data/preview/46/67/4667e8118159b612601f1b72ae010693.webp"
+      },
+      "sample": {
+        "width": 850,
+        "height": 1275,
+        "jpg": "https://static1.e621.net/data/sample/46/67/4667e8118159b612601f1b72ae010693.jpg",
+        "webp": "https://static1.e621.net/data/sample/46/67/4667e8118159b612601f1b72ae010693.webp"
+      }
+    },
+    "uploader_id": 1,
+    "uploader_name": "example_uploader",
+    "approver_id": null,
+    "stats": {
+      "score": { "up": 3, "down": 0, "total": 3 },
+      "fav_count": 5,
+      "is_favorited": false,
+      "vote": 0,
+      "comment_count": 0,
+      "hotness": 1.5
+    },
+    "flags": {
+      "pending": false,
+      "flagged": false,
+      "note_locked": false,
+      "status_locked": false,
+      "rating_locked": false,
+      "deleted": false
+    },
+    "has": {
+      "parent": false,
+      "children": false,
+      "active_children": false,
+      "notes": false,
+      "sample": true
+    },
+    "relationships": { "parent_id": null, "children": [] },
+    "pools": [],
+    "rating": "e",
+    "locked_tags": [],
+    "sources": [],
+    "description": "A post",
+    "tags": {
+      "general": ["solo"],
+      "artist": ["example_artist"],
+      "contributor": [],
+      "copyright": ["example_series"],
+      "character": ["example_character"],
+      "species": ["canine"],
+      "invalid": [],
+      "meta": ["highres"],
+      "lore": []
+    }
+  },
+  {
+    "id": 6360237,
+    "created_at": "2026-11-20T16:40:02.118-05:00",
+    "files": {
+      "meta": {
+        "md5": "0123456789abcdef0123456789abcdef",
+        "ext": "webm",
+        "size": 1048576,
+        "duration": 12.5,
+        "has_sample": false
+      },
+      "original": { "width": 1280, "height": 720, "url": null }
+    },
+    "rating": "s",
+    "description": "",
+    "tags": {
+      "general": ["solo"],
+      "artist": ["example_artist"],
+      "species": ["canine"]
+    }
+  }
+]
