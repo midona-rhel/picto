@@ -1,10 +1,12 @@
-//! `MediaCoverDialog`: media 200 at a time in a grid of squares; a click
-//! frames the chosen image in a square that is dragged to place and zoomed
-//! with the wheel or the slider, and Confirm saves it. A subscription's
-//! cover (`SubscriptionCoverDialog`: `subscriptions.cover.candidates`,
-//! `subscriptions.cover.set`) and the library's (`LibraryCoverDialogHost`)
-//! both use it: [`CoverHost`] is what each owner provides, and
-//! [`cover_layer`] draws the dialog for any of them.
+//! The dialog that sets a cover (`MediaCoverDialog`). It first shows the
+//! pictures that can become the cover as a grid of squares, loaded 200 at a
+//! time. A click on one shows that picture in a square frame, where it is
+//! dragged into place and zoomed with the wheel or the slider. Confirm saves
+//! the framed square as the cover. A subscription's cover
+//! (`SubscriptionCoverDialog`: `subscriptions.cover.candidates`,
+//! `subscriptions.cover.set`) and the library's cover
+//! (`LibraryCoverDialogHost`) both use it. [`CoverHost`] is what each of those
+//! two owners provides, and [`cover_layer`] draws the dialog for either.
 use crate::cover::Crop;
 use crate::grid::thumbnails::Thumbnails;
 use crate::i18n::t;
@@ -15,8 +17,8 @@ use gpui::*;
 use serde_json::Value;
 use std::{cell::Cell, path::PathBuf, rc::Rc};
 
-/// `.candidate` squares are at least 104px with 8px between them
-/// (`floor((width + 8) / 112)` columns).
+/// The squares (`.candidate`) are at least 104px wide with 8px between them,
+/// which gives `floor((width + 8) / 112)` columns.
 const CANDIDATE: f32 = 112.;
 const GAP: f32 = 8.;
 /// `zoomPercent` runs from 100 to 300 in steps of 5.
@@ -24,18 +26,19 @@ const ZOOM_MIN: f32 = 100.;
 const ZOOM_MAX: f32 = 300.;
 const ZOOM_STEP: f32 = 5.;
 
-/// One medium that can become the cover.
+/// One picture or video that can become the cover.
 #[derive(Clone, Debug)]
 pub struct Candidate {
     pub media_item: i64,
     /// Its file's content hash.
     pub hash: String,
-    /// The source's size; a square until it is known.
+    /// The size of the original in pixels. A square until the size is known.
     pub size: (u32, u32),
     pub thumbnail: Option<PathBuf>,
 }
 
-/// Where a drag started: the pointer and the focus it moved from.
+/// Where a drag started: the pointer's position and the focus the picture had
+/// then.
 type Drag = Rc<Cell<Option<(Point<Pixels>, f32, f32)>>>;
 
 /// Whose cover the dialog sets.
@@ -57,14 +60,16 @@ pub struct Cover {
     pub crop: Crop,
     drag: Drag,
     list: UniformListScrollHandle,
-    /// The text over the candidates, and what shows when there are none.
+    /// The text above the squares (`instructions`), and the text shown when
+    /// there is nothing to choose from (`empty`).
     instructions: &'static str,
     empty: &'static str,
 }
 
 impl Cover {
-    /// A dialog for `target` that starts loading its candidates, framing
-    /// `selected` at once when it is given (`initialCandidate`).
+    /// Makes a dialog for `target` and starts loading its candidates. When
+    /// `selected` is given (`initialCandidate`), the dialog opens with that
+    /// picture already in the frame.
     pub fn new(
         target: Target,
         selected: Option<Candidate>,
@@ -91,16 +96,18 @@ impl Cover {
 pub trait CoverHost: Sized + 'static {
     /// The open dialog's state.
     fn cover(&mut self) -> Option<&mut Cover>;
-    /// A save is on its way: Back and Confirm wait.
+    /// Whether a save is in progress. Back and Confirm are disabled while it
+    /// is.
     fn cover_busy(&self) -> bool;
-    /// The cache the candidates' thumbnails decode into.
+    /// The cache that the candidates' thumbnails are decoded into.
     fn cover_thumbnails(&self) -> Entity<Thumbnails>;
-    /// The grid has scrolled near its end: the next page.
+    /// Called when the grid has been scrolled near its end. Loads the next
+    /// page.
     fn load_more_candidates(&mut self, cx: &mut Context<Self>);
-    /// Confirm: the framed square is saved, and the dialog closes once it
-    /// has been.
+    /// Confirm: saves the framed square. The dialog closes when the save has
+    /// finished.
     fn save_cover(&mut self, cx: &mut Context<Self>);
-    /// The close button, Escape and the backdrop.
+    /// Called by the close button, by Escape and by a click on the backdrop.
     fn dismiss_cover(&mut self, cx: &mut Context<Self>);
 
     fn choose_candidate(&mut self, candidate: Candidate, cx: &mut Context<Self>) {
@@ -118,7 +125,7 @@ pub trait CoverHost: Sized + 'static {
         }
     }
 
-    /// Back: the candidates again.
+    /// Back: shows the candidates again.
     fn unselect_candidate(&mut self, cx: &mut Context<Self>) {
         if let Some(cover) = self.cover() {
             cover.selected = None;
@@ -127,8 +134,9 @@ pub trait CoverHost: Sized + 'static {
     }
 }
 
-/// Adds a page of candidates to the dialog: a first page with nothing on it
-/// asks for the next while there is more (the cursor to read on with).
+/// Adds a page of candidates to the dialog. When the dialog still has no
+/// candidates after this page and there are more pages, it returns the cursor
+/// of the next page, which the caller then loads.
 pub fn add_page(
     cover: &mut Cover,
     candidates: Vec<Candidate>,
@@ -149,16 +157,17 @@ pub fn add_page(
     again
 }
 
-/// `floor((width + 8) / 112)` columns, at least one, and their side.
+/// The number of columns for `width`, which is `floor((width + 8) / 112)` and
+/// at least one, and the side of one square.
 pub fn columns(width: f32) -> (usize, f32) {
     let count = (((width + GAP) / CANDIDATE).floor() as usize).max(1);
     let side = (width - (count - 1) as f32 * GAP) / count as f32;
     (count, side)
 }
 
-/// The zoom after a wheel turn of `delta_y` as the browser reports it
-/// (`deltaY`, positive for a turn down): 5 points per event, in for a turn
-/// up.
+/// The zoom after one wheel event with `delta_y` as a browser reports it
+/// (`deltaY`, positive when the wheel turns down). Each event changes the zoom
+/// by 5 points: in when the wheel turns up, out when it turns down.
 pub fn wheel_zoom(zoom: f32, delta_y: f32) -> f32 {
     (zoom - delta_y.signum() * ZOOM_STEP).clamp(ZOOM_MIN, ZOOM_MAX)
 }
@@ -168,8 +177,8 @@ pub fn stepped_zoom(zoom: f32) -> f32 {
     ((zoom / ZOOM_STEP).round() * ZOOM_STEP).clamp(ZOOM_MIN, ZOOM_MAX)
 }
 
-/// The focus after dragging by `moved` over a viewport `side` wide: the
-/// image follows the pointer, as far as it reaches past the square.
+/// The focus after a drag by `moved` in a frame `side` wide. The picture
+/// follows the pointer, but only as far as the picture extends past the frame.
 pub fn dragged(
     from: (f32, f32),
     moved: (f32, f32),
@@ -193,7 +202,7 @@ pub fn dragged(
     (along(from.0, moved.0, across), along(from.1, moved.1, down))
 }
 
-/// The dialog: the candidates, or the chosen one being framed.
+/// Draws the dialog: the candidates, or the chosen picture in its frame.
 pub fn cover_layer<V: CoverHost>(
     host: &mut V,
     presence: Presence,
@@ -217,8 +226,8 @@ pub fn cover_layer<V: CoverHost>(
     let viewport = window.viewport_size();
     match &cover.selected {
         Some(selected) => {
-            // `.cropViewport`: `min(58vh, 420px)` square, no wider than
-            // the body.
+            // `.cropViewport`: a square of `min(58vh, 420px)`, and no wider
+            // than the body.
             let side = (f32::from(viewport.height) * 0.58).min(420.);
             let inner = side - 2.;
             let (x, y, square) =
@@ -254,8 +263,8 @@ pub fn cover_layer<V: CoverHost>(
                         .overflow_hidden()
                         .children(image),
                 )
-                // The border over the image, which GPUI cannot clip to
-                // the rounded corners.
+                // The border is drawn over the picture, because GPUI cannot
+                // cut the picture to the round corners.
                 .child(
                     div()
                         .absolute()
@@ -267,8 +276,8 @@ pub fn cover_layer<V: CoverHost>(
                 .on_scroll(cx.listener(move |this, event: &ScrollEvent, window, cx| {
                     let delta = event.delta.pixel_delta(window.line_height());
                     if f32::from(delta.y) != 0. {
-                        // GPUI's delta is the content's movement, the
-                        // opposite of the browser's `deltaY`.
+                        // GPUI's delta is how far the content moves, which has
+                        // the opposite sign of a browser's `deltaY`.
                         this.set_crop(
                             |crop| crop.zoom = wheel_zoom(crop.zoom, -f32::from(delta.y)),
                             cx,
@@ -276,8 +285,9 @@ pub fn cover_layer<V: CoverHost>(
                     }
                     cx.stop_propagation();
                 }))
-                // The drag follows the pointer anywhere in the window
-                // until the button comes up, as pointer capture does.
+                // The drag follows the pointer anywhere in the window until
+                // the button is released, as pointer capture does in a
+                // browser.
                 .child(
                     canvas(|_, _, _| {}, {
                         let view = view.clone();
@@ -331,8 +341,8 @@ pub fn cover_layer<V: CoverHost>(
                     .inset_0(),
                 );
             let zoom_view = view.clone();
-            // `.zoomRow`: `auto minmax(180px, 320px)` across
-            // `min(100%, 420px)`, the label taking what is left.
+            // `.zoomRow`: two columns, `auto minmax(180px, 320px)`, in a row
+            // `min(100%, 420px)` wide. The label takes the width that is left.
             let zoom = div()
                 .w(px(420.))
                 .max_w_full()
@@ -407,8 +417,8 @@ pub fn cover_layer<V: CoverHost>(
             } else if cover.candidates.is_empty() {
                 message(cover.empty)
             } else {
-                // The body's width less its padding and both gutters:
-                // the body's and the grid's own.
+                // The width of the body, less its padding and less two
+                // scrollbar gutters: the body's and the grid's.
                 let width = Size::Large.content_width() - ui::scrollbar::GUTTER;
                 let (count, cell) = columns(width);
                 let row = cell + GAP;
@@ -425,6 +435,12 @@ pub fn cover_layer<V: CoverHost>(
                         });
                     }
                     let theme = theme::theme(cx);
+                    // The colour of the dialog's panel as one opaque colour:
+                    // the panel's translucent fill over the window's
+                    // background.
+                    let glass = theme.glass();
+                    let behind =
+                        theme::blend(theme.background(), Rgba { a: 1., ..glass }, glass.a);
                     range
                         .map(|index| {
                             let mut line = div().h(px(row)).flex().gap(px(GAP));
@@ -436,34 +452,66 @@ pub fn cover_layer<V: CoverHost>(
                                     "media-cover-candidate",
                                     candidate.media_item as usize,
                                 ));
-                                // `.candidate` is a `<button>`; with the
-                                // keyboard its border turns the primary
-                                // colour, as under the pointer.
+                                // `.candidate` is a `<button>`. When it has
+                                // the keyboard focus its border is the primary
+                                // colour, as it is under the pointer.
                                 let ring = ui::focus::Ring {
                                     width: 1.,
                                     offset: -1.,
                                     color: theme.primary(),
                                 };
+                                // A picture that fills a square of another
+                                // shape is drawn larger than the square. It
+                                // is cut to the square (`overflow_hidden`).
+                                // GPUI cuts to rectangles only, so the
+                                // square's four round corners are then
+                                // painted over in the colour of the dialog
+                                // behind the square. The border is drawn
+                                // last, on top of the picture.
                                 let tile = div()
                                     .id(id.clone())
+                                    .group("media-cover-candidate")
                                     .role(Role::Button)
                                     .aria_label(t("Set cover photo"))
                                     .relative()
                                     .size(px(cell))
                                     .flex_none()
                                     .rounded(px(theme::RADIUS_MD))
-                                    .border_1()
-                                    .border_color(theme.border_secondary())
+                                    .overflow_hidden()
                                     .bg(theme.surface_1())
                                     .cursor_pointer()
-                                    .hover(move |style| style.border_color(theme.primary()))
                                     .children(candidate.thumbnail.clone().map(|path| {
                                         img(path)
                                             .image_cache(&cache)
                                             .size_full()
-                                            .rounded(px(theme::RADIUS_MD - 1.))
                                             .object_fit(ObjectFit::Cover)
                                     }))
+                                    .child(
+                                        canvas(
+                                            |_, _, _| {},
+                                            move |bounds, _, window, _| {
+                                                window.paint_drop_shadows_outside(
+                                                    bounds,
+                                                    Corners::all(px(theme::RADIUS_MD)),
+                                                    &[BoxShadow::new(px(0.), px(0.), behind.into())
+                                                        .spread_radius(px(theme::RADIUS_MD))],
+                                                );
+                                            },
+                                        )
+                                        .absolute()
+                                        .inset_0(),
+                                    )
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .inset_0()
+                                            .rounded(px(theme::RADIUS_MD))
+                                            .border_1()
+                                            .border_color(theme.border_secondary())
+                                            .group_hover("media-cover-candidate", move |style| {
+                                                style.border_color(theme.primary())
+                                            }),
+                                    )
                                     .on_click(move |_, _, cx| {
                                         let chosen = chosen.clone();
                                         let _ = pick.update(cx, |this, cx| {
@@ -499,7 +547,8 @@ pub fn cover_layer<V: CoverHost>(
                     .child(list)
                     .child(ui::scrollbar("media-cover-scrollbar", &scroll, window, cx))
                     .children(loading_more.then(|| {
-                        // `.loadingMore`: sticky at the grid's foot.
+                        // `.loadingMore`: stays at the bottom edge of the
+                        // grid.
                         div()
                             .absolute()
                             .bottom(px(4.))
@@ -549,7 +598,7 @@ mod tests {
 
     #[test]
     fn the_grid_fits_as_many_columns_as_the_electron_one() {
-        // The large dialog's grid is 630px inside its gutter.
+        // The grid of the large dialog is 630px wide inside its gutter.
         let (count, side) = columns(630.);
         assert_eq!(count, 5);
         assert!((side - 119.6).abs() < 0.01);
@@ -567,8 +616,8 @@ mod tests {
 
     #[test]
     fn a_drag_moves_the_focus_only_where_the_image_reaches_past_the_square() {
-        // A landscape image twice as wide as tall in a 420px square: it
-        // reaches 420px past it across, and not at all down.
+        // A picture twice as wide as it is tall in a 420px frame extends 420px
+        // past the frame horizontally and not at all vertically.
         assert_eq!(
             dragged((500., 500.), (-210., 40.), (2000, 1000), 100., 420.),
             (1000., 500.)
@@ -577,7 +626,7 @@ mod tests {
             dragged((500., 500.), (42., 0.), (2000, 1000), 100., 420.),
             (400., 500.)
         );
-        // Zoomed, a square image reaches past it both ways.
+        // A zoomed square picture extends past the frame in both directions.
         assert_eq!(
             dragged((500., 500.), (0., -42.), (800, 800), 200., 420.),
             (500., 600.)

@@ -1078,9 +1078,15 @@ impl SubscriptionsScreen {
                         .text_color(theme.text_secondary())
                         .child(source.clone())
                         .into_any_element(),
+                    // The cell is as tall as the row, so that the row's
+                    // 24px buttons, which are placed inside the cell, are
+                    // not cut off at the height of the query's line of text.
                     div()
                         .relative()
                         .w_full()
+                        .h(px(ROW))
+                        .flex()
+                        .items_center()
                         .child(name)
                         .child(actions)
                         .into_any_element(),
