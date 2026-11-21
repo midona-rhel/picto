@@ -7,7 +7,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::blob_store::mime_to_extension;
+use crate::blob_store::{extension_to_mime, mime_to_extension};
 use crate::dto::FileHash;
 use crate::library_application::LibraryApplication;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -303,6 +303,7 @@ fn export_one(
     })?;
     let stem = sanitize_stem(
         media.name.as_deref().unwrap_or_default(),
+        extension,
         &format!(
             "{}-{}",
             &media.file_hash.0[..12],
@@ -408,16 +409,15 @@ fn encode(
     Ok(output)
 }
 
-fn sanitize_stem(name: &str, fallback: &str) -> String {
+/// Builds the exported file stem from an item name. `extension` is the media's
+/// own file extension, the only suffix removed from the name.
+fn sanitize_stem(name: &str, extension: &str, fallback: &str) -> String {
     let raw = if name.trim().is_empty() {
         fallback
     } else {
         name.trim()
     };
-    let stem = Path::new(raw)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or(raw);
+    let stem = strip_media_extension(raw, extension);
     let sanitized = stem
         .chars()
         .map(|character| match character {
@@ -434,6 +434,23 @@ fn sanitize_stem(name: &str, fallback: &str) -> String {
     } else {
         sanitized
     }
+}
+
+/// Item names are titles, not file names: a dot belongs to the name unless
+/// what follows it is this media's file extension or an alias of it.
+fn strip_media_extension<'a>(name: &'a str, extension: &str) -> &'a str {
+    match name.rsplit_once('.') {
+        Some((stem, suffix)) if is_media_extension(suffix, extension) => stem,
+        _ => name,
+    }
+}
+
+fn is_media_extension(suffix: &str, extension: &str) -> bool {
+    if suffix.eq_ignore_ascii_case(extension) {
+        return true;
+    }
+    let mime = extension_to_mime(&suffix.to_ascii_lowercase());
+    mime != "application/octet-stream" && mime_to_extension(mime) == extension
 }
 
 fn unique_path(directory: &Path, stem: &str, extension: &str) -> PathBuf {
@@ -462,4 +479,22 @@ fn reject_library_path(library_root: &Path, output: &Path) -> Result<(), String>
         return Err("Cannot export into the library directory".to_string());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn export_stem_keeps_dotted_names_and_drops_only_the_media_extension() {
+        let png = mime_to_extension("image/png");
+        let jpeg = mime_to_extension("image/jpeg");
+        let dotted = "1785371971.honestradish_thelucariowriter_hammond_comicfinal4";
+
+        assert_eq!(sanitize_stem(dotted, png, "fallback"), dotted);
+        assert_eq!(sanitize_stem("photo.PNG", png, "fallback"), "photo");
+        assert_eq!(sanitize_stem("photo.jpeg", jpeg, "fallback"), "photo");
+        assert_eq!(sanitize_stem("photo.jpeg", png, "fallback"), "photo.jpeg");
+        assert_eq!(sanitize_stem(".png", png, "fallback"), "fallback");
+    }
 }
