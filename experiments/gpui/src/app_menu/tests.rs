@@ -1,8 +1,10 @@
 use super::{Entry, Keys, MenuContext, Platform, ScopeKind, Status, TopMenu, accelerators, model};
 use crate::settings::registry::{KeyboardPreset, Override, Overrides};
 
-/// Keys in one spelling: modifiers in a fixed order, then the key.
-/// Production writes `CmdOrCtrl` (or a role's `Command`) for `Mod`.
+/// Rewrites keys so that the same keys are always written the same way: the
+/// modifiers in a fixed order, followed by the key. Production writes
+/// `CmdOrCtrl`, or `Command` in a menu role, where the registry writes
+/// `Mod`.
 fn normalized(keys: &str) -> String {
     let parts: Vec<&str> = keys.split('+').collect();
     let (key, modifiers) = parts.split_last().unwrap();
@@ -21,8 +23,10 @@ fn normalized(keys: &str) -> String {
     modifiers.join("+")
 }
 
-/// The menus as rows of text: `Title|Keys|on`, `---`, `Services`, and a
-/// submenu's rows indented under `Title >|on`.
+/// Writes the menus as lines of text, so that a test can compare them. A
+/// row is `Title|Keys|on` or `Title|Keys|off`. A separator is `---`. The
+/// Services submenu is `Services`. A submenu is `Title >|on`, and its rows
+/// follow it, indented.
 fn rows(menus: &[TopMenu]) -> Vec<(String, Vec<String>)> {
     fn entries(list: &[Entry], indent: &str, out: &mut Vec<String>) {
         for entry in list {
@@ -64,11 +68,13 @@ fn rows(menus: &[TopMenu]) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
-/// Production's template (`menu.mjs`, `isMac`, not a development
-/// build), transcribed: Electron's role rows with Electron's own titles
-/// and keys, the others with the registry's default keys that its
-/// `accelerator()` falls back to. `$` rows change with the context and
-/// are given by the caller.
+/// Returns the menus of production's template for macOS (`menu.mjs` with
+/// `isMac`, not a development build), copied by hand. The rows of Electron's
+/// menu roles have Electron's own titles and keys. The other rows have the
+/// registry's default keys, which production's `accelerator()` uses when the
+/// user has not changed them. A menu written as `$` changes with the
+/// context, and the caller gives its rows in `variable`. The View menu also
+/// has this app's own Quick Search… row, which production does not have.
 fn production(variable: &[(&str, Vec<&str>)]) -> Vec<(String, Vec<String>)> {
     let fixed =
         |rows: &[&str]| -> Vec<String> { rows.iter().map(|row| (*row).to_owned()).collect() };
@@ -147,6 +153,8 @@ fn view(single_media: &str, single: &str) -> Vec<String> {
         "Inbox|CmdOrCtrl+2|on".into(),
         "Untagged|CmdOrCtrl+3|on".into(),
         "Trash|CmdOrCtrl+4|on".into(),
+        // This app's own row. Production's template does not have it.
+        "Quick Search…|CmdOrCtrl+T|on".into(),
         "---".into(),
         "Duplicates||on".into(),
         "---".into(),
@@ -249,20 +257,22 @@ fn several_selected_in_a_folder_match_production() {
     let file = &menus.iter().find(|(title, _)| title == "File").unwrap().1;
     assert_eq!(file[0], "New Subfolder|Alt+N|on");
     assert_eq!(file[1], "New Smart Folder|Mod+Alt+Shift+N|off");
-    // The Edit rows a selection of three in a folder changes.
+    // These are the Edit rows that differ when three items are selected in
+    // a folder.
     let edit = &menus.iter().find(|(title, _)| title == "Edit").unwrap().1;
     for row in [
         "Batch Rename…|Ctrl+R|on",
         "Copy File Paths|Mod+Alt+C|on",
         "Copy Names||on",
         "Regenerate 3 Thumbnails|Mod+Shift+T|on",
-        // The Delete key belongs to Remove from Folder in a folder.
+        // In a folder, the Delete key is the key of Remove from Folder.
         "Remove from Folder|Mod+Backspace|on",
         "Move 3 to Trash||on",
     ] {
         assert!(edit.iter().any(|shown| shown == row), "{row} in {edit:?}");
     }
-    // No Library row is listed without a library name.
+    // When the context has no library name and no recent libraries, the
+    // Library menu has no Recent Libraries submenu.
     let library = &menus
         .iter()
         .find(|(title, _)| title == "Library")
@@ -310,7 +320,8 @@ fn the_inbox_accepts_and_rejects_first() {
     assert_eq!(&organize[..3], ["Accept||on", "Reject||on", "---"]);
     let view = &menus.iter().find(|(title, _)| title == "View").unwrap().1;
     assert_eq!(view, &view_rows("on", "on"));
-    // A collection opens in a new window but not in the default app.
+    // A collection can be opened in a new window, but not in the default
+    // application.
     let collection = MenuContext {
         single: Some(true),
         ..context
@@ -349,8 +360,7 @@ fn smart_folders_take_no_new_folders_and_running_imports_block_imports() {
     assert_eq!(file[5], "Import Picto Pack...||off");
 }
 
-/// The rows this app cannot perform yet: they have no handler, so
-/// AppKit shows them disabled.
+/// Quit has the keys that Electron's `quit` role has on each platform.
 #[test]
 fn quit_takes_the_keys_electrons_quit_role_has() {
     assert_eq!(Platform::Mac.quit_keys(), Some("Mod+Q"));
@@ -358,7 +368,8 @@ fn quit_takes_the_keys_electrons_quit_role_has() {
     assert_eq!(Platform::Windows.quit_keys(), None);
 }
 
-/// The rows of one menu as `title|keys` lines.
+/// Returns the rows of the menu with this title, each as a `title|keys`
+/// line.
 fn titled(menus: &[TopMenu], title: &str) -> Vec<String> {
     let menu = menus
         .iter()
@@ -381,9 +392,9 @@ fn titled(menus: &[TopMenu], title: &str) -> Vec<String> {
         .collect()
 }
 
-/// Off the Mac, production's template has no app menu: File ends with
-/// Settings…, Check for Updates… and the quit role, the Window menu
-/// closes the window, and full screen is F11.
+/// On Windows and Linux, production's template has no "Picto" menu. The File
+/// menu ends with Settings…, Check for Updates… and the quit role, the
+/// Window menu has a Close row, and the key of Toggle Full Screen is F11.
 #[test]
 fn windows_and_linux_take_productions_other_template() {
     let context = MenuContext::default();
@@ -448,7 +459,8 @@ fn spelled(written: &str) -> String {
 #[test]
 fn rows_bind_their_keys_and_follow_rebinding() {
     let none = Overrides::new();
-    // A row whose keys the registry binds only shows them.
+    // When the registry binds a row's keys to another action, the menu only
+    // shows the keys.
     let new_folder = accelerators(KeyboardPreset::Us, &none)
         .into_iter()
         .find(|accelerator| accelerator.action.partial_eq(&super::NewFolder))
@@ -459,14 +471,15 @@ fn rows_bind_their_keys_and_follow_rebinding() {
         .into_iter()
         .find(|accelerator| accelerator.action.partial_eq(&super::LogWindow))
         .unwrap();
-    // The registry binds ⌘L to the log window where the window's content
-    // has the keyboard; the row shows it.
+    // The registry binds ⌘L to the log window's action in the main window,
+    // so the menu's row only shows the keys.
     assert_eq!(logs.keystroke, spelled("cmd-l"));
     assert_eq!(logs.predicate.as_deref(), Some(super::SHOWN_ONLY));
     let close = bound(KeyboardPreset::Us, &none, &super::CloseWindow);
     assert_eq!(close, [spelled("cmd-w")]);
-    // The Delete key: Move to Trash outside a folder, Remove from Folder
-    // inside one, and neither row's other variant.
+    // The Delete key is bound to Move to Trash outside a folder and to
+    // Remove from Folder inside a folder. It is not bound to the variant of
+    // either row that shows no keys.
     assert_eq!(
         bound(
             KeyboardPreset::Us,
@@ -499,7 +512,8 @@ fn rows_bind_their_keys_and_follow_rebinding() {
         )
         .is_empty()
     );
-    // Rebound in Settings, the row shows the new keys; cleared, none.
+    // After the user changes a shortcut's keys in Settings, the row shows
+    // the new keys. After the user clears them, the row shows no keys.
     let mut overrides = Overrides::new();
     overrides.insert(
         "file.newFolder",
@@ -522,8 +536,9 @@ fn rows_bind_their_keys_and_follow_rebinding() {
     assert!(bound(KeyboardPreset::Us, &overrides, &super::LogWindow).is_empty());
 }
 
-/// Every row with keys has a binding for its own action: the menu's, or
-/// the registry's for a row whose action is the registry's.
+/// Every row that shows keys has a key binding for its own action. The
+/// binding is one that the menu adds, or, for a row whose action is the
+/// registry's action, one that the registry adds.
 #[test]
 fn every_keyed_row_has_a_binding() {
     let none = Overrides::new();
@@ -548,8 +563,9 @@ fn every_keyed_row_has_a_binding() {
     }
 }
 
-/// Every binding the menu adds parses, and a key only the menu has does
-/// not take a key the registry binds in the same place.
+/// Every binding that the menu adds can be parsed as a keystroke. A binding
+/// that the menu adds for the window does not use keys that the registry
+/// binds in the same scope.
 #[test]
 fn menu_keys_parse_and_take_no_registry_key() {
     let none = Overrides::new();

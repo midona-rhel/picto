@@ -373,16 +373,99 @@ turns window points into screen points goes through `zoom`'s conversions.
 
 **Keys and the application menu** (`settings/registry.rs`, `keymap.rs`,
 `app_menu/`, `shell/menu_commands.rs`, `shell/shortcuts.rs`). The registry
-is production's `shortcuts.ts` as data; `keymap.rs` turns it, with the preset
-and the user's overrides, into bindings in production's scopes. The
-application menu is one model of production's `menu.mjs` (`app_menu/model.rs`)
-shown as the macOS menu bar or, off macOS, a titlebar button
-(`app_menu/presentation.rs`). A command the menu and the keys share is
-handled once, in `Shell::menu_actions`, under production's menu rule: a row
-with keys in production binds the keymap's action itself, a row shown
-without keys has an action of its own under the same rule. Each action is
-handled only while its rule holds, so AppKit's row enablement and the key
-follow one rule.
+holds production's `shortcuts.ts` as data: the id, the label, the group and
+the default keys of every shortcut. `keymap.rs` makes the key bindings from
+the registry, the keyboard preset and the user's overrides, and binds each
+shortcut in the scope in which production handles it. The application menu
+is one model of production's `menu.mjs` (`app_menu/model.rs`). On macOS it
+is shown as the menu bar. On Windows and Linux it is shown as a menu that a
+button in the titlebar opens (`app_menu/presentation.rs`).
+
+A command that the menu and the keys share is handled once, in
+`Shell::menu_actions`, under the rule that production's menu has for it. A
+menu row that has keys in production uses the keymap's action. A menu row
+that has no keys in production has an action of its own, which is handled
+under the same rule. Each action is handled only while its rule holds. A
+row of the menu bar is enabled exactly while something handles its action,
+so the row and the key follow one rule.
+
+Twelve shortcuts of production's registry are marked as deferred there,
+because production has no handler for them. This app implements two of
+them: `nav.commandPalette` and `nav.goToFolder` open the Quick Search panel
+(below). The other ten are not implemented, are bound to no key, and are
+not listed in Settings › Shortcuts. They are listed in `keymap::NOT_YET`:
+`file.addToLastFolder`, `edit.copyTags`, `edit.pasteTags`, `view.slideshow`,
+`view.navigator`, `view.layoutGrid`, `view.layoutWaterfall`,
+`view.layoutJustified`, `view.toggleTileName` and `view.toggleTileMetadata`.
+
+**Quick Search** (`shell/quick_search.rs`, `shell/quick_search/`). A panel
+480 px wide in the middle of the main window, over the dimmed backdrop that
+the dialogs use. It has a search field, a row of five tabs (All, Actions,
+Places, Tags, Items) and a list, and the user chooses a row with the
+keyboard or the pointer. Its structure and measurements follow the
+quick-search panel of the Eagle app. The Electron app has no such panel.
+
+- It opens in three ways: the button with the two arrows in the titlebar, at
+  the right of the Toggle Panels button; the shortcut `nav.commandPalette`
+  (⌘T or ⌘K, Ctrl+T or Ctrl+K on Windows and Linux), which is also the row
+  View › Quick Search… of the application menu; and the shortcut
+  `nav.goToFolder` (⌘J or Ctrl+J), which opens the panel on the Places tab.
+  Both shortcuts are listed in Settings › Shortcuts and can be changed
+  there. Like the other shortcuts of the main window, they do not run while
+  the keyboard is in a text field, a menu, a popover or a dialog. They do
+  run while the viewer is open.
+- **Actions** are the commands of the shortcut registry that can run with
+  the keyboard focus where it was when the panel opened. A command that has
+  a row in the application menu is listed exactly when the menu enables
+  that row (`app_menu::shortcut_rows`). A command without a menu row is
+  listed when the key context of one of its bindings holds and an element
+  handles the binding's action (`app_menu::handled`). A row shows the
+  command's keys at the right. Choosing a row gives the keyboard focus back
+  to where it was and dispatches the action there, as the application menu
+  does. The rows of the application menu that have no registry shortcut,
+  such as Library Manager… and Check for Updates…, are not listed.
+- **Places** are the sidebar's destinations (the system rows, every folder
+  and every smart folder) and the subscriptions, which are read with the
+  core's `subscriptions.list` command. A row has the icon and the colour
+  that the sidebar gives the place, and the parent's name at the right.
+  Choosing a place opens it (`Session::navigate`), and choosing a
+  subscription opens its page on the Subscriptions screen.
+- **Tags** are the library's tags, those on the most items first, each with
+  the number of its items at the right. Choosing a tag opens the All
+  destination with that tag as the only filter, as "Show items" on the Tags
+  screen does (`Session::navigate_with_filters`).
+- **Items** are files and collections. They are found by the library's text
+  search, which is the search of the grid's search field
+  (`backend::text_filter`), in the All destination. An item's row is 92 px
+  high and has the thumbnail from the grid's thumbnail cache, the name and a
+  line with the type, the dimensions and the size. Choosing an item opens
+  the destination that lists the items with that item's media
+  (`Session::open_media_matches`, which is what Find Items with This Media
+  opens) and selects the item there. A collection is then opened in the
+  viewer.
+- A name matches the text when it contains the text's letters in the same
+  order (`quick_search/matching.rs`). Names that start with the text come
+  first, then names that contain the text as one piece, then names that
+  contain its letters with other letters between them. In that last case
+  the first letter of the text must be the first letter of a word of the
+  name. The matched letters are drawn in bold and underlined. This is the
+  order that the search field of the context menus uses.
+- While the field is empty, each tab lists the choices made most recently
+  first. The 30 most recent choices are kept for each library in
+  `state.json`, in the field `quickSearchRecent`.
+- The keys: Up and Down move the highlight, Enter chooses the highlighted
+  row, Escape closes the panel, and Tab and Shift+Tab go to the next and
+  the previous tab. The key that opens the panel also closes it. The
+  highlight follows the pointer, and a click chooses a row.
+- The actions, the places and the tags are lists in memory, and they are
+  searched on a background thread each time the text changes. The items are
+  searched on the library's thread, 50 ms after the last change of the
+  text. A text of one or two characters does not search the items, because
+  the library's text search needs three characters. A search that is no
+  longer the newest does no work, and its answer is dropped. A tab lists at
+  most 200 rows, and at most 50 items.
+- The list is as high as its rows, between 8 and 16 rows of 26 px. The top
+  of the panel stays in place when the list becomes shorter or longer.
 
 **Grid** (`grid/`). The grid shows the items of the open destination as
 tiles. These files hold its parts:
@@ -805,6 +888,7 @@ reading production's code, seen in this app).
 | Filter bar and view menu | pictures; read |
 | Inspector: destination, one item, several items, pickers and dialogs | pictures |
 | Item menus and application menu | pictures; values (production's menu cases); off-screen in CI |
+| Quick Search panel | tests (the matching and the order of the rows); pictures off-screen on macOS in the dark and the light theme, and off-screen in CI on Windows and Linux |
 | Viewer: media view, Quick Look, detail windows, Inbox review, collections | pictures; values |
 | Documents and document thumbnails | tests (format matrix); pictures |
 | Video and audio; Flash | pictures; seen playing on macOS; GPU tests |
@@ -859,6 +943,18 @@ reading production's code, seen in this app).
   destination only).
 - File › New Folder starts a rename; Organize › Tags opens the Tags screen;
   Copy in the application menu copies the selection's files.
+- This app has a Quick Search panel (section 4), which production does not
+  have. It adds a button to the titlebar and the row View › Quick Search… to
+  the application menu. Production registers the shortcuts
+  `nav.commandPalette` (⌘K, "Command Palette") and `nav.goToFolder` (⌘J) as
+  deferred and binds them to nothing. In this app `nav.commandPalette` is
+  called "Quick Search", has the keys ⌘T and ⌘K, and opens the panel, and
+  `nav.goToFolder` opens the panel on its Places tab.
+- The handlers for the keys of Media View (Enter), Quick Look (Space), Copy
+  (⌘C) and Delete (⌘⌫) over the grid are present only while the key has
+  something to act on. Without something to act on, the key press is passed
+  on, as before. The Quick Search panel therefore does not list these four
+  commands when they would do nothing.
 - Auto Tag from a menu or its key opens centred over the window (the
   inspector's button still docks it).
 - PDF, DjVu and comic pages scroll as one continuous column.

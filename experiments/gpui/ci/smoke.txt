@@ -42,6 +42,16 @@
 # so the scan finds no pairs and both pictures show the screen's empty
 # state ("No duplicate pairs"). The screen with a pair on it is therefore
 # not photographed in CI.
+#
+# Pictures 19 to 21 show the Quick Search panel at 100% interface zoom. The
+# script first opens the All destination and resets the zoom.
+#   19 the panel just after its shortcut opened it (Command+T on macOS,
+#      Control+T on Windows and Linux), with the search field empty.
+#   20 the panel after the script typed "inbox". The All tab lists the
+#      command and the place with that name.
+#   21 the Inbox, which the script opened by going to the Places tab with
+#      the Tab key twice and pressing Enter. The picture shows that the
+#      panel has closed and that the chosen place is open.
 reload
 size 1213 865
 wait 800
@@ -198,3 +208,19 @@ wait 100
 key secondary-=
 wait 1200
 shot 18-duplicates-empty-zoom-125
+key secondary-1
+wait 1500
+key secondary-0
+wait 600
+key secondary-t
+wait 600
+shot 19-quick-search
+type inbox
+wait 600
+shot 20-quick-search-typed
+key tab
+key tab
+wait 300
+key enter
+wait 1500
+shot 21-quick-search-opened-inbox

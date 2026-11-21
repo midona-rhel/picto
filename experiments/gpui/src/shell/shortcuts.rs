@@ -18,6 +18,7 @@ use crate::app_menu::ScopeKind;
 use crate::grid::menu::Action as Row;
 use crate::keymap::*;
 use crate::settings;
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use picto_library::query::ItemScope;
 
@@ -253,7 +254,21 @@ impl Shell {
     /// Adds a listener to `root`, the window's root element, for each
     /// shortcut action that `crate::keymap` binds and this file handles,
     /// and returns `root`.
+    ///
+    /// The listeners for Quick Look, Copy and Delete are added only while
+    /// the action has something to act on. While it has nothing, no element
+    /// handles the action, which has the same effect on a key press as a
+    /// handler that passes the key on. The Quick Search panel lists a
+    /// command only while a handler would run it, so with this the panel
+    /// does not list these three commands when they would do nothing.
     pub(super) fn shortcut_actions(&self, root: Div, cx: &mut Context<Self>) -> Div {
+        let menu = crate::app_menu::context(cx);
+        let viewing = self.viewing(cx);
+        let space_setting = settings::current(cx).space_key_action;
+        let space_acts = crate::viewer::trigger::space(space_setting, self.trigger_state(cx))
+            != crate::viewer::trigger::Action::Nothing;
+        let copies = menu.has_selection() || viewing;
+        let deletes = menu.has_selection() && !menu.in_folder();
         root.on_action(cx.listener(|this, _: &GoBack, _, cx| {
             this.session
                 .update(cx, |session, cx| session.step_history(-1, cx));
@@ -271,13 +286,25 @@ impl Shell {
             cx.listener(|this, _: &ShowUntagged, _, cx| this.show_scope(ItemScope::Untagged, cx)),
         )
         .on_action(cx.listener(|this, _: &ShowTrash, _, cx| this.show_scope(ItemScope::Trash, cx)))
-        .on_action(cx.listener(|this, _: &QuickLook, window, cx| this.quick_look(window, cx)))
-        .on_action(cx.listener(|this, _: &CopyFiles, window, cx| this.copy_files_key(window, cx)))
+        .when(space_acts, |root| {
+            root.on_action(
+                cx.listener(|this, _: &QuickLook, window, cx| this.quick_look(window, cx)),
+            )
+        })
+        .when(copies, |root| {
+            root.on_action(
+                cx.listener(|this, _: &CopyFiles, window, cx| this.copy_files_key(window, cx)),
+            )
+        })
         .on_action(cx.listener(|this, _: &ToggleGrayscale, _, cx| {
             this.session
                 .update(cx, |session, cx| session.toggle_grayscale(cx))
         }))
-        .on_action(cx.listener(|this, _: &DeleteItems, window, cx| this.delete_items(window, cx)))
+        .when(deletes, |root| {
+            root.on_action(
+                cx.listener(|this, _: &DeleteItems, window, cx| this.delete_items(window, cx)),
+            )
+        })
         .on_action(cx.listener(|this, _: &NewFolder, window, cx| {
             this.sidebar
                 .update(cx, |sidebar, cx| sidebar.new_folder(window, cx));

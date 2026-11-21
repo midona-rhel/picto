@@ -1,43 +1,53 @@
-//! The menus' rows, titles, keys and rules for a context, as production's
-//! template builds them, and the key bindings their accelerators need.
+//! This file builds the model of the application menu for a context: every
+//! menu, and for every row its title, its keys, its action and production's
+//! rule for when the row is enabled. The model follows the template in
+//! production's `electron/windows/menu.mjs`. The file also lists the key
+//! bindings that the rows need so that their keys are shown and work.
 use super::*;
 use crate::settings::registry;
 
-/// How a row's accelerator reaches the keymap.
+/// How the keys of a row are bound in the keymap.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Binding {
-    /// The row's action already has these keys bound elsewhere.
+    /// Another file already binds these keys to the row's action, so no
+    /// binding is added.
     Existing,
-    /// Shown by the menu but not bound in the window: the keys already do
-    /// this through another action (the registry's, a text field's), or
-    /// they must reach the window's own key listeners first. AppKit sends
-    /// them to the row when nothing in the window took them, as production's
-    /// menu accelerators fire for keys the page left alone.
+    /// The menu shows the keys, but they are not bound in the window. This
+    /// is for keys that already perform the command through another action,
+    /// such as the registry's action or a text field's action, and for keys
+    /// that the window's own key listeners must receive first. When nothing
+    /// in the window takes the keys, AppKit sends them to the menu row. In
+    /// production a menu accelerator fires in the same way for keys that
+    /// the page did not take.
     Shown,
-    /// Only the menu has these keys: also bound in the window, where they
-    /// listen, so they work wherever the window's shortcuts do.
+    /// Only the menu has these keys. They are also bound in the window, in
+    /// this scope, so that they work wherever the window's shortcuts work.
     Live(Scope),
 }
 
-/// A row's accelerator.
+/// The keys of a row.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Keys {
     None,
-    /// The registry shortcut that the row's own action is bound to.
+    /// The keys of this registry shortcut. The keymap binds the shortcut to
+    /// the row's own action.
     Registry(&'static str),
-    /// A registry shortcut for a row whose action is the menu's own: shown
-    /// only when the registry binds the shortcut to another action, bound
-    /// for real when nothing does.
+    /// The keys of this registry shortcut, for a row whose action is one of
+    /// the menu's own actions. When the keymap binds the shortcut to another
+    /// action, the menu only shows the keys. When the keymap binds the
+    /// shortcut to nothing, the keys are bound to the row's action.
     Shortcut(&'static str),
-    /// Keys production's template fixes (a role's, or a literal), written
-    /// as the registry writes keys.
+    /// Keys that production's template fixes: the keys of an Electron menu
+    /// role, or keys written in the template. They are written in the form
+    /// in which the registry writes keys.
     Fixed(&'static str, Binding),
 }
 
 pub struct Item {
     pub title: String,
     pub keys: Keys,
-    /// Production's rule for the row.
+    /// Whether production's rule enables the row in the context that the
+    /// model was built for.
     pub enabled: bool,
     pub checked: bool,
     pub action: Box<dyn Action>,
@@ -52,7 +62,7 @@ pub enum Entry {
         enabled: bool,
         entries: Vec<Entry>,
     },
-    /// The system's Services menu.
+    /// The Services submenu, which macOS fills.
     Services,
 }
 
@@ -88,7 +98,9 @@ impl Item {
         self
     }
 
-    /// The keys this row shows, as the registry writes them.
+    /// Returns the keys that this row shows, in the form in which the
+    /// registry writes keys, with the keyboard preset and the user's
+    /// overrides applied. Returns `None` when the row has no keys.
     pub fn accelerator(&self, preset: KeyboardPreset, overrides: &Overrides) -> Option<String> {
         let keys = match self.keys {
             Keys::None => return None,
@@ -107,7 +119,9 @@ impl From<Item> for Entry {
     }
 }
 
-/// A row's title by the selection's size (`selectionCount > 1`).
+/// Returns the title of a row whose wording depends on how many items are
+/// selected: `one` when at most one item is selected, and `many(count)`
+/// when more are (`selectionCount > 1` in production).
 pub(super) fn by_count(count: u64, one: &str, many: impl FnOnce(u64) -> String) -> String {
     if count > 1 {
         many(count)
@@ -116,17 +130,19 @@ pub(super) fn by_count(count: u64, one: &str, many: impl FnOnce(u64) -> String) 
     }
 }
 
-/// The menus for a context on a platform, in production's order. Off the
-/// Mac there is no app menu: Settings… and Quit end the File menu, and the
-/// Window menu closes the window instead of bringing all to front.
+/// Returns the menus for `context` on `platform`, in production's order.
+/// Windows and Linux have no "Picto" menu. There, Settings… and Quit are the
+/// last rows of the File menu, and the Window menu has a Close row where
+/// macOS has Bring All to Front.
 pub fn model(context: &MenuContext, platform: Platform) -> Vec<TopMenu> {
     use Entry::Separator;
     let count = context.selection;
     let has = context.has_selection();
     let fixed = |keys, binding| Keys::Fixed(keys, binding);
-    // The window commands' keys reach their rows through AppKit, after the
-    // window has passed them up: a field listening for keys (Settings'
-    // shortcut capture) takes ⌘W before Close Window does, as a page does
+    // The keys of the window commands are not bound in the window. They
+    // reach their rows through AppKit after the window has not taken them.
+    // A field that listens for keys, such as the shortcut capture field in
+    // Settings, therefore takes ⌘W before Close Window does, as a page does
     // before production's menu.
     let window_key = Binding::Shown;
     let main_window = Binding::Live(Scope::App);
@@ -142,10 +158,11 @@ pub fn model(context: &MenuContext, platform: Platform) -> Vec<TopMenu> {
         item("Open Library…", OpenLibrary).into(),
         Separator,
     ];
-    // The libraries opened before, pinned ones first (marked with a pin, as
-    // production writes them), the open one checked.
-    // Production's history always holds the open library; a context that
-    // lists none still shows it.
+    // Recent Libraries lists the libraries that were opened before. The
+    // pinned ones come first, and each has a pin before its name, as
+    // production writes them. The open library has a check mark.
+    // Production's history always holds the open library, so when the
+    // context lists no library, the open library is still shown.
     let open = context.library.as_ref().map(|name| Recent {
         path: String::new(),
         name: name.clone(),
@@ -212,7 +229,7 @@ pub fn model(context: &MenuContext, platform: Platform) -> Vec<TopMenu> {
             .keys(Keys::Registry("file.import"))
             .enabled(context.import)
             .into(),
-        // `crate::imports::bind` binds its keys.
+        // `crate::imports::bind` binds the keys of Import Folder….
         item("Import Folder…", keymap::ImportFolder)
             .keys(fixed("Mod+Shift+I", Binding::Existing))
             .enabled(context.import)
@@ -221,7 +238,8 @@ pub fn model(context: &MenuContext, platform: Platform) -> Vec<TopMenu> {
             .enabled(context.import)
             .into(),
         Separator,
-        // The export area handles these on the window root.
+        // The shell's export handlers (`Shell::export_actions`) handle the
+        // three export actions on the window's root element.
         item("Export Originals…", keymap::ExportOriginals)
             .keys(Keys::Registry("file.export"))
             .enabled(has)
@@ -420,9 +438,9 @@ pub fn model(context: &MenuContext, platform: Platform) -> Vec<TopMenu> {
                 .collect(),
         },
         Separator,
-        // Production sends `menu:navigate` with `tags`, which its shell
-        // does not map to a destination, so the row does nothing there; it
-        // opens the Tags screen here.
+        // In production this row sends `menu:navigate` with `tags`. The
+        // shell there does not map `tags` to a destination, so the row does
+        // nothing. In this app the row opens the Tags screen.
         item("Tags", ShowTags).into(),
     ]);
 
@@ -451,6 +469,11 @@ pub fn model(context: &MenuContext, platform: Platform) -> Vec<TopMenu> {
             .into(),
         item("Trash", keymap::ShowTrash)
             .keys(Keys::Registry("nav.trash"))
+            .into(),
+        // This row opens this app's Quick Search panel. Production's menu
+        // has no such row.
+        item("Quick Search…", keymap::QuickSearch)
+            .keys(Keys::Registry("nav.commandPalette"))
             .into(),
         Separator,
         item("Duplicates", ShowDuplicates).into(),
@@ -483,7 +506,8 @@ pub fn model(context: &MenuContext, platform: Platform) -> Vec<TopMenu> {
             item("Bring All to Front", BringAllToFront).into(),
         ]);
     } else {
-        // Electron's `close` role, titled "Close" off the Mac.
+        // This is Electron's `close` role, whose title is "Close" on
+        // Windows and Linux.
         window_menu.push(
             item("Close", CloseWindow)
                 .keys(fixed("Mod+W", window_key))
@@ -534,8 +558,8 @@ pub fn model(context: &MenuContext, platform: Platform) -> Vec<TopMenu> {
             title: "View",
             entries: view,
         },
-        // Titled "Window", the menu is AppKit's Windows menu, which lists
-        // the app's windows below these rows.
+        // AppKit treats a menu with the title "Window" as its Windows menu,
+        // and lists the app's windows below these rows.
         TopMenu {
             title: "Window",
             entries: window_menu,
@@ -551,7 +575,8 @@ pub fn model(context: &MenuContext, platform: Platform) -> Vec<TopMenu> {
     menus
 }
 
-/// Quit, as Electron's `quit` role is titled and keyed on `platform`.
+/// Returns the Quit row, with the title and the keys that Electron's `quit`
+/// role has on `platform`.
 pub(super) fn quit(platform: Platform) -> Item {
     let quit = item(platform.quit_title(), crate::shell::Quit);
     match platform.quit_keys() {
@@ -560,7 +585,8 @@ pub(super) fn quit(platform: Platform) -> Item {
     }
 }
 
-/// Every row of `entries`, submenus included.
+/// Calls `visit` for every row of `entries`, including the rows of
+/// submenus.
 pub(super) fn each_item(entries: &[Entry], visit: &mut impl FnMut(&Item)) {
     for entry in entries {
         match entry {
@@ -571,19 +597,19 @@ pub(super) fn each_item(entries: &[Entry], visit: &mut impl FnMut(&Item)) {
     }
 }
 
-/// A key binding a row's accelerator needs.
+/// One key binding that a row of the menu needs.
 pub struct Accelerator {
     pub keystroke: String,
     pub action: Box<dyn Action>,
     pub predicate: Option<String>,
 }
 
-/// A context no element sets: a binding under it is never taken by the
-/// keyboard, but the menu shows its keys.
+/// A key context that no element sets. A binding in this context never runs
+/// from the keyboard, but the menu still shows the binding's keys.
 pub(super) const SHOWN_ONLY: &str = "AppMenuKeyEquivalent";
 
-/// The bindings the menu's rows need for their keys to show, under the
-/// keyboard preset and the user's overrides.
+/// Returns the bindings that the menu's rows need so that the menu shows
+/// their keys, for this keyboard preset and these overrides.
 pub fn accelerators(preset: KeyboardPreset, overrides: &Overrides) -> Vec<Accelerator> {
     let mut planned: Vec<Accelerator> = Vec::new();
     for context in MenuContext::variants() {

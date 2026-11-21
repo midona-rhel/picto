@@ -1,26 +1,36 @@
-//! What the user arranges that belongs to this machine rather than to a
-//! library: where the window was, the rails' widths and whether they are
-//! hidden, folded sidebar sections and nodes, the filter bar's pinned fields
-//! and saved filters, the tag picker's layout, recent tags and folders, the
-//! keyboard preset and rebound shortcuts, the language and the audio
-//! visualization. Production keeps these in the renderer's localStorage and,
-//! for the main window's place, in the main process's `config.json`; both
-//! are per machine. What production keeps in the library's settings stays in
-//! the settings model (`settings::model`), which travels with the library.
+//! This file keeps the things the user arranges that belong to this machine
+//! and not to a library. They are: the position and size of the main window,
+//! the widths of the sidebar and the inspector and whether each is hidden,
+//! the folded sections and nodes of the sidebar, the filter bar's pinned
+//! fields and saved filters, the tag picker's layout, the recent tags, the
+//! recent folders and the recent Quick Search choices, the keyboard preset
+//! and the changed shortcuts, the language, the audio visualization, the
+//! interface zoom and the list of libraries. Production keeps most of these
+//! in the renderer's localStorage, and keeps the main window's position and
+//! the list of libraries in the main process's `config.json`. Both are kept
+//! per machine. The settings that production keeps in the library are in the
+//! settings model (`settings::model`), and they travel with the library.
 //!
-//! The state lives in one JSON file in this app's own folder (never the
-//! Electron app's): the platform's configuration folder under
-//! "Picto GPUI", or the folder `PICTO_GPUI_STATE` names. Tests and the
-//! off-screen tool keep nothing unless `PICTO_GPUI_STATE` is set, so their
-//! pictures never depend on how the user left the app.
+//! The state is one JSON file, `state.json`, in this app's own folder. That
+//! folder is "Picto GPUI" in the platform's configuration folder, or the
+//! folder that the environment variable `PICTO_GPUI_STATE` names. It is never
+//! the Electron app's folder. Tests and the off-screen tool keep no state
+//! unless `PICTO_GPUI_STATE` is set, so that their pictures never depend on
+//! how the user left the app.
 //!
-//! It is read once at start. Changes are written 250 ms after the last one,
-//! off the drawing thread, through a temporary file renamed over the old
-//! one, and at once when the app quits. A missing file gives the defaults;
-//! a field that is missing or of the wrong kind gives that field's default
-//! and leaves the others; an unreadable file is set aside as
-//! `state.json.corrupt` and the defaults are used; fields written by a newer
-//! version that this one does not know are kept as they were.
+//! The file is read once when the app starts. A change is written 250 ms
+//! after the last change, off the thread that draws, and the remaining
+//! changes are written at once when the app quits. Each write goes to a
+//! temporary file that is then renamed over the old file. The rules for
+//! reading are these:
+//!
+//! - When there is no file, every field has its default.
+//! - A field that is missing, or whose value is of the wrong kind, has its
+//!   default, and the other fields are read as usual.
+//! - A file that cannot be read as JSON is renamed to `state.json.corrupt`,
+//!   and every field has its default.
+//! - A field that this version does not know, because a newer version wrote
+//!   it, is kept and written back unchanged.
 use gpui::{App, Global, Task};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -28,20 +38,22 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-/// The version of the file's layout this build writes.
+/// The version of the file's layout that this build writes.
 pub const VERSION: u64 = 1;
 const FILE: &str = "state.json";
-/// How long after the last change the file is written.
+/// The time between the last change and the write of the file.
 const SAVE_DELAY: Duration = Duration::from_millis(250);
 
-/// The main window's smallest size: the `minWidth` and `minHeight` its
-/// `BrowserWindow` is made with in `windowManager.mjs`. Production restores a
-/// kept size down to 700×500 (`MAIN_WINDOW_MIN_WIDTH`, `_HEIGHT`), but the
-/// window's own minimum then raises it to this, so this is the one limit.
+/// The smallest size of the main window. These are the `minWidth` and
+/// `minHeight` that production gives its `BrowserWindow` in
+/// `windowManager.mjs`. Production accepts a saved size as small as 700×500
+/// (`MAIN_WINDOW_MIN_WIDTH` and `MAIN_WINDOW_MIN_HEIGHT`), but the window's
+/// own minimum then enlarges it to this size, so this size is the only limit
+/// that has an effect.
 pub const WINDOW_MIN_WIDTH: f32 = 1000.;
 pub const WINDOW_MIN_HEIGHT: f32 = 600.;
 
-/// A rectangle in global screen points.
+/// A rectangle, in the points of the whole screen area.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
     pub x: f32,
@@ -59,13 +71,15 @@ impl Rect {
     }
 }
 
-/// The main window's place (`windowState.main`): its bounds when neither
-/// maximised nor full screen, and whether it was maximised. Production does
-/// not remember full screen; a window closed in full screen opens at its
-/// normal bounds.
+/// The saved position and size of the main window (`windowState.main` in
+/// production). The bounds are those the window has while it is neither
+/// maximised nor in full screen. `maximized` says whether the window was
+/// maximised. Production does not remember full screen: a window that was
+/// closed in full screen opens again at these bounds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowPlace {
-    /// Where it was; `None` centres it.
+    /// The position of the window's top-left corner. When `x` or `y` is
+    /// `None`, the window opens in the centre of the display.
     pub x: Option<f32>,
     pub y: Option<f32>,
     pub width: f32,
@@ -74,9 +88,11 @@ pub struct WindowPlace {
 }
 
 impl WindowPlace {
-    /// `normalizeMainWindowState`: at least the minimum size, and placed
-    /// where it was only if that still overlaps one of the displays' usable
-    /// areas, else centred.
+    /// Returns the position and size to open the window with, given the
+    /// usable areas of the displays. The size is at least the minimum size.
+    /// The saved position is kept only when the window would overlap one of
+    /// the displays there. Otherwise the position is `None`, and the window
+    /// opens in the centre. This is production's `normalizeMainWindowState`.
     pub fn on_displays(&self, displays: &[Rect]) -> WindowPlace {
         let mut place = WindowPlace {
             width: self.width.round().max(WINDOW_MIN_WIDTH),
@@ -101,89 +117,115 @@ impl WindowPlace {
     }
 }
 
-/// A binding the user changed in Settings (`ShortcutBindingOverride`):
-/// either slot, empty when cleared.
+/// The keys of one shortcut that the user changed in Settings
+/// (`ShortcutBindingOverride` in production). Each field is one of the
+/// shortcut's two key slots. A slot is `None` when the user did not change
+/// it, and an empty string when the user cleared it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Binding {
     pub keys: Option<String>,
     pub keys2: Option<String>,
 }
 
-/// Everything kept. Field names follow production's storage keys.
+/// Everything that the file holds. The comment on each field names the
+/// storage key under which production keeps the same thing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct State {
-    /// `config.json` `windowState.main`.
+    /// The main window's position and size (`windowState.main` in
+    /// `config.json`).
     pub window: Option<WindowPlace>,
-    /// `picto-sidebar-width`, `picto-sidebar-collapsed-panel`.
+    /// The sidebar's width, and whether the sidebar is hidden
+    /// (`picto-sidebar-width` and `picto-sidebar-collapsed-panel`).
     pub sidebar_width: f32,
     pub sidebar_collapsed: bool,
-    /// `picto-inspector-width`, `picto-inspector-collapsed`.
+    /// The inspector's width, and whether the inspector is hidden
+    /// (`picto-inspector-width` and `picto-inspector-collapsed`).
     pub inspector_width: f32,
     pub inspector_collapsed: bool,
-    /// `picto-sidebar-collapsed`: folded sections and nodes, by id.
+    /// The ids of the sidebar's sections and nodes that are folded
+    /// (`picto-sidebar-collapsed`).
     pub folded: Vec<String>,
-    /// `picto:grid:pinned-filters`: the filter fields the bar shows while
-    /// empty, by production's names (`color`, `tags`, …).
+    /// The filter fields that the filter bar shows while they are empty,
+    /// under production's names for them, such as `color` and `tags`
+    /// (`picto:grid:pinned-filters`).
     pub pinned_filters: Vec<String>,
-    /// `picto:grid:saved-filters`: name and filters, in the order saved.
+    /// The saved filters, each with its name, in the order in which they
+    /// were saved (`picto:grid:saved-filters`).
     pub saved_filters: Vec<(String, Value)>,
-    /// `picto-tag-picker-layout` is `list`.
+    /// True when the tag picker shows a list and false when it shows a
+    /// grid (`picto-tag-picker-layout`).
     pub tag_picker_list: bool,
-    /// `picto-tag-picker-counts`.
+    /// Whether the tag picker shows each tag's count
+    /// (`picto-tag-picker-counts`).
     pub tag_picker_counts: bool,
-    /// `picto-recent-tags`, newest first.
+    /// The tags used most recently, the newest first (`picto-recent-tags`).
     pub recent_tags: Vec<String>,
-    /// `picto-recent-folders:<library>`, newest first, by library.
+    /// For each library, the folders used most recently, the newest first
+    /// (`picto-recent-folders:<library>`). The map's key is the library's
+    /// key ([`library_key`]).
     pub recent_folders: BTreeMap<String, Vec<u32>>,
-    /// `picto-keyboard-preset`.
+    /// For each library, the choices made most recently in the Quick Search
+    /// panel, the newest first. The map's key is the library's key
+    /// ([`library_key`]). Each choice is a JSON object that
+    /// `crate::shell::quick_search` writes and reads. Production has no such panel
+    /// and no such list.
+    pub quick_search_recent: BTreeMap<String, Vec<Value>>,
+    /// The keyboard preset, `us` or `eu` (`picto-keyboard-preset`).
     pub keyboard_preset: String,
-    /// `picto-shortcut-overrides`, by shortcut id.
+    /// The shortcuts whose keys the user changed, by shortcut id
+    /// (`picto-shortcut-overrides`).
     pub shortcut_overrides: BTreeMap<String, Binding>,
-    /// `picto:locale`; empty until a language is chosen, when the system's
-    /// is shown.
+    /// The language the user chose (`picto:locale`). It is empty until the
+    /// user chooses one, and the interface then uses the system's language.
     pub locale: String,
-    /// `picto:audio-visualization`.
+    /// The audio visualization the user chose (`picto:audio-visualization`).
     pub audio_visualization: String,
-    /// `picto-zoom-factor`: the interface zoom (`crate::zoom`).
+    /// The interface zoom (`picto-zoom-factor`). `crate::zoom` applies it.
     pub zoom_factor: f64,
-    /// `config.json` `libraryHistory`: the libraries the user keeps that
-    /// this app opened, most recent first (`crate::libraries`). Disposable
-    /// copies are never listed.
+    /// The paths of the libraries the user keeps that this app has opened,
+    /// the most recent first (`libraryHistory` in `config.json`).
+    /// `crate::libraries` maintains the list. A disposable copy is never
+    /// listed.
     pub library_history: Vec<String>,
-    /// `config.json` `pinnedLibraries`: Quick Access, in the order pinned.
+    /// The paths of the libraries pinned to Quick Access, in the order in
+    /// which they were pinned (`pinnedLibraries` in `config.json`).
     pub pinned_libraries: Vec<String>,
-    /// `config.json` `lastLibrary`: the library opened at start.
+    /// The path of the library that the app opens when it starts
+    /// (`lastLibrary` in `config.json`).
     pub last_library: Option<String>,
-    /// The libraries the user agreed this app may read and write directly,
-    /// by path and database file (`libraries::Identity`). This app's own;
-    /// production has none.
+    /// The libraries that the user agreed this app may read and write
+    /// directly. Each entry is a library's path and the identity of its
+    /// database file (`libraries::Identity`). Production has no such list.
     pub library_consents: Vec<(String, String)>,
-    /// Whether the list of libraries was once seeded from the Electron
-    /// app's `config.json` (`libraries::seed`), so it never is again.
+    /// True once the list of libraries has been copied from the Electron
+    /// app's `config.json` (`libraries::seed`). The copy is made only once.
     pub libraries_seeded: bool,
-    /// `config.json` `libraryMeta`: each library's colour and icon, by
-    /// path, as the Library Manager sets them. (The cover is kept in the
-    /// library's own folder.)
+    /// Each library's colour and icon, by the library's path, as the
+    /// Library Manager sets them (`libraryMeta` in `config.json`). A
+    /// library's cover is not here: it is kept in the library's own folder.
     pub library_meta: BTreeMap<String, LibraryLook>,
-    /// `config.json` `cloudLocations`: the provider folder last chosen for
-    /// each provider (`rememberCloudRoot`), offered again until it is no
-    /// longer one.
+    /// For each cloud provider, the provider's folder that the user chose
+    /// last (`cloudLocations` in `config.json`, written by production's
+    /// `rememberCloudRoot`). The app offers that folder again for as long as
+    /// it is still a folder of that provider.
     pub cloud_locations: BTreeMap<String, crate::cloud::Root>,
 }
 
-/// A library's colour (`#RRGGBB`) and icon (an icon picker name), each
-/// unset for the default.
+/// A library's colour, written as `#RRGGBB`, and its icon, which is a name
+/// from the icon picker. Each is `None` when the library has the default.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LibraryLook {
     pub color: Option<String>,
     pub icon: Option<String>,
-    /// The cloud library it was opened from (`cloudLibraryId`), so Open
-    /// from Cloud… says it is already added.
+    /// The id of the cloud library that this library was opened from
+    /// (`cloudLibraryId`). Open from Cloud… uses it to say that the library
+    /// is already added.
     pub cloud_library_id: Option<String>,
 }
 
 impl LibraryLook {
-    /// From production's `libraryMeta` entry; other fields are left out.
+    /// Reads the colour, the icon and the cloud library id from one entry of
+    /// production's `libraryMeta`. The entry's other fields are not read.
     pub fn from_value(value: &Value) -> Self {
         let text = |key: &str| {
             value
@@ -221,6 +263,7 @@ impl Default for State {
             tag_picker_counts: true,
             recent_tags: Vec::new(),
             recent_folders: BTreeMap::new(),
+            quick_search_recent: BTreeMap::new(),
             keyboard_preset: "us".into(),
             shortcut_overrides: BTreeMap::new(),
             locale: String::new(),
@@ -237,13 +280,18 @@ impl Default for State {
     }
 }
 
-/// `setSidebarWidthAtom`'s and `setInspectorWidthAtom`'s rounding and limits.
+/// Rounds a sidebar width to a whole number of pixels and keeps it between
+/// the sidebar's smallest and largest widths, as production's
+/// `setSidebarWidthAtom` does.
 pub fn sidebar_width(width: f32) -> f32 {
     width
         .round()
         .clamp(crate::theme::SIDEBAR_MIN, crate::theme::SIDEBAR_MAX)
 }
 
+/// Rounds an inspector width to a whole number of pixels and keeps it
+/// between the inspector's smallest and largest widths, as production's
+/// `setInspectorWidthAtom` does.
 pub fn inspector_width(width: f32) -> f32 {
     width
         .round()
@@ -261,9 +309,10 @@ fn strings(value: Option<&Value>) -> Option<Vec<String>> {
 }
 
 impl State {
-    /// Reads a file's contents, field by field: what is missing or not of
-    /// its kind takes the default. Returns the state and the fields this
-    /// version does not know, to be written back unchanged.
+    /// Reads the contents of a file, one field at a time. A field that is
+    /// missing, or whose value is of the wrong kind, gets its default.
+    /// Returns the state, and the fields that this version does not know,
+    /// which are written back unchanged.
     pub fn from_value(value: &Value) -> (State, Map<String, Value>) {
         let mut state = State::default();
         let Some(object) = value.as_object() else {
@@ -301,7 +350,8 @@ impl State {
         if let Some(folded) = strings(get("sidebarFolded")) {
             state.folded = folded;
         }
-        // `loadPinnedFilters`: only the known fields.
+        // Keep only the fields that this version knows, as production's
+        // `loadPinnedFilters` does.
         if let Some(pinned) = strings(get("pinnedFilters")) {
             state.pinned_filters = pinned
                 .into_iter()
@@ -337,6 +387,20 @@ impl State {
                         .map(|id| id as u32)
                         .collect();
                     Some((library.clone(), ids))
+                })
+                .collect();
+        }
+        if let Some(libraries) = get("quickSearchRecent").and_then(Value::as_object) {
+            state.quick_search_recent = libraries
+                .iter()
+                .filter_map(|(library, choices)| {
+                    let choices = choices
+                        .as_array()?
+                        .iter()
+                        .filter(|choice| choice.is_object())
+                        .cloned()
+                        .collect();
+                    Some((library.clone(), choices))
                 })
                 .collect();
         }
@@ -419,7 +483,8 @@ impl State {
         (state, extra)
     }
 
-    /// The file's contents, with `extra` (fields of a newer version) kept.
+    /// Returns the contents to write to the file. `extra` holds the fields
+    /// that a newer version wrote, and they are written back unchanged.
     pub fn to_value(&self, extra: &Map<String, Value>) -> Value {
         let mut object = extra.clone();
         let mut put = |key: &str, value: Value| {
@@ -461,6 +526,7 @@ impl State {
         put("tagPickerCounts", json!(self.tag_picker_counts));
         put("recentTags", json!(self.recent_tags));
         put("recentFolders", json!(self.recent_folders));
+        put("quickSearchRecent", json!(self.quick_search_recent));
         put("keyboardPreset", json!(self.keyboard_preset));
         put(
             "shortcutOverrides",
@@ -523,15 +589,16 @@ impl State {
         Value::Object(object)
     }
 
-    /// Reads the file's text. `None` when it is not JSON at all.
+    /// Reads the text of a file. Returns `None` when the text is not a JSON
+    /// object.
     pub fn parse(text: &str) -> Option<(State, Map<String, Value>)> {
         let value: Value = serde_json::from_str(text).ok()?;
         value.is_object().then(|| State::from_value(&value))
     }
 }
 
-/// The fields this version reads and writes.
-const KNOWN: [&str; 25] = [
+/// The names of the fields that this version reads and writes.
+const KNOWN: [&str; 26] = [
     "version",
     "window",
     "sidebarWidth",
@@ -545,6 +612,7 @@ const KNOWN: [&str; 25] = [
     "tagPickerCounts",
     "recentTags",
     "recentFolders",
+    "quickSearchRecent",
     "keyboardPreset",
     "shortcutOverrides",
     "locale",
@@ -559,15 +627,19 @@ const KNOWN: [&str; 25] = [
     "cloudLocations",
 ];
 
-/// Brings a file written by an earlier version to this version's layout,
-/// one version at a time. Version 1 is the first layout, so there is no
-/// step yet; a file without a version stamp is read as version 1. A later
-/// layout adds its step here, on the file's `version`.
+/// Converts the contents of a file that an earlier version wrote to this
+/// version's layout, one version at a time. Version 1 is the first layout,
+/// so there is no conversion yet. A file that has no `version` field is read
+/// as version 1. A later layout adds its conversion here, and applies it
+/// according to the file's `version` field.
 fn migrate(object: Map<String, Value>) -> Map<String, Value> {
     object
 }
 
-/// This app's own folder for what it keeps per machine.
+/// Returns the folder that holds the state file, or `None` when no state is
+/// kept. That is the folder `PICTO_GPUI_STATE` names when it is set. In a
+/// test build without that variable no state is kept. Otherwise it is
+/// "Picto GPUI" in the platform's configuration folder.
 pub fn location() -> Option<PathBuf> {
     if let Some(folder) = crate::seams::state_folder() {
         return Some(folder);
@@ -578,7 +650,8 @@ pub fn location() -> Option<PathBuf> {
     config_folder().map(|folder| folder.join("Picto GPUI"))
 }
 
-/// The platform's per-user configuration folder (`app.getPath('appData')`).
+/// Returns the platform's configuration folder for the current user. This is
+/// what `app.getPath('appData')` returns in production.
 pub fn config_folder() -> Option<PathBuf> {
     let home = || std::env::var_os("HOME").map(PathBuf::from);
     if cfg!(target_os = "macos") {
@@ -594,13 +667,14 @@ pub fn config_folder() -> Option<PathBuf> {
     }
 }
 
-/// Reads the file in `folder`. A file that is not JSON is set aside so it is
-/// not lost, and the defaults are used.
+/// Reads the state file in `folder`. A file that is not JSON is renamed to
+/// `state.json.corrupt`, so that its contents are not lost, and every field
+/// then has its default.
 pub fn load(folder: &Path) -> (State, Map<String, Value>) {
     let path = folder.join(FILE);
-    // Only a missing file is no state; one that cannot be read as text is
-    // set aside below like any other unreadable file, rather than written
-    // over by the next save.
+    // Only a missing file means that there is no state. A file that exists
+    // and cannot be read as text is renamed below, like any other file that
+    // cannot be read. Otherwise the next save would write over it.
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -624,12 +698,14 @@ pub fn load(folder: &Path) -> (State, Map<String, Value>) {
     }
 }
 
-/// The last write that reached the disk, so a slower earlier write never
-/// replaces a later one.
+/// The sequence number of the latest write that reached the disk. A write
+/// with a lower number is skipped, so that an earlier write that finishes
+/// late never replaces a later one.
 static WRITTEN: Mutex<u64> = Mutex::new(0);
 
-/// Writes `text` as the file in `folder` through [`write_file`], unless a
-/// later write has already landed.
+/// Writes `text` to the state file in `folder` with [`write_file`]. It does
+/// nothing when a write with a higher sequence number has already reached
+/// the disk.
 fn write(folder: &Path, text: &str, sequence: u64) -> std::io::Result<()> {
     let mut written = WRITTEN.lock().unwrap_or_else(|poison| poison.into_inner());
     if sequence < *written {
@@ -640,10 +716,12 @@ fn write(folder: &Path, text: &str, sequence: u64) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Writes `bytes` as the file `name` in `folder` (made if missing) through a
-/// temporary file. The temporary file reaches the disk before it replaces
-/// the old one, so a crash or a power cut leaves the old file or the new
-/// one, never a part of either; a write that fails removes it.
+/// Writes `bytes` to the file `name` in `folder`, and creates the folder
+/// when it does not exist. The bytes are written to a temporary file, and
+/// that file is flushed to the disk before it is renamed over the old file.
+/// After a crash or a power cut the folder therefore holds either the whole
+/// old file or the whole new file. A write that fails removes the temporary
+/// file.
 pub fn write_file(folder: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     std::fs::create_dir_all(folder)?;
@@ -661,8 +739,11 @@ pub fn write_file(folder: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()
     Ok(())
 }
 
-/// The library's name in the recent folders: the library the disposable
-/// copy was made from, so the recents outlive the copy.
+/// Returns the key under which the recent folders and the recent Quick
+/// Search choices of the library at `root` are kept. For a disposable copy
+/// the key is the path of the library that the copy was made from, so that
+/// the lists are still there when another copy of that library is opened.
+/// For any other library the key is the library's own path.
 pub fn library_key(root: &Path) -> String {
     std::fs::read_to_string(root.join(crate::application::MARKER))
         .ok()
@@ -675,7 +756,8 @@ struct Store {
     folder: Option<PathBuf>,
     state: State,
     extra: Map<String, Value>,
-    /// What the file holds, to skip writing what is already there.
+    /// The contents of the file on the disk. A save whose contents are the
+    /// same is skipped.
     on_disk: Value,
     sequence: u64,
     pending: Option<Task<()>>,
@@ -683,7 +765,8 @@ struct Store {
 
 impl Global for Store {}
 
-/// Reads the state from [`location`]. Called once, before anything reads it.
+/// Reads the state from the folder that [`location`] returns. The app calls
+/// it once when it starts, before anything reads the state.
 pub fn init(cx: &mut App) {
     let folder = location();
     let (state, extra) = folder.as_deref().map(load).unwrap_or_default();
@@ -699,12 +782,13 @@ pub fn init(cx: &mut App) {
     });
 }
 
-/// The state as kept.
+/// Returns the state.
 pub fn get(cx: &App) -> &State {
     &cx.global::<Store>().state
 }
 
-/// Changes the state; the file is written shortly after the last change.
+/// Changes the state with `change`. The file is written 250 ms after the
+/// last change.
 pub fn update(cx: &mut App, change: impl FnOnce(&mut State)) {
     if !cx.has_global::<Store>() {
         return;
@@ -722,7 +806,9 @@ pub fn update(cx: &mut App, change: impl FnOnce(&mut State)) {
     cx.global_mut::<Store>().pending = Some(task);
 }
 
-/// Writes what changed now, as the app quits or a script ends.
+/// Writes the state to the file at once when it differs from the file's
+/// contents. The app calls it when it quits and when a script of the
+/// off-screen tool ends.
 pub fn flush(cx: &mut App) {
     if cx.has_global::<Store>() {
         save(cx, true);
@@ -804,6 +890,13 @@ mod tests {
         state
             .recent_folders
             .insert("/Users/x/Main.library".into(), vec![4, 9]);
+        state.quick_search_recent.insert(
+            "/Users/x/Main.library".into(),
+            vec![
+                json!({ "key": "tag:7" }),
+                json!({ "key": "place:folder:4" }),
+            ],
+        );
         state.shortcut_overrides.insert(
             "view.toggleSidebar".into(),
             Binding {
@@ -887,10 +980,10 @@ mod tests {
         assert_eq!(state, State::default());
         assert!(folder.path().join("state.json.corrupt").exists());
         assert!(!folder.path().join("state.json").exists());
-        // No file at all is the defaults too.
+        // When there is no file at all, every field has its default too.
         assert_eq!(load(folder.path()).0, State::default());
-        // A file that is not even text is set aside as well, not left to
-        // be written over.
+        // A file that is not text is renamed as well, so that the next save
+        // does not write over it.
         std::fs::write(folder.path().join("state.json"), b"\x00\xff{{").unwrap();
         assert_eq!(load(folder.path()).0, State::default());
         assert_eq!(
@@ -913,7 +1006,7 @@ mod tests {
         )
         .unwrap();
         state.locale = "pt".into();
-        // An earlier write finishing late is dropped.
+        // An earlier write that finishes after a later one is skipped.
         write(
             folder.path(),
             &state.to_value(&Default::default()).to_string(),
@@ -948,19 +1041,21 @@ mod tests {
             height,
             maximized: false,
         };
-        // On the second display: kept.
+        // The saved position is on the second display, so it is kept.
         let kept = place(2000., 100., 1200., 800.).on_displays(&displays);
         assert_eq!((kept.x, kept.y), (Some(2000.), Some(100.)));
-        // Partly on a display: kept, as production keeps it.
+        // The saved position is partly on a display, so it is kept, as in
+        // production.
         let edge = place(-1100., 10., 1200., 800.).on_displays(&displays);
         assert_eq!(edge.x, Some(-1100.));
-        // On a display that is gone: centred.
+        // The saved position is on a display that is no longer connected, so
+        // the window is centred.
         let gone = place(5000., 100., 1200., 800.).on_displays(&displays);
         assert_eq!((gone.x, gone.y), (None, None));
-        // Too small: the minimum size.
+        // The saved size is below the minimum, so the minimum size is used.
         let small = place(10., 10., 300., 200.4).on_displays(&displays);
         assert_eq!((small.width, small.height), (1000., 600.));
-        // No displays known: centred.
+        // No display is known, so the window is centred.
         assert_eq!(place(10., 10., 900., 600.).on_displays(&[]).x, None::<f32>);
     }
 }
