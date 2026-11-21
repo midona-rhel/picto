@@ -133,19 +133,20 @@ jobs:
           echo "APPIMAGETOOL=$tools/appimagetool" >> "$GITHUB_ENV"
           echo "APPIMAGE_RUNTIME=$tools/runtime" >> "$GITHUB_ENV"
 
-      # The installer is compiled with NSIS, which the Windows runner image
-      # has. This step fails here, with a clear message, if a later image
-      # does not have it. It also compiles the installer's script once with
-      # an empty file in place of the program, so that a mistake in the
+      # The installer is compiled with NSIS. The Windows runner image does
+      # not have it, so it is installed here from Chocolatey at one fixed
+      # version; the Chocolatey package checks the download against a
+      # checksum of its own. Then the installer's script is compiled once
+      # with an empty file in place of the program, so that a mistake in the
       # script is found now and not after the release build.
-      - name: Find NSIS and compile the installer's script (Windows)
+      - name: Install NSIS and compile the installer's script (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          makensis="$(command -v makensis || true)"
-          [[ -n "$makensis" ]] || makensis="/c/Program Files (x86)/NSIS/makensis.exe"
+          choco install nsis --version=3.11.0 --yes --no-progress
+          makensis="/c/Program Files (x86)/NSIS/makensis.exe"
           if [[ ! -x "$makensis" ]]; then
-            echo "::error::makensis was not found on this runner image."
+            echo "::error::makensis was not found after NSIS was installed."
             exit 1
           fi
           echo "makensis: $makensis"
