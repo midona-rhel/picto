@@ -1,9 +1,8 @@
 // Signs macOS app bundles with the project's own certificate, "Picto Code
-// Signing", and checks the result. The Electron package
-// (`build-alpha-package.mjs`, `verify-mac-package.mjs`) and the GPUI package
-// (`sign-mac-app.mjs`) both use this module, so that there is one signing
-// policy: a bundle is signed with this certificate or the build fails, and an
-// ad-hoc signature is never accepted in its place.
+// Signing", and checks the result. `sign-mac-app.mjs`, which the package
+// script calls, uses this module. The signing policy is: a bundle is signed
+// with this certificate or the build fails, and an ad-hoc signature is never
+// accepted in its place.
 
 import { X509Certificate, randomBytes } from 'node:crypto';
 import {
@@ -183,7 +182,7 @@ export function prepareMacSigning(env = process.env, platform = process.platform
     run('codesign', ['--force', '--sign', SIGNING_IDENTITY, '--keychain', keychainPath,
       '--timestamp=none', probe]);
     run('codesign', ['--verify', '--strict', probe]);
-    console.log('[alpha-package] Signing preflight passed.');
+    console.log('mac-signing: the certificate was imported and signed a test file.');
   } catch (error) {
     cleanup();
     throw error;

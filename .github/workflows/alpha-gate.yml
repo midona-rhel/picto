@@ -1,5 +1,12 @@
 name: Alpha Gate
 
+# The gate that a release passes.
+#
+# - A pull request into a release branch is verified.
+# - A push to a release branch is verified, and the packages for the three
+#   systems are built and checked.
+# - A tag publishes the packages that the push of the same commit built. A
+#   tag builds nothing.
 on:
   pull_request:
     branches:
@@ -19,134 +26,25 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  CARGO_INCREMENTAL: 0
-
 jobs:
   verify:
     name: verify
-    # Verify and package the release branch once. Tags only publish its artifacts.
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     uses: ./.github/workflows/verify.yml
 
-  alpha-package:
-    name: alpha:package + alpha:smoke (${{ matrix.platform }})
-    # Independent jobs run together; publication still requires the entire run
-    # to succeed. Pull requests remain verification-only and receive no signing secrets.
+  # The packages are built beside the verification, not after it, so that
+  # the gate takes no longer than its slowest job. Publication needs the
+  # whole run to succeed. A pull request builds no packages and gets no
+  # signing secrets.
+  package:
+    name: package
     if: ${{ github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/') }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-26
-            platform: macos
-            artifact: macos-arm64
-            package-artifacts: |
-              dist/*.dmg
-              dist/*.zip
-              dist/latest-mac.yml
-              dist/*.blockmap
-          - os: ubuntu-24.04
-            platform: linux
-            artifact: linux-x64
-            package-artifacts: |
-              dist/*.AppImage
-              dist/latest-linux.yml
-              dist/*.blockmap
-          - os: windows-latest
-            platform: windows
-            artifact: windows-x64
-            package-artifacts: |
-              dist/*.exe
-              dist/latest.yml
-              dist/*.blockmap
-
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            native/picto-node/package-lock.json
-
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-        with:
-          toolchain: 1.98.0
-
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
-        with:
-          workspaces: . -> target
-          cache-on-failure: true
-
-      - name: Install system deps (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            libdbus-1-dev \
-            libssl-dev \
-            libclang-dev \
-            libfuse2 \
-            xvfb
-
-      - name: Install LLVM (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          choco install llvm -y
-          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
-
-      - name: Download FFmpeg binaries
-        run: bash scripts/download-ffmpeg.sh
-
-      - name: Install root dependencies
-        run: npm ci
-
-      - name: Install NAPI CLI deps
-        working-directory: native/picto-node
-        run: npm ci
-
-      - name: Package alpha artifacts
-        run: npm run alpha:package
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MAC_CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || '' }}
-          MAC_CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
-          PICTO_REQUIRE_MAC_SIGNING: ${{ runner.os == 'macOS' && 'true' || 'false' }}
-
-      - name: Run alpha smoke (Linux)
-        id: smoke-linux
-        if: runner.os == 'Linux'
-        run: xvfb-run --auto-servernum npm run alpha:smoke -- --platform "${{ matrix.platform }}" --report "artifacts/alpha-smoke/${{ matrix.platform }}.json"
-
-      - name: Run alpha smoke
-        id: smoke-other
-        if: runner.os != 'Linux'
-        run: npm run alpha:smoke -- --platform "${{ matrix.platform }}" --report "artifacts/alpha-smoke/${{ matrix.platform }}.json"
-
-      - name: Upload package artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: picto-${{ matrix.artifact }}
-          path: ${{ matrix.package-artifacts }}
-          if-no-files-found: error
-          compression-level: 0
-          overwrite: true
-
-      - name: Upload alpha smoke report
-        if: always() && (steps.smoke-linux.outcome != 'skipped' || steps.smoke-other.outcome != 'skipped')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: alpha-smoke-${{ matrix.platform }}
-          path: artifacts/alpha-smoke/${{ matrix.platform }}.json
-          if-no-files-found: error
-          overwrite: true
+    uses: ./.github/workflows/package.yml
+    with:
+      require-mac-signing: true
+    secrets:
+      MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+      MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
 
   alpha-release-assets:
     name: Attach Release Assets
@@ -163,6 +61,9 @@ jobs:
         with:
           node-version: 24
 
+      # Finds the run of this workflow that the push of this commit to its
+      # release branch started, and requires that it succeeded and still
+      # holds the three packages.
       - name: Require the exact successful release gate
         id: gate
         run: node scripts/ci/find-release-gate.mjs
@@ -198,4 +99,3 @@ jobs:
             release-artifacts/*.AppImage
             release-artifacts/*.exe
             release-artifacts/*.yml
-            release-artifacts/*.blockmap

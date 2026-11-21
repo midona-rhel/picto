@@ -1,19 +1,32 @@
-name: GPUI package
+name: Package
 
-# Builds the packages of the GPUI app (`experiments/gpui/package.sh`) on the
-# three systems and proves on each that the packaged program starts. The
-# packages have the file names of the Electron app's packages, and the
-# artifacts have the names of the artifacts that `alpha-gate.yml` uploads, so
-# that a later change can make the release from these jobs.
+# Builds the packages of Picto (`experiments/gpui/package.sh`) on the three
+# systems and proves on each that the packaged program starts. This is the
+# only workflow that builds packages.
 #
-# This workflow is not part of a release: `alpha-gate.yml` still builds and
-# publishes the Electron app's packages.
+# The Alpha Gate (`alpha-gate.yml`) calls this workflow for every push to a
+# release branch. The packages that such a run uploads are the ones a release
+# publishes: the artifacts `picto-macos-arm64`, `picto-linux-x64` and
+# `picto-windows-x64`.
 #
-# Each job makes a release build, which takes a long time. The workflow
-# therefore starts by itself only for a pull request that changes the
-# packaging itself. For any other change, start it by hand from the Actions
-# page.
+# Each job makes a release build, which takes a long time. Outside a release
+# the workflow therefore starts by itself only for a pull request that
+# changes the packaging itself. For any other change, start it by hand from
+# the Actions page.
 on:
+  workflow_call:
+    inputs:
+      # With `true`, the macOS job fails when the signing certificate is
+      # missing. The Alpha Gate passes `true`, so that a release never holds
+      # an unsigned app.
+      require-mac-signing:
+        type: boolean
+        default: false
+    secrets:
+      MAC_CSC_LINK:
+        required: false
+      MAC_CSC_KEY_PASSWORD:
+        required: false
   pull_request:
     branches:
       - dev
@@ -24,12 +37,17 @@ on:
       - "experiments/gpui/Cargo.toml"
       - "scripts/mac-signing.mjs"
       - "scripts/sign-mac-app.mjs"
-      - ".github/workflows/gpui-package.yml"
+      - "scripts/generate-app-icons.mjs"
+      - "scripts/release-audit.mjs"
+      - ".github/workflows/package.yml"
   workflow_dispatch:
 
-# A new push to the same branch stops the run of the push before it.
+# A new push to the same branch stops the run of the push before it. The
+# group holds the name of the workflow that started the run, which is "Alpha
+# Gate" when the Alpha Gate calls this workflow. A run started by hand
+# therefore never stops the packaging of a release on the same branch.
 concurrency:
-  group: gpui-package-${{ github.ref }}
+  group: package-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -72,9 +90,7 @@ jobs:
 
       # On macOS, Node.js runs the script that signs the app and the script
       # that draws the layer of the app's icon (`scripts/generate-app-icons.mjs`,
-      # which needs the package `@resvg/resvg-js`). The packages are installed
-      # without their install scripts, so that Electron itself is not
-      # downloaded.
+      # which needs the package `@resvg/resvg-js`).
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: runner.os == 'macOS'
         with:
@@ -180,21 +196,31 @@ jobs:
         run: bash scripts/download-ffmpeg.sh
 
       # With the certificate, the macOS app is signed and the package must
-      # also hold the compiled Icon Composer icon, as a release package must.
-      # A pull request from a fork gets no secrets; its app is not signed, and
-      # the script says so.
+      # also hold the compiled Icon Composer icon. A release requires both
+      # (`require-mac-signing`), and the script then fails without the
+      # certificate. In any other run without the certificate, for example
+      # for a pull request from a fork, which gets no secrets, the app is not
+      # signed and the script says so.
       - name: Package
         shell: bash
         working-directory: experiments/gpui
         env:
           MAC_CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || '' }}
           MAC_CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          REQUIRE_MAC_SIGNING: ${{ runner.os == 'macOS' && inputs.require-mac-signing && 'true' || 'false' }}
         run: |
-          if [[ -n "$MAC_CSC_LINK" ]]; then
+          if [[ "$REQUIRE_MAC_SIGNING" == true || -n "$MAC_CSC_LINK" ]]; then
             export PICTO_REQUIRE_MAC_SIGNING=true
           fi
           ./package.sh
           echo "PICTO_SIGNED=$([[ -n "$MAC_CSC_LINK" ]] && echo true || echo false)" >> "$GITHUB_ENV"
+
+      # The package must consist of exactly the files that a release
+      # publishes for this system, under their release names, and the update
+      # feed must name them.
+      - name: Audit the package
+        shell: bash
+        run: node scripts/release-audit.mjs --artifacts
 
       # The archive is unpacked into a new folder, and the program in it is
       # run with `--version`. It must print the app's name and version and
@@ -353,18 +379,20 @@ jobs:
           Expect (-not (Test-Path $desktopLink)) 'the uninstaller removed the desktop shortcut'
           Expect (-not (Test-Path 'HKCU:\Software\Classes\Picto Pack')) 'the uninstaller removed the pack file class'
 
-      # The installer must upgrade an installation of the Electron app in
-      # place. The Electron app's installer of the release named here is
-      # downloaded and run silently, then this installer is run with the
-      # arguments the Electron app's updater passes. Afterwards the same
-      # folder must hold this app and none of the Electron app's files, and
-      # the registry values and the shortcuts must still be there.
-      - name: Check the upgrade of the Electron app (Windows)
+      # Picto up to version 0.6.19-alpha was built with Electron and
+      # installed by an installer that electron-builder made. This installer
+      # must upgrade such an installation in place. The installer of the
+      # release named here is downloaded and run silently, then this
+      # installer is run with the arguments the updater of that version
+      # passes. Afterwards the same folder must hold this app and none of
+      # the old version's files, and the registry values and the shortcuts
+      # must still be there.
+      - name: Check the upgrade of an Electron-based Picto (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          ELECTRON_RELEASE: v0.6.19-alpha
+          OLD_RELEASE: v0.6.19-alpha
         run: |
           $ErrorActionPreference = 'Stop'
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
@@ -379,25 +407,25 @@ jobs:
             "ok: $what"
           }
           $old = Join-Path $env:RUNNER_TEMP 'electron'
-          gh release download $env:ELECTRON_RELEASE --repo $env:GITHUB_REPOSITORY --pattern 'Picto-Setup-*.exe' --dir $old
+          gh release download $env:OLD_RELEASE --repo $env:GITHUB_REPOSITORY --pattern 'Picto-Setup-*.exe' --dir $old
           $oldInstaller = (Get-ChildItem $old -Filter 'Picto-Setup-*.exe')[0].FullName
-          # On the runner the Electron app's installer sometimes ends with
-          # the code -1073741819 (an access violation inside that installer)
-          # and installs nothing. It is then run again, three times at most.
-          # Its exit code is printed and not checked: what matters here is
-          # that the Electron app is installed, which the next lines check.
+          # On the runner the old version's installer sometimes ends with the
+          # code -1073741819 (an access violation inside that installer) and
+          # installs nothing. It is then run again, three times at most. Its
+          # exit code is printed and not checked: what matters here is that
+          # the old version is installed, which the next lines check.
           for ($attempt = 1; $attempt -le 3 -and -not (Test-Path "$folder\resources\app.asar"); $attempt++) {
             $process = Start-Process -FilePath $oldInstaller -ArgumentList '/S' -Wait -PassThru
-            "attempt ${attempt}: the Electron app's installer ended with code $($process.ExitCode)"
+            "attempt ${attempt}: the old version's installer ended with code $($process.ExitCode)"
           }
-          Expect (Test-Path "$folder\resources\app.asar") "the Electron app is installed in $folder"
-          Expect ((Get-ItemProperty $installKey).InstallLocation -eq $folder) "the Electron app's installer wrote InstallLocation"
-          "the Electron app's uninstall entry: $((Get-ItemProperty $uninstallKey).UninstallString)"
-          Expect (Test-Path $startLink) "the Electron app's installer made the Start menu shortcut"
+          Expect (Test-Path "$folder\resources\app.asar") "the old version is installed in $folder"
+          Expect ((Get-ItemProperty $installKey).InstallLocation -eq $folder) "the old version's installer wrote InstallLocation"
+          "the old version's uninstall entry: $((Get-ItemProperty $uninstallKey).UninstallString)"
+          Expect (Test-Path $startLink) "the old version's installer made the Start menu shortcut"
           $process = Start-Process -FilePath $installer -ArgumentList '--updated /S' -Wait -PassThru
           Expect ($process.ExitCode -eq 0) 'this installer ended with code 0 as an upgrade'
           Get-ChildItem $folder -Recurse | ForEach-Object { $_.FullName }
-          Expect (-not (Test-Path "$folder\resources\app.asar")) "the Electron app's files are gone"
+          Expect (-not (Test-Path "$folder\resources\app.asar")) "the old version's files are gone"
           Expect (-not (Test-Path "$folder\resources.pak")) "the Electron runtime's files are gone"
           Expect ((Get-ItemProperty $installKey).InstallLocation -eq $folder) 'InstallLocation still names the folder'
           Expect ((Get-ItemProperty $uninstallKey).DisplayName -eq "Picto $version") 'the uninstall entry names the new version'

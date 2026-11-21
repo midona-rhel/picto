@@ -3,9 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { packageArguments, supportsIconComposer } from './build-alpha-package.mjs';
-import { prepareMacSigning, signingIdentity } from './mac-signing.mjs';
-import verifyMacPackage from './verify-mac-package.mjs';
+import { prepareMacSigning, signingIdentity, verifyMacSignature } from './mac-signing.mjs';
 
 const state = vi.hoisted(() => ({ fingerprint: 'AB'.repeat(20) }));
 vi.mock('node:child_process', () => {
@@ -30,7 +28,6 @@ beforeEach(() => {
   state.fingerprint = hash;
 });
 afterEach(() => {
-  vi.unstubAllEnvs();
   for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -119,27 +116,8 @@ it('deletes the private keychain even if hosted trust cannot make the certificat
   expect(spawnSync.mock.calls.some(([c, a]) => c === 'security' && a[0] === 'delete-keychain')).toBe(true);
 });
 
-it('uses the Xcode marketing version and requires actool instead of parsing its unrelated version format', () => {
-  spawnSync.mockImplementation(c => ({ status: 0, stdout: c === 'xcodebuild' ? 'Xcode 26.6\nBuild version 17G500' : '' }));
-  expect(supportsIconComposer('darwin')).toBe(true);
-  spawnSync.mockReturnValue({ status: 0, stdout: 'Xcode 16.4\nBuild version 16F6' });
-  expect(supportsIconComposer('darwin')).toBe(false);
-  spawnSync.mockImplementation(c => ({ status: c === 'xcrun' ? 1 : 0, stdout: 'Xcode 26.6' }));
-  expect(supportsIconComposer('darwin')).toBe(false);
-});
-
-it('requires the release icon and forces signing without changing Windows or Linux packaging', () => {
-  const signing = { environment: { PICTO_MAC_SIGNING_IDENTITY_HASH: hash } };
-  expect(() => packageArguments({ platform: 'darwin', env: credentials, iconComposer: false, signing })).toThrow('requires Xcode 26');
-  const args = packageArguments({ platform: 'darwin', env: credentials, iconComposer: true, signing });
-  expect(args).toContain('--config.forceCodeSigning=true');
-  expect(args).toContain(`--config.mac.identity=${hash}`);
-  expect(args.some(arg => arg.includes('verify-mac-package.mjs'))).toBe(true);
-  expect(args.some(arg => arg.includes('icon-flat'))).toBe(false);
-  for (const platform of ['win32', 'linux']) {
-    expect(prepareMacSigning(credentials, platform)).toBeNull();
-    expect(packageArguments({ platform, env: {}, iconComposer: true, signing: null })).toHaveLength(2);
-  }
+it('does nothing on Windows and Linux', () => {
+  for (const platform of ['win32', 'linux']) expect(prepareMacSigning(credentials, platform)).toBeNull();
 });
 
 describe('final packaged app check', () => {
@@ -148,28 +126,27 @@ describe('final packaged app check', () => {
     scratch.push(dir);
     mkdirSync(path.join(dir, 'Picto.app/Contents/Resources'), { recursive: true });
     writeFileSync(path.join(dir, 'Picto.app/Contents/Resources/Assets.car'), 'compiled catalog');
-    vi.stubEnv('PICTO_MAC_SIGNING_IDENTITY_HASH', hash);
-    vi.stubEnv('PICTO_REQUIRE_MAC_SIGNING', 'true');
     execFileSync.mockImplementation((c, args) => {
       if (args[1].startsWith('--extract-certificates=')) writeFileSync(`${args[1].split('=')[1]}0`, 'DER fixture');
     });
-    return { electronPlatformName: 'darwin', appOutDir: dir, packager: { appInfo: { productFilename: 'Picto' } } };
+    return path.join(dir, 'Picto.app');
   }
+  const check = app => verifyMacSignature(app, hash, { requireIconCatalog: true });
   it('verifies the app deeply, matches its leaf certificate and requires the compiled icon before archives', () => {
-    const context = fixture();
-    expect(() => verifyMacPackage(context)).not.toThrow();
-    expect(execFileSync).toHaveBeenCalledWith('codesign', ['--verify', '--deep', '--strict', path.join(context.appOutDir, 'Picto.app')], { stdio: 'pipe' });
+    const app = fixture();
+    expect(() => check(app)).not.toThrow();
+    expect(execFileSync).toHaveBeenCalledWith('codesign', ['--verify', '--deep', '--strict', app], { stdio: 'pipe' });
   });
   it('rejects an unrelated signature', () => {
-    const context = fixture(); state.fingerprint = 'CD'.repeat(20);
-    expect(() => verifyMacPackage(context)).toThrow('configured macOS signing certificate');
+    const app = fixture(); state.fingerprint = 'CD'.repeat(20);
+    expect(() => check(app)).toThrow('configured macOS signing certificate');
   });
   it('rejects an ad-hoc signature without a certificate', () => {
-    const context = fixture(); execFileSync.mockImplementation(() => {});
-    expect(() => verifyMacPackage(context)).toThrow();
+    const app = fixture(); execFileSync.mockImplementation(() => {});
+    expect(() => check(app)).toThrow();
   });
   it('rejects a missing Icon Composer catalog', () => {
-    const context = fixture(); rmSync(path.join(context.appOutDir, 'Picto.app/Contents/Resources/Assets.car'));
-    expect(() => verifyMacPackage(context)).toThrow();
+    const app = fixture(); rmSync(path.join(app, 'Contents/Resources/Assets.car'));
+    expect(() => check(app)).toThrow();
   });
 });

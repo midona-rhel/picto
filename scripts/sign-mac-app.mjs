@@ -1,17 +1,16 @@
 #!/usr/bin/env node
 
 // Signs the macOS app bundle given as the first argument with the project's
-// own certificate, "Picto Code Signing", and checks the result. The GPUI
-// app's package script (`experiments/gpui/package.sh`) calls this before it
-// makes the disk image and the archive.
+// own certificate, "Picto Code Signing", and checks the result. The package
+// script (`experiments/gpui/package.sh`) calls this before it makes the disk
+// image and the archive.
 //
 // The certificate comes only from the environment variables `MAC_CSC_LINK`
 // and `MAC_CSC_KEY_PASSWORD`. Without them the script signs nothing and
 // fails: it never looks for a certificate on the machine.
 //
-// The bundle is signed as the Electron package is: with the certificate and
-// without a timestamp. It is not notarized, because the project has no Apple
-// Developer ID.
+// The bundle is signed with the certificate and without a timestamp. It is
+// not notarized, because the project has no Apple Developer ID.
 
 import { execFileSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
