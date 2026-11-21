@@ -346,7 +346,7 @@ had, and they upgrade an installed Picto 0.6.19 or earlier.
 | System | Files | What is in the package |
 | --- | --- | --- |
 | macOS, arm64 | `Picto-<version>-arm64.dmg`, `Picto-<version>-arm64-mac.zip`, `latest-mac.yml` | `Picto.app` with the program, `ffmpeg` and `ffprobe` in `Contents/MacOS`, `packaging/macos/Info.plist`, and the icons in `Contents/Resources`. The disk image also holds a link to the Applications folder. |
-| Windows, x64 | `Picto-Setup-<version>.exe`, `latest.yml` | An NSIS installer (`packaging/windows/installer.nsi`) with `Picto.exe`, the DLLs the build put beside it (`DirectML.dll`, which the application core's ONNX Runtime uses), `ffmpeg.exe`, `ffprobe.exe` and the icon of pack files. Needs NSIS 3 (`makensis`) and Git Bash. |
+| Windows, x64 | `Picto-Setup-<version>.exe`, `latest.yml` | An NSIS installer (`packaging/windows/installer.nsi`) with `Picto.exe`, the DLLs the build put beside it (`DirectML.dll`, which the application core's ONNX Runtime uses), the Microsoft C++ runtime DLLs that these import (such as `vcruntime140.dll`), `ffmpeg.exe`, `ffprobe.exe` and the icon of pack files. Needs NSIS 3 (`makensis`), Git Bash and Visual Studio or its Build Tools with the C++ tools for x64. |
 | Linux, x64 | `Picto-<version>.AppImage`, `latest-linux.yml` | An AppImage with `usr/bin/picto`, `libwebgpu_dawn.so`, `ffmpeg` and `ffprobe` beside it, `packaging/linux/AppRun`, the desktop file and the icon. Needs `appimagetool`, on the `PATH` or named by `APPIMAGETOOL`. |
 
 The version is the one in the repository's `package.json`. The `.yml` files
@@ -383,6 +383,19 @@ application data. It differs from electron-builder's
 installer in three ways: its texts are in English only, an upgrade never
 asks for the folder or for whom to install, and the uninstaller has no
 option to delete application data.
+
+`Picto.exe` loads the Microsoft C++ runtime from DLLs that are not a part of
+Windows, so the installer puts them into the program's folder, where
+Microsoft allows an application to install them. A computer then needs no
+Visual C++ redistributable for the program to start. `package.sh` asks the
+linker of the Visual Studio on the build machine which DLLs `Picto.exe` and
+the DLLs beside it import (`link.exe -dump -dependents`), and copies the
+runtime's DLLs among them from that Visual Studio's folder
+`VC\Redist\MSVC\<version>\x64\Microsoft.VC<number>.CRT`. It prints the
+imported names and the copied files, and it fails when an imported runtime
+DLL is not in that folder. The runtime is not linked into the program
+instead, because the prebuilt ONNX Runtime libraries are built for the
+runtime's DLLs.
 
 The AppImage does not hold the libraries of the system that the program is
 linked against: GTK 3, WebKitGTK 4.1 with libsoup 3, ALSA, D-Bus, xcb and
@@ -1022,6 +1035,10 @@ and SHA-512. Each job then proves that its package works on that system:
 
 A program that starts has found the shared libraries it is linked against,
 so the `--version` runs also prove that the libraries are in the package.
+The Microsoft C++ runtime DLLs on Windows are the exception: the runner has
+them in its system folder, so the program would start there without the
+copies in the package. For these the job's log shows which DLLs `package.sh`
+copied, and the list of the installed folder shows them beside the program.
 The Alpha Gate calls the workflow for every push to a release branch.
 Outside a release the workflow starts by itself only for a pull request into
 `dev` that changes the packaging (`package.sh`, `packaging/`, `build.rs`,
