@@ -22,7 +22,7 @@ vi.mock('../../shared/ui/KbdTooltip', () => ({
 
 const model = {
   slug: 'wd14-swinv2-v3', label: 'WD14', enabled: false, downloaded: false,
-  sessionLoaded: false, recommended: true, heavy: false, sizeBytes: 1024 * 1024, dataset: 'test',
+  sessionLoaded: false, backend: null, recommended: true, heavy: false, sizeBytes: 1024 * 1024, dataset: 'test',
   referenceInferenceMs: 17.74,
   optimizationSupported: false, optimized: false,
   downloadedBytes: null, downloadTotalBytes: null,

@@ -238,6 +238,21 @@ pub fn seed(path: &std::path::Path, count: u32) -> Result<(), Box<dyn std::error
     seed_with_assets(path, count, &[])
 }
 
+/// The content hash of seeded item `id`'s file when it reuses a sample
+/// asset: one per item, spread evenly over the blob store's folders.
+pub fn sample_hash(id: u32) -> String {
+    let mut state = u64::from(id) ^ 0x9e37_79b9_7f4a_7c15;
+    let mut next = || {
+        // SplitMix64.
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut mixed = state;
+        mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        mixed ^ (mixed >> 31)
+    };
+    format!("{:016x}{:016x}{:016x}{:016x}", next(), next(), next(), next())
+}
+
 pub fn seed_with_assets(
     path: &std::path::Path,
     count: u32,
@@ -298,11 +313,9 @@ pub fn seed_with_assets(
                 id
             );
             let asset = (!assets.is_empty()).then(|| &assets[(id as usize - 1) % assets.len()]);
-            let file_id = if assets.is_empty() {
-                id
-            } else {
-                (id - 1) % assets.len() as u32 + 1
-            };
+            // Every media item has a file row of its own; items that reuse a
+            // sample asset share its bytes on disk under their own hash.
+            let file_id = id;
             let mime = if asset.is_some() {
                 "image/jpeg"
             } else {
@@ -318,11 +331,11 @@ pub fn seed_with_assets(
                 .map(|asset| asset.size as i64)
                 .unwrap_or(100_000 + mix as i64 % 50_000_000);
             item.execute(params![id, format!("fixture-{id}")])?;
-            if asset.is_none() || id as usize <= assets.len() {
+            {
                 file.execute(params![
                     file_id,
                     asset
-                        .map(|asset| asset.hash.clone())
+                        .map(|_| sample_hash(id))
                         .unwrap_or_else(|| format!("{id:064x}")),
                     asset
                         .map(|asset| asset.path.clone())

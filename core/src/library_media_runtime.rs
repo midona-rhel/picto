@@ -54,17 +54,21 @@ pub fn recover(application: &LibraryApplication) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
 
     let stored_originals = application.blobs().list_originals();
+    // One listing of the thumbnail tree answers for almost every original;
+    // only one it does not name is looked for on the file system.
+    let thumbnails = application.blobs().list_thumbnails();
     let mut recovered = Vec::with_capacity(stored_originals.len());
     for (hash, extension) in stored_originals {
         let canonical_path = application
             .blobs()
             .original_path_with_ext(&hash, Some(&extension))
             .map_err(|error| format!("Failed to resolve stored original {hash}: {error}"))?;
-        let thumbnail_missing = application
-            .blobs()
-            .find_thumbnail_path(&hash)
-            .map_err(|error| format!("Failed to inspect thumbnail {hash}: {error}"))?
-            .is_none();
+        let thumbnail_missing = !thumbnails.contains(&hash)
+            && application
+                .blobs()
+                .find_thumbnail_path(&hash)
+                .map_err(|error| format!("Failed to inspect thumbnail {hash}: {error}"))?
+                .is_none();
         recovered.push((
             hash,
             canonical_path.to_string_lossy().into_owned(),
@@ -78,17 +82,20 @@ pub fn recover(application: &LibraryApplication) -> Result<(), String> {
         .maintenance_write(WorkPriority::CorrectnessRecovery, |transaction| {
             let mut paths_repaired = 0_usize;
             let mut thumbnails_queued = 0_usize;
+            // A statement is compiled once and reused for every original.
             for (hash, canonical_path, thumbnail_missing) in &recovered {
-                paths_repaired += transaction.execute(
-                    "UPDATE media_file SET file_path = ?2
-                     WHERE content_hash = ?1 AND file_path != ?2",
-                    rusqlite::params![hash, canonical_path],
-                )?;
+                paths_repaired += transaction
+                    .prepare_cached(
+                        "UPDATE media_file SET file_path = ?2
+                         WHERE content_hash = ?1 AND file_path != ?2",
+                    )?
+                    .execute(rusqlite::params![hash, canonical_path])?;
                 if !thumbnail_missing {
                     continue;
                 }
-                thumbnails_queued += transaction.execute(
-                    "INSERT INTO work_item
+                thumbnails_queued += transaction
+                    .prepare_cached(
+                        "INSERT INTO work_item
                          (file_id, file_hash, work_type, status, priority,
                           attempt_count, available_at, created_at, updated_at)
                      SELECT file_id, content_hash, 'thumbnail', 'pending', ?2,
@@ -101,8 +108,12 @@ pub fn recover(application: &LibraryApplication) -> Result<(), String> {
                          last_error = NULL, updated_at = excluded.updated_at
                      WHERE work_item.status = 'failed'
                         OR (work_item.status = 'pending' AND work_item.last_error IS NOT NULL)",
-                    rusqlite::params![hash, MediaWorkKind::Thumbnail.priority(), now],
-                )?;
+                    )?
+                    .execute(rusqlite::params![
+                        hash,
+                        MediaWorkKind::Thumbnail.priority(),
+                        now
+                    ])?;
             }
             Ok((paths_repaired, thumbnails_queued))
         })

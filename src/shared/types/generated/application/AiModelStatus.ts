@@ -3,4 +3,9 @@
 /**
  * Read-only model state exposed by the replacement AI runtime.
  */
-export type AiModelStatus = { slug: string, label: string, enabled: boolean, downloaded: boolean, sessionLoaded: boolean, recommended: boolean, heavy: boolean, optimizationSupported: boolean, optimized: boolean, downloadedBytes: number | null, downloadTotalBytes: number | null, sizeBytes: number, dataset: string, referenceInferenceMs: number, };
+export type AiModelStatus = { slug: string, label: string, enabled: boolean, downloaded: boolean, sessionLoaded: boolean, 
+/**
+ * What the model's loaded session runs on ("Core ML GPU/ANE", "CPU", ...);
+ * none until it has been loaded.
+ */
+backend: string | null, recommended: boolean, heavy: boolean, optimizationSupported: boolean, optimized: boolean, downloadedBytes: number | null, downloadTotalBytes: number | null, sizeBytes: number, dataset: string, referenceInferenceMs: number, };

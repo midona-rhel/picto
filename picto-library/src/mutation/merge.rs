@@ -4,7 +4,8 @@
 //! A merge is a sequence of ordinary undoable changes, so a duplicate
 //! resolution can be undone exactly:
 //! 1. a merged-away collection member leaves its collection (a structural
-//!    detach); a collection it leaves empty is removed, and what pointed at the
+//!    detach) carrying the collection's tags, folders, rating and links; a
+//!    collection it leaves empty is removed, and what pointed at the
 //!    collection points at the item that stays;
 //! 2. a loose item hands its tags, folders, rating, lifecycle, notes and source
 //!    links to the root that stays;
@@ -112,18 +113,18 @@ pub(super) fn merge_media(
     }
     let survivor_root = owner(snapshot, survivor)?;
     let mut loser_root = owner(snapshot, loser)?;
-    let mut hands_over = true;
     if loser_root.0 != loser.0 {
         let collection = loser_root;
         let members = snapshot
             .collection_orders
             .get(&collection)
             .map_or(0, |members| members.len());
-        // A member leaves its collection alone; only a collection it empties
-        // hands its tags, folders and links on to the item that stays.
-        let empties = members == 1;
-        hands_over = empties;
-        if empties {
+        // A member leaves its collection carrying what it had as part of it
+        // (the collection's tags, folders, rating and links, and its own
+        // notes) and hands that on like any merged item; a collection that
+        // lives on keeps its own. A collection it empties goes, and what
+        // pointed at it points at the item that stays.
+        if members == 1 {
             let relink = relink_root(transaction, collection, survivor_root)?;
             push_relink(transaction, relink, merge)?;
             merge.removed_collections += 1;
@@ -160,7 +161,7 @@ pub(super) fn merge_media(
         loser_root = RootId(loser.0);
     }
 
-    if hands_over && loser_root != survivor_root {
+    if loser_root != survivor_root {
         for change in hand_over(transaction, snapshot, loser_root, survivor_root, now_ms)? {
             apply_semantic_change(
                 transaction,
@@ -287,20 +288,7 @@ fn hand_over(
             merged.source_urls.push(url.clone());
         }
     }
-    let present = |notes: &Option<String>| {
-        notes
-            .as_deref()
-            .map(str::trim)
-            .filter(|notes| !notes.is_empty())
-            .map(str::to_owned)
-    };
-    if let Some(source_notes) = present(&source_text.notes) {
-        merged.notes = match present(&target_text.notes) {
-            None => Some(source_notes),
-            Some(target_notes) if target_notes.contains(&source_notes) => target_text.notes.clone(),
-            Some(target_notes) => Some(format!("{target_notes}\n\n{source_notes}")),
-        };
-    }
+    merged.notes = merged_notes(target_text.notes.as_deref(), source_text.notes.as_deref());
     if merged != target_text {
         merged.modified_at_ms = now_ms;
         changes.push(SemanticChange::RootText {
@@ -309,6 +297,32 @@ fn hand_over(
         });
     }
     Ok(changes)
+}
+
+/// The notes an item keeps when another's are handed to it: its own when
+/// the other has none or says nothing they do not, the other's when they
+/// say all its own do, else both, its own first. Whitespace and line breaks
+/// do not count in the comparison, so a note copied with other spacing is
+/// kept once.
+pub fn merged_notes(target: Option<&str>, source: Option<&str>) -> Option<String> {
+    fn present(notes: Option<&str>) -> Option<&str> {
+        notes.map(str::trim).filter(|notes| !notes.is_empty())
+    }
+    let Some(source_notes) = present(source) else {
+        return target.map(str::to_owned);
+    };
+    let Some(target_notes) = present(target) else {
+        return Some(source_notes.to_owned());
+    };
+    let words = |notes: &str| notes.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (target_words, source_words) = (words(target_notes), words(source_notes));
+    if target_words.contains(&source_words) {
+        target.map(str::to_owned)
+    } else if source_words.contains(&target_words) {
+        Some(source_notes.to_owned())
+    } else {
+        Some(format!("{target_notes}\n\n{source_notes}"))
+    }
 }
 
 fn root_text(transaction: &rusqlite::Transaction<'_>, root: RootId) -> Result<RootTextState> {

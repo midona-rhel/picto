@@ -14,6 +14,7 @@
 //!   path. A file at a content-addressed path is therefore always complete —
 //!   which is what makes the existence-skip and hash-as-filename safe.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::io::Read as _;
@@ -310,13 +311,58 @@ impl BlobStore {
             };
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_dir() {
+                if entry_is_dir(&entry) {
                     stack.push(path);
                 } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if let Some((hash, ext)) = name.split_once('.') {
                         if hash.len() == 64 {
                             out.push((hash.to_string(), ext.to_string()));
                         }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The thumbnails present in their own shard (`t/<ab>/<cd>/<hash>.jpg`
+    /// or `.png`), by exact file stem, read from one listing of the
+    /// thumbnail tree. A hash in the set is one `find_thumbnail_path` finds.
+    /// Symbolic links are left out: whether one leads anywhere takes a look
+    /// at its target, which `find_thumbnail_path` does.
+    pub fn list_thumbnails(&self) -> HashSet<String> {
+        let mut out = HashSet::new();
+        let shards = |dir: &Path| -> Vec<(String, PathBuf)> {
+            let Ok(entries) = fs::read_dir(dir) else {
+                return Vec::new();
+            };
+            entries
+                .flatten()
+                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+                .filter_map(|entry| Some((entry.file_name().into_string().ok()?, entry.path())))
+                .filter(|(name, _)| name.len() == 2)
+                .collect()
+        };
+        for (ab, outer) in shards(&self.root.join("t")) {
+            for (cd, inner) in shards(&outer) {
+                let Ok(entries) = fs::read_dir(&inner) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    if entry.file_type().map_or(true, |kind| kind.is_symlink()) {
+                        continue;
+                    }
+                    let Ok(name) = entry.file_name().into_string() else {
+                        continue;
+                    };
+                    let Some((hash, "jpg" | "png")) = name.split_once('.') else {
+                        continue;
+                    };
+                    if hash.len() == 64
+                        && hash.get(0..2) == Some(ab.as_str())
+                        && hash.get(2..4) == Some(cd.as_str())
+                    {
+                        out.insert(hash.to_owned());
                     }
                 }
             }
@@ -530,6 +576,16 @@ impl BlobStore {
     }
 }
 
+/// Whether a directory entry is a directory, following a symbolic link as
+/// `Path::is_dir` does. The kind comes from the directory listing itself, so
+/// only a link costs a look at the file system.
+fn entry_is_dir(entry: &fs::DirEntry) -> bool {
+    match entry.file_type() {
+        Ok(kind) if !kind.is_symlink() => kind.is_dir(),
+        _ => entry.path().is_dir(),
+    }
+}
+
 /// Recursively sum file sizes under a directory.
 fn dir_size(path: &Path) -> u64 {
     let mut total = 0u64;
@@ -587,6 +643,57 @@ mod tests {
         store.write_original(&hash, b"second", Some("png")).unwrap();
         let data = store.read_original(&hash, Some("png")).unwrap();
         assert_eq!(data, b"first");
+    }
+
+    /// The listings the recovery pass reads agree with a look at each file:
+    /// originals behind a linked shard are found, and a thumbnail is listed
+    /// exactly when `find_thumbnail_path` finds it.
+    #[cfg(unix)]
+    #[test]
+    fn listings_agree_with_looking_at_each_file() {
+        let dir = TempDir::new().unwrap();
+        let store = BlobStore::open(dir.path()).unwrap();
+        let hash = |n: u8| format!("ab{:02x}{}", n, "0".repeat(60));
+        // Originals: two in place, one in a shard reached through a link.
+        store.write_original(&hash(1), b"one", Some("png")).unwrap();
+        store.write_original(&hash(2), b"two", Some("jpg")).unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::write(elsewhere.join(format!("{}.gif", hash(3))), b"three").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, store.root.join("f/ab/03")).unwrap();
+        let mut originals = store.list_originals();
+        originals.sort();
+        assert_eq!(
+            originals,
+            vec![
+                (hash(1), "png".to_string()),
+                (hash(2), "jpg".to_string()),
+                (hash(3), "gif".to_string()),
+            ]
+        );
+        // Thumbnails: a .jpg, a .png, one in the wrong shard, one that is a
+        // link to nothing, and one that is a link to a file.
+        store.write_thumbnail(&hash(1), b"t", "jpg").unwrap();
+        store.write_thumbnail(&hash(2), b"t", "png").unwrap();
+        let wrong = store.root.join("t/ab/01");
+        fs::write(wrong.join(format!("{}.jpg", hash(4))), b"t").unwrap();
+        let linked = store.thumbnail_path_with_ext(&hash(5), "jpg").unwrap();
+        fs::create_dir_all(linked.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("nothing"), &linked).unwrap();
+        let target = dir.path().join("thumbnail.jpg");
+        fs::write(&target, b"t").unwrap();
+        let alive = store.thumbnail_path_with_ext(&hash(6), "jpg").unwrap();
+        fs::create_dir_all(alive.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&target, &alive).unwrap();
+        let listed = store.list_thumbnails();
+        for n in 1..=6 {
+            let found = store.find_thumbnail_path(&hash(n)).unwrap().is_some();
+            // A listed thumbnail is always found; a link is left to the look.
+            assert!(!listed.contains(&hash(n)) || found, "{n}");
+        }
+        let mut listed = listed.into_iter().collect::<Vec<_>>();
+        listed.sort();
+        assert_eq!(listed, vec![hash(1), hash(2)]);
     }
 
     #[test]

@@ -1,0 +1,8 @@
+Picto text fixture
+==================
+
+Plain text keeps every space and line:
+	a tab-indented line
+    four spaces
+
+The end.

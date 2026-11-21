@@ -44,7 +44,7 @@ use folders::*;
 use smart_folders::*;
 use structure::*;
 use merge::*;
-pub use merge::SharedFileMerge;
+pub use merge::{SharedFileMerge, merged_notes};
 use undo::*;
 
 struct PublishedDelta {

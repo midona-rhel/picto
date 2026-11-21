@@ -1,0 +1,536 @@
+//! The inspector's field for an item's source addresses (URLs).
+//!
+//! The field shows the item's first address: the host in the normal text
+//! colour and the rest of the address in a dimmer colour. When the item has
+//! more addresses, the field also shows how many, for example "+3". A press
+//! on the address opens it in the browser.
+//!
+//! At the right end of the field is the link button. It opens a list over
+//! the field: a rounded rectangle as wide as the field, with "Add URL" as
+//! its first row and one row for each address under it. Each address row
+//! opens the address when pressed and has an Edit button and a Delete
+//! button.
+use super::Inspector;
+use crate::i18n::t;
+use crate::theme;
+use crate::theme::Text as _;
+use crate::ui::{
+    self,
+    text_input::{Kind, TextInput},
+    tooltip::Tip,
+};
+use gpui::*;
+use std::{cell::Cell, rc::Rc};
+
+/// `handleSave`: the list once the address at `index` is saved as `value`.
+/// A blank value deletes the address; saving past the end adds one, unless
+/// it is blank.
+pub fn saved(urls: &[String], index: usize, value: &str) -> Option<Vec<String>> {
+    let trimmed = value.trim();
+    if index >= urls.len() {
+        return (!trimmed.is_empty()).then(|| {
+            let mut next = urls.to_vec();
+            next.push(trimmed.to_owned());
+            next
+        });
+    }
+    let mut next = urls.to_vec();
+    if trimmed.is_empty() {
+        next.remove(index);
+    } else {
+        next[index] = trimmed.to_owned();
+    }
+    Some(next)
+}
+
+/// `handleRemove`
+pub fn removed(urls: &[String], index: usize) -> Vec<String> {
+    urls.iter()
+        .enumerate()
+        .filter(|(at, _)| *at != index)
+        .map(|(_, url)| url.clone())
+        .collect()
+}
+
+/// `splitUrl`: the host without `www.`, and the path (unless it is `/`),
+/// query and fragment; an address that does not parse is all host.
+pub fn split(url: &str) -> (String, String) {
+    match url::Url::parse(url) {
+        Ok(address) => {
+            let host = address.host_str().unwrap_or_default();
+            let host = host.strip_prefix("www.").unwrap_or(host).to_owned();
+            let mut rest = if address.path() == "/" {
+                String::new()
+            } else {
+                address.path().to_owned()
+            };
+            if let Some(query) = address.query() {
+                rest = format!("{rest}?{query}");
+            }
+            if let Some(fragment) = address.fragment() {
+                rest = format!("{rest}#{fragment}");
+            }
+            (host, rest)
+        }
+        Err(_) => (url.to_owned(), String::new()),
+    }
+}
+
+/// The list's state: whether it is open, which row is being edited (the
+/// row past the last is a new address), and the field's place.
+pub(super) struct SourcesState {
+    pub(super) open: bool,
+    pub(super) editing: Option<usize>,
+    pub(super) input: Entity<TextInput>,
+    field: Rc<Cell<Bounds<Pixels>>>,
+}
+
+impl SourcesState {
+    pub(super) fn new(cx: &mut Context<Inspector>) -> Self {
+        Self {
+            open: false,
+            editing: None,
+            input: cx.new(|cx| {
+                TextInput::new(Kind::Inspector, cx)
+                    .placeholder("https://...")
+                    .submits()
+            }),
+            field: Rc::new(Cell::new(Bounds::default())),
+        }
+    }
+}
+
+/// `UrlLabel`: the host, then the rest at half strength, cut with an
+/// ellipsis.
+fn label(url: &str) -> Div {
+    let (host, rest) = split(url);
+    let mut label = div()
+        .flex()
+        .min_w_0()
+        .flex_1()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .child(div().flex_none().child(host));
+    if !rest.is_empty() {
+        label = label.child(div().min_w_0().truncate().opacity(0.5).child(rest));
+    }
+    label
+}
+
+impl Inspector {
+    /// The addresses the field shows and edits, and whether they can be
+    /// edited.
+    fn source_urls(&self) -> Option<Vec<String>> {
+        match self.shown {
+            super::Mode::Item => self.item.as_ref().map(|item| item.root.source_urls.clone()),
+            super::Mode::Selection => self.selection_sources(),
+            _ => None,
+        }
+    }
+
+    pub(super) fn close_sources(&mut self, save: bool, cx: &mut Context<Self>) {
+        if save {
+            self.save_source(cx);
+        }
+        self.sources.open = false;
+        self.sources.editing = None;
+        cx.notify();
+    }
+
+    /// `handleAdd`: opens the list on a new, empty address.
+    fn add_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let count = self.source_urls().map_or(0, |urls| urls.len());
+        self.edit_source(count, String::new(), window, cx);
+    }
+
+    fn edit_source(
+        &mut self,
+        index: usize,
+        value: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A row already being edited is saved first, as its blur does.
+        self.save_source(cx);
+        self.sources.open = true;
+        self.sources.editing = Some(index);
+        self.sources.input.update(cx, |input, cx| {
+            input.set_text(value, cx);
+            input.select_everything(cx);
+        });
+        let handle = self.sources.input.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+        cx.notify();
+    }
+
+    /// Saves the row being edited, if any.
+    pub(super) fn save_source(&mut self, cx: &mut Context<Self>) {
+        let Some(index) = self.sources.editing.take() else {
+            return;
+        };
+        let value = self.sources.input.read(cx).value();
+        let urls = self.source_urls().unwrap_or_default();
+        if let Some(next) = saved(&urls, index, &value) {
+            self.set_sources(next, cx);
+        }
+        cx.notify();
+    }
+
+    fn toggle_sources(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let urls = self.source_urls().unwrap_or_default();
+        if urls.is_empty() {
+            self.add_source(window, cx);
+        } else if self.sources.open {
+            self.close_sources(true, cx);
+        } else {
+            self.sources.open = true;
+            cx.notify();
+        }
+    }
+
+    /// The source field. Without addresses to show (`unavailable`) it holds
+    /// a dash and no button.
+    pub(super) fn source(&mut self, urls: Option<&[String]>, cx: &mut Context<Self>) -> Div {
+        let theme = theme::theme(cx);
+        let unavailable = urls.is_none();
+        let urls = urls.unwrap_or_default().to_vec();
+        let first = urls.first().cloned();
+        let open = self.sources.open && !unavailable;
+        let value = if unavailable {
+            div().child("—")
+        } else {
+            match &first {
+                Some(url) => label(url),
+                None => div().text_color(theme.text_tertiary()).child(t("http://")),
+            }
+        };
+        let field_bounds = self.sources.field.clone();
+        let probe = canvas(
+            move |bounds, _, _| field_bounds.set(bounds),
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0();
+        let mut field = div()
+            .id("source-url")
+            .relative()
+            .h(px(theme::CONTROL_LG))
+            .rounded(px(theme::RADIUS_MD))
+            .border_1()
+            .border_color(if open {
+                theme.primary()
+            } else {
+                theme.border_secondary()
+            })
+            .bg(if open {
+                theme.rail()
+            } else {
+                theme.control_surface()
+            })
+            .overflow_hidden()
+            .flex()
+            .items_center()
+            .text(theme::TEXT_MD)
+            .line_height(px(18.))
+            .whitespace_nowrap()
+            .text_color(if unavailable {
+                theme.text_tertiary()
+            } else {
+                theme.text()
+            })
+            .child(probe)
+            .child(
+                div()
+                    .id("open-source")
+                    .role(Role::Button)
+                    .aria_label(match &first {
+                        Some(url) => crate::tf!("Open {value0}", url),
+                        None => t("Add source URL").to_owned(),
+                    })
+                    .aria_disabled(unavailable)
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .px(px(10.))
+                    .flex()
+                    .items_center()
+                    .cursor(if unavailable {
+                        CursorStyle::Arrow
+                    } else {
+                        CursorStyle::PointingHand
+                    })
+                    .child(value)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if unavailable {
+                            return;
+                        }
+                        match &first {
+                            Some(address) => crate::desktop::open_link(address, cx),
+                            None => this.add_source(window, cx),
+                        }
+                    })),
+            );
+        if unavailable {
+            return div().mb(px(8.)).child(field);
+        }
+        if urls.len() > 1 {
+            field = field.child(
+                div()
+                    .id("source-count")
+                    .role(Role::Button)
+                    .aria_label(crate::tf!("Show all {value0} source URLs", urls.len()))
+                    .aria_expanded(open)
+                    .group("source-count")
+                    .h_full()
+                    .px(px(6.))
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(theme.control_surface()))
+                    .child(
+                        div()
+                            .opacity(0.5)
+                            .group_hover("source-count", |style| style.opacity(1.))
+                            .child(format!("+{}", urls.len() - 1)),
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_sources(window, cx))),
+            );
+        }
+        let action = div()
+            .id("manage-sources")
+            .role(Role::Button)
+            .aria_label(t("Manage source URLs"))
+            .aria_expanded(open)
+            .group("manage-sources")
+            .w(px(31.))
+            .h_full()
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .border_l_1()
+            .border_color(theme.border_secondary())
+            .bg(if open {
+                theme.rail()
+            } else {
+                gpui::transparent_black().into()
+            })
+            .cursor_pointer()
+            .hover(move |style| style.bg(theme.control_surface()))
+            .child(
+                ui::icon("link", 14., theme.text())
+                    .opacity(if open { 1. } else { 0.5 })
+                    .group_hover("manage-sources", |style| style.opacity(1.)),
+            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_sources(window, cx)));
+        field = field.child(action);
+        let mut slot = div().relative().mb(px(8.)).child(field);
+        if open {
+            slot = slot.child(self.source_list(&urls, cx));
+        }
+        slot
+    }
+
+    /// The list of addresses that opens when the link button is pressed. It
+    /// is one rectangle with rounded corners, as wide as the address field,
+    /// drawn over the field and over what follows it. Its first row is "Add
+    /// URL" (or the text field for a new address while one is being typed),
+    /// and under it there is one row for each address the item has. A press
+    /// outside the list closes it.
+    fn source_list(&mut self, urls: &[String], cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = theme::theme(cx);
+        // The field's size is measured inside its 1 px border, so the list
+        // is 2 px wider than that measurement to cover the field exactly.
+        let width = f32::from(self.sources.field.get().size.width) + 2.;
+        let separator = theme::blend(
+            gpui::transparent_black().into(),
+            theme.border_secondary(),
+            0.55,
+        );
+        let editing = self.sources.editing;
+        let row_button = |id: (&'static str, usize), icon: &'static str, tip: &'static str| {
+            ui::icon_button(id, icon)
+                .look(ui::icon_button::Look::UrlAction)
+                .tip(Tip::new(tip))
+        };
+        let input_row = || {
+            div()
+                .flex_1()
+                .min_w_0()
+                .h(px(32.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .child(self.sources.input.clone())
+        };
+        let mut list = div().w_full().flex().flex_col();
+        // The first row: the text field for a new address while one is
+        // being typed, and the "Add URL" button otherwise.
+        list = list.child(if editing == Some(urls.len()) {
+            div()
+                .id("source-new")
+                .min_h(px(32.))
+                .flex()
+                .items_center()
+                .child(input_row())
+        } else {
+            div()
+                .id("source-add")
+                .role(Role::Button)
+                .aria_label(t("Add URL"))
+                .w_full()
+                .h(px(32.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .text(theme::TEXT_SM)
+                .text_color(theme.text_tertiary())
+                .cursor_pointer()
+                .hover(move |style| style.text_color(theme.text()))
+                .child(ui::icon("source-plus", 13., theme.text_tertiary()))
+                .child(t("Add URL"))
+                .on_click(cx.listener(|this, _, window, cx| this.add_source(window, cx)))
+        });
+        for (index, url) in urls.iter().enumerate() {
+            let mut row = div()
+                .id(("source-row", index))
+                .min_h(px(32.))
+                .flex()
+                .items_center();
+            // Every address row has a line above it, which separates it
+            // from the first row or from the address before it.
+            row = row.border_t_1().border_color(separator);
+            row = if editing == Some(index) {
+                row.child(input_row())
+            } else {
+                let address = url.clone();
+                row.child(
+                    div()
+                        .id(("source-open", index))
+                        .role(Role::Button)
+                        .aria_label(crate::tf!("Open {value0}", url))
+                        .flex_1()
+                        .min_w_0()
+                        .h(px(32.))
+                        .px(px(10.))
+                        .flex()
+                        .items_center()
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(theme.control_surface()))
+                        // `.urlDropdown .urlLabel { transform: translateY(-1px) }`
+                        .child(label(url).mt(px(-2.)))
+                        .on_click(move |_, _, cx| crate::desktop::open_link(&address, cx)),
+                )
+            };
+            let (edited, kept) = (url.clone(), urls.to_vec());
+            row = row
+                .child(
+                    row_button(("source-edit", index), "source-edit", t("Edit URL")).on_click(
+                        cx.listener(move |this, _, window, cx| {
+                            this.edit_source(index, edited.clone(), window, cx)
+                        }),
+                    ),
+                )
+                .child(
+                    row_button(("source-delete", index), "source-trash", t("Delete URL")).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            if this.sources.editing == Some(index) {
+                                this.sources.editing = None;
+                            }
+                            this.set_sources(removed(&kept, index), cx);
+                            cx.notify();
+                        }),
+                    ),
+                );
+            list = list.child(row);
+        }
+        let field = self.sources.field.get();
+        let dropdown = div()
+            .id("source-list")
+            .w(px(width.max(0.)))
+            .min_h(px(32.))
+            .max_h(px(240.))
+            .overflow_y_scroll()
+            .rounded(px(theme::RADIUS_MD))
+            .border_1()
+            .border_color(theme.primary())
+            .bg(theme.rail())
+            .shadow(vec![
+                BoxShadow::new(px(0.), px(4.), rgba(theme::BLACK_18).into()).blur_radius(px(10.)),
+            ])
+            .font_family(theme::FONT_INSPECTOR)
+            .text(theme::TEXT_MD)
+            .line_height(px(18.))
+            .text_color(theme.text())
+            .on_action(
+                cx.listener(|this, _: &crate::ui::text_input::Cancel, _, cx| {
+                    // Escape leaves the row as it was.
+                    this.sources.editing = None;
+                    cx.notify();
+                }),
+            )
+            .child(list);
+        // Over the field where it is laid out; a press outside it and the
+        // field closes it.
+        let this = cx.entity().downgrade();
+        div().absolute().top_0().left_0().child(
+            ui::popover::floating("source-floating", ui::layer::OVERLAY)
+                .dismiss(ui::popover::Dismissal::Outside(field), move |_, cx| {
+                    let _ = this.update(cx, |this, cx| this.close_sources(true, cx));
+                })
+                .child(dropdown),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{removed, saved, split};
+
+    fn urls(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn saving_a_row_replaces_it_or_deletes_it_when_blank() {
+        let list = urls(&["https://a.example/1", "https://b.example/2"]);
+        assert_eq!(
+            saved(&list, 1, "  https://c.example  "),
+            Some(urls(&["https://a.example/1", "https://c.example"]))
+        );
+        assert_eq!(saved(&list, 0, " "), Some(urls(&["https://b.example/2"])));
+    }
+
+    #[test]
+    fn saving_past_the_end_adds_an_address_unless_it_is_blank() {
+        let list = urls(&["https://a.example"]);
+        assert_eq!(
+            saved(&list, 1, "https://new.example"),
+            Some(urls(&["https://a.example", "https://new.example"]))
+        );
+        assert_eq!(saved(&list, 1, ""), None);
+        assert_eq!(saved(&[], 0, "x"), Some(urls(&["x"])));
+    }
+
+    #[test]
+    fn deleting_takes_out_one_address() {
+        let list = urls(&["a", "b", "c"]);
+        assert_eq!(removed(&list, 1), urls(&["a", "c"]));
+        assert_eq!(removed(&list, 5), list);
+    }
+
+    #[test]
+    fn an_address_shows_its_host_without_www_then_the_rest() {
+        assert_eq!(
+            split("https://www.example.com/a/b?x=1#top"),
+            ("example.com".into(), "/a/b?x=1#top".into())
+        );
+        assert_eq!(
+            split("https://example.com/"),
+            ("example.com".into(), "".into())
+        );
+        assert_eq!(split("not a url"), ("not a url".into(), "".into()));
+    }
+}

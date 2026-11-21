@@ -166,6 +166,8 @@ pub enum ExportFormat {
     Jpeg,
     Webp,
     Avif,
+    /// The original files, in one zip archive.
+    Zip,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -202,6 +204,10 @@ pub fn export_library(
         skipped: 0,
         errors: Vec::new(),
     };
+    if request.format == ExportFormat::Zip {
+        export_zip(&request.output_dir, &media, &mut result)?;
+        return Ok(result);
+    }
     for (index, media) in media.iter().enumerate() {
         match export_one(
             &request.output_dir,
@@ -282,6 +288,78 @@ fn ordered_media_library(
         .map_err(|error| error.to_string())
 }
 
+/// The name a file is exported under, without its extension: the item's
+/// name, or its hash and place when it has none.
+fn export_stem(media: &ExportMedia, index: usize) -> String {
+    sanitize_stem(
+        media.name.as_deref().unwrap_or_default(),
+        &format!(
+            "{}-{}",
+            &media.file_hash.0[..12],
+            media.position.max(index as i64)
+        ),
+    )
+}
+
+/// Writes every original into one archive in `output_dir`, stored as it is:
+/// media is compressed already, so deflating it costs time and saves
+/// nothing. A file that cannot be read is skipped and reported; an archive
+/// that would hold nothing is not left behind.
+fn export_zip(
+    output_dir: &Path,
+    media: &[ExportMedia],
+    result: &mut ExportResult,
+) -> Result<(), String> {
+    use std::io::Write as _;
+    let path = unique_path(output_dir, "Picto Export", "zip");
+    let failed = |error: &dyn std::fmt::Display| {
+        format!("Failed to write {}: {error}", path.display())
+    };
+    let file = fs::File::create(&path).map_err(|error| failed(&error))?;
+    let mut archive = zip::ZipWriter::new(std::io::BufWriter::new(file));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+        .large_file(true);
+    let mut used = std::collections::HashSet::<String>::new();
+    for (index, media) in media.iter().enumerate() {
+        let mut source = match fs::File::open(&media.file_path) {
+            Ok(source) => source,
+            Err(error) => {
+                result.skipped += 1;
+                result.errors.push(format!(
+                    "Failed to read {} at {}: {error}",
+                    media.file_hash.0,
+                    media.file_path.display()
+                ));
+                continue;
+            }
+        };
+        let (stem, extension) = (export_stem(media, index), mime_to_extension(&media.mime_type));
+        let mut name = format!("{stem}.{extension}");
+        let mut suffix = 2;
+        // Names are compared without case, as the file systems an archive
+        // is unpacked onto compare them.
+        while !used.insert(name.to_lowercase()) {
+            name = format!("{stem} ({suffix}).{extension}");
+            suffix += 1;
+        }
+        archive
+            .start_file(name, options)
+            .map_err(|error| failed(&error))?;
+        // A read that fails part-way leaves the archive unusable.
+        std::io::copy(&mut source, &mut archive).map_err(|error| failed(&error))?;
+        result.exported += 1;
+    }
+    archive
+        .finish()
+        .and_then(|mut file| Ok(file.flush()?))
+        .map_err(|error| failed(&error))?;
+    if result.exported == 0 {
+        let _ = fs::remove_file(&path);
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn export_one(
     output_dir: &Path,
@@ -301,14 +379,7 @@ fn export_one(
             media.file_path.display()
         )
     })?;
-    let stem = sanitize_stem(
-        media.name.as_deref().unwrap_or_default(),
-        &format!(
-            "{}-{}",
-            &media.file_hash.0[..12],
-            media.position.max(index as i64)
-        ),
-    );
+    let stem = export_stem(media, index);
     let output_extension = output_extension(format, extension);
     let output_path = unique_path(output_dir, &stem, output_extension);
     let output = match format {
@@ -332,7 +403,7 @@ fn export_one(
 
 fn output_extension(format: ExportFormat, original: &str) -> &str {
     match format {
-        ExportFormat::Original => original,
+        ExportFormat::Original | ExportFormat::Zip => original,
         ExportFormat::Png => "png",
         ExportFormat::Jpeg => "jpg",
         ExportFormat::Webp => "webp",
@@ -371,7 +442,7 @@ fn encode(
 ) -> Result<Vec<u8>, String> {
     let mut output = Vec::new();
     match format {
-        ExportFormat::Original => unreachable!(),
+        ExportFormat::Original | ExportFormat::Zip => unreachable!(),
         ExportFormat::Png => {
             use image::ImageEncoder;
             let rgba = image.to_rgba8();
