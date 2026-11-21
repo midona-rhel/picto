@@ -874,7 +874,9 @@ Windows, plays `ci/smoke.txt` and `ci/cloud.txt` with the off-screen tool on
 a generated library, and runs the sign-in and network checks in a real
 window; each step's comments say what it checks, and its pictures and logs
 are the run's artifacts (`gh run download <run> -n pictures-linux`). There is
-no macOS job.
+no macOS job. The workflow starts by itself only for a push to a branch
+whose name starts with `feature/163-`. For any other branch it has to be
+started by hand from the Actions page (`workflow_dispatch`).
 
 ## 7. Status
 
@@ -1076,6 +1078,11 @@ reading production's code, seen in this app).
   until the subscription is looked at.
 
 ### Open
+
+Each point below has an issue with the label `area: gpui`. Issue
+[#163](https://github.com/midona-rhel/picto/issues/163) lists them all and
+is the place to look for what remains before this app replaces the Electron
+app.
 
 Not done:
 

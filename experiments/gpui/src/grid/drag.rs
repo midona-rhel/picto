@@ -1,6 +1,10 @@
-//! Items dragged out of the grid (`dragState.ts`): one model the grid
-//! drives and the views that take drops (the sidebar's rows) read, and the
-//! ghost that follows the pointer (`DragGhost.tsx`).
+//! The drag of items that starts on a tile of the grid (`dragState.ts` in the
+//! Electron app). This file holds the state of that drag, `Drags`, which the
+//! grid writes and which the views that accept a drop read; the sidebar is
+//! such a view. It also holds the ghost, which is the small picture of the
+//! dragged items that follows the pointer (`DragGhost.tsx`), the functions
+//! that decide where a drop reorders the items of a folder, and the grid's own
+//! handling of the drag.
 use super::prefs::ViewPrefs;
 use super::thumbnails::Thumbnails;
 use super::{drag, format, subfolders};
@@ -11,32 +15,44 @@ use picto_library::query::ItemScope;
 use picto_library::selection::SelectionTarget;
 use std::path::PathBuf;
 
-/// A press on a tile becomes a drag once the pointer has moved this far.
+/// A press on a tile becomes a drag of items once the pointer is this many
+/// pixels from the place of the press.
 pub const THRESHOLD: f32 = 5.;
 
-/// `dragGhostSpec.ts`.
+/// The ghost's sizes and its border colour, from `dragGhostSpec.ts` in the
+/// Electron app. `THUMB` is the side of one thumbnail in pixels.
+/// `STACK_OFFSET` is how many pixels each thumbnail is placed to the right of
+/// and below the one before it. `RADIUS` is a thumbnail's corner radius.
+/// `BORDER` is the colour of a thumbnail's border, white at 20% opacity.
+/// `BADGE_HEIGHT` and `BADGE_MIN_WIDTH` are the height and the smallest width
+/// of the badge that shows the number of dragged items.
 const THUMB: f32 = 44.;
 const STACK_OFFSET: f32 = 3.;
 const RADIUS: f32 = 4.;
 const BORDER: u32 = 0xffffff33;
 const BADGE_HEIGHT: f32 = 20.;
 const BADGE_MIN_WIDTH: f32 = 20.;
-/// The ghost is drawn at 85%.
+/// The ghost is drawn at 85% opacity.
 const OPACITY: f32 = 0.85;
 
-/// One of the first three dragged items, as the ghost shows it.
+/// What the ghost needs to draw one dragged item. The ghost draws the first
+/// three dragged items.
 #[derive(Clone)]
 pub struct Cover {
     pub thumbnail: PathBuf,
-    /// The item's dominant colour, behind its thumbnail.
+    /// The colour drawn behind the thumbnail. It is the first colour of the
+    /// item's palette, or the theme's background colour when the item has no
+    /// palette.
     pub matte: Rgba,
 }
 
-/// The thumbnail cache's holders for the covers the ghost shows.
+/// The names under which the ghost pins its thumbnails in the thumbnail cache
+/// (`Thumbnails::pin`), one name for each of the three thumbnails.
 const GHOST_HOLDERS: [&str; 3] = ["drag-ghost-0", "drag-ghost-1", "drag-ghost-2"];
 
-/// Keeps the dragged items' covers decoded while the ghost shows them;
-/// `&[]` lets them go.
+/// Pins the thumbnails of `covers` in the thumbnail cache, so that the cache
+/// does not remove them while the ghost shows them. A call with an empty
+/// `covers` removes the three pins.
 pub fn pin_covers(thumbnails: &Entity<Thumbnails>, covers: &[Cover], cx: &mut App) {
     thumbnails.update(cx, |thumbnails, _| {
         for (at, holder) in GHOST_HOLDERS.into_iter().enumerate() {
@@ -49,48 +65,79 @@ pub fn pin_covers(thumbnails: &Entity<Thumbnails>, covers: &[Cover], cx: &mut Ap
     });
 }
 
-/// The items being dragged.
+/// A drag of items that is in progress: which items are dragged, where they
+/// were dragged from, and where the pointer is.
 #[derive(Clone)]
 pub struct ItemDrag {
-    /// The items dragged by id, in grid order (of a query-wide selection,
-    /// the loaded ones), which a reorder moves.
+    /// The ids of the dragged items, in the grid's order. For a query-wide
+    /// selection (Select All or a range) this lists only the selected items
+    /// that the grid has loaded. A reorder within a folder moves these items.
     pub roots: Vec<RootId>,
-    /// What a drop addresses: the grid's selection, loaded or not, or the
-    /// one tile dragged; and how many items that is.
+    /// The description of the dragged items that a drop sends to the library.
+    /// When the pressed tile was selected, it describes the grid's whole
+    /// selection, including selected items that the grid has not loaded. When
+    /// the pressed tile was not selected, it describes that tile's item alone.
     pub target: SelectionTarget,
+    /// The number of items that `target` describes.
     pub count: u64,
-    /// The scope they were dragged from: a drop into a folder from the Inbox
-    /// or the Trash also makes them active.
+    /// The scope of the destination that the items were dragged from. When it
+    /// is the Inbox or the Trash, a drop on a folder also makes the items
+    /// active.
     pub source: ItemScope,
     pub covers: Vec<Cover>,
     pub position: Point<Pixels>,
 }
 
+impl ItemDrag {
+    /// Whether every dragged item is among the items the grid has loaded.
+    /// A selection made over the whole query, for example with Select All,
+    /// can hold items that the grid has not loaded, and `roots` then lists
+    /// fewer items than `count`.
+    ///
+    /// A reorder within a folder moves only the items in `roots`. With items
+    /// missing from `roots`, it would move one part of the selection and
+    /// leave the other part where it was, so such a drag does not reorder.
+    pub fn all_loaded(&self) -> bool {
+        self.roots.len() as u64 == self.count
+    }
+}
+
 pub enum DragEvent {
-    /// The pointer moved with the items.
+    /// Emitted when a drag starts and each time the pointer moves during it.
+    /// `ItemDrag::position` holds the pointer's position.
     Moved,
-    /// The button came up; whoever is under the pointer takes them.
+    /// The mouse button was released during the drag. The value is the drag as
+    /// it was at that moment. Each view that accepts drops checks whether the
+    /// pointer is over one of its drop targets and, if it is, carries out the
+    /// drop.
     Dropped(ItemDrag),
-    /// The drag ended without a drop: it left the window and the system
-    /// carries the files on (`cancelDrag` after `startNativeDrag`).
+    /// The drag ended without a drop, because the pointer left the window. The
+    /// grid then gives the items' files to the operating system as a drag of
+    /// files, when there are files to give (`cancelDrag` after
+    /// `startNativeDrag` in the Electron app).
     Cancelled,
 }
 
-/// How long files dragged out of the window are not taken back as an import
-/// when they come over it again (`startNativeDrag`'s 3 s
-/// `internalDragOrigin`).
+/// For this long after the grid has given its items' files to the operating
+/// system as a drag of files, files dragged over the window are not accepted
+/// for an import, because they are taken to be those same files (the 3 seconds
+/// of `internalDragOrigin` in `startNativeDrag`).
 pub const OUT_GUARD: std::time::Duration = std::time::Duration::from_secs(3);
 
 #[derive(Default)]
 pub struct Drags {
     pub items: Option<ItemDrag>,
-    /// When the grid last handed its items to the system as files.
+    /// The time at which the grid last gave its items' files to the operating
+    /// system as a drag of files. It is `None` if the grid has never done so.
     pub out_since: Option<std::time::Instant>,
 }
 
 impl Drags {
-    /// Whether files over the window are the grid's own, dragged out just
-    /// now (`isInternalDragOrigin`), which a drop must not import again.
+    /// Whether the grid gave its items' files to the operating system as a
+    /// drag of files less than 3 seconds ago (`OUT_GUARD`). While this is
+    /// true, files dragged over the window are taken to be those files. They
+    /// are already in the library, so a drop must not import them
+    /// (`isInternalDragOrigin`).
     pub fn dragging_out(&self) -> bool {
         self.out_since
             .is_some_and(|since| since.elapsed() < OUT_GUARD)
@@ -103,7 +150,7 @@ struct DragsGlobal(Entity<Drags>);
 
 impl Global for DragsGlobal {}
 
-/// The one drag model, made on first use.
+/// Returns the app's one `Drags` entity. The first call creates it.
 pub fn model(cx: &mut App) -> Entity<Drags> {
     if !cx.has_global::<DragsGlobal>() {
         let drags = cx.new(|_| Drags::default());
@@ -112,8 +159,10 @@ pub fn model(cx: &mut App) -> Entity<Drags> {
     cx.global::<DragsGlobal>().0.clone()
 }
 
-/// Whether the pointer has left the window's viewport, where the system
-/// takes a drag over (`clientX <= 0 || … >= innerWidth`).
+/// Whether `position` is on or outside an edge of the window's viewport. When
+/// the pointer gets there during a drag, the grid ends its own drag and gives
+/// the files to the operating system (`clientX <= 0 || … >= innerWidth` in the
+/// Electron app).
 pub fn left_window(position: Point<Pixels>, viewport: Size<Pixels>) -> bool {
     position.x <= px(0.)
         || position.y <= px(0.)
@@ -121,14 +170,20 @@ pub fn left_window(position: Point<Pixels>, viewport: Size<Pixels>) -> bool {
         || position.y >= viewport.height
 }
 
-/// Whether the pointer has gone far enough from the press to drag.
+/// Whether the pointer at `to` is at least `THRESHOLD` (5) pixels, in a
+/// straight line, from the press at `from`.
 pub fn past_threshold(from: Point<Pixels>, to: Point<Pixels>) -> bool {
     let (dx, dy) = (f32::from(to.x - from.x), f32::from(to.y - from.y));
     dx.hypot(dy) >= THRESHOLD
 }
 
-/// `DragGhost`: up to three thumbnails stacked 3px apart, centred on the
-/// pointer, with the count on a primary badge when there is more than one.
+/// Draws the ghost (`DragGhost` in the Electron app): the thumbnails of up to
+/// three dragged items, each 44 px square, each placed 3 px to the right of
+/// and below the one before it. The ghost's top-left corner is 24 px to the
+/// left of and 24 px above the pointer. When more than one item is dragged, a
+/// badge in the theme's primary colour at the ghost's top-right corner shows
+/// the number of items. The ghost is drawn on the layer `ui::layer::DRAG`,
+/// which is above dialogs, menus and tooltips.
 pub fn ghost(drag: &ItemDrag, thumbnails: &Entity<Thumbnails>, cx: &App) -> impl IntoElement {
     let theme = theme::theme(cx);
     let stack = drag.covers.len().min(3);
@@ -189,17 +244,37 @@ pub fn ghost(drag: &ItemDrag, thumbnails: &Entity<Thumbnails>, cx: &App) -> impl
     .with_priority(crate::ui::layer::DRAG)
 }
 
-/// Which side of a tile dragged items go to.
+/// The side of a tile on which dragged items are put: `Left` puts them before
+/// the tile's item in the folder's order, and `Right` puts them after it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
     Left,
     Right,
 }
 
-/// `computeReorderTarget`: where items dragged to a layout point (`x`, `y`)
-/// go, beside the tile whose image is under it, else beside the nearest in
-/// its row, else beside the nearest tile of all. The dragged tiles (`skip`)
-/// are never a target.
+/// Finds where a drop at the point (`x`, `y`) would put the dragged items
+/// (`computeReorderTarget` in the Electron app). The point is in the
+/// coordinates of `tiles`. Returns the index of a tile and the side of that
+/// tile, or `None` when there is no tile to choose. `text_height` is the
+/// height of the text rows under a tile's image; those rows are not part of
+/// the image. The tiles whose indexes are in `skip` are the dragged ones, and
+/// they are never chosen.
+///
+/// If the point is on a tile's image, that tile is chosen, on its left side
+/// when the point is in the left half of the image and on its right side
+/// otherwise.
+///
+/// Otherwise, if `y` is between the top and the bottom of one or more images,
+/// the tile is chosen among the tiles of those images. To the left of the
+/// leftmost image, that tile's left side is chosen. To the right of the
+/// rightmost image, that tile's right side is chosen. In the gap between two
+/// neighbouring images, the right side of the left tile is chosen when the
+/// point is in the left half of the gap, and the left side of the right tile
+/// otherwise.
+///
+/// Otherwise the tile whose image has its centre nearest to the point is
+/// chosen, on its left side when the point is to the left of that centre and
+/// on its right side otherwise.
 pub fn reorder_target(
     tiles: &[super::layout::Tile],
     x: f32,
@@ -259,9 +334,14 @@ pub fn reorder_target(
     best.map(|(_, index, side)| (index, side))
 }
 
-/// `CanvasGrid`'s reorder drop indicator: a 2px line in the gap at `side`
-/// of the tile's image, with a triangle at its top, in the coordinates the
-/// tile is laid out in.
+/// Draws the reorder marker, which shows where a drop would put the dragged
+/// items (the reorder drop indicator of `CanvasGrid` in the Electron app). It
+/// is a vertical line 2 px wide and as tall as the tile's image, in the middle
+/// of the gap on the `side` of `tile`. At the top of the line is a triangle
+/// that points down, 10 px wide and 7 px tall. `gap` is the space between two
+/// tiles in pixels, and `text_height` is the height of the text rows under the
+/// image. The marker is placed with the tile's own `x` and `y`, so it must be
+/// a child of the element that the tiles are placed in.
 pub fn reorder_marker(tile: &super::layout::Tile, side: Side, gap: f32, text_height: f32) -> Div {
     let x = match side {
         Side::Left => tile.x - gap / 2.,
@@ -304,9 +384,11 @@ pub fn reorder_marker(tile: &super::layout::Tile, side: Side, gap: f32, text_hei
         )
 }
 
-/// `planFolderReorder`: the order with the dragged items moved, as one block
-/// in their own order, to `side` of the item at `target`. Empty when nothing
-/// moves.
+/// Returns `ordered` with the items of `dragged` moved to the `side` of the
+/// item at index `target` (`planFolderReorder` in the Electron app). The moved
+/// items are put next to each other and keep the order they had in `ordered`.
+/// Returns an empty list when the result would be the same as `ordered`, and
+/// when `ordered` holds none of the dragged items.
 pub fn plan_reorder<T: Copy + PartialEq>(
     ordered: &[T],
     dragged: &[T],
@@ -342,16 +424,29 @@ pub fn plan_reorder<T: Copy + PartialEq>(
     if next == ordered { Vec::new() } else { next }
 }
 
-/// Whether the destination (`entry`, the session's current one) is still
-/// the grid of `scope`, the one a reply was asked for.
+/// Whether the open destination `entry` is the grid of items of `scope`. A
+/// reply from the library is applied only if this is true for the scope the
+/// request was made for, because the user may have opened another destination
+/// before the reply arrived.
 fn shows(entry: Option<&crate::backend::Navigation>, scope: &ItemScope) -> bool {
     entry.is_some_and(|entry| entry.screen.is_none() && entry.scope == *scope)
 }
 
 impl super::GridView {
-    /// The pointer moved with the button held after a press on a tile:
-    /// past 5px the selection, or that tile if it is not selected, is
-    /// dragged (`CanvasGrid.tsx`), and the ghost follows the pointer.
+    /// Called when the pointer moves while the button is held down after a
+    /// press on a tile (`CanvasGrid.tsx` in the Electron app).
+    ///
+    /// Before a drag has started, it starts one once the pointer is 5 px from
+    /// the press (`THRESHOLD`). The drag carries the selection when the
+    /// pressed tile is selected, and only that tile's item when it is not.
+    /// Starting a drag pins the ghost's thumbnails, asks the session for the
+    /// paths of the dragged items' files (`resolve_drag_files`), and stores
+    /// the drag in the `Drags` entity.
+    ///
+    /// During a drag, it stores the pointer's position, which is where the
+    /// ghost is drawn, and works out where a drop would go (`track_drop`).
+    /// When the pointer reaches an edge of the window, it ends the grid's own
+    /// drag and gives the files to the operating system (`hand_out`).
     pub(super) fn drag_moved(
         &mut self,
         position: Point<Pixels>,
@@ -359,8 +454,9 @@ impl super::GridView {
         cx: &mut Context<Self>,
     ) {
         let drags = drag::model(cx);
-        // Out of the window the system takes the files over
-        // (`startNativeDrag`).
+        // When the pointer reaches an edge of the window during a drag, the
+        // grid gives the items' files to the operating system as a drag of
+        // files and ends its own drag (`startNativeDrag` in the Electron app).
         if self.dragging && drag::left_window(position, window.viewport_size()) {
             self.hand_out(window, cx);
             return;
@@ -386,8 +482,9 @@ impl super::GridView {
         let items = {
             let session = self.session.read(cx);
             let theme = theme::theme(cx);
-            // The selection, loaded or not, when the tile is in it; the
-            // ghost shows the loaded ones.
+            // When the pressed tile is selected, the drag carries the whole
+            // selection, including selected items that the grid has not
+            // loaded. The ghost shows thumbnails of loaded items only.
             let selection = session
                 .selection_target()
                 .filter(|_| session.is_selected(ordinal));
@@ -450,9 +547,15 @@ impl super::GridView {
         cx.notify();
     }
 
-    /// The button came up after a press on a tile: a drag hands its items
-    /// to whatever is under the pointer, and the click it makes selects
-    /// nothing.
+    /// Called when the button is released after a press on a tile. If no drag
+    /// had started, it only forgets the press. If a drag was in progress, it
+    /// ends the drag and emits `DragEvent::Dropped`, so that the sidebar takes
+    /// the items if the pointer is over one of its rows. If the pointer is
+    /// over a subfolder tile of the grid, the items are put into that folder.
+    /// Otherwise, if the grid shows a reorder marker, the items are moved to
+    /// the marked place. The release also produces a click event on a tile;
+    /// `swallow_tile_click` makes the tile ignore that click, so that it does
+    /// not change the selection.
     pub(super) fn drag_released(&mut self, cx: &mut Context<Self>) {
         self.press = None;
         self.drag_files = None;
@@ -483,16 +586,29 @@ impl super::GridView {
         cx.notify();
     }
 
-    /// While items are dragged over the grid: the subfolder tile they would
-    /// go into, or, in a folder showing its own items alone, where among
-    /// them they would be put (`isOverGridItems`, `computeReorderTarget`).
+    /// Works out, while items are dragged, where a drop at `position` would
+    /// go, and stores the answer (`isOverGridItems` and `computeReorderTarget`
+    /// in the Electron app). If the pointer is over a subfolder tile, that
+    /// tile is stored in `subfolders.drop`. Otherwise, the tile and side that
+    /// `reorder_target` returns are stored in `reorder`, on three conditions:
+    /// the grid's items can be reordered by dragging (`reorders`), every
+    /// dragged item is loaded, and the pointer is at or below the top of the
+    /// items and to the left of the scrollbar's gutter. Both values are
+    /// cleared when the pointer is outside the grid.
     fn track_drop(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let inside = self.bounds.contains(&position);
         let tile = inside
             .then(|| self.subfolder_at(position))
             .flatten()
             .map(|index| self.subfolders.children[index].node.clone());
-        let reorder = if tile.is_none() && inside && self.reorders(cx) {
+        // A selection with items that are not loaded cannot be reordered as
+        // a whole (`ItemDrag::all_loaded`), so it gets no reorder marker.
+        let all_loaded = drag::model(cx)
+            .read(cx)
+            .items
+            .as_ref()
+            .is_some_and(drag::ItemDrag::all_loaded);
+        let reorder = if tile.is_none() && inside && all_loaded && self.reorders(cx) {
             let (x, y) = self.local(position);
             let y = y + self.scroll_top();
             if y >= 0. && x < self.grid_width() {
@@ -535,10 +651,13 @@ impl super::GridView {
         }
     }
 
-    /// Whether dragging items within this grid puts them in an order of
-    /// their own: a folder showing only its own items. (A folder showing
-    /// its subfolders' items too holds items that are not its members, which
-    /// the library cannot order in it.)
+    /// Whether a drag within this grid can reorder its items. It can when the
+    /// displayed destination is a folder and the grid shows only the folder's
+    /// own items: either the view preference `show_subfolders` is off, or the
+    /// folder has no subfolders. With `show_subfolders` on, the grid of a
+    /// folder that has subfolders also shows the subfolders' items. Those
+    /// items are not members of the folder, so the library cannot give them a
+    /// position in the folder's order.
     fn reorders(&self, cx: &App) -> bool {
         let session = self.session.read(cx);
         let folder = session.nav.get(session.displayed).is_some_and(|entry| {
@@ -551,9 +670,18 @@ impl super::GridView {
         folder && (!session.prefs.show_subfolders || self.subfolders.children.is_empty())
     }
 
-    /// `dragController.executeDrop`'s reorder: the window's order with the
-    /// dragged items moved (`folders.items.reorder`), then the folder shown
-    /// in that order (`useManualFolderOrder`), the dragged items selected.
+    /// Carries out a drop that reorders the items of a folder (the reorder
+    /// part of `dragController.executeDrop` in the Electron app). `target` and
+    /// `side` are the tile and the side that `reorder_target` chose. It does
+    /// nothing unless the items were dragged from a folder and every dragged
+    /// item is loaded. It takes the order of the items that the grid has laid
+    /// out (`layout_ids`), moves the dragged items to the target with
+    /// `plan_reorder`, and asks the library to store that order for the folder
+    /// (`folders.items.reorder`). When the library has stored it, the folder's
+    /// view preferences are changed to sort by `folder_order`, ascending, with
+    /// `show_subfolders` off, so that the grid shows the stored order
+    /// (`useManualFolderOrder`). The dragged items are selected again when the
+    /// results arrive.
     fn reorder_dropped(
         &mut self,
         items: &drag::ItemDrag,
@@ -564,6 +692,9 @@ impl super::GridView {
             ItemScope::Folder { folder_id } | ItemScope::FolderTree { folder_id } => *folder_id,
             _ => return,
         };
+        if !items.all_loaded() {
+            return;
+        }
         let dragged = items.roots.iter().map(|root| root.0).collect::<Vec<_>>();
         let order = drag::plan_reorder(&self.layout_ids, &dragged, target, side);
         if order.is_empty() {
@@ -572,8 +703,11 @@ impl super::GridView {
         let reselect = items.roots.clone();
         let source = items.source.clone();
         let order = order.into_iter().map(RootId).collect::<Vec<_>>();
-        // A failed drop goes to the console, as production leaves it. The
-        // folder is read again in its new order below.
+        // With `Report::default()`, the user gets no notification if the
+        // library refuses the reorder. The error is only written to the
+        // console, as in the Electron app. `Reread::NOTHING` is passed because
+        // `update_view` below reads the folder's results again, in the new
+        // order.
         crate::session::edit_then(
             &self.session,
             crate::session::Report::default(),
@@ -585,9 +719,11 @@ impl super::GridView {
                     return;
                 }
                 this.session.update(cx, |session, cx| {
-                    // The folder is shown in its new order only while it is
-                    // still the destination: the view preferences written
-                    // are the destination's.
+                    // `update_view` changes the view preferences of the open
+                    // destination. So it is called only if the open
+                    // destination is still the folder that was reordered. The
+                    // user may have opened another destination while the
+                    // library was storing the order.
                     if !shows(session.nav.get(session.scope), &source) {
                         return;
                     }
@@ -606,8 +742,11 @@ impl super::GridView {
         );
     }
 
-    /// The reorder marker beside the target tile, placed in the whole
-    /// destination's height.
+    /// Returns the reorder marker for the tile and side in `reorder`, or
+    /// `None` when `reorder` is not set. The tile's `y` is measured from the
+    /// top of the scrollable height that stands for every item of the
+    /// destination (`placed`), because the marker is drawn in the element of
+    /// that height.
     pub(super) fn reorder_marker(&self, prefs: &ViewPrefs) -> Option<AnyElement> {
         let (target, side) = self.reorder?;
         let tile = self.placed(target)?;
@@ -697,7 +836,8 @@ mod tests {
             reorder_target(&tiles, 190., 50., 20., &none),
             Some((1, Side::Right))
         );
-        // In the gap between two images of a row: the nearer side of it.
+        // In the gap between two images of a row, the point gives the tile
+        // whose image is nearer, on the side that faces the gap.
         assert_eq!(
             reorder_target(&tiles, 103., 50., 20., &none),
             Some((0, Side::Right))
@@ -706,12 +846,15 @@ mod tests {
             reorder_target(&tiles, 108., 50., 20., &none),
             Some((1, Side::Left))
         );
-        // Past the row's end, after its last image.
+        // A point to the right of the row's last image gives the right side of
+        // that tile.
         assert_eq!(
             reorder_target(&tiles, 400., 50., 20., &none),
             Some((1, Side::Right))
         );
-        // Under the name row: the nearest image of all.
+        // The `y` of a point in the text rows under an image is between the
+        // top and the bottom of no image, so the point gives the tile whose
+        // image has its centre nearest to it.
         assert_eq!(
             reorder_target(&tiles, 20., 115., 20., &none),
             Some((0, Side::Left))

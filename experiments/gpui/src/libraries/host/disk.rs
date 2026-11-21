@@ -1,31 +1,45 @@
-//! A library changed on disk from the Library Manager: whether it may be
-//! now (`permit`), Rename, Move…, Delete…, and the consent the user gives.
+//! The changes that the Library Manager makes to a library on disk, as the
+//! host carries them out: Rename ([`rename`]), Move… ([`move_library`]) and
+//! Delete… ([`delete`]). [`permit`] decides whether a library may be changed
+//! or revealed at this moment. [`consent_message`] is the text of the question
+//! that asks the user's consent for a library, and [`agree`] stores the user's
+//! yes.
 use super::*;
 
 /// Why the host did not change a library on disk ([`rename`],
 /// [`move_library`], [`delete`]) or would not let the Library Manager
 /// reveal it ([`permit`]).
 pub enum Denied {
-    /// Every rule held but the user has not agreed to this library yet:
-    /// ask, keep the answer, and try again.
+    /// The library passed every rule of `admission::admit`, but the user has
+    /// not yet given consent for it. The Library Manager asks the user
+    /// ([`consent_message`]), stores a yes with [`agree`], and then carries
+    /// out the action. `root` is the library's canonical folder, and
+    /// `identity` is what the consent is stored for.
     Ask {
         root: PathBuf,
         identity: crate::libraries::Identity,
     },
-    /// Refused or failed, in production's words.
+    /// The change was refused or it failed. The value is the message to show,
+    /// in the Electron app's wording.
     Error(String),
-    /// A disposable copy that is not open, which the manager never lists.
+    /// The path is a disposable copy of a library, and it is not the open
+    /// library. The Library Manager never lists such a copy, so it shows
+    /// nothing for this answer.
     Copy,
 }
 
-/// What a second change is told while one runs (production's words).
+/// The error message for a rename, a move or a delete that is asked for while
+/// the host is busy with another library operation. The wording is the
+/// Electron app's.
 const BUSY: &str = "A library operation is already in progress.";
 
-/// Whether the library at `path` may be changed on disk or revealed from
-/// the Library Manager right now. The open library was let through when it
-/// opened; any other is what `admission::admit` decides for an open from
-/// the manager, so a library the user has not agreed to yet is asked about
-/// first, as opening does.
+/// Decides whether the library at `path` may be changed on disk, or revealed
+/// in the file manager, from the Library Manager at this moment. The open
+/// library is allowed, because it passed the rules when it was opened. For any
+/// other library the answer is what `admission::admit` decides for a library
+/// that the user opens from the Library Manager (`Origin::Manager`). So when
+/// the user has not yet given consent for the library, the answer is
+/// `Denied::Ask`, and the user is asked first, as when the library is opened.
 pub fn permit(path: &Path, cx: &mut App) -> Result<(), Denied> {
     if current(cx).is_some_and(|(root, _)| root == path) {
         return Ok(());
@@ -46,10 +60,13 @@ pub fn permit(path: &Path, cx: &mut App) -> Result<(), Denied> {
     }
 }
 
-/// Rename (`renameLibrary`): the folder renamed beside itself, keeping its
-/// place in the list, its colour and icon and the user's consent; the open
-/// library is closed first and opened again after. Hands the outcome to
-/// `done`.
+/// Does the Library Manager's Rename (`renameLibrary` in the Electron app):
+/// renames the library's folder `from` to `to`, which is in the same parent
+/// folder. The library keeps its position in the list of libraries and among
+/// the pinned libraries, its colour and icon, and the user's consent. If the
+/// library is open, it is closed before the rename and opened again
+/// afterwards, at the new path after a success and at the old path after a
+/// failure. The result is passed to `done`.
 pub fn rename(
     from: PathBuf,
     to: PathBuf,
@@ -59,8 +76,14 @@ pub fn rename(
     relocate(from, to, Relocation::Rename, cx, done);
 }
 
-/// Move… (`relocateLibrary`): the folder moved into another (`files`), as
-/// a rename is.
+/// Does the Library Manager's Move… (`relocateLibrary` in the Electron app):
+/// moves the library's folder `from` to the path `to`, which is in another
+/// folder (`files::move_to`). Everything else is done as [`rename`] does it:
+/// the same checks are made, the open library is closed and opened again, the
+/// library keeps its position in the list of libraries and among the pinned
+/// libraries, its colour and its icon, and the result is passed to `done`.
+/// After a move to another volume the user is asked for consent again, because
+/// the database file is then a new file.
 pub fn move_library(
     from: PathBuf,
     to: PathBuf,
@@ -87,8 +110,12 @@ fn relocate(
         return done(Err(Denied::Error(BUSY.to_owned())), cx);
     }
     let probes = host(cx).read(cx).probes.clone();
-    // Production renames only what it has closed; this app cannot see
-    // what the Electron app has open.
+    // The Electron app renames or moves a library only after it has closed it.
+    // This app cannot tell which library the Electron app has open, so it
+    // refuses the change whenever the Electron app is running, and also when
+    // it cannot find out whether the Electron app is running. When the
+    // Electron app is not running, `permits_library` still refuses a library
+    // that this process may not open.
     let refused = match probes.picto_process() {
         Ok(None) => crate::libraries::facts().permits_library(&from).err(),
         Ok(Some(process)) => Some(Refusal::PictoRunning(process)),
@@ -118,8 +145,7 @@ fn relocate(
             .background_executor()
             .spawn(async move {
                 match how {
-                    Relocation::Rename => std::fs::rename(&source, &target)
-                        .map_err(|error| format!("Failed to rename library: {error}")),
+                    Relocation::Rename => crate::libraries::files::rename_to(&source, &target),
                     Relocation::Move => crate::libraries::files::move_to(&source, &target),
                 }
             })
@@ -144,9 +170,13 @@ fn relocate(
                             &to_text,
                         );
                         history::rename_look(&mut state.library_meta, &from_text, &to_text);
-                        // The consent follows the path; it holds only while
-                        // the database file is the same one (a move across
-                        // volumes makes a new one, which is asked about).
+                        // The stored consent is changed to the new path. A
+                        // consent is the pair of the library's path and the
+                        // identity of its database file, so it still applies
+                        // only if the database file is the same file. A move
+                        // across volumes copies the database into a new file,
+                        // so after such a move the user is asked for consent
+                        // again.
                         for consent in &mut state.library_consents {
                             if consent.0 == from_text {
                                 consent.0 = to_text.clone();
@@ -160,8 +190,12 @@ fn relocate(
                     }
                     done(Ok(()), cx);
                 }
-                // Reported where it was asked for, in production's words
-                // ("Failed to rename library: …", the move's own).
+                // The error is passed to `done`, which shows it in the Library
+                // Manager, where the user asked for the change. When the
+                // rename or the move itself fails, the message has the
+                // Electron app's wording: "Failed to rename library: …" or
+                // "Failed to move library: …". If the library was open, it is
+                // opened again at its old path.
                 Err(error) => {
                     if is_open {
                         request(&from, Origin::Manager, cx);
@@ -174,11 +208,15 @@ fn relocate(
     .detach();
 }
 
-/// Delete… (`deleteLibrary`), once the user confirmed: checked again
-/// ([`permit`]), as the moment may have changed (the Electron app started,
-/// the consent was withdrawn), then the library's folder removed for good
-/// (`files::delete`), never the open one, and taken out of the list. Hands
-/// the outcome to `done`.
+/// Does the Library Manager's Delete… (`deleteLibrary` in the Electron app),
+/// after the user has confirmed it. It first checks the library again with
+/// [`permit`], because things may have changed since the user chose Delete…:
+/// the Electron app may have been started, or the consent may have been
+/// withdrawn. It then removes the library's folder and everything in it
+/// (`files::delete`). The folder is not moved to the system's Trash, and the
+/// open library is never deleted. After a success the library is taken out of
+/// the list of libraries and its stored consent is removed. The result is
+/// passed to `done`.
 pub fn delete(
     path: PathBuf,
     cx: &mut App,
@@ -212,7 +250,9 @@ pub fn delete(
                         &mut state.last_library,
                         &text,
                     );
-                    // A library put there later is asked about afresh.
+                    // The stored consent for this path is removed, so that the
+                    // user is asked again if a library is later put at the
+                    // same path.
                     state.library_consents.retain(|(path, _)| *path != text);
                 });
                 crate::set_app_menus(cx);
@@ -223,7 +263,9 @@ pub fn delete(
     .detach();
 }
 
-/// The consent question's message for the library at `root`.
+/// Returns the message of the dialog that asks the user's consent for the
+/// library at `root`: the library's path, an empty line, and the explanation
+/// of what the consent allows.
 pub fn consent_message(root: &Path) -> String {
     format!(
         "{}\n\n{}",
@@ -234,7 +276,8 @@ pub fn consent_message(root: &Path) -> String {
     )
 }
 
-/// Keeps the user's consent for `identity`.
+/// Stores the user's consent for `identity` in the app's state
+/// (`library_consents`), unless it is already stored.
 pub fn agree(identity: &crate::libraries::Identity, cx: &mut App) {
     crate::state::update(cx, |state| {
         let pair = (identity.path.clone(), identity.database.clone());

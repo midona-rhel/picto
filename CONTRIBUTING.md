@@ -18,7 +18,8 @@ Every change starts as an issue, created from a template:
   test card, implementation boundary, acceptance criteria.
 
 Give each issue one `priority:` label (P2 is the default), one `type:` label
-and one `area:` label. An issue without evidence stays `status: triage`.
+and one `area:` label. The `area:` labels are `library`, `core`, `sources`,
+`renderer`, `electron` and `gpui`. An issue without evidence stays `status: triage`.
 Search for related issues first and link them rather than restating them.
 
 ## 2. Branch from `dev`
@@ -35,7 +36,7 @@ only issue-owned changes.
 - Fill in the template; start with `Closes #<issue>`.
 - CI runs `verify` (renderer typecheck/tests, localization, command parity,
   Rust clippy `-D warnings` and tests). It must be green before merge.
-- Pull requests use the Codex GitHub integration, as in Poser, against the
+- Pull requests are reviewed by the Codex GitHub integration against the
   review guidelines in [AGENTS.md](AGENTS.md). Enable Automatic review for
   this repository in Codex settings, including review after new pushes.
   Use `@codex review` to request another pass. No AI-provider Actions secret
@@ -48,6 +49,15 @@ only issue-owned changes.
 - Merge with **squash**: one commit per issue on `dev`, titled by the PR.
 - Merge commits are also enabled on `dev` for the post-release `main` sync.
 - Do not merge before review. Resolve every review thread first.
+- A change to the GPUI app (`experiments/gpui/`), or to a shared crate that
+  it uses (`core`, `picto-library`, `picto-sources`), must also build and
+  pass its tests on Windows and Linux. `verify` does not build the GPUI app.
+  The `GPUI experiment` workflow does, and it takes about an hour. It starts
+  by itself only for a push to a branch named `feature/163-…`; for any other
+  branch, start it by hand from the Actions page and wait for it before
+  merging. Its pictures of the app on both systems are attached to the run.
+  [`experiments/gpui/README.md`](experiments/gpui/README.md), section 6,
+  says how to check a change locally. Give the issue the `area: gpui` label.
 - The required `branch-policy` check is a guard for trusted maintainers, not
   tamper-proof enforcement: a same-repository PR can change its Actions job.
   Zero required approvals therefore do not mechanically guarantee release-only
