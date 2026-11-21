@@ -131,17 +131,12 @@ jobs:
       # time. The last step of this job checks that the app also compiles
       # without them.
       #
-      # The step writes three things for the later steps:
-      # - `PICTO_APP`, the path of the app;
-      # - `PICTO_TESTS`, the path of the test program;
-      # - the folders that hold the ONNX Runtime libraries the application
-      #   core loads at start (`target/debug` and `target/debug/deps`, where
-      #   the `ort` crate copies them), on the loader's search path. `cargo
-      #   run` adds these folders by itself; a program started directly
-      #   needs them given.
+      # The step writes the paths of the two programs for the later steps:
+      # `PICTO_APP` is the app and `PICTO_TESTS` is the test program. A step
+      # that starts one of them first reads `ci/env.sh`, which puts the
+      # folders of the ONNX Runtime libraries on the loader's search path.
       - name: Build
         run: |
-          native() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
           unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
           build="$(unix "$RUNNER_TEMP")/build.json"
           cargo test --locked --no-run --message-format=json-render-diagnostics > "$build"
@@ -153,16 +148,13 @@ jobs:
           test -n "$tests" && test -n "$app"
           echo "PICTO_TESTS=$(unix "$tests")" >> "$GITHUB_ENV"
           echo "PICTO_APP=$(unix "$app")" >> "$GITHUB_ENV"
-          if [[ "$RUNNER_OS" == Windows ]]; then
-            printf '%s\n' "$(native "$PWD/target/debug")" "$(native "$PWD/target/debug/deps")" >> "$GITHUB_PATH"
-          else
-            echo "LD_LIBRARY_PATH=$PWD/target/debug:$PWD/target/debug/deps" >> "$GITHUB_ENV"
-          fi
 
-      # Runs the tests. Cargo finds everything built by the step above and
-      # compiles nothing.
+      # Runs the tests by starting the test program that the step above
+      # built.
       - name: Test
-        run: cargo test --locked
+        run: |
+          . ci/env.sh
+          "$PICTO_TESTS"
 
       # Checks that a file dragged from a program that offers to save it
       # arrives whole. Browsers and archive managers drag files this way on
@@ -172,10 +164,11 @@ jobs:
       # checked by a test in the step above, which needs no display.
       - name: Drop check (Linux)
         if: runner.os == 'Linux'
-        run: >-
-          xvfb-run -a -s "-screen 0 1024x768x24"
-          "$PICTO_TESTS" --ignored --exact
-          imports::drop::tests::an_x11_drop_of_a_file_offered_to_save_arrives_whole
+        run: |
+          . ci/env.sh
+          xvfb-run -a -s "-screen 0 1024x768x24" \
+            "$PICTO_TESTS" --ignored --exact \
+            imports::drop::tests::an_x11_drop_of_a_file_offered_to_save_arrives_whole
 
       # The library that the pictures are taken in holds 2,000 generated
       # pictures. A program of the application core generates it
@@ -198,6 +191,7 @@ jobs:
       - name: Test library (generate)
         if: steps.library.outputs.cache-hit != 'true'
         run: |
+          # This step calls Cargo, so it does not read `ci/env.sh`.
           native() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
           unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
           library="$(unix "$RUNNER_TEMP")/picto-synthetic/Synthetic.library"
@@ -219,8 +213,7 @@ jobs:
       # through Direct3D 12 on Windows.
       - name: Pictures
         run: |
-          native() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
-          unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
+          . ci/env.sh
           library="$(unix "$RUNNER_TEMP")/picto-synthetic/Synthetic.library"
           copy="$("$PICTO_APP" --make-copy "$(native "$library")" | tail -n 1)"
           echo "copy: $copy"
@@ -253,8 +246,7 @@ jobs:
       # contacted.
       - name: Cloud
         run: |
-          native() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
-          unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
+          . ci/env.sh
           if [[ "$RUNNER_OS" == Windows ]]; then temp="$(unix "$TEMP")"; else temp=/tmp; fi
           scratch="$(mktemp -d "$temp/picto-gpui-cloud.XXXXXX")"
           mkdir -p "$scratch/libraries" "$scratch/Dropbox" "$scratch/state" "$scratch/data"
@@ -344,8 +336,7 @@ jobs:
       # the login is kept in memory only.
       - name: Sign-in window
         run: |
-          native() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
-          unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
+          . ci/env.sh
           out="$(unix "$RUNNER_TEMP")/login-check"
           mkdir -p "$out/state" "$out/data"
           export PICTO_GPUI_HOLD_RUNS=1 PICTO_GPUI_HOLD_DOWNLOADS=1 PICTO_GPUI_SILENT=1
@@ -394,8 +385,7 @@ jobs:
       #   `APPIMAGE_EXIT_AFTER_INSTALL`.
       - name: Network features
         run: |
-          native() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
-          unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
+          . ci/env.sh
           if [[ "$RUNNER_OS" == Linux ]]; then
             export WEBKIT_DISABLE_DMABUF_RENDERER=1
             run=(xvfb-run -a -s "-screen 0 1920x1080x24" dbus-run-session --)
