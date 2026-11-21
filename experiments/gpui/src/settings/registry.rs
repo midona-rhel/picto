@@ -67,12 +67,13 @@ pub const SHORTCUT_DEFS: &[ShortcutDef] = &[
     def("nav.untagged", "Untagged", NAV, "Mod+3"),
     def("nav.trash", "Trash", NAV, "Mod+4"),
     def("nav.search", "Search", NAV, "Mod+F"),
-    def("nav.commandPalette", "Command Palette", NAV, "Mod+K")
-        .about("Open command palette")
-        .deferred(),
+    // This app's Quick Search panel. Production registers these two
+    // shortcuts as deferred and has no panel for them.
+    def("nav.commandPalette", "Quick Search", NAV, "Mod+T")
+        .or("Mod+K")
+        .about("Search actions, places, tags and items"),
     def("nav.goToFolder", "Go to Folder", NAV, "Mod+J")
-        .about("Quick-jump to a folder or smart folder")
-        .deferred(),
+        .about("Open Quick Search on the Places tab"),
     def("nav.back", "Go Back", NAV, "Alt+ArrowLeft").or("Mod+["),
     def("nav.forward", "Go Forward", NAV, "Alt+ArrowRight").or("Mod+]"),
     def("file.import", "Import Files", FILE, "Mod+I"),
@@ -591,10 +592,14 @@ mod tests {
             ]
         );
         let navigation: Vec<_> = groups[0].items.iter().map(|item| item.id).collect();
-        assert!(!navigation.contains(&"nav.commandPalette"));
+        assert!(navigation.contains(&"nav.commandPalette"));
+        assert!(navigation.contains(&"nav.goToFolder"));
         assert_eq!(navigation.first(), Some(&"nav.allActive"));
         assert_eq!(navigation.last(), Some(&"grid.pageDown"));
-        assert_eq!(groups[0].items.len(), 15);
+        assert_eq!(groups[0].items.len(), 17);
+        // A shortcut that has no handler is not listed.
+        let file: Vec<_> = groups[1].items.iter().map(|item| item.id).collect();
+        assert!(!file.contains(&"file.addToLastFolder"));
     }
 
     #[test]

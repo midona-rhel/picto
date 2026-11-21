@@ -32,6 +32,8 @@ actions!(
         GridZoomOut,
         GoForward,
         FocusSearch,
+        QuickSearch,
+        GoToFolder,
         ShowAll,
         ShowInbox,
         ShowUntagged,
@@ -186,6 +188,11 @@ pub fn targets(id: &str) -> Vec<Target> {
         "nav.untagged" => vec![to!(App, ShowUntagged)],
         "nav.trash" => vec![to!(App, ShowTrash)],
         "nav.search" => vec![to!(App, FocusSearch)],
+        // Both shortcuts open the Quick Search panel (`crate::shell::quick_search`).
+        // The first opens it on the All tab and the second on the Places
+        // tab.
+        "nav.commandPalette" => vec![to!(App, QuickSearch)],
+        "nav.goToFolder" => vec![to!(App, GoToFolder)],
         "nav.back" => vec![to!(App, GoBack)],
         "nav.forward" => vec![to!(App, GoForward)],
         "grid.moveLeft" => vec![to!(Grid, shell::Previous, extends)],
@@ -373,11 +380,6 @@ pub fn targets(id: &str) -> Vec<Target> {
 /// They stay in the registry and no key is bound to them. Settings lists
 /// those of them that production's Settings lists.
 pub const NOT_YET: &[(&str, &str)] = &[
-    (
-        "nav.commandPalette",
-        "deferred in production; no command palette",
-    ),
-    ("nav.goToFolder", "deferred in production; no folder jump"),
     ("file.addToLastFolder", "deferred in production"),
     ("edit.copyTags", "deferred in production"),
     ("edit.pasteTags", "deferred in production"),

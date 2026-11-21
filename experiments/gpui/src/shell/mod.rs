@@ -23,6 +23,7 @@ pub(crate) use item_menu::media_link;
 pub mod library;
 mod library_cover;
 mod menu_commands;
+mod quick_search;
 mod review;
 mod shortcuts;
 pub mod sidebar;
@@ -161,6 +162,9 @@ pub struct Shell {
     library_cover: Entity<library_cover::LibraryCover>,
     /// The update dialog, which is `ApplicationUpdateHost` in production.
     updates: Entity<crate::updates::dialog::UpdateDialog>,
+    /// The Quick Search panel. It is drawn over the whole window while it is
+    /// open.
+    quick_search: Entity<quick_search::QuickSearch>,
     /// The paths of the files that the user is dragging over the window from
     /// another application. It is `None` again once the files are dropped or
     /// dragged out of the window.
@@ -433,6 +437,8 @@ impl Shell {
         let library_cover =
             cx.new(|cx| library_cover::LibraryCover::new(session.clone(), focus.clone(), cx));
         let updates = cx.new(|cx| crate::updates::dialog::UpdateDialog::new(focus.clone(), cx));
+        let quick_search =
+            cx.new(|cx| quick_search::QuickSearch::new(session.clone(), thumbnails.clone(), cx));
         let mut subscriptions = subscriptions;
         // Start with the sidebar and the inspector hidden or shown as the
         // saved state (`crate::state`) records them, which is how the user
@@ -546,6 +552,7 @@ impl Shell {
             batch_rename,
             library_cover,
             updates,
+            quick_search,
             file_drag: None,
             reviewer: Default::default(),
             review_flash: None,
@@ -670,6 +677,39 @@ impl Shell {
             state.inspector_collapsed = inspector;
         });
         cx.notify();
+    }
+
+    /// Opens the Quick Search panel on the tab `kind`.
+    ///
+    /// It does nothing while a dialog or a popover has the keyboard focus.
+    /// The keymap does not run the panel's shortcuts there, but on macOS the
+    /// menu bar sends the row View › Quick Search… to the window wherever
+    /// the focus is, and this check gives the row the same rule.
+    ///
+    /// The panel lists the commands that can run with the keyboard focus
+    /// where it is now. When a text field or a context menu has the focus,
+    /// the focus is first given to the shell, so that the panel lists the
+    /// commands for the window's content and gives the focus back to the
+    /// shell when it closes. A text field has the focus when the user
+    /// clicks the panel's titlebar button while typing in a search field.
+    /// An open context menu is closed.
+    fn open_quick_search(
+        &mut self,
+        kind: quick_search::Kind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let contexts = window.context_stack();
+        let within = |name: &str| contexts.iter().any(|context| context.contains(name));
+        if within("Modal") || within("Popover") {
+            return;
+        }
+        self.menu.close(cx);
+        if within("TextInput") || within("Menu") {
+            window.focus(&self.focus, cx);
+        }
+        self.quick_search
+            .update(cx, |panel, cx| panel.open(kind, window, cx));
     }
 
     /// Starts a drag of the resize edge of `rail`, with the pointer at the
@@ -829,8 +869,9 @@ impl Shell {
 
     /// The left block of the titlebar. It is as wide as the sidebar even while
     /// the sidebar is hidden, so the toolbar beside it does not move when the
-    /// sidebar is hidden or shown. It holds the Settings and Toggle Panels
-    /// buttons, and the application menu button where the window has one. Its
+    /// sidebar is hidden or shown. It holds the Settings, Toggle Panels and
+    /// Quick Search buttons, and the application menu button where the window
+    /// has one. Its
     /// left padding (`TITLEBAR_INSET`) keeps the buttons clear of the macOS
     /// window buttons (the traffic lights).
     fn titlebar_left(&self, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -895,6 +936,15 @@ impl Shell {
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_all_rails(cx)))
                     .on_secondary(cx.listener(|this, event: &MouseDownEvent, window, cx| {
                         this.open_panels_menu(event.position, window, cx)
+                    })),
+            )
+            .child(
+                ui::icon_button("quick-search", "transfer")
+                    .tip(
+                        ui::tip(crate::i18n::en("Quick Search")).shortcut("nav.commandPalette", cx),
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_quick_search(quick_search::Kind::All, window, cx)
                     })),
             )
     }
@@ -1378,7 +1428,14 @@ impl Render for Shell {
                     this.open_in_window(ordinals, start, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &Preview, _, cx| this.open_selected(cx)))
+            // The `view.detailView` shortcut opens the selected item in the
+            // viewer when exactly one item is selected. With no item or
+            // several items selected, no element handles the action, so the
+            // key is passed on and the Quick Search panel does not list the
+            // command.
+            .when(self.session.read(cx).selection_count() == 1, |root| {
+                root.on_action(cx.listener(|this, _: &Preview, _, cx| this.open_selected(cx)))
+            })
             .on_action(cx.listener(|this, _: &ClosePreview, _, cx| {
                 // Escape closes the open menu. If no menu is open, it closes
                 // the viewer. If the viewer is not open and the grid is shown
@@ -1421,6 +1478,19 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &Redo, _, cx| {
                 this.session.update(cx, |session, cx| session.redo(cx))
             }))
+            // The `nav.commandPalette` shortcut opens the Quick Search panel
+            // on its All tab, and the `nav.goToFolder` shortcut opens it on
+            // its Places tab.
+            .on_action(
+                cx.listener(|this, _: &crate::keymap::QuickSearch, window, cx| {
+                    this.open_quick_search(quick_search::Kind::All, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::keymap::GoToFolder, window, cx| {
+                    this.open_quick_search(quick_search::Kind::Places, window, cx)
+                }),
+            )
             .child(titlebar)
             .child(body)
             .children(sidebar_edge)
@@ -1444,6 +1514,8 @@ impl Render for Shell {
         root = root.child(self.batch_rename.clone());
         root = root.child(self.library_cover.clone());
         root = root.child(self.updates.clone());
+        // The Quick Search panel is drawn on the dialogs' layer.
+        root = root.child(self.quick_search.clone());
         // The cloud sync bar is drawn along the bottom of the window. While a
         // sync blocks the window, a progress dialog is drawn instead of the
         // bar and has keyboard focus.
