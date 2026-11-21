@@ -365,9 +365,10 @@ the arguments of the installer electron-builder made for the Electron app,
 so it upgrades that installation in place: it runs the old version's own
 uninstaller, which removes the old files and keeps the user's data, and
 then installs into the same folder. It accepts `/S`, `--updated`,
-`--force-run`, `/currentuser`, `/allusers` and `/D=<folder>`. It registers
-`.picto-pack`, and its uninstaller removes only what the installer put
-there. Neither deletes application data. It differs from electron-builder's
+`--force-run`, `/currentuser`, `/allusers` and `/D=<folder>`. A folder for a
+new installation that is not named `Picto` gets a `Picto` folder inside it.
+It registers `.picto-pack`, and its uninstaller deletes the installed files
+one by one, by name, from a list that `package.sh` writes. Neither deletes application data. It differs from electron-builder's
 installer in three ways: its texts are in English only, an upgrade never
 asks for the folder or for whom to install, and the uninstaller has no
 option to delete application data.

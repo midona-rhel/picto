@@ -203,7 +203,8 @@ package_mac() {
 package_windows() {
 	local stage="$out/win-x64/Picto"
 	local installer="$out/Picto-Setup-$version.exe"
-	local makensis library numbers
+	local uninstall_list="$out/win-x64/uninstall-files.nsh"
+	local makensis library numbers name
 	rm -rf "$out/win-x64" "$installer"
 	mkdir -p "$stage/resources"
 
@@ -220,6 +221,18 @@ package_windows() {
 	cp "${ffmpeg[@]}" "$stage/"
 	cp "$repository/build/picto-pack.ico" "$stage/resources/picto-pack.ico"
 
+	# The uninstaller deletes the installed files one by one, by name. This
+	# writes the instructions for it: a `Delete` for every file put together
+	# above, then an `RMDir` for every folder, the deepest first.
+	{
+		(cd "$stage" && find . -type f | sed 's|^\./||' | sort) | while read -r name; do
+			printf 'Delete "$INSTDIR\\%s"\n' "${name//\//\\}"
+		done
+		(cd "$stage" && find . -mindepth 1 -type d | sed 's|^\./||' | sort -r) | while read -r name; do
+			printf 'RMDir "$INSTDIR\\%s"\n' "${name//\//\\}"
+		done
+	} >"$uninstall_list"
+
 	makensis="$(command -v makensis || true)"
 	[[ -n "$makensis" ]] || makensis="/c/Program Files (x86)/NSIS/makensis.exe"
 	[[ -x "$makensis" ]] || fail "makensis was not found. Install NSIS 3."
@@ -234,6 +247,7 @@ package_windows() {
 		"-DOUTPUT=$(cygpath -w "$installer")" \
 		"-DICON=$(cygpath -w "$repository/build/icon.ico")" \
 		"-DESTIMATED_SIZE_KB=$(du -sk "$stage" | cut -f1)" \
+		"-DUNINSTALL_LIST=$(cygpath -w "$uninstall_list")" \
 		"$(cygpath -w "$here/packaging/windows/installer.nsi")"
 	write_feed "$out/latest.yml" "$installer"
 	packages=("$installer" "$out/latest.yml")

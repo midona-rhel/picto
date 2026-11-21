@@ -7,6 +7,8 @@
 ;   OUTPUT             the installer to write
 ;   ICON               build/icon.ico
 ;   ESTIMATED_SIZE_KB  the size of SOURCE in kilobytes
+;   UNINSTALL_LIST     a file of NSIS instructions that delete every file of
+;                      SOURCE from the installation folder, one by one
 ;
 ; The installer takes the place of the installer that electron-builder made
 ; for the Electron app, and it upgrades an installation made by that
@@ -34,7 +36,7 @@ SetCompressor /SOLID lzma
 !include "nsDialogs.nsh"
 
 !ifndef VERSION
-  !error "Pass -DVERSION, -DVERSION_NUMBERS, -DSOURCE, -DOUTPUT, -DICON and -DESTIMATED_SIZE_KB."
+  !error "Pass -DVERSION, -DVERSION_NUMBERS, -DSOURCE, -DOUTPUT, -DICON, -DESTIMATED_SIZE_KB and -DUNINSTALL_LIST."
 !endif
 
 !define PRODUCT_NAME "Picto"
@@ -120,11 +122,16 @@ Var modeAllRadio
 !macro CloseRunningAppFunction PREFIX
 Function ${PREFIX}CloseRunningApp
   StrCpy $R1 0
+  ; PowerShell reads the installation folder from this environment variable.
+  ; The folder is not written into the PowerShell command itself, because a
+  ; folder name may hold an apostrophe, which would end the text of the
+  ; command early.
+  System::Call 'kernel32::SetEnvironmentVariable(t "PICTO_INSTALL_FOLDER", t "$INSTDIR")'
   check:
     ; PowerShell ends with code 0 when a process runs from the installation
     ; folder and with code 1 when none does. Any other answer means that
     ; PowerShell could not be used, and the installer then goes on.
-    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "if (@(Get-CimInstance -ClassName Win32_Process | Where-Object { $$_.Path -and $$_.Path.StartsWith('$INSTDIR\', 'CurrentCultureIgnoreCase') }).Count -gt 0) { exit 0 } else { exit 1 }"`
+    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "if (@(Get-CimInstance -ClassName Win32_Process | Where-Object { $$_.Path -and $$_.Path.StartsWith($$env:PICTO_INSTALL_FOLDER + '\', 'CurrentCultureIgnoreCase') }).Count -gt 0) { exit 0 } else { exit 1 }"`
     Pop $R0
     ${If} $R0 != 0
       Return
@@ -144,7 +151,7 @@ Function ${PREFIX}CloseRunningApp
     ${EndIf}
     ${If} $isUpdated != "1"
     ${OrIf} $R1 > 10
-      nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "Get-CimInstance -ClassName Win32_Process | Where-Object { $$_.Path -and $$_.Path.StartsWith('$INSTDIR\', 'CurrentCultureIgnoreCase') } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"`
+      nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "Get-CimInstance -ClassName Win32_Process | Where-Object { $$_.Path -and $$_.Path.StartsWith($$env:PICTO_INSTALL_FOLDER + '\', 'CurrentCultureIgnoreCase') } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"`
       Pop $R0
     ${EndIf}
   wait:
@@ -176,7 +183,9 @@ Page custom ModePageShow ModePageLeave
 ; Sets the shell folders and the installation folder for `installMode`. The
 ; folder is the one given with `/D=`, else the folder of the existing
 ; installation, else the folder electron-builder's installer uses: `Picto` in
-; the user's `Programs` folder, or `Picto` in `Program Files`.
+; the user's `Programs` folder, or `Picto` in `Program Files`. A folder given
+; with `/D=` goes through `UsePictoFolder`, as a folder chosen on the page
+; does.
 Function ApplyMode
   ${If} $installMode == "all"
     SetShellVarContext all
@@ -195,6 +204,17 @@ Function ApplyMode
   ${EndIf}
   ${If} $givenFolder != ""
     StrCpy $INSTDIR $givenFolder
+    Call UsePictoFolder
+  ${EndIf}
+FunctionEnd
+
+; Makes sure that a folder chosen for a new installation is Picto's own, so
+; that Picto's files are never put among the files of another program. A
+; folder that is not named `Picto` gets a `Picto` folder inside it.
+Function UsePictoFolder
+  ${GetFileName} "$INSTDIR" $R0
+  ${If} $R0 != "${PRODUCT_NAME}"
+    StrCpy $INSTDIR "$INSTDIR\${PRODUCT_NAME}"
   ${EndIf}
 FunctionEnd
 
@@ -317,14 +337,8 @@ Function DirectoryPagePre
   ${EndIf}
 FunctionEnd
 
-; The uninstaller deletes Picto's files from the installation folder, so the
-; folder must be Picto's own. A folder the user chose that is not named
-; `Picto` gets a `Picto` folder inside it.
 Function DirectoryPageLeave
-  ${GetFileName} "$INSTDIR" $R0
-  ${If} $R0 != "${PRODUCT_NAME}"
-    StrCpy $INSTDIR "$INSTDIR\${PRODUCT_NAME}"
-  ${EndIf}
+  Call UsePictoFolder
 FunctionEnd
 
 ; Starts Picto. An installer for all users runs with administrator rights,
@@ -471,7 +485,7 @@ Section "Install"
   Call RemovePreviousVersion
 
   ; The files that `package.sh` put into SOURCE. The uninstaller's section
-  ; below deletes the same files and must be changed with that list.
+  ; below deletes exactly these files, from the list `package.sh` wrote.
   SetOutPath "$INSTDIR"
   File /r "${SOURCE}\*.*"
   WriteUninstaller "$INSTDIR\${UNINSTALLER}"
@@ -575,14 +589,11 @@ FunctionEnd
 Section "Uninstall"
   Call un.CloseRunningApp
 
-  ; The files that the installer's section put there, and nothing else. The
-  ; folders are removed only when they are empty.
-  Delete "$INSTDIR\${APP_EXE}"
-  Delete "$INSTDIR\ffmpeg.exe"
-  Delete "$INSTDIR\ffprobe.exe"
-  Delete "$INSTDIR\*.dll"
-  Delete "$INSTDIR\resources\picto-pack.ico"
-  RMDir "$INSTDIR\resources"
+  ; The files that the installer's section put there are deleted one by one,
+  ; by name, and nothing else is deleted. UNINSTALL_LIST holds one `Delete`
+  ; for every file of SOURCE and one `RMDir` for every folder of it. `RMDir`
+  ; removes a folder only when it is empty.
+  !include "${UNINSTALL_LIST}"
   Delete "$INSTDIR\${UNINSTALLER}"
   RMDir "$INSTDIR"
 

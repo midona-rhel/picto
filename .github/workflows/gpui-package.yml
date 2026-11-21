@@ -166,11 +166,13 @@ jobs:
           mkdir -p "$stand_in/files/resources"
           : > "$stand_in/files/Picto.exe"
           cp build/picto-pack.ico "$stand_in/files/resources/"
+          printf 'Delete "$INSTDIR\\Picto.exe"\n' > "$stand_in/uninstall-files.nsh"
           MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "$makensis" -V2 -INPUTCHARSET UTF8 \
             -DVERSION=0.0.0 -DVERSION_NUMBERS=0.0.0.0 -DESTIMATED_SIZE_KB=1 \
             "-DSOURCE=$(cygpath -w "$stand_in/files")" \
             "-DOUTPUT=$(cygpath -w "$stand_in/setup.exe")" \
             "-DICON=$(cygpath -w "$PWD/build/icon.ico")" \
+            "-DUNINSTALL_LIST=$(cygpath -w "$stand_in/uninstall-files.nsh")" \
             "$(cygpath -w "$PWD/experiments/gpui/packaging/windows/installer.nsi")"
 
       - name: Download FFmpeg binaries
