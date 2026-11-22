@@ -25,7 +25,7 @@ use gpui::*;
 /// `traffic_lights` gives their position when it is not `None`. The app
 /// decides which parts of the window drag it. On Linux the window asks for
 /// client-side decorations, so that the window manager draws no frame and
-/// no titlebar around it.
+/// no titlebar around it, and the window carries the app's id.
 pub fn frameless(
     title: impl Into<SharedString>,
     traffic_lights: Option<Point<Pixels>>,
@@ -38,6 +38,11 @@ pub fn frameless(
         }),
         app_owns_titlebar_drag: true,
         window_decorations: DECORATIONS,
+        // On Linux a desktop matches a window to the app's launcher entry
+        // (`packaging/linux/com.picto.desktop.desktop`) by this id, and
+        // groups the app's windows under that entry's icon. macOS and
+        // Windows do not read it.
+        app_id: Some(crate::desktop::APP_ID.to_owned()),
         // While the environment variable `PICTO_GPUI_BACKGROUND` is set, a
         // window of the app opens without taking keyboard focus.
         focus: !crate::seams::background(),
