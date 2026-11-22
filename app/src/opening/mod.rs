@@ -7,6 +7,7 @@
 //! `.picto-pack` archive goes to the pack's import dialog, one archive at a
 //! time. A `.library` folder that is not the open library is refused with a
 //! notification ([`accept`]).
+use crate::paths::Canonical as _;
 pub mod instance;
 
 use std::collections::HashSet;
@@ -172,7 +173,7 @@ pub fn accept(incoming: Incoming, cx: &mut gpui::App) {
             Kind::Library => {
                 let same = entry
                     .path
-                    .canonicalize()
+                    .canonical()
                     .is_ok_and(|path| Some(&path) == root.as_ref());
                 if !same {
                     // TODO: open the other library. The app does not

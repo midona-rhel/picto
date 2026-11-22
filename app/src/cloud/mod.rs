@@ -16,6 +16,7 @@
 //! [`validate`]) and the libraries in them ([`discover`]). No library has to
 //! be open for that. It also decides how the state of a sync is shown
 //! ([`present`]).
+use crate::paths::Canonical as _;
 pub mod bar;
 mod model;
 
@@ -117,11 +118,11 @@ fn named_roots() -> Vec<Root> {
 /// folders that `named_roots` returns are accepted.
 pub fn validate(provider: &str, path: &std::path::Path) -> Result<Root, String> {
     if crate::seams::automation().is_some() {
-        let chosen = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let chosen = path.canonical().unwrap_or_else(|_| path.to_path_buf());
         let named = named_roots().into_iter().find(|root| {
             root.provider == provider
                 && std::path::Path::new(&root.path)
-                    .canonicalize()
+                    .canonical()
                     .is_ok_and(|named| named == chosen)
         });
         if named.is_none() {

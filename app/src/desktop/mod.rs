@@ -13,6 +13,7 @@
 //! inside the open copy are passed on, whatever path the library stored. For
 //! any other path, these functions, the drag out of the grid and "Copy File
 //! Path" refuse and show a notification.
+use crate::paths::Canonical as _;
 use crate::application::{self, Event};
 use crate::session::{Coalesced, Session};
 use gpui::{App, AppContext as _, Context, Entity, Global, Subscription, Task};
@@ -308,7 +309,7 @@ fn checked(paths: &[PathBuf], cx: &App) -> Result<Vec<PathBuf>, String> {
 fn checked_in(root: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     paths
         .iter()
-        .map(|path| match path.canonicalize() {
+        .map(|path| match path.canonical() {
             Ok(canonical) if inside(root, &canonical) => Ok(canonical),
             Ok(_) => Err(format!(
                 "{} is not a file of this library copy, so it was not handed to the desktop.",
@@ -793,6 +794,7 @@ fn sort_applications(
 
 #[cfg(test)]
 mod tests {
+    use crate::paths::Canonical as _;
     use std::path::{Path, PathBuf};
 
     /// The `CF_HDROP` list has this layout: a 20-byte `DROPFILES` header, then
@@ -928,9 +930,9 @@ mod tests {
         std::fs::write(&file, b"a").unwrap();
         let outside = folder.path().join("kept.jpg");
         std::fs::write(&outside, b"b").unwrap();
-        let root = root.canonicalize().unwrap();
+        let root = root.canonical().unwrap();
         let handed = super::checked_in(&root, &[file.clone()]).unwrap();
-        assert_eq!(handed, [file.canonicalize().unwrap()]);
+        assert_eq!(handed, [file.canonical().unwrap()]);
         assert!(super::checked_in(&root, &[outside.clone()]).is_err());
         assert!(super::checked_in(&root, &[file.clone(), outside]).is_err());
         assert!(super::checked_in(&root, &[root.join("blobs").join("gone.jpg")]).is_err());

@@ -17,6 +17,7 @@
 //! - [`files`] does Delete… and Move… on disk.
 //! - [`seed`] fills the list on the first run. It reads, once, the
 //!   `config.json` that Picto 0.6.19 or earlier wrote.
+use crate::paths::Canonical as _;
 pub mod admission;
 pub mod files;
 pub mod host;
@@ -59,7 +60,7 @@ pub fn facts() -> Facts {
 #[cfg(test)]
 fn test_folder() -> Option<PathBuf> {
     let folder = PathBuf::from(std::env::var_os("PICTO_GPUI_TEST_LIBRARIES")?)
-        .canonicalize()
+        .canonical()
         .ok()?;
     let temporary = [
         std::env::temp_dir(),
@@ -68,7 +69,7 @@ fn test_folder() -> Option<PathBuf> {
     ];
     let inside = temporary
         .iter()
-        .filter_map(|folder| folder.canonicalize().ok())
+        .filter_map(|folder| folder.canonical().ok())
         .any(|temporary| folder.starts_with(&temporary) && folder != temporary);
     if inside {
         Some(folder)
@@ -116,8 +117,8 @@ pub fn writable(root: &Path, cx: &gpui::App) -> Option<PathBuf> {
 /// Does the work of [`writable`]. `open` is the root of the library that is
 /// open now, or `None`.
 pub fn writable_in(open: Option<&Path>, root: &Path) -> Option<PathBuf> {
-    let open = open?.canonicalize().ok()?;
-    let root = root.canonicalize().ok()?;
+    let open = open?.canonical().ok()?;
+    let root = root.canonical().ok()?;
     (open == root).then_some(root)
 }
 
@@ -159,7 +160,7 @@ pub fn confine(root: &Path, path: &Path) -> Result<PathBuf, String> {
     let mut existing = path.parent().ok_or_else(outside)?.to_path_buf();
     let mut rest = Vec::new();
     let mut folder = loop {
-        match existing.canonicalize() {
+        match existing.canonical() {
             Ok(canonical) => break canonical,
             // This part is a symbolic link whose target does not exist.
             Err(_) if existing.symlink_metadata().is_ok() => return Err(outside()),
@@ -605,7 +606,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let root = admission::tests::real_library(folder.path(), "Kept");
         let elsewhere = tempfile::tempdir().unwrap();
-        let outside = elsewhere.path().canonicalize().unwrap();
+        let outside = elsewhere.path().canonical().unwrap();
         std::fs::create_dir_all(root.join("blobs/t/ab")).unwrap();
         // These are allowed: a file that exists, a file that does not exist
         // yet, and a file in folders that do not exist yet.
@@ -629,7 +630,7 @@ mod tests {
             root.clone(),
             folder
                 .path()
-                .canonicalize()
+                .canonical()
                 .unwrap()
                 .join("Kept.library2/x.png"),
             root.join("blobs/../../x.png"),
@@ -687,7 +688,7 @@ mod tests {
         let name = std::ffi::OsStr::new("Kept.library");
         assert_eq!(located(&kept, name), Some(kept.clone()));
         assert_eq!(
-            located(&folder.path().canonicalize().unwrap(), name),
+            located(&folder.path().canonical().unwrap(), name),
             Some(kept.clone())
         );
         assert_eq!(
