@@ -931,6 +931,16 @@ impl VideoPlayer {
         self.status = status;
         if let Some(frame) = backend.take_frame() {
             let first = self.frame.is_none();
+            if first {
+                // The time from the opening of the player to its first
+                // frame is written to the log, so that a user's log shows
+                // how long a video took to appear.
+                log::info!(
+                    target: "timing.first_frame",
+                    "the first frame arrived {} ms after the player was opened",
+                    self.opened.elapsed().as_millis()
+                );
+            }
             // A frame from `ffmpeg` is an image, and every window keeps an
             // image it has drawn in its sprite atlas until the image is
             // released. The frame that is replaced is released here, so
