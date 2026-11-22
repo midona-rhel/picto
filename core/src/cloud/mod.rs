@@ -6,16 +6,17 @@
 //! - `snapshots/`, compressed copies of the whole database, each with a
 //!   manifest (`snapshot.rs`). A device writes a new one when the library
 //!   has changed and has been idle for 30 seconds.
-//! - `deletions/<device id>/`, the deletions that the user made on that
-//!   device (`deletions.rs`).
+//! - `tombstones/<device id>/`, the tombstones that the device made: what it
+//!   deleted, moved into or out of the Trash, or added again
+//!   (`tombstones.rs`).
 //!
 //! Another device gets the library by taking the newest snapshot as its
 //! database (Open from Cloud…) and copying the originals. After that, the
-//! only thing that one device takes over from another by itself is a
-//! deletion: an item that was moved to the Trash, restored or deleted
-//! permanently, and a deleted tag, folder or smart folder. An item that is
-//! added or edited on one device reaches another device only when a
-//! snapshot is restored there.
+//! only thing that the devices share by themselves is the tombstones: an
+//! item that was deleted permanently, moved to the Trash or restored, a
+//! deleted tag, folder or smart folder, and the removal of a tombstone. An
+//! item that is added or edited on one device reaches another device only
+//! when a snapshot is restored there.
 //!
 //! This file holds the configuration and the state of the sync
 //! (`cloud_state`), the commands that switch it on and off, and the removal
@@ -30,9 +31,9 @@ use ts_rs::TS;
 
 use crate::library_application::LibraryApplication;
 
-pub mod deletions;
 pub mod provider;
 pub mod snapshot;
+pub mod tombstones;
 
 pub const CLOUD_SCHEMA_GENERATION: i64 = 1;
 
@@ -41,14 +42,9 @@ pub const CLOUD_SCHEMA_GENERATION: i64 = 1;
 pub const CLOUD_DATA_REMOVED: &str = "The cloud data of this library was deleted. \
     Cloud sync is now off on this device. Nothing was deleted from this library.";
 
-/// The message that a library shows while a deletion file of another device
-/// is expected and cannot be read yet.
-pub(crate) const WAITING_FOR_DELETIONS: &str =
-    "Waiting for a deletion file from another device to arrive in the cloud folder.";
-
 /// Held by everything that reads or writes a library's cloud data: a sync,
-/// the check for deletion files, and the removal of the cloud data. So the
-/// cloud data is never removed while a sync writes into it.
+/// the merge of the other devices' tombstones, and the removal of the cloud
+/// data. So the cloud data is never removed while a sync writes into it.
 static SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(
@@ -213,14 +209,14 @@ pub fn configure_library(
                 if !connected {
                     // The library starts to sync with this folder. What it
                     // knew about the cloud data it synced with before does
-                    // not hold here: the time of the last sync, and the
-                    // position in every device's deletion files.
+                    // not hold here: the time of the last sync, and which
+                    // of its tombstones are written there.
                     transaction.execute(
                         "UPDATE cloud_state SET last_sync_at = NULL, last_snapshot_at = NULL
                          WHERE singleton = 1",
                         [],
                     )?;
-                    picto_library::reset_synced_deletions(transaction)?;
+                    picto_library::reset_published_entries(transaction)?;
                 }
                 let changed = transaction.execute(
                     "UPDATE cloud_state
@@ -284,6 +280,7 @@ pub fn snapshot_due_library(
 }
 
 pub fn recover_interrupted_sync_library(application: &LibraryApplication) -> Result<(), String> {
+    tombstones::forget_merged();
     application
         .library()
         .database()
@@ -574,8 +571,8 @@ pub async fn delete_cloud_data_library(
     Ok(removal)
 }
 
-/// Returns whether the worker should look for deletion files of other
-/// devices now: cloud sync is on, not paused, and no sync runs or failed.
+/// Returns whether the worker should merge the tombstones in the cloud
+/// folder now: cloud sync is on, not paused, and no sync runs or failed.
 pub fn receive_due_library(application: &LibraryApplication) -> Result<bool, String> {
     application
         .library()
@@ -590,49 +587,23 @@ pub fn receive_due_library(application: &LibraryApplication) -> Result<bool, Str
         .map_err(|error| error.to_string())
 }
 
-/// Looks for deletion files of other devices in the cloud folder and
-/// applies them. The worker calls it between two snapshots, so that a
-/// deletion made on another device arrives while this library is idle.
-/// While files are applied the sync state is `reconciling`. A damaged file
-/// leaves the state `error` with a message that names it.
+/// Merges the tombstone files that are in the cloud folder and were not
+/// merged yet, and returns the number of files. The
+/// worker calls it between two syncs, so that a deletion made on another
+/// device arrives while this library is idle. A damaged file leaves the
+/// sync state `error` with a message that names it, and nothing is merged.
 pub async fn receive_library(
     application: &LibraryApplication,
     provider: &dyn provider::CloudProvider,
-) -> Result<deletions::Received, String> {
+) -> Result<u64, String> {
     let _running = SYNC.lock().await;
     let library_id = configuration_library(application)?.library_id;
     stop_if_cloud_data_removed(application, provider, &library_id).await?;
-    let (waiting, gap) = deletions::waiting_files(application, provider, &library_id).await?;
-    if waiting.is_empty() {
-        snapshot::settle_notice(application, if gap { WAITING_FOR_DELETIONS } else { "" })?;
-        return Ok(deletions::Received {
-            files: 0,
-            incomplete: gap,
-        });
+    let merged = tombstones::receive_library(application, provider, &library_id).await;
+    if let Err(error) = &merged {
+        let _ = snapshot::set_sync_state(application, "error", "idle", error);
     }
-    snapshot::set_sync_state(
-        application,
-        "reconciling",
-        "deletions",
-        "Applying deletions from another device",
-    )?;
-    match deletions::apply_files(application, provider, &library_id, waiting, gap).await {
-        Ok(received) => {
-            snapshot::finish_sync_state(
-                application,
-                if received.incomplete {
-                    WAITING_FOR_DELETIONS
-                } else {
-                    ""
-                },
-            )?;
-            Ok(received)
-        }
-        Err(error) => {
-            let _ = snapshot::set_sync_state(application, "error", "idle", &error);
-            Err(error)
-        }
-    }
+    merged
 }
 
 fn cloud_receipt_or_current(

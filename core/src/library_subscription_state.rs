@@ -1,7 +1,8 @@
-//! Canonical subscription persistence over the schema-1 library coordinator.
+//! What a subscription run stores in the library: the posts and items it
+//! found, the attempts to download them, and their outcomes.
 //!
-//! Source acquisition remains in `picto_core`, but all durable state changes
-//! use the `picto_library` writer scheduler. No legacy Store is opened.
+//! The core fetches from the sources. Everything that it stores goes through
+//! the library's writer, as every other write does.
 
 use std::collections::BTreeMap;
 
@@ -965,10 +966,12 @@ fn record_post_in(
             params![source_post_id, item.item_key],
             |row| row.get::<_, i64>(0),
         )?;
-        transaction.execute(
-            "DELETE FROM deletion_tombstone
-             WHERE stable_key = 'source:' || ?1 || ':' || ?2 || ':' || ?3",
-            params![post.site_id, post.post_key, item.item_key],
+        picto_library::remove_item_tombstones(
+            transaction,
+            &[format!(
+                "source:{}:{}:{}",
+                post.site_id, post.post_key, item.item_key
+            )],
         )?;
         transaction.execute(
             "INSERT INTO subscription_run_source_item(run_query_id, source_item_id)

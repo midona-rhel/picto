@@ -38,7 +38,7 @@ mod duplicates;
 mod structure;
 mod merge;
 mod undo;
-mod synced;
+mod shared;
 pub(crate) mod tasks;
 use tags::*;
 use folders::*;
@@ -46,10 +46,11 @@ use smart_folders::*;
 use structure::*;
 use merge::*;
 pub use merge::{SharedFileMerge, merged_notes};
-pub use synced::{
-    AppliedDeletions, OutgoingCursor, OutgoingDeletions, ReceivedDeletions, SyncedDeletion,
-    reset_synced_deletions,
+pub use shared::{
+    AppliedEntries, EntryClock, EntryKind, EntryState, SharedEntry, remove_item_tombstones,
+    reset_published_entries,
 };
+use shared::*;
 use undo::*;
 
 struct PublishedDelta {
@@ -1946,10 +1947,12 @@ fn move_to_partition(
 
 /// Records in the cloud journal which roots a change moved into the Trash
 /// and which it took out of it, by comparing the Trash of `before` with the
-/// Trash of `after`. Cloud sync sends these rows to the other devices. One
-/// row of the kind `root.trash` is written for the roots that entered the
-/// Trash, and one for each lifecycle that restored roots now have. A change
-/// that moved nothing into or out of the Trash writes no row.
+/// Trash of `after`. One row of the kind `root.trash` is written for the
+/// roots that entered the Trash, and one for each lifecycle that restored
+/// roots now have. Each row holds the time of the library's hybrid logical
+/// clock at the change. Cloud sync turns the rows into the `status` entries
+/// that the devices share (`shared.rs`). A change that moved nothing into or
+/// out of the Trash writes no row and does not advance the clock.
 fn journal_trash_moves(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
@@ -1971,6 +1974,10 @@ fn journal_trash_moves(
         (Lifecycle::Active, &left & after.lifecycle(Lifecycle::Active)),
         (Lifecycle::Inbox, &left & after.lifecycle(Lifecycle::Inbox)),
     ];
+    if moves.iter().all(|(_, roots)| roots.is_empty()) {
+        return Ok(());
+    }
+    let (at_ms, logical) = tick(transaction)?;
     for (lifecycle, roots) in moves {
         if !roots.is_empty() {
             insert_cloud_journal(
@@ -1978,7 +1985,11 @@ fn journal_trash_moves(
                 revision,
                 "root.trash",
                 Some(&roots),
-                serde_json::json!({"lifecycle": lifecycle.bitmap_key()}),
+                serde_json::json!({
+                    "lifecycle": lifecycle.bitmap_key(),
+                    "at_ms": at_ms,
+                    "logical": logical,
+                }),
                 changed_at_ms,
             )?;
         }

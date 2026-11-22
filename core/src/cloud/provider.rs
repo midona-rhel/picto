@@ -187,8 +187,8 @@ impl DirectoryProvider {
     /// its `library.json`, if it has one, names this library. A file is
     /// removed only when its name and its place are those of a file that
     /// the sync writes: `library.json`, a snapshot and its manifest in
-    /// `snapshots/`, an original in `blobs/f/<aa>/<bb>/`, a deletion file in
-    /// `deletions/<device id>/`, and a file that an interrupted upload left
+    /// `snapshots/`, an original in `blobs/f/<aa>/<bb>/`, a tombstone file in
+    /// `tombstones/<device id>/`, and a file that an interrupted upload left
     /// beside one of them. Everything else is left where it is and counted in
     /// the result, and a folder that still holds something is not removed.
     /// Links are never followed and never removed.
@@ -232,8 +232,11 @@ impl DirectoryProvider {
         let trees: [(&str, &[Known]); 3] = [
             ("snapshots", &[Known::Files(is_snapshot_file)]),
             (
-                "deletions",
-                &[Known::Folders(is_uuid), Known::Files(is_deletion_file)],
+                "tombstones",
+                &[
+                    Known::Folders(is_uuid),
+                    Known::Files(super::tombstones::is_file_name),
+                ],
             ),
             (
                 "blobs",
@@ -388,12 +391,6 @@ fn is_snapshot_file(name: &str) -> bool {
     name.strip_suffix(".json")
         .or_else(|| name.strip_suffix(".sqlite.zst"))
         .is_some_and(is_snapshot_id)
-}
-
-/// A deletion file: ten digits and `.jsonl.zst`.
-fn is_deletion_file(name: &str) -> bool {
-    name.strip_suffix(".jsonl.zst")
-        .is_some_and(|number| number.len() == 10 && number.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// An original: its SHA-256 in hexadecimal, a dot, and its extension.
@@ -1082,7 +1079,9 @@ mod tests {
         let id = "20261122T101500.123Z-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11";
         assert!(is_snapshot_file(&format!("{id}.json")));
         assert!(is_snapshot_file(&format!("{id}.sqlite.zst")));
-        assert!(is_deletion_file("0000000012.jsonl.zst"));
+        assert!(super::super::tombstones::is_file_name(
+            "0a.0123456789abcdef.jsonl.zst"
+        ));
         assert!(is_blob_file(&format!("{}.png", "a".repeat(64))));
         assert!(is_upload_remnant(
             "x.picto-uploading-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11"
@@ -1098,11 +1097,11 @@ mod tests {
             format!("20261122T101500.1世-{uuid}.json"),
             format!("世界世界世界世界世界世界世界-{uuid}.json"),
             "世界.json".to_owned(),
-            "000000001２.jsonl.zst".to_owned(),
+            "0a.012345678９abcd.jsonl.zst".to_owned(),
             format!("{}世.png", "a".repeat(61)),
         ] {
             assert!(!is_snapshot_file(&name), "{name}");
-            assert!(!is_deletion_file(&name), "{name}");
+            assert!(!super::super::tombstones::is_file_name(&name), "{name}");
             assert!(!is_blob_file(&name), "{name}");
             assert!(!is_upload_remnant(&name), "{name}");
             assert!(!is_hex_pair(&name), "{name}");

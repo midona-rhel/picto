@@ -818,15 +818,13 @@ impl Library {
                 } else {
                     false
                 };
+            record_entries(transaction, EntryKind::Tag, EntryState::Delete, &stable_keys)?;
             insert_cloud_journal(
                 transaction,
                 revision,
                 "tag.delete_unused",
                 None,
-                serde_json::json!({
-                    "tag_ids": unused.iter().map(|id| id.0).collect::<Vec<_>>(),
-                    "stable_keys": stable_keys,
-                }),
+                serde_json::json!({"tag_ids": unused.iter().map(|id| id.0).collect::<Vec<_>>() }),
                 now_ms(),
             )?;
             next.revision = revision;
@@ -909,6 +907,13 @@ impl Library {
             } else {
                 false
             };
+            if destination.is_none() {
+                // A deleted tag is deleted on the other devices too. A tag
+                // that was merged into another is not: the other devices
+                // do not get the merge.
+                let keys = removed_tag_key(&history_changes).into_iter().collect::<Vec<_>>();
+                record_entries(transaction, EntryKind::Tag, EntryState::Delete, &keys)?;
+            }
             transaction.execute(
                 "INSERT INTO cloud_journal
                      (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
@@ -924,12 +929,6 @@ impl Library {
                     serde_json::json!({
                         "source_tag_id": source.0,
                         "destination_tag_id": destination.map(|tag| tag.0),
-                        "stable_keys": destination
-                            .is_none()
-                            .then(|| removed_tag_key(&history_changes))
-                            .flatten()
-                            .into_iter()
-                            .collect::<Vec<_>>(),
                     })
                     .to_string(),
                     changed_at_ms

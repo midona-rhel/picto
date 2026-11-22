@@ -189,6 +189,12 @@ impl Library {
         let result = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let mut next = (*snapshot).clone();
             let deleted = delete_smart_folder_subtree(transaction, &mut next, smart_folder_id)?;
+            record_entries(
+                transaction,
+                EntryKind::SmartFolder,
+                EntryState::Delete,
+                &deleted.stable_keys,
+            )?;
             insert_cloud_journal(
                 transaction,
                 revision,
@@ -197,8 +203,7 @@ impl Library {
                 serde_json::json!({
                     "smart_folder_ids": deleted.smart_folder_ids.iter()
                         .map(|id| id.0)
-                        .collect::<Vec<_>>(),
-                    "stable_keys": deleted.stable_keys,
+                        .collect::<Vec<_>>()
                 }),
                 changed_at_ms,
             )?;

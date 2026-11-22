@@ -37,8 +37,8 @@ pub use database::LibraryDatabase;
 pub use error::{LibraryError, Result};
 pub use model::*;
 pub use mutation::{
-    AppliedDeletions, Library, OutgoingCursor, OutgoingDeletions, ReceivedDeletions,
-    SharedFileMerge, SyncedDeletion, merged_notes, reset_synced_deletions,
+    AppliedEntries, EntryClock, EntryKind, EntryState, Library, SharedEntry, SharedFileMerge,
+    merged_notes, remove_item_tombstones, reset_published_entries,
 };
 
 /// The name a duplicate merge keeps of two: `incoming` only when it is a
