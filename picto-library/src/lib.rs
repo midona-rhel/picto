@@ -7,6 +7,7 @@
 pub mod bitmap;
 mod browsing;
 pub mod checkpoint;
+pub mod content;
 pub mod database;
 pub mod duplicate;
 pub mod error;
@@ -36,7 +37,10 @@ pub mod work_queue;
 pub use database::LibraryDatabase;
 pub use error::{LibraryError, Result};
 pub use model::*;
-pub use mutation::{Library, SharedFileMerge, merged_notes};
+pub use mutation::{
+    merged_notes, translate_view, Library, MergeTaskInput, SharedFileMerge, MERGE_BACKUP,
+    MERGE_LIBRARY,
+};
 
 /// The name a duplicate merge keeps of two: `incoming` only when it is a
 /// more descriptive kind of name than `existing`.

@@ -18,6 +18,7 @@ pub mod library_application;
 pub mod library_import;
 pub mod library_ingest_runtime;
 pub mod library_media_runtime;
+pub mod library_merge;
 pub mod library_runtime;
 pub mod library_subscription_state;
 pub mod media_capabilities;

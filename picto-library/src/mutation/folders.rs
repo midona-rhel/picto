@@ -68,18 +68,40 @@ impl Library {
         parent_id: Option<FolderId>,
         stable_key: String,
     ) -> Result<(FolderId, MutationReceipt)> {
-        self.create_folder_owned(name, parent_id, stable_key, None)
+        self.create_folder_owned(name, parent_id, stable_key, None, None)
     }
 
     pub fn create_folder_for_task(
         &self, name: &str, parent_id: Option<FolderId>, task: crate::TaskId,
     ) -> Result<(FolderId, MutationReceipt)> {
-        self.create_folder_owned(name, parent_id, uuid::Uuid::new_v4().to_string(), Some(task))
+        self.create_folder_owned(name, parent_id, uuid::Uuid::new_v4().to_string(), Some(task), None)
+    }
+
+    /// Creates a folder for a task that merges another library. The folder
+    /// gets the name, the icon, the colour and the notes of that library's
+    /// folder `like`, and it gives its items the tags `auto_tag_ids`, which
+    /// are tags of this library. When `parent_id` already has a folder of
+    /// that name, that folder is returned and nothing about it is changed.
+    pub fn create_folder_like_for_task(
+        &self,
+        like: &crate::content::ContentFolder,
+        parent_id: Option<FolderId>,
+        auto_tag_ids: &[crate::TagId],
+        task: crate::TaskId,
+    ) -> Result<(FolderId, MutationReceipt)> {
+        self.create_folder_owned(
+            &like.name,
+            parent_id,
+            uuid::Uuid::new_v4().to_string(),
+            Some(task),
+            Some((like, auto_tag_ids)),
+        )
     }
 
     fn create_folder_owned(
         &self, name: &str, parent_id: Option<FolderId>, stable_key: String,
         task: Option<crate::TaskId>,
+        like: Option<(&crate::content::ContentFolder, &[crate::TagId])>,
     ) -> Result<(FolderId, MutationReceipt)> {
         if name.trim().is_empty() {
             return Err(LibraryError::InvalidInput("folder name is empty".into()));
@@ -118,16 +140,27 @@ impl Library {
                 [parent_id.map(|id| id.0)],
                 |row| row.get::<_, i64>(0),
             )?;
+            let auto_tags = like
+                .map(|(_, tag_ids)| tag_ids.iter().map(|tag_id| tag_id.0).collect::<RoaringBitmap>())
+                .filter(|tag_ids| !tag_ids.is_empty())
+                .map(|tag_ids| ingest::encode_folder_auto_tags(&tag_ids))
+                .transpose()?
+                .unwrap_or_default();
             transaction.execute(
                 "INSERT INTO folder_definition
-                     (folder_id, stable_key, parent_id, name, display_order)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                     (folder_id, stable_key, parent_id, name, display_order, icon, color, notes,
+                      auto_tag_ids)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 rusqlite::params![
                     folder_id.0,
                     stable_key,
                     parent_id.map(|id| id.0),
                     name,
-                    display_order
+                    display_order,
+                    like.and_then(|(folder, _)| normalized_optional(folder.icon.as_deref())),
+                    like.and_then(|(folder, _)| normalized_optional(folder.color.as_deref())),
+                    like.and_then(|(folder, _)| normalized_optional(folder.notes.as_deref())),
+                    auto_tags
                 ],
             )?;
             insert_cloud_journal(

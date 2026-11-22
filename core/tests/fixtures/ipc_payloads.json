@@ -3457,6 +3457,18 @@
     }
   ],
   [
+    "library.merge.inspect",
+    {
+      "path": "/picto-contract/Other.library"
+    }
+  ],
+  [
+    "library.merge.start",
+    {
+      "path": "/picto-contract/Other.library"
+    }
+  ],
+  [
     "media.export",
     {
       "target": {

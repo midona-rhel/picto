@@ -52,6 +52,10 @@ pub struct TaskFailure {
 /// Starting an import.
 pub const IMPORT_ACTION: &str = "import";
 
+/// The kind that [`foreground_tasks`] reports for a task that merges another
+/// library into the open one (`library_merge.rs`).
+pub const MERGE_TASK_KIND: &str = "merge";
+
 /// What an open (running, paused or undoing) task of `kind` keeps from
 /// starting. This is the one table of which work excludes which: the backend
 /// refuses a blocked start (`ensure_can_start`) and the renderer disables what
@@ -160,9 +164,17 @@ pub fn foreground_tasks(
             } else {
                 Vec::new()
             };
+            // A merge of another library is stored as an import task. It is
+            // reported with a kind of its own, so that the renderer can name
+            // it a merge and offer only to cancel it.
+            let kind = if picto_library::MergeTaskInput::from_json(&task.input_json).is_some() {
+                MERGE_TASK_KIND.to_owned()
+            } else {
+                task.kind
+            };
             ForegroundTask {
                 task_id: task.task_id.0,
-                kind: task.kind,
+                kind,
                 title: task.title,
                 state: task.state.as_str().to_owned(),
                 scan_complete: task.scan_complete,

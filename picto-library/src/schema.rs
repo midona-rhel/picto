@@ -155,12 +155,12 @@ pub fn migrate_for_open(
         return Err(LibraryError::OpenCancelled);
     }
     progress(OpenStage::Migrating);
-    let backup_path = migration_backup_path(database_path);
+    let backup_path = backup_path(database_path, "pre-migration");
     let created_backup = !backup_path.exists();
     let result = {
         let _interrupt = MigrationInterrupt::install(connection, cancellation.flag())?;
         (|| {
-            connection.execute("VACUUM INTO ?1", [backup_path.to_string_lossy().as_ref()])?;
+            backup(connection, &backup_path)?;
             if cancellation.is_cancelled() {
                 return Err(LibraryError::OpenCancelled);
             }
@@ -445,7 +445,11 @@ fn metadata(connection: &Connection) -> Result<(u32, String, u64)> {
     row.map_err(|_| LibraryError::Incompatible("missing schema-generation-1 metadata".into()))
 }
 
-fn migration_backup_path(database_path: &Path) -> PathBuf {
+/// Returns the path of a backup of the database at `database_path`, made
+/// now: the database's file name followed by `.<label>-<milliseconds since
+/// 1970>.backup`, in the database's folder. The migration uses the label
+/// `pre-migration` and a merge of another library uses `pre-merge`.
+pub fn backup_path(database_path: &Path, label: &str) -> PathBuf {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -454,7 +458,15 @@ fn migration_backup_path(database_path: &Path) -> PathBuf {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("library.sqlite");
-    database_path.with_file_name(format!("{file_name}.pre-migration-{timestamp}.backup"))
+    database_path.with_file_name(format!("{file_name}.{label}-{timestamp}.backup"))
+}
+
+/// Writes a copy of the whole database, as it is committed at this moment,
+/// to the new file `backup_path` (`VACUUM INTO`). The connection must not be
+/// inside a transaction. SQLite refuses to write over an existing file.
+pub fn backup(connection: &Connection, backup_path: &Path) -> Result<()> {
+    connection.execute("VACUUM INTO ?1", [backup_path.to_string_lossy().as_ref()])?;
+    Ok(())
 }
 
 fn has_table(connection: &Connection, table: &str) -> Result<bool> {

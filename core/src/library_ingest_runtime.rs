@@ -618,6 +618,21 @@ fn prepare_import(
         .blobs()
         .original_path_with_ext(&input.facts.content_hash, Some(extension))
         .map_err(|error| format!("Failed to resolve original blob: {error}"))?;
+    // A file that comes out of another library's blob store, as every file of
+    // a merge does, brings that library's thumbnail with it. A thumbnail that
+    // cannot be copied is made again later by the thumbnail worker.
+    if !same_path(&source, &stored) {
+        if let Some(thumbnail) =
+            crate::blob_store::thumbnail_beside_original(&source, &input.facts.content_hash)
+        {
+            if let Err(error) = application
+                .blobs()
+                .adopt_thumbnail(&input.facts.content_hash, &thumbnail)
+            {
+                tracing::warn!(%error, "Could not copy the thumbnail of an imported file");
+            }
+        }
+    }
     let archive_staging = application.root().join("temp/archive-import");
     if (delete_after_ingest || source.starts_with(archive_staging)) && !same_path(&source, &stored)
     {

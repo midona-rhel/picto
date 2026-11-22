@@ -496,11 +496,32 @@ impl Library {
         Ok(receipt)
     }
 
-    /// Ensure portable metadata can reference tag definitions without adding
-    /// synthetic assignments to a library item.
+    /// Creates the tags of `names` that the library does not have yet,
+    /// without giving them to any item, and returns the ids of all of them in
+    /// the alphabetical order of their names. A Picto Pack uses this for the
+    /// tags that its folders give to their items.
     pub fn ensure_tag_definitions(
         &self,
         names: &[String],
+    ) -> Result<(Vec<crate::TagId>, MutationReceipt)> {
+        self.ensure_tag_definitions_owned(names, None)
+    }
+
+    /// Does what [`Self::ensure_tag_definitions`] does for a foreground
+    /// task, and records the tags and the tag namespaces that it creates, so
+    /// that undoing the task removes those that no item carries then.
+    pub fn ensure_tag_definitions_for_task(
+        &self,
+        names: &[String],
+        task: crate::TaskId,
+    ) -> Result<(Vec<crate::TagId>, MutationReceipt)> {
+        self.ensure_tag_definitions_owned(names, Some(task))
+    }
+
+    fn ensure_tag_definitions_owned(
+        &self,
+        names: &[String],
+        task: Option<crate::TaskId>,
     ) -> Result<(Vec<crate::TagId>, MutationReceipt)> {
         let names = names
             .iter()
@@ -512,9 +533,17 @@ impl Library {
             ));
         }
         let (tag_ids, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let namespaces_before = match task {
+                Some(task) => {
+                    super::tasks::require_running_task(transaction, task)?;
+                    Some(namespace_ids(transaction)?)
+                }
+                None => None,
+            };
             let mut next = (*snapshot).clone();
             let mut tag_ids = Vec::with_capacity(names.len());
             let mut created = Vec::new();
+            let mut created_ids = Vec::new();
             for name in &names {
                 let tag_id = if let Some(tag_id) = next.tag_ids_by_name.get(name).copied() {
                     tag_id
@@ -525,9 +554,20 @@ impl Library {
                         .entry(tag_id)
                         .or_insert_with(|| RoaringBitmap::new().into());
                     created.push(name.clone());
+                    created_ids.push(tag_id.0);
                     tag_id
                 };
                 tag_ids.push(tag_id);
+            }
+            if let (Some(task), Some(before)) = (task, namespaces_before) {
+                let namespace_ids = (namespace_ids(transaction)? - before).into_iter().collect::<Vec<_>>();
+                if !created_ids.is_empty() || !namespace_ids.is_empty() {
+                    super::tasks::record_task_undo(
+                        transaction,
+                        task,
+                        super::tasks::TaskUndo::Tags { tag_ids: created_ids, namespace_ids },
+                    )?;
+                }
             }
             if !created.is_empty() {
                 insert_cloud_journal(
@@ -1249,6 +1289,64 @@ pub(super) fn remove_tag_in_transaction(
         },
     );
     Ok((source_members, history_changes))
+}
+
+/// Returns the ids of all tag namespaces.
+fn namespace_ids(transaction: &rusqlite::Transaction<'_>) -> Result<RoaringBitmap> {
+    let ids = transaction
+        .prepare("SELECT namespace_id FROM tag_namespace")?
+        .query_map([], |row| row.get::<_, u32>(0))?
+        .collect::<rusqlite::Result<RoaringBitmap>>()?;
+    Ok(ids)
+}
+
+/// Removes those of the tags `tag_ids` that nothing uses: no item carries
+/// the tag, no folder gives it to its items, and no smart folder's rules
+/// name it. Returns how many tags were removed. Undoing a merge of another
+/// library removes the tags that the merge created in this way. The folders
+/// and the smart folders are read once for all the tags.
+pub(super) fn remove_unreferenced_tags(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    snapshot: &mut ProjectionSnapshot,
+    tag_ids: &[crate::TagId],
+) -> Result<usize> {
+    let mut referenced = RoaringBitmap::new();
+    let mut statement = transaction
+        .prepare("SELECT auto_tag_ids FROM folder_definition WHERE length(auto_tag_ids) > 0")?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let payload = row.get_ref(0)?.as_blob().map_err(rusqlite::Error::from)?;
+        referenced |= RoaringBitmap::deserialize_from(&mut std::io::Cursor::new(payload))?;
+    }
+    for query in snapshot.smart_queries.values() {
+        super::library_merge::tag_references(&query.filter, &mut referenced);
+    }
+    let mut removed = 0;
+    for tag_id in tag_ids {
+        if referenced.contains(tag_id.0)
+            || snapshot.tags.get(tag_id).is_some_and(|roots| !roots.is_empty())
+        {
+            continue;
+        }
+        let Some(state) = load_tag_definition(transaction, *tag_id)? else {
+            continue;
+        };
+        bitmap::replace(
+            transaction,
+            revision,
+            BitmapKey {
+                domain: BitmapDomain::Tag,
+                key_id: tag_id.0,
+            },
+            &RoaringBitmap::new(),
+        )?;
+        transaction.execute("DELETE FROM tag_definition WHERE tag_id = ?1", [tag_id.0])?;
+        Arc::make_mut(&mut snapshot.tags).remove(tag_id);
+        Arc::make_mut(&mut snapshot.tag_ids_by_name).remove(&state.full_name);
+        removed += 1;
+    }
+    Ok(removed)
 }
 
 pub(super) fn prune_deleted_starred_tags(

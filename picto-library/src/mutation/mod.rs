@@ -37,6 +37,7 @@ mod imports;
 mod duplicates;
 mod structure;
 mod merge;
+mod library_merge;
 mod undo;
 pub(crate) mod tasks;
 use tags::*;
@@ -45,6 +46,7 @@ use smart_folders::*;
 use structure::*;
 use merge::*;
 pub use merge::{SharedFileMerge, merged_notes};
+pub use library_merge::{MergeTaskInput, translate_view, MERGE_BACKUP, MERGE_LIBRARY};
 use undo::*;
 
 struct PublishedDelta {

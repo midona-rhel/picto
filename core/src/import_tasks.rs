@@ -124,6 +124,11 @@ pub fn scan_import_task(
     task: &TaskRecord,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<(), String> {
+    // A task that merges another library reads that library instead of
+    // walking folders.
+    if let Some(merge) = picto_library::MergeTaskInput::from_json(&task.input_json) {
+        return crate::library_merge::scan(application, task, &merge, cancelled);
+    }
     let library = application.library();
     let task_id = task.task_id;
     let input: ManualImportInput =
@@ -233,7 +238,7 @@ pub fn scan_import_task(
 
 /// Queue a chunk of scanned files. While the task is paused the scan waits
 /// here; returns false when the scan should end (stopped, or closing).
-fn queue(
+pub(crate) fn queue(
     application: &LibraryApplication,
     task: TaskId,
     chunk: &mut Vec<TaskIngestJob>,
@@ -252,7 +257,9 @@ fn queue(
     Ok(true)
 }
 
-fn scan_checkpoint(
+/// Returns whether a scan may go on. While the task is paused this waits. It
+/// returns `false` when the library is closing or the task is stopped.
+pub(crate) fn scan_checkpoint(
     application: &LibraryApplication,
     task: TaskId,
     cancelled: &dyn Fn() -> bool,
@@ -457,11 +464,19 @@ fn file_stem(path: &str) -> Option<String> {
 /// Undo the tasks marked for it. Runs on the ingest worker, between batches,
 /// so none of a task's jobs is being imported meanwhile.
 pub fn settle_reverts(application: &LibraryApplication) -> Result<(), String> {
+    // A merge of another library that was stopped, or that could not import
+    // a file, is marked for undo here, so that the loop below undoes it.
+    crate::library_merge::settle(application)?;
     let library = application.library();
-    for task in library.tasks_to_revert().map_err(|error| error.to_string())? {
+    let tasks = library.tasks_to_revert().map_err(|error| error.to_string())?;
+    for task in &tasks {
         library
-            .revert_task(task, now_ms())
+            .revert_task(*task, now_ms())
             .map_err(|error| error.to_string())?;
+    }
+    if !tasks.is_empty() {
+        // The backup of a merge that has just been undone is removed.
+        crate::library_merge::settle(application)?;
     }
     Ok(())
 }

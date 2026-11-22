@@ -13,21 +13,28 @@ impl Library {
         &self,
         inputs: &[PreparedImport],
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
-        self.ingest_batch_with(inputs, false, None)
+        self.ingest_batch_with(inputs, false, None, ingest::Held::Refresh)
     }
 
     /// Import items for a foreground task, which records the roots it
-    /// creates and the tags it adds to existing ones so it can be undone.
+    /// creates and what it gives to existing ones, so that it can be undone.
+    /// For a task that merges another library, an item that the library
+    /// already holds gets what [`ingest::Held::Merge`] names, and the new
+    /// items are not queued for automatic tagging.
     pub fn ingest_batch_for_task(
         &self,
         inputs: &[PreparedImport],
         task: crate::TaskId,
         auto_tag: bool,
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
-        let grouped = self.task(task)?.is_some_and(|record| {
-            serde_json::from_str::<serde_json::Value>(&record.input_json)
-                .ok().and_then(|value| value["group_files"].as_bool()).unwrap_or(false)
+        let options = self.task(task)?.and_then(|record| {
+            serde_json::from_str::<serde_json::Value>(&record.input_json).ok()
         });
+        let grouped = options
+            .as_ref()
+            .and_then(|value| value["group_files"].as_bool())
+            .unwrap_or(false);
+        let held = held_for_task(options.as_ref());
         if grouped && !inputs.is_empty() {
             if inputs.len() > ingest::MAX_INGEST_BATCH {
                 return Err(LibraryError::InvalidInput("task ingest batch is too large".into()));
@@ -38,14 +45,19 @@ impl Library {
             }, auto_tag, Some(task))?;
             return Ok(vec![output; inputs.len()]);
         }
-        self.ingest_batch_with(inputs, auto_tag, Some(task))
+        self.ingest_batch_with(
+            inputs,
+            auto_tag && held == ingest::Held::Refresh,
+            Some(task),
+            held,
+        )
     }
 
     pub fn ingest_batch_with_auto_tags(
         &self,
         inputs: &[PreparedImport],
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
-        self.ingest_batch_with(inputs, true, None)
+        self.ingest_batch_with(inputs, true, None, ingest::Held::Refresh)
     }
 
     fn ingest_batch_with(
@@ -53,6 +65,7 @@ impl Library {
         inputs: &[PreparedImport],
         auto_tag: bool,
         task: Option<crate::TaskId>,
+        held: ingest::Held,
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
         if inputs.is_empty() {
             return Ok(Vec::new());
@@ -74,10 +87,14 @@ impl Library {
             let mut bitmap_keys = HashSet::new();
             let mut folder_ids = HashSet::new();
             let mut affected = RoaringBitmap::new();
+            let mut placed = Vec::new();
+            let mut rated = Vec::new();
             for input in inputs {
-                let output = ingest::insert_one(transaction, revision, next, input, task)?;
+                let output = ingest::insert_one(transaction, revision, next, input, task, held)?;
                 next = output.snapshot;
                 root_ids.push(output.root_id);
+                placed.extend(output.placed);
+                rated.extend(output.rated);
                 if let Some(task) = task {
                     crate::mutation::tasks::record_task_ingest(
                         transaction,
@@ -108,6 +125,9 @@ impl Library {
                 bitmap_keys.extend(output.bitmap_keys);
                 folder_ids.extend(output.folder_ids);
                 affected |= &output.affected_roots;
+            }
+            if let Some(task) = task {
+                super::tasks::record_task_merge(transaction, task, &placed, &rated)?;
             }
             ingest::persist_touched(
                 transaction,
@@ -214,9 +234,11 @@ impl Library {
             // Each grouped task streams ordinary jobs. Its durable alias resolves
             // the accumulated collection across batches, pauses and reopen.
             let mut grouped = input.clone();
+            let mut held = ingest::Held::Refresh;
             let group_key = if let Some(task) = task {
                 let options: String = transaction.query_row("SELECT input_json FROM task WHERE task_id = ?1", [task.0], |row| row.get(0))?;
                 let options: serde_json::Value = serde_json::from_str(&options)?;
+                held = held_for_task(Some(&options));
                 if options["group_files"].as_bool() == Some(true) {
                     grouped.name = options["collection_name"].as_str().map(str::to_owned);
                     let key = format!("task:{}:collection", task.0);
@@ -252,12 +274,18 @@ impl Library {
             let mut ingest_affected = RoaringBitmap::new();
             let mut outputs = Vec::with_capacity(input.members.len());
             for member in &input.members {
-                let output = ingest::insert_one(transaction, revision, next, member, task)?;
+                let output = ingest::insert_one(transaction, revision, next, member, task, held)?;
                 next = output.snapshot;
                 if output.created_root {
                     created_root_ids.push(output.root_id);
                 }
                 if let Some(task) = task {
+                    super::tasks::record_task_merge(
+                        transaction,
+                        task,
+                        &output.placed,
+                        &output.rated.into_iter().collect::<Vec<_>>(),
+                    )?;
                     // Partial collections are ungrouped during rollback, exposing
                     // these created media roots for deletion.
                     crate::mutation::tasks::record_task_ingest(
@@ -381,7 +409,7 @@ impl Library {
                 affected.iter().map(RootId),
             )?;
             crate::smart::settle_affected(transaction, &mut next, &affected)?;
-            if auto_tag && !created_root_ids.is_empty() {
+            if auto_tag && held == ingest::Held::Refresh && !created_root_ids.is_empty() {
                 ingest::enqueue_ai_tag_roots(
                     transaction,
                     std::iter::once(published_root),
@@ -434,6 +462,17 @@ impl Library {
             ))
         })?;
         Ok((collection_id, receipt))
+    }
+}
+
+/// Returns what a task's import gives an item that the library already
+/// holds. `options` is the task's stored input. A task that merges another
+/// library gives what [`ingest::Held::Merge`] names.
+fn held_for_task(options: Option<&serde_json::Value>) -> ingest::Held {
+    if options.is_some_and(|options| options.get(super::library_merge::MERGE_LIBRARY).is_some()) {
+        ingest::Held::Merge
+    } else {
+        ingest::Held::Refresh
     }
 }
 
