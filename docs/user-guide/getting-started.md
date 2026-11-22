@@ -67,8 +67,8 @@ folder on macOS, or replace the `.AppImage` file on Linux.
 After the upgrade:
 
 - Your libraries are unchanged. They keep all their items, tags, folders and settings.
-- Your libraries are listed in the Library Manager, but no library opens by itself the first time.
-  Choose your library there. Picto asks once for each library whether it may open that library.
+- The library that was open in the version you had opens when Picto starts. Your other
+  libraries are listed in the Library Manager.
 - Your site logins and the downloaded AI models are still there.
 - The window's size and position, the widths of the sidebar and the inspector, the saved filters,
   the recent tags and folders, the keyboard layout and the changed keyboard shortcuts, the language
