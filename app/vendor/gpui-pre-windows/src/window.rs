@@ -492,14 +492,7 @@ impl WindowsWindow {
         );
 
         let (mut dwexstyle, dwstyle) = if params.kind == WindowKind::PopUp {
-            // A pop-up window is never activated (`WS_EX_NOACTIVATE`): a click in it
-            // leaves the window that opened it active, and the system does not make
-            // it the foreground window when the foreground window goes away. Chromium
-            // gives its menu windows the same style.
-            (
-                WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
-                WINDOW_STYLE(0x0),
-            )
+            (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WINDOW_STYLE(0x0))
         } else {
             let mut dwstyle = WS_SYSMENU;
 

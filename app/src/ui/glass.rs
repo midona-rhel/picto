@@ -59,7 +59,7 @@ pub fn glass_panel(id: impl Into<ElementId>, radius: f32, cx: &App) -> GlassPane
 
 /// Returns the fill that a glass panel in its own transparent window draws
 /// over the system's plain blur of what is behind the window
-/// ([`super::window_chrome::prepare_panel_window`]). With this fill the panel
+/// ([`super::window_chrome::system_blur_behind`]). With this fill the panel
 /// shows what `glass` shows over a blur whose brightness is multiplied by
 /// `brightness`. For a brightness below 1 the result is exact: it is a black
 /// layer with the alpha `1 − brightness` over the blur. For a brightness above

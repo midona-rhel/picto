@@ -214,9 +214,6 @@ pub struct X11ClientState {
     pub(crate) windows: HashMap<xproto::Window, WindowRef>,
     pub(crate) mouse_focused_window: Option<xproto::Window>,
     pub(crate) keyboard_focused_window: Option<xproto::Window>,
-    /// The pop-up window that holds the pointer grab which is active while a
-    /// pop-up window is open (`grab_pointer_for_popup`).
-    popup_grab: Option<xproto::Window>,
     pub(crate) xkb: xkbc::State,
     keyboard_layout: LinuxKeyboardLayout,
     pub(crate) ximc: Option<X11rbClient<Rc<XCBConnection>>>,
@@ -281,44 +278,6 @@ impl X11ClientStatePtr {
             state.cursor_hidden_window = None;
         }
         state.cursor_styles.remove(&x_window);
-        if state.popup_grab == Some(x_window) {
-            // The server ended the grab when it destroyed the window. Another
-            // pop-up window that is still open takes the grab.
-            state.popup_grab = None;
-            let next = state
-                .windows
-                .iter()
-                .find(|(_, window)| window.window.is_popup())
-                .map(|(x_window, _)| *x_window);
-            if let Some(next) = next {
-                state.grab_pointer(next);
-            }
-        }
-    }
-
-    /// Grabs the pointer for the pop-up window `x_window`, which has just
-    /// been mapped, unless another pop-up window already holds the grab.
-    ///
-    /// A pop-up window is not managed by the window manager and never has
-    /// the keyboard, so nothing tells the application when the user clicks
-    /// somewhere else. Toolkits grab the pointer for a menu for this reason,
-    /// and so does this. The grab reports pointer events to this
-    /// application's windows as usual (`owner_events`), so the pop-up
-    /// windows and the window that opened them keep their hover and their
-    /// clicks. A press of a button anywhere else is reported to the grab
-    /// window, and `handle_event` then asks every pop-up window to close.
-    /// While the grab is held, a window manager that gives the keyboard to
-    /// the window under the pointer receives no crossing events, so the
-    /// window that opened the pop-up keeps the keyboard while the pointer is
-    /// over the pop-up.
-    pub fn grab_pointer_for_popup(&self, x_window: xproto::Window) {
-        let Some(client) = self.get_client() else {
-            return;
-        };
-        let mut state = client.0.borrow_mut();
-        if state.popup_grab.is_none() {
-            state.grab_pointer(x_window);
-        }
     }
 
     pub fn update_ime_position(&self, bounds: Bounds<Pixels>) {
@@ -578,7 +537,6 @@ impl X11Connection {
                 windows: HashMap::default(),
                 mouse_focused_window: None,
                 keyboard_focused_window: None,
-                popup_grab: None,
                 xkb: xkb_state,
                 keyboard_layout,
                 ximc,
@@ -1428,31 +1386,6 @@ impl X11Client {
                     px(event.event_x as f32 / u16::MAX as f32 / state.scale_factor),
                     px(event.event_y as f32 / u16::MAX as f32 / state.scale_factor),
                 );
-
-                // While a pop-up window holds the pointer grab, a press on anything
-                // that is not a window of this application is reported to the grab
-                // window, at a position outside its content. Every pop-up window is
-                // then asked to close, as the window manager asks a managed window
-                // with `WM_DELETE_WINDOW`. A turn of the wheel there does nothing.
-                if state.popup_grab == Some(event.event) && !window.has_content_at(position) {
-                    let pressed = matches!(
-                        button_or_scroll_from_event_detail(event.detail),
-                        Some(ButtonOrScroll::Button(_))
-                    );
-                    let popups = state
-                        .windows
-                        .values()
-                        .filter(|window| pressed && window.window.is_popup())
-                        .map(|window| window.window.clone())
-                        .collect::<Vec<_>>();
-                    drop(state);
-                    for popup in popups {
-                        if popup.should_close() {
-                            popup.close();
-                        }
-                    }
-                    return Some(());
-                }
 
                 if state.composing && state.ximc.is_some() {
                     drop(state);
@@ -2523,49 +2456,6 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
 
 fn fp3232_to_f32(value: xinput::Fp3232) -> f32 {
     value.integral as f32 + value.frac as f32 / u32::MAX as f32
-}
-
-impl X11ClientState {
-    /// Grabs the pointer with `x_window` as the grab window and records the
-    /// grab in `popup_grab` if the server granted it
-    /// (`X11ClientStatePtr::grab_pointer_for_popup`). The grab is an XInput
-    /// grab of the pointer that this client's requests act on. The windows
-    /// select their pointer events through XInput, and under a grab of the
-    /// core protocol the server would not send them their enter and leave
-    /// events.
-    fn grab_pointer(&mut self, x_window: xproto::Window) {
-        let Some(pointer) = get_reply(
-            || "X11 XIGetClientPointer failed.",
-            self.xcb_connection.xinput_xi_get_client_pointer(x11rb::NONE),
-        )
-        .log_err()
-        .filter(|reply| reply.set)
-        .map(|reply| reply.deviceid) else {
-            return;
-        };
-        let events = xinput::XIEventMask::BUTTON_PRESS
-            | xinput::XIEventMask::BUTTON_RELEASE
-            | xinput::XIEventMask::MOTION
-            | xinput::XIEventMask::ENTER
-            | xinput::XIEventMask::LEAVE;
-        let granted = get_reply(
-            || "X11 XIGrabDevice for a pop-up window failed.",
-            self.xcb_connection.xinput_xi_grab_device(
-                x_window,
-                x11rb::CURRENT_TIME,
-                x11rb::NONE,
-                pointer,
-                xproto::GrabMode::ASYNC,
-                xproto::GrabMode::ASYNC,
-                xinput::GrabOwner::OWNER,
-                &[u32::from(events)],
-            ),
-        )
-        .log_err()
-        .is_some_and(|reply| reply.status == xproto::GrabStatus::SUCCESS);
-        xcb_flush(&self.xcb_connection);
-        self.popup_grab = granted.then_some(x_window);
-    }
 }
 
 fn detect_compositor_gpu(

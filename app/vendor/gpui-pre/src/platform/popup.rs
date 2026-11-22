@@ -36,14 +36,6 @@ pub struct PopupOptions {
     /// An additional offset applied to the popup after anchoring.
     pub offset: Point<Pixels>,
 
-    /// How far inside the popup's surface, on every side, the rectangle is
-    /// that the platform positions and keeps on the screen (on Wayland, the
-    /// popup's window geometry). A popup that draws a shadow around its
-    /// content sets this to the width of the part that may leave the screen.
-    /// The anchor point, the gravity and the offset place this rectangle,
-    /// not the whole surface.
-    pub geometry_inset: Pixels,
-
     /// Whether the popup should take an explicit input grab.
     ///
     /// Grabbing popups behave like menus: they take keyboard focus and are dismissed when the
