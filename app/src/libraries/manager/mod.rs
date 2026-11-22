@@ -260,6 +260,8 @@ pub struct Manager {
     eta: Option<u64>,
     /// The Stop Syncing question.
     stopping: ui::modal::Host<()>,
+    /// The Delete Cloud Data… question.
+    deleting_cloud: ui::modal::Host<()>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -339,6 +341,7 @@ impl Manager {
             work_key: None,
             eta: None,
             stopping: Default::default(),
+            deleting_cloud: Default::default(),
             _subscriptions: subscriptions,
         };
         this.read(cx);
@@ -934,6 +937,7 @@ impl Render for Manager {
             .children(self.merge_dialog(window, cx))
             .children(self.consent(window, cx))
             .children(self.stop_question(window, cx))
+            .children(self.delete_cloud_question(window, cx))
             .children(ui::window_chrome::rim(window, cx))
     }
 }

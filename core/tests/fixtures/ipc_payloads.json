@@ -4817,5 +4817,9 @@
       "task_id": 1,
       "undo": true
     }
+  ],
+  [
+    "cloud.data.delete",
+    {}
   ]
 ]

@@ -1,6 +1,7 @@
 //! The Cloud section of the Settings window. It shows the library's cloud
-//! sync, the work that is waiting to be synced, how long recovery snapshots
-//! are kept, and the recovery snapshots that can be restored. Sync now,
+//! sync with its state and its message, the work that is waiting to be
+//! synced, how long recovery snapshots are kept, and the recovery snapshots
+//! that can be restored. Sync now,
 //! Pause or Resume, Create snapshot and the retention fields take effect at
 //! once through the core's commands; they do not wait for the Save & Close
 //! button or the Apply button. Restore puts the database of a snapshot in
@@ -183,11 +184,15 @@ impl SettingsWindow {
             Some(provider) => cloud::provider_name(provider),
             None => t("Not configured"),
         };
-        let state = if status.message.is_empty() {
-            status.state.clone()
-        } else {
-            status.message.clone()
-        };
+        // The sync's message is a whole sentence or more, for example the
+        // reason of a failure. It is drawn under the State row as text that
+        // wraps, because the row's value is a single line.
+        let message = (!status.message.is_empty()).then(|| {
+            ui::form::help_text(theme, status.message.clone())
+                .id("cloud-state-message")
+                .mt(px(4.))
+                .line_height(px(20.))
+        });
         let paused = status.state == "paused";
         let mut sync = card(theme)
             .child(title(theme, t("Library Sync")))
@@ -210,7 +215,8 @@ impl SettingsWindow {
                 .truncate(),
             ))
             .child(separator(theme))
-            .child(row(theme, t("State"), value(theme, state)))
+            .child(row(theme, t("State"), value(theme, status.state.clone())))
+            .children(message)
             .child(separator(theme))
             .child(row(
                 theme,

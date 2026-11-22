@@ -397,5 +397,82 @@ When a source breaks, follow
 
 ## Cloud sync
 
-Cloud sync (experimental) consumes committed revisions and application operations; it does not
-write SQLite, blob files, or Roaring projections behind the core.
+Cloud sync is experimental. Its transport is a folder that the Google Drive or Dropbox desktop app
+syncs; Picto has no account service and signs in to nothing. The core owns it (`core/src/cloud/`),
+and it changes a library only through the library's own writes.
+
+A library writes below `picto/<library id>/` in the cloud folder:
+
+| Path | Content | Written |
+| --- | --- | --- |
+| `library.json` | the library's id and name | once, by the first sync |
+| `blobs/f/<aa>/<bb>/<hash>.<ext>` | the original files, by content hash | when a file is missing there |
+| `snapshots/<id>.sqlite.zst`, `<id>.json` | a compressed copy of the whole database, and its manifest with both checksums | by every sync |
+| `deletions/<device id>/<number>.jsonl.zst` | the deletions that the user made on that device | by a sync that has deletions to send |
+
+A sync (`snapshot::publish_library`) runs when the library has changed and has been idle for 30
+seconds, and on Sync Now. Every file is written beside its target and then renamed onto it, so a
+reader never sees a file in part.
+
+**What another device takes over.** Open from Cloud… takes the newest snapshot as the new
+library's database, gives the library a device id of its own and copies the originals. Restore
+replaces the database with one snapshot. Neither runs by itself. The only thing that a device
+takes over from another device by itself is a deletion. An item that is added or edited on one
+device does not reach another device.
+
+**Deletions.** Every local deletion leaves a row in `cloud_journal` that names what was deleted
+by stable key: `root.trash` for a move into or out of the Trash, `root.permanent_delete` with each
+root's key and the content hashes of its files, and `tag.delete`, `folder.delete` and
+`smart_folder.delete` with the stable keys. Undo and redo write the same rows for what they move
+or delete. A sync turns the rows into records (`Library::outgoing_deletions`), leaves out a
+deletion that was undone since, and writes them as the device's next deletion file. The files of a
+device are numbered from 1 without a gap and are never changed. A file is zstd-compressed lines of
+JSON: a header with the library, the device, the number and the SHA-256 of the rest, and one
+record per line.
+
+A device reads the files of the other devices in the order of their numbers, at every sync and
+every 30 seconds while the library is idle (`cloud::receive_library`). `cloud_device_frontier`
+holds the number of the last file of each device that the library holds. One file is applied in
+one publication (`Library::apply_synced_deletions` in `picto-library/src/mutation/synced.rs`),
+through the delete code of each aggregate, with no history entry. The rules:
+
+- An item record changes the local item with the same stable key only when every file that the
+  item holds locally is among the record's files. Stable keys of imports are made from the task
+  number and the path, so two devices can give one key to different files.
+- A permanent deletion deletes the item whatever its local status is, unless the item was imported
+  locally after the deletion was made.
+- Of two moves of an item into or out of the Trash, the later one wins. `cloud_tombstone` holds
+  the time and the device of the last synced move per item, and the library's revision at which it
+  was stored, under the object kind `lifecycle`. A move that the user makes after the library
+  stored another device's move gets a later time than that move, whatever the two clocks say:
+  its journal row has a greater revision than the stored move, and no clock is asked which of the
+  two came first.
+- A folder or a smart folder is deleted only when every folder below it locally is deleted by the
+  same file.
+- Before the first waiting file is applied, every waiting file is read and checked against its
+  header. If one is damaged, none is applied and the sync state becomes `error` with a message that
+  names the file. A file that has not arrived holds back the later files of its device, and the
+  state's message says that a file is awaited.
+
+The originals of a permanently deleted item are removed from the cloud folder by the device that
+made the deletion, after the "Keep deleted files" time (`purge_expired_cloud_blobs`). A device
+that applies the deletion does not queue that removal.
+
+**Removing the cloud data.** `cloud.data.delete` (Delete Cloud Data… in the Library Manager)
+removes the library's folder from the cloud folder and then switches sync off
+(`DirectoryProvider::remove_library`). It removes `library.json` first, and after it only files
+whose name and place are those of a file that the sync writes. A file of any other name stays, and
+so does every folder that still holds something. A sync, the removal and the check for deletion
+files hold one lock, so the data is not removed while a sync writes into it.
+
+A device whose library has synced with the folder before and no longer finds `library.json` there
+treats the cloud data as removed: it switches its sync off, leaves the message "The cloud data of
+this library was deleted. …" in `cloud_state`, writes nothing into the cloud folder and changes
+nothing else (`cloud::stop_if_cloud_data_removed`). Connecting a library to a cloud folder clears
+the time of the last sync and the positions in `cloud_device_frontier`, so the library then treats
+the folder's cloud data as new.
+
+**Compatibility.** The schema is unchanged. Snapshots, originals and `library.json` have the
+format that Picto 0.6.22 writes, and data that 0.6.22 wrote is read as before. A device that runs
+0.6.22 ignores the folder `deletions/`: it neither sends nor applies deletions, and after the
+cloud data was removed it writes a new snapshot into the folder at its next sync.

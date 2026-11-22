@@ -1,4 +1,25 @@
-//! Low-priority schema-1 cloud snapshot configuration and publication.
+//! Cloud sync. A library writes its data into the folder of a Google Drive
+//! or Dropbox desktop app, below `picto/<library id>/`:
+//!
+//! - `library.json`, which names the library. It is written once.
+//! - `blobs/f/`, the original files, each under its content hash.
+//! - `snapshots/`, compressed copies of the whole database, each with a
+//!   manifest (`snapshot.rs`). A device writes a new one when the library
+//!   has changed and has been idle for 30 seconds.
+//! - `deletions/<device id>/`, the deletions that the user made on that
+//!   device (`deletions.rs`).
+//!
+//! Another device gets the library by taking the newest snapshot as its
+//! database (Open from Cloud…) and copying the originals. After that, the
+//! only thing that one device takes over from another by itself is a
+//! deletion: an item that was moved to the Trash, restored or deleted
+//! permanently, and a deleted tag, folder or smart folder. An item that is
+//! added or edited on one device reaches another device only when a
+//! snapshot is restored there.
+//!
+//! This file holds the configuration and the state of the sync
+//! (`cloud_state`), the commands that switch it on and off, and the removal
+//! of a library's cloud data.
 
 use std::collections::BTreeMap;
 
@@ -9,10 +30,26 @@ use ts_rs::TS;
 
 use crate::library_application::LibraryApplication;
 
+pub mod deletions;
 pub mod provider;
 pub mod snapshot;
 
 pub const CLOUD_SCHEMA_GENERATION: i64 = 1;
+
+/// The message that a library shows after it has found that its cloud data
+/// is gone and has switched its sync off.
+pub const CLOUD_DATA_REMOVED: &str = "The cloud data of this library was deleted. \
+    Cloud sync is now off on this device. Nothing was deleted from this library.";
+
+/// The message that a library shows while a deletion file of another device
+/// is expected and cannot be read yet.
+pub(crate) const WAITING_FOR_DELETIONS: &str =
+    "Waiting for a deletion file from another device to arrive in the cloud folder.";
+
+/// Held by everything that reads or writes a library's cloud data: a sync,
+/// the check for deletion files, and the removal of the cloud data. So the
+/// cloud data is never removed while a sync writes into it.
+static SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS,
@@ -167,6 +204,24 @@ pub fn configure_library(
             ["cloud".to_string(), "tasks".to_string()],
             [],
             |transaction, _| {
+                let connected = transaction.query_row(
+                    "SELECT provider IS ?1 AND remote_root IS ?2
+                     FROM cloud_state WHERE singleton = 1",
+                    params![input.provider, root_path],
+                    |row| row.get::<_, bool>(0),
+                )?;
+                if !connected {
+                    // The library starts to sync with this folder. What it
+                    // knew about the cloud data it synced with before does
+                    // not hold here: the time of the last sync, and the
+                    // position in every device's deletion files.
+                    transaction.execute(
+                        "UPDATE cloud_state SET last_sync_at = NULL, last_snapshot_at = NULL
+                         WHERE singleton = 1",
+                        [],
+                    )?;
+                    picto_library::reset_synced_deletions(transaction)?;
+                }
                 let changed = transaction.execute(
                     "UPDATE cloud_state
                      SET provider = ?1, account_label = ?2, remote_root = ?3,
@@ -177,7 +232,7 @@ pub fn configure_library(
                             OR state != 'idle' OR phase != 'idle' OR message != '')",
                     params![input.provider, input.account_label, root_path],
                 )?;
-                Ok((changed != 0).then_some(()))
+                Ok((changed != 0 || !connected).then_some(()))
             },
         )
         .map_err(|error| error.to_string())?;
@@ -413,8 +468,19 @@ pub fn set_paused_library(
     cloud_receipt_or_current(application, published)
 }
 
+/// Switches cloud sync off for the library on this device (Stop Syncing).
+/// The library and its cloud data stay as they are.
 pub fn disable_library(
     application: &LibraryApplication,
+) -> Result<picto_library::MutationReceipt, String> {
+    disable_with_message(application, "")
+}
+
+/// Switches cloud sync off and leaves `message` as the sync's message, which
+/// the app shows where it shows the sync state.
+fn disable_with_message(
+    application: &LibraryApplication,
+    message: &str,
 ) -> Result<picto_library::MutationReceipt, String> {
     let published = application
         .library()
@@ -428,21 +494,145 @@ pub fn disable_library(
                      SET provider = NULL, account_label = NULL, remote_root = NULL,
                          paused = 0, state = 'disabled', phase = 'idle',
                          blocking = 0, completed_units = 0, total_units = NULL,
-                         message = '', pending_blobs = 0, missing_blobs = 0
+                         message = ?1, pending_blobs = 0, missing_blobs = 0
                      WHERE singleton = 1
                        AND (provider IS NOT NULL OR account_label IS NOT NULL
                             OR remote_root IS NOT NULL OR paused != 0
                             OR state != 'disabled' OR phase != 'idle'
                             OR blocking != 0 OR completed_units != 0
-                            OR total_units IS NOT NULL OR message != ''
+                            OR total_units IS NOT NULL OR message != ?1
                             OR pending_blobs != 0 OR missing_blobs != 0)",
-                    [],
+                    [message],
                 )?;
                 Ok((changed != 0).then_some(()))
             },
         )
         .map_err(|error| error.to_string())?;
     cloud_receipt_or_current(application, published)
+}
+
+/// Returns whether the library's cloud data is gone: the folder of the
+/// provider is there, the library has synced with it before, and its
+/// `library.json` is no longer in it. A library that has not synced with the
+/// folder yet has no cloud data to lose; its first sync writes it.
+async fn cloud_data_removed(
+    application: &LibraryApplication,
+    provider: &dyn provider::CloudProvider,
+    library_id: &str,
+) -> Result<bool, String> {
+    if !provider.connectivity().await? {
+        return Err("Cloud sync folder is unavailable".to_string());
+    }
+    if provider
+        .exists(&format!("picto/{library_id}/library.json"))
+        .await?
+    {
+        return Ok(false);
+    }
+    application
+        .library()
+        .auxiliary_read(picto_library::database::WorkPriority::Cloud, |connection| {
+            Ok(connection.query_row(
+                "SELECT last_sync_at IS NOT NULL FROM cloud_state WHERE singleton = 1",
+                [],
+                |row| row.get::<_, bool>(0),
+            )?)
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// Stops a sync that finds the library's cloud data gone: it switches cloud
+/// sync off on this device, leaves [`CLOUD_DATA_REMOVED`] as the message,
+/// and returns that message as the error. It writes nothing into the cloud
+/// folder and changes nothing else in the library.
+pub(crate) async fn stop_if_cloud_data_removed(
+    application: &LibraryApplication,
+    provider: &dyn provider::CloudProvider,
+    library_id: &str,
+) -> Result<(), String> {
+    if !cloud_data_removed(application, provider, library_id).await? {
+        return Ok(());
+    }
+    disable_with_message(application, CLOUD_DATA_REMOVED)?;
+    Err(CLOUD_DATA_REMOVED.to_string())
+}
+
+/// Does Delete Cloud Data…: removes the library's data from the cloud folder
+/// (`DirectoryProvider::remove_library`) and then switches cloud sync off on
+/// this device. The library on this device keeps every item and file. It
+/// waits for a running sync to finish first.
+pub async fn delete_cloud_data_library(
+    application: &LibraryApplication,
+) -> Result<provider::CloudDataRemoval, String> {
+    let _running = SYNC.lock().await;
+    let provider = directory_provider_library(application)?;
+    let library_id = configuration_library(application)?.library_id;
+    let removal = tokio::task::spawn_blocking(move || provider.remove_library(&library_id))
+        .await
+        .map_err(|error| format!("Cloud data removal stopped: {error}"))??;
+    disable_library(application)?;
+    Ok(removal)
+}
+
+/// Returns whether the worker should look for deletion files of other
+/// devices now: cloud sync is on, not paused, and no sync runs or failed.
+pub fn receive_due_library(application: &LibraryApplication) -> Result<bool, String> {
+    application
+        .library()
+        .auxiliary_read(picto_library::database::WorkPriority::Cloud, |connection| {
+            Ok(connection.query_row(
+                "SELECT provider IS NOT NULL AND paused = 0 AND state = 'idle'
+                 FROM cloud_state WHERE singleton = 1",
+                [],
+                |row| row.get::<_, bool>(0),
+            )?)
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// Looks for deletion files of other devices in the cloud folder and
+/// applies them. The worker calls it between two snapshots, so that a
+/// deletion made on another device arrives while this library is idle.
+/// While files are applied the sync state is `reconciling`. A damaged file
+/// leaves the state `error` with a message that names it.
+pub async fn receive_library(
+    application: &LibraryApplication,
+    provider: &dyn provider::CloudProvider,
+) -> Result<deletions::Received, String> {
+    let _running = SYNC.lock().await;
+    let library_id = configuration_library(application)?.library_id;
+    stop_if_cloud_data_removed(application, provider, &library_id).await?;
+    let (waiting, gap) = deletions::waiting_files(application, provider, &library_id).await?;
+    if waiting.is_empty() {
+        snapshot::settle_notice(application, if gap { WAITING_FOR_DELETIONS } else { "" })?;
+        return Ok(deletions::Received {
+            files: 0,
+            incomplete: gap,
+        });
+    }
+    snapshot::set_sync_state(
+        application,
+        "reconciling",
+        "deletions",
+        "Applying deletions from another device",
+    )?;
+    match deletions::apply_files(application, provider, &library_id, waiting, gap).await {
+        Ok(received) => {
+            snapshot::finish_sync_state(
+                application,
+                if received.incomplete {
+                    WAITING_FOR_DELETIONS
+                } else {
+                    ""
+                },
+            )?;
+            Ok(received)
+        }
+        Err(error) => {
+            let _ = snapshot::set_sync_state(application, "error", "idle", &error);
+            Err(error)
+        }
+    }
 }
 
 fn cloud_receipt_or_current(
@@ -489,6 +679,9 @@ fn seed_local_originals_library(application: &LibraryApplication) -> Result<(), 
 fn json_sql_error(error: serde_json::Error) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
 }
+
+#[cfg(test)]
+mod two_device_tests;
 
 #[cfg(test)]
 mod tests {
@@ -661,7 +854,12 @@ mod tests {
         assert_eq!(retention["full_media_history"], false);
     }
 
-    fn image_job(directory: &std::path::Path, index: u8) -> picto_library::PreparedIngestJob {
+    /// Returns an import job for a PNG that it writes into `directory`. The
+    /// picture's colour, and so its content hash, depends on `index`.
+    pub(super) fn image_job(
+        directory: &std::path::Path,
+        index: u8,
+    ) -> picto_library::PreparedIngestJob {
         use sha2::Digest;
         let path = directory.join(format!("cloud-{index}.png"));
         image::RgbaImage::from_pixel(8, 8, image::Rgba([index, 20, 30, 255]))

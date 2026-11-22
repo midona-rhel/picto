@@ -149,7 +149,8 @@ impl Cloud {
 pub enum Popup {
     /// Changes from the cloud are being applied.
     Found,
-    /// The sync failed. The text is the core's error message.
+    /// The sync failed, or it switched itself off. The text is the core's
+    /// message.
     Attention(String),
     /// A sync that ran for at least five seconds has finished.
     Complete,
@@ -195,8 +196,10 @@ fn view_progress(cx: &mut App) {
 /// Returns the notifications for the change from `before` to `next`. A sync
 /// that starts is announced, unless it is a blocking sync: that one restores
 /// the media of a joined library and has its own dialog. An error is announced
-/// when the state becomes `error` or the error message changes. A sync that
-/// ran for at least five seconds is announced when it has finished.
+/// when the state becomes `error` or the error message changes. So is a sync
+/// that switched itself off and left a message, which it does when the
+/// library's cloud data is gone. A sync that ran for at least five seconds is
+/// announced when it has finished.
 pub fn settle(
     before: &Status,
     next: &Status,
@@ -210,6 +213,12 @@ pub fn settle(
     if next.state == "error" && (before.state != "error" || before.message != next.message) {
         return vec![Popup::Attention(next.message.clone())];
     }
+    if next.state == "disabled"
+        && !next.message.is_empty()
+        && (before.state != "disabled" || before.message != next.message)
+    {
+        return vec![Popup::Attention(next.message.clone())];
+    }
     if before.state == "reconciling" && next.state == "idle" {
         let elapsed = started.take().map(|since| now.duration_since(since));
         if elapsed.is_some_and(|elapsed| elapsed >= Duration::from_secs(5)) {
@@ -217,4 +226,42 @@ pub fn settle(
         }
     }
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Popup, Status, settle};
+    use std::time::Instant;
+
+    fn status(state: &str, message: &str) -> Status {
+        Status {
+            state: state.to_owned(),
+            phase: "idle".to_owned(),
+            blocking: false,
+            completed_units: 0,
+            total_units: None,
+            message: message.to_owned(),
+            last_sync_at: None,
+            pending_mutations: 0,
+            pending_blobs: 0,
+            missing_blobs: 0,
+        }
+    }
+
+    /// A sync that switches itself off, as it does when the library's cloud
+    /// data is gone, is announced once with the core's message. Stop Syncing
+    /// leaves no message and is not announced.
+    #[test]
+    fn a_sync_that_switched_itself_off_is_announced_once() {
+        let message = picto_core::cloud::CLOUD_DATA_REMOVED;
+        let mut started = None;
+        let now = Instant::now();
+        let off = status("disabled", message);
+        assert_eq!(
+            settle(&status("idle", ""), &off, &mut started, now),
+            [Popup::Attention(message.to_owned())]
+        );
+        assert!(settle(&off, &off, &mut started, now).is_empty());
+        assert!(settle(&status("idle", ""), &status("disabled", ""), &mut started, now).is_empty());
+    }
 }

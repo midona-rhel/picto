@@ -326,9 +326,10 @@ fn start_fts_worker(
                 Ok(Err(error)) => tracing::warn!(%error, "Canonical FTS settlement failed"),
                 Err(error) => tracing::warn!(%error, "Canonical FTS worker stopped"),
             }
-            // Text only goes dirty through a published write. Batches stay
-            // small so a user edit never waits long for the writer, and follow
-            // each other quickly so a large import becomes searchable soon.
+            // The search text of a root changes only through a published
+            // write. A batch is small, so that an edit by the user does not
+            // wait long for the writer, and the batches follow each other
+            // quickly, so that a large import can be searched soon.
             if !wake.next(&cancel, Duration::from_millis(25), Duration::from_secs(30)).await {
                 return;
             }
@@ -355,8 +356,9 @@ fn start_checkpoint_worker(
                     let result = tokio::task::spawn_blocking(move || {
                         if projection {
                             library.write_projection_checkpoint()?;
-                            // Without a cloud provider no snapshot will ever
-                            // consume the change journal; keep it from growing.
+                            // While the library does not sync, no snapshot
+                            // removes the rows of the change journal, so
+                            // they are removed here.
                             library.database().maintenance_write(
                                 picto_library::database::WorkPriority::Maintenance,
                                 |transaction| {
@@ -449,29 +451,39 @@ fn start_cloud_snapshot_worker(
     heavy_jobs: Arc<Semaphore>,
 ) -> tokio::task::JoinHandle<()> {
     const CLOUD_IDLE_DELAY: Duration = Duration::from_secs(30);
+    // Every sixth tick, which is every 30 seconds, the worker looks for
+    // deletion files of other devices when no snapshot is due.
+    const RECEIVE_EVERY: u32 = 6;
     tokio::spawn(async move {
         if let Err(error) = crate::cloud::recover_interrupted_sync_library(&application) {
             tracing::warn!(%error, "Canonical cloud recovery failed");
         }
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut ticks = 0_u32;
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => return,
                 _ = interval.tick() => {
+                    ticks = ticks.wrapping_add(1);
                     let now_ms = chrono::Utc::now().timestamp_millis();
                     let due = crate::cloud::snapshot_due_library(
                         &application,
                         now_ms,
                         CLOUD_IDLE_DELAY.as_millis() as i64,
                     );
-                    match due {
-                        Ok(false) => continue,
+                    let publish = match due {
+                        Ok(due) => due,
                         Err(error) => {
                             tracing::warn!(%error, "Canonical cloud schedule check failed");
                             continue;
                         }
-                        Ok(true) => {}
+                    };
+                    if !publish
+                        && !(ticks.is_multiple_of(RECEIVE_EVERY)
+                            && crate::cloud::receive_due_library(&application).unwrap_or(false))
+                    {
+                        continue;
                     }
                     let provider = match crate::cloud::directory_provider_library(&application) {
                         Ok(provider) => provider,
@@ -487,8 +499,12 @@ fn start_cloud_snapshot_worker(
                             Err(_) => return,
                         },
                     };
-                    if let Err(error) = crate::cloud::snapshot::publish_library(&application, &provider).await {
-                        tracing::warn!(%error, "Canonical cloud snapshot failed");
+                    if publish {
+                        if let Err(error) = crate::cloud::snapshot::publish_library(&application, &provider).await {
+                            tracing::warn!(%error, "Canonical cloud snapshot failed");
+                        }
+                    } else if let Err(error) = crate::cloud::receive_library(&application, &provider).await {
+                        tracing::warn!(%error, "Canonical cloud deletions were not applied");
                     }
                     drop(permit);
                 }

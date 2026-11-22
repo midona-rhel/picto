@@ -1,8 +1,8 @@
-//! The media library: its database, its queries and its writes.
+//! The media library: its SQLite database, the projections that are built
+//! from it, the queries, the writes and the undo history of a session.
 //!
-//! This crate owns the media roots, their memberships in tags and folders,
-//! the queries, the mutations, the publication of committed changes, and the
-//! session's undo history. It does not depend on the application shell.
+//! The crate does not depend on the application core or on the app. Both
+//! reach a library through [`Library`].
 
 pub mod bitmap;
 mod browsing;
@@ -38,8 +38,9 @@ pub use database::LibraryDatabase;
 pub use error::{LibraryError, Result};
 pub use model::*;
 pub use mutation::{
-    merged_notes, translate_view, Library, MergeTaskInput, SharedFileMerge, MERGE_BACKUP,
-    MERGE_LIBRARY,
+    AppliedDeletions, Library, MergeTaskInput, OutgoingCursor, OutgoingDeletions,
+    ReceivedDeletions, SharedFileMerge, SyncedDeletion, MERGE_BACKUP, MERGE_LIBRARY,
+    merged_notes, reset_synced_deletions, translate_view,
 };
 
 /// Returns the name that is kept when two items become one: `incoming` when

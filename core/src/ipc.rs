@@ -1,9 +1,9 @@
-//! The commands of the core: each has a name and takes its arguments as
-//! JSON.
+//! The core's commands. A command has a name and arguments that are written
+//! as JSON.
 //!
-//! This module decides nothing about the product's behavior. For one
-//! command it reads the arguments, calls the one function that does the
-//! work, and returns that function's answer as JSON.
+//! This file reads the arguments of one command, calls the one function of
+//! the library's application that carries the command out, and returns that
+//! function's answer as JSON. It holds no behaviour of its own.
 
 use chrono::Utc;
 use rusqlite::OptionalExtension;
@@ -25,10 +25,10 @@ fn gallery_start_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-/// Answers the commands that need no waiting. [`dispatch_library_async`]
-/// answers the commands that wait for work and passes every other command
-/// to this function. This function returns `None` for a command that it
-/// does not know.
+/// Carries out the command `command` on `application` and returns its answer
+/// as JSON. Returns `None` for a command that this function does not know;
+/// [`dispatch_library_async`] carries out the commands that have to wait for
+/// something.
 pub fn dispatch_library(
     application: &crate::library_application::LibraryApplication,
     command: &str,
@@ -607,6 +607,7 @@ pub async fn dispatch_library_async(
             let provider = crate::cloud::directory_provider_library(application)?;
             read(crate::cloud::snapshot::list_remote_for_library(application, &provider).await?)
         }
+        "cloud.data.delete" => read(crate::cloud::delete_cloud_data_library(application).await?),
         "diagnostics.snapshot" => read(crate::diagnostics::snapshot_library(application)?),
         "ai.status" => read(crate::ai_runtime::model_status_library(application).await?),
         "ai.models.download" => {

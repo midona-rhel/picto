@@ -26,6 +26,9 @@ pub trait CloudProvider: Send + Sync {
     fn connectivity(&self) -> ProviderFuture<'_, bool>;
     fn exists(&self, path: &str) -> ProviderFuture<'_, bool>;
     fn list(&self, prefix: &str) -> ProviderFuture<'_, Vec<RemoteObject>>;
+    /// Returns the names of the folders directly inside `prefix`, without
+    /// reading what they hold. A `prefix` that does not exist has none.
+    fn children(&self, prefix: &str) -> ProviderFuture<'_, Vec<String>>;
     fn download(&self, path: &str) -> ProviderFuture<'_, Vec<u8>>;
     fn download_file(
         &self,
@@ -57,11 +60,47 @@ pub trait CloudProvider: Send + Sync {
 
 pub type ProviderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>;
 
-/// Filesystem transport backed by an installed Drive or Dropbox desktop app.
-/// Picto owns only the checked artifacts inside this directory; the desktop
-/// client owns authentication, networking, and cross-device transfer.
+/// The transport of cloud sync: a folder that an installed Google Drive or
+/// Dropbox desktop app syncs. Picto reads and writes only its own files
+/// below `picto/` in that folder. The desktop app signs in, uses the network
+/// and carries the files to the other devices.
 pub struct DirectoryProvider {
     root: PathBuf,
+}
+
+/// What [`DirectoryProvider::remove_library`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudDataRemoval {
+    /// The number of files that were removed.
+    pub removed_files: u64,
+    /// Whether the library's folder is gone from the cloud folder.
+    pub folder_removed: bool,
+    /// The number of entries that were left: files and folders that the
+    /// sync did not write, and files of the sync that could not be removed.
+    pub kept_entries: u64,
+    /// The first of those entries, as paths inside the library's folder.
+    pub kept: Vec<String>,
+}
+
+impl CloudDataRemoval {
+    /// At most this many kept entries are named in `kept`.
+    const NAMED: usize = 12;
+
+    fn keep(&mut self, path: &str) {
+        self.kept_entries += 1;
+        if self.kept.len() < Self::NAMED {
+            self.kept.push(path.to_owned());
+        }
+    }
+}
+
+/// Which entries of one folder of a library's cloud data the sync wrote.
+enum Known {
+    /// Files whose names the function accepts.
+    Files(fn(&str) -> bool),
+    /// Folders whose names the function accepts. The entries of such a
+    /// folder are checked against the next level.
+    Folders(fn(&str) -> bool),
 }
 
 impl DirectoryProvider {
@@ -140,8 +179,98 @@ impl DirectoryProvider {
         Ok(path)
     }
 
-    /// Finds only immediate Picto library manifests. Blob and epoch trees may
-    /// contain millions of files and must never be traversed for discovery.
+    /// Removes the cloud data of the library `library_id`: the files that the
+    /// sync wrote below `picto/<library id>/`, and each folder that is empty
+    /// afterwards.
+    ///
+    /// The folder is touched only when it is a real folder (not a link) and
+    /// its `library.json`, if it has one, names this library. A file is
+    /// removed only when its name and its place are those of a file that
+    /// the sync writes: `library.json`, a snapshot and its manifest in
+    /// `snapshots/`, an original in `blobs/f/<aa>/<bb>/`, a deletion file in
+    /// `deletions/<device id>/`, and a file that an interrupted upload left
+    /// beside one of them. Everything else is left where it is and counted in
+    /// the result, and a folder that still holds something is not removed.
+    /// Links are never followed and never removed.
+    ///
+    /// `library.json` is removed first, so that another device sees at once
+    /// that the cloud data is being removed.
+    pub fn remove_library(&self, library_id: &str) -> Result<CloudDataRemoval, String> {
+        if uuid::Uuid::parse_str(library_id).is_err() {
+            return Err("The library has no valid cloud identity".to_string());
+        }
+        let folder = self.resolve(&format!("picto/{library_id}"))?;
+        let mut removal = CloudDataRemoval::default();
+        match std::fs::symlink_metadata(&folder) {
+            Ok(metadata) if metadata.file_type().is_dir() => {}
+            Ok(_) => return Err("The library's cloud folder is not a folder".to_string()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                removal.folder_removed = true;
+                return Ok(removal);
+            }
+            Err(error) => return Err(format!("Failed to inspect the cloud folder: {error}")),
+        }
+        let manifest = folder.join("library.json");
+        match std::fs::symlink_metadata(&manifest) {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                let named = std::fs::read(&manifest)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                    .and_then(|value| value.get("library_id")?.as_str().map(str::to_owned));
+                if named.as_deref() != Some(library_id) {
+                    return Err(
+                        "The cloud folder does not hold this library's data; nothing was removed"
+                            .to_string(),
+                    );
+                }
+                remove_file(&manifest, "library.json", &mut removal);
+            }
+            Ok(_) => removal.keep("library.json"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Failed to inspect the cloud folder: {error}")),
+        }
+        let trees: [(&str, &[Known]); 3] = [
+            ("snapshots", &[Known::Files(is_snapshot_file)]),
+            (
+                "deletions",
+                &[Known::Folders(is_uuid), Known::Files(is_deletion_file)],
+            ),
+            (
+                "blobs",
+                &[
+                    Known::Folders(|name| name == "f"),
+                    Known::Folders(is_hex_pair),
+                    Known::Folders(is_hex_pair),
+                    Known::Files(is_blob_file),
+                ],
+            ),
+        ];
+        for entry in std::fs::read_dir(&folder)
+            .map_err(|error| format!("Failed to list the cloud folder: {error}"))?
+        {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let kind = entry.file_type().map_err(|error| error.to_string())?;
+            let tree = trees.iter().find(|(known, _)| *known == name);
+            match tree {
+                Some((_, levels)) if kind.is_dir() => {
+                    remove_known(&entry.path(), levels, &name, &mut removal)?;
+                }
+                _ if kind.is_file() && is_upload_remnant(&name) => {
+                    remove_file(&entry.path(), &name, &mut removal);
+                }
+                // `library.json` was handled above.
+                _ if name == "library.json" => {}
+                _ => removal.keep(&name),
+            }
+        }
+        removal.folder_removed = std::fs::remove_dir(&folder).is_ok();
+        Ok(removal)
+    }
+
+    /// Returns the `library.json` of every library folder directly below
+    /// `picto/`. It does not look into the folders below a library's folder,
+    /// which can hold millions of files.
     pub fn library_manifests(&self) -> Result<Vec<PathBuf>, String> {
         let picto_root = self.resolve("picto")?;
         let entries = match std::fs::read_dir(&picto_root) {
@@ -175,6 +304,114 @@ impl DirectoryProvider {
         std::fs::read(path)
             .map_err(|error| format!("Failed to read cloud object {}: {error}", path.display()))
     }
+}
+
+/// Removes the entries of `folder` that `levels[0]` accepts, and then the
+/// folder itself when nothing is left in it. `relative` is the folder's path
+/// inside the library's cloud folder. An entry that is not accepted, a link,
+/// and a file that cannot be removed are counted in `removal` and stay.
+fn remove_known(
+    folder: &Path,
+    levels: &[Known],
+    relative: &str,
+    removal: &mut CloudDataRemoval,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(folder)
+        .map_err(|error| format!("Failed to list the cloud folder: {error}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let kind = entry.file_type().map_err(|error| error.to_string())?;
+        let path = format!("{relative}/{name}");
+        match levels.first() {
+            Some(Known::Folders(accepts)) if kind.is_dir() && accepts(&name) => {
+                remove_known(&entry.path(), &levels[1..], &path, removal)?;
+            }
+            Some(Known::Files(accepts))
+                if kind.is_file() && (accepts(&name) || is_upload_remnant(&name)) =>
+            {
+                remove_file(&entry.path(), &path, removal);
+            }
+            _ => removal.keep(&path),
+        }
+    }
+    // `remove_dir` removes an empty folder only, so a folder that still
+    // holds a kept entry stays.
+    let _ = std::fs::remove_dir(folder);
+    Ok(())
+}
+
+/// Removes one file of the sync. A file that cannot be removed, for example
+/// because the provider's desktop app holds it open, is counted as kept.
+fn remove_file(path: &Path, relative: &str, removal: &mut CloudDataRemoval) {
+    match std::fs::remove_file(path) {
+        Ok(()) => removal.removed_files += 1,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => removal.keep(relative),
+    }
+}
+
+fn is_uuid(name: &str) -> bool {
+    uuid::Uuid::parse_str(name).is_ok()
+}
+
+fn is_hex_pair(name: &str) -> bool {
+    name.len() == 2 && name.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// A snapshot id is the time the snapshot was made, written as
+/// `20261122T101500.123Z`, a hyphen, and a UUID.
+///
+/// The time is checked byte by byte. A name that holds a character of more
+/// than one byte is the name of a file that the sync did not write, and it
+/// must be answered with `false`: cutting such a name as text at a fixed
+/// position can fall inside the character, which stops the program.
+fn is_snapshot_id(name: &str) -> bool {
+    let Some((time, id)) = name.split_once('-') else {
+        return false;
+    };
+    let time = time.as_bytes();
+    let digits = |bytes: &[u8]| bytes.iter().all(u8::is_ascii_digit);
+    time.len() == 20
+        && digits(&time[..8])
+        && time[8] == b'T'
+        && digits(&time[9..15])
+        && time[15] == b'.'
+        && digits(&time[16..19])
+        && time[19] == b'Z'
+        && is_uuid(id)
+}
+
+/// A snapshot's manifest `<snapshot id>.json` or its database
+/// `<snapshot id>.sqlite.zst`.
+fn is_snapshot_file(name: &str) -> bool {
+    name.strip_suffix(".json")
+        .or_else(|| name.strip_suffix(".sqlite.zst"))
+        .is_some_and(is_snapshot_id)
+}
+
+/// A deletion file: ten digits and `.jsonl.zst`.
+fn is_deletion_file(name: &str) -> bool {
+    name.strip_suffix(".jsonl.zst")
+        .is_some_and(|number| number.len() == 10 && number.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// An original: its SHA-256 in hexadecimal, a dot, and its extension.
+fn is_blob_file(name: &str) -> bool {
+    name.split_once('.').is_some_and(|(hash, extension)| {
+        hash.len() == 64
+            && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+            && !extension.is_empty()
+            && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    })
+}
+
+/// A file that `publish_file` writes beside its target while it uploads, and
+/// that stays when the upload is interrupted: the target's name with its
+/// last extension replaced by `picto-uploading-<uuid>`.
+fn is_upload_remnant(name: &str) -> bool {
+    name.rsplit_once(".picto-uploading-")
+        .is_some_and(|(_, id)| is_uuid(id))
 }
 
 /// `CON`, `NUL`, `COM1`… name devices on Windows whatever their extension.
@@ -290,7 +527,10 @@ fn publish_file(
     })
 }
 
-pub fn detect_roots() -> Vec<DetectedProviderRoot> {
+/// Returns the folders that the variables `PICTO_GOOGLE_DRIVE_ROOT` and
+/// `PICTO_DROPBOX_ROOT` name. Each stands in for the folder of that
+/// provider's desktop app.
+fn named_roots() -> Vec<DetectedProviderRoot> {
     let mut roots = Vec::new();
     if let Ok(path) = std::env::var("PICTO_GOOGLE_DRIVE_ROOT") {
         push_provider_directory(
@@ -303,6 +543,11 @@ pub fn detect_roots() -> Vec<DetectedProviderRoot> {
     if let Ok(path) = std::env::var("PICTO_DROPBOX_ROOT") {
         push_provider_directory(&mut roots, "dropbox", "Dropbox", PathBuf::from(path));
     }
+    roots
+}
+
+pub fn detect_roots() -> Vec<DetectedProviderRoot> {
+    let mut roots = named_roots();
     let Some(home) = home_directory() else {
         return roots;
     };
@@ -355,9 +600,14 @@ pub fn detect_roots() -> Vec<DetectedProviderRoot> {
     roots
 }
 
-/// Resolve a user choice to an installed provider root. A writable arbitrary
-/// directory is deliberately not enough: otherwise Picto can claim cloud sync
-/// while writing to a location no provider uploads.
+/// Returns the provider folder that the user's choice `root` is, or an error
+/// when it is not the folder of an installed desktop app of `provider`. A
+/// folder that can be written to is not enough: Picto would then say that a
+/// library syncs while it writes to a folder that no provider uploads.
+///
+/// A folder that `PICTO_GOOGLE_DRIVE_ROOT` or `PICTO_DROPBOX_ROOT` names is
+/// accepted before the installed desktop apps are looked for, so a check
+/// that uses such a stand-in folder does not read the home folder.
 pub fn validate_root(
     provider: &str,
     root: impl Into<PathBuf>,
@@ -367,11 +617,14 @@ pub fn validate_root(
     }
     let selected = root.into();
     let selected_identity = path_identity(&selected);
-    let detected = detect_roots().into_iter().find(|candidate| {
+    let chosen = |candidate: &DetectedProviderRoot| {
         candidate.provider == provider
             && path_identity(Path::new(&candidate.path)) == selected_identity
-    });
-    if let Some(detected) = detected {
+    };
+    if let Some(named) = named_roots().into_iter().find(chosen) {
+        return Ok(named);
+    }
+    if let Some(detected) = detect_roots().into_iter().find(chosen) {
         return Ok(detected);
     }
     #[cfg(target_os = "windows")]
@@ -615,6 +868,28 @@ impl CloudProvider for DirectoryProvider {
         })
     }
 
+    fn children(&self, prefix: &str) -> ProviderFuture<'_, Vec<String>> {
+        let base = self.resolve(prefix);
+        Box::pin(async move {
+            let entries = match std::fs::read_dir(base?) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(Vec::new())
+                }
+                Err(error) => return Err(format!("Failed to list cloud objects: {error}")),
+            };
+            let mut names = Vec::new();
+            for entry in entries {
+                let entry = entry.map_err(|error| error.to_string())?;
+                // A link is not a folder of the sync.
+                if entry.file_type().map_err(|error| error.to_string())?.is_dir() {
+                    names.push(entry.file_name().to_string_lossy().into_owned());
+                }
+            }
+            Ok(names)
+        })
+    }
+
     fn download(&self, path: &str) -> ProviderFuture<'_, Vec<u8>> {
         let resolved = self.resolve(path);
         let path = path.to_string();
@@ -796,6 +1071,44 @@ mod tests {
         assert!(provider.delete("picto/linked/marker.txt").await.is_err());
         assert!(provider.list("picto").await.unwrap().is_empty());
         assert_eq!(std::fs::read(outside.join("marker.txt")).unwrap(), b"outside");
+    }
+
+    /// The names that `remove_library` takes for files of the sync, and
+    /// names that it must leave alone. The last names hold a character of
+    /// more than one byte at each position where the time of a snapshot id
+    /// is cut.
+    #[test]
+    fn only_names_that_the_sync_writes_are_taken_for_its_files() {
+        let id = "20261122T101500.123Z-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11";
+        assert!(is_snapshot_file(&format!("{id}.json")));
+        assert!(is_snapshot_file(&format!("{id}.sqlite.zst")));
+        assert!(is_deletion_file("0000000012.jsonl.zst"));
+        assert!(is_blob_file(&format!("{}.png", "a".repeat(64))));
+        assert!(is_upload_remnant(
+            "x.picto-uploading-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11"
+        ));
+        let uuid = "0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11";
+        for name in [
+            "readme.md".to_owned(),
+            format!("{id}.txt"),
+            format!("2026112２T101500.123Z-{uuid}.json"),
+            format!("202611世T101500.12Z-{uuid}.json"),
+            format!("20261122世1500.123Z-{uuid}.json"),
+            format!("20261122T1015世123Z-{uuid}.json"),
+            format!("20261122T101500.1世-{uuid}.json"),
+            format!("世界世界世界世界世界世界世界-{uuid}.json"),
+            "世界.json".to_owned(),
+            "000000001２.jsonl.zst".to_owned(),
+            format!("{}世.png", "a".repeat(61)),
+        ] {
+            assert!(!is_snapshot_file(&name), "{name}");
+            assert!(!is_deletion_file(&name), "{name}");
+            assert!(!is_blob_file(&name), "{name}");
+            assert!(!is_upload_remnant(&name), "{name}");
+            assert!(!is_hex_pair(&name), "{name}");
+        }
+        assert!(!is_hex_pair("世"));
+        assert!(!is_hex_pair("é"));
     }
 
     #[test]
