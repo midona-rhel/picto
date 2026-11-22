@@ -11,13 +11,15 @@
 //!
 //! The entries are rows of `cloud_tombstone`. `object_kind` and `object_key`
 //! name the key, `mutation_id` holds the state, `hlc_physical_ms` and
-//! `hlc_logical` the clock time, and `device_id` the device. The rows of the
+//! `hlc_logical` the clock time, and `device_id` the device. A `delete`
+//! entry of an item that has a file also holds the content hash of that
+//! file, as `{"file": "<hash>"}` in `causal_frontier_json`. The rows of the
 //! kind `blob` in the same table are the originals that wait to be removed
 //! from the cloud folder; they are not entries.
 //!
 //! | Kind | Key | States |
 //! | --- | --- | --- |
-//! | `item` | stable key of an item or a collection | `delete`: deleted permanently. `add`: the tombstone was removed, by an import of the item, a subscription or an undo. |
+//! | `item` | stable key of an item or a collection | `delete`: deleted permanently; with the content hash of the item's file, and without one for a collection. `add`: the tombstone was removed, by an import of the item, a subscription or an undo. |
 //! | `status` | stable key of an item or a collection | `trash`, `active`, `inbox`: where the last move into or out of the Trash put it. |
 //! | `tag`, `folder`, `smart_folder` | stable key | `delete`, and `add` when the deletion was undone. |
 //!
@@ -32,8 +34,13 @@
 //! to that entry's time. What the user does after a merge is therefore later
 //! than everything that was merged, whatever the device's wall clock says.
 //!
-//! A merged `delete` deletes the item through the existing delete code. Two
-//! things are left alone. An item of which the library holds no entry yet,
+//! A merged `delete` deletes the item through the existing delete code.
+//! Three things are left alone. An item whose file has another content hash
+//! than the entry names is another item under the same stable key: the
+//! stable key of a manual import is made from the number of the import task
+//! and the file's path, and two devices can give the same number and path to
+//! different files. Such an item stays, as if the library did not hold an
+//! item with that key. An item of which the library holds no entry yet,
 //! and which was imported here after the deletion was made, was added again:
 //! it stays and gets an `add` entry. That is the rule of an import, which
 //! removes a tombstone that is earlier than the import. A folder or
@@ -131,6 +138,12 @@ pub struct SharedEntry {
     /// that orders the entries of one millisecond.
     pub at_ms: i64,
     pub logical: i64,
+    /// The content hash of the deleted item's file. Only a `delete` entry of
+    /// the kind `item` has one, and only for an item that has a file: a
+    /// collection has none. A device that merges the entry deletes its item
+    /// with the same stable key only when that item's file has this hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 /// The state of this library's exchange of entries.
@@ -229,6 +242,7 @@ pub(super) fn record_entries(
                  hlc_physical_ms = excluded.hlc_physical_ms,
                  hlc_logical = excluded.hlc_logical,
                  device_id = excluded.device_id,
+                 causal_frontier_json = excluded.causal_frontier_json,
                  deleted_at = excluded.deleted_at"
         ),
         rusqlite::params![
@@ -259,7 +273,7 @@ pub(super) fn record_added_again(
             "UPDATE cloud_tombstone SET
                  mutation_id = 'add', hlc_physical_ms = ?2, hlc_logical = ?3,
                  device_id = (SELECT device_id FROM cloud_state WHERE singleton = 1),
-                 deleted_at = {NOW_SQL}
+                 causal_frontier_json = '{{}}', deleted_at = {NOW_SQL}
              WHERE object_kind = ?1 AND mutation_id = 'delete'
                AND object_key IN (SELECT value FROM json_each(?4))"
         ),
@@ -297,7 +311,8 @@ pub fn remove_item_tombstones(
 /// Called by `delete_roots` while the ids of the roots and of their media
 /// are staged in `temp.delete_root` and `temp.delete_item` and their rows
 /// still exist. For a deletion that the user made it records a `delete`
-/// entry for every item that gets a tombstone. For every deletion it drops
+/// entry for every item that gets a tombstone, with the content hash of the
+/// item's file when the item has one. For every deletion it drops
 /// the `status` entries of the deleted roots, which no longer mean anything.
 pub(super) fn record_deleted_roots(
     transaction: &rusqlite::Transaction<'_>,
@@ -321,15 +336,20 @@ pub(super) fn record_deleted_roots(
                   device_id, causal_frontier_json, deleted_at, purge_after)
              SELECT 'item', item.stable_key, 'delete', ?1, ?2,
                     (SELECT device_id FROM cloud_state WHERE singleton = 1),
-                    '{{}}', {NOW_SQL}, NULL
+                    CASE WHEN file.content_hash IS NULL THEN '{{}}'
+                         ELSE json_object('file', file.content_hash) END,
+                    {NOW_SQL}, NULL
              FROM temp.delete_item selected
              CROSS JOIN library_item item ON item.local_id = selected.local_id
+             LEFT JOIN media_item media ON media.media_id = item.local_id
+             LEFT JOIN media_file file ON file.file_id = media.file_id
              WHERE true
              ON CONFLICT(object_kind, object_key) DO UPDATE SET
                  mutation_id = excluded.mutation_id,
                  hlc_physical_ms = excluded.hlc_physical_ms,
                  hlc_logical = excluded.hlc_logical,
                  device_id = excluded.device_id,
+                 causal_frontier_json = excluded.causal_frontier_json,
                  deleted_at = excluded.deleted_at"
         ),
         [at_ms, logical],
@@ -484,7 +504,8 @@ impl Library {
         self.database.read(WorkPriority::Cloud, |connection| {
             let (at_ms, logical) = later_than.unwrap_or((i64::MIN, 0));
             let mut statement = connection.prepare(
-                "SELECT object_kind, object_key, mutation_id, hlc_physical_ms, hlc_logical
+                "SELECT object_kind, object_key, mutation_id, hlc_physical_ms, hlc_logical,
+                        json_extract(causal_frontier_json, '$.file')
                  FROM cloud_tombstone
                  WHERE object_kind != 'blob'
                    AND device_id = (SELECT device_id FROM cloud_state WHERE singleton = 1)
@@ -502,6 +523,7 @@ impl Library {
                         state,
                         at_ms: row.get(3)?,
                         logical: row.get(4)?,
+                        file: row.get(5)?,
                     });
                 }
             }
@@ -541,7 +563,11 @@ impl Library {
     ///
     /// - `item`, `delete`: the item gets its tombstone. If it is an item or
     ///   a collection of this library, it is deleted, whatever its status
-    ///   is. One case is different: the library holds no entry for the item,
+    ///   is. An entry that names the content hash of a file deletes the
+    ///   item only when the item's file here has that hash. An item with
+    ///   another file is another item under the same stable key: it stays,
+    ///   and the entry is handled as if the library held no item with that
+    ///   key. One more case is different: the library holds no entry for the item,
     ///   and the item was imported here after the time of the deletion. Then
     ///   the item stays, gets no tombstone, and gets an `add` entry of this
     ///   device.
@@ -606,6 +632,21 @@ impl Library {
                     .map(|entry| entry.key.as_str())
                     .collect::<BTreeSet<_>>();
                 let roots = local_roots(transaction, &root_keys)?;
+                // The keys under which this library holds an item with
+                // another file than a `delete` entry names. Such an item is
+                // not the deleted one, and the entry does not touch it.
+                let other_file = winners
+                    .iter()
+                    .filter(|entry| entry.kind == EntryKind::Item)
+                    .filter(|entry| {
+                        entry.file.as_ref().is_some_and(|named| {
+                            roots
+                                .get(entry.key.as_str())
+                                .is_some_and(|(_, _, held)| held.as_ref() != Some(named))
+                        })
+                    })
+                    .map(|entry| entry.key.as_str())
+                    .collect::<HashSet<_>>();
 
                 // An item of which the library holds no entry, and which was
                 // imported here after it was deleted elsewhere, was added
@@ -616,9 +657,10 @@ impl Library {
                     let later_import = entry.kind == EntryKind::Item
                         && entry.state == EntryState::Delete
                         && !held.contains_key(&(EntryKind::Item, entry.key.as_str()))
+                        && !other_file.contains(entry.key.as_str())
                         && roots
                             .get(entry.key.as_str())
-                            .is_some_and(|(_, imported_at_ms)| *imported_at_ms > entry.at_ms);
+                            .is_some_and(|(_, imported_at_ms, _)| *imported_at_ms > entry.at_ms);
                     if later_import {
                         added_again.push(entry.key.clone());
                     }
@@ -644,7 +686,7 @@ impl Library {
                             entry.kind == EntryKind::Status
                                 && entry.state.lifecycle() == Some(destination)
                         })
-                        .filter_map(|entry| roots.get(entry.key.as_str()).map(|(root, _)| *root))
+                        .filter_map(|entry| roots.get(entry.key.as_str()).map(|(root, _, _)| *root))
                         .collect::<RoaringBitmap>();
                     if destination == Lifecycle::Trash {
                         moved -= next.lifecycle(Lifecycle::Trash);
@@ -683,7 +725,8 @@ impl Library {
                     .collect::<Vec<_>>();
                 let deleted = deleted_items
                     .iter()
-                    .filter_map(|(key, _)| roots.get(key).map(|(root, _)| *root))
+                    .filter(|(key, _)| !other_file.contains(key))
+                    .filter_map(|(key, _)| roots.get(key).map(|(root, _, _)| *root))
                     .collect::<RoaringBitmap>();
                 if !deleted.is_empty() {
                     let (after, _, receipt) = delete_roots(
@@ -917,7 +960,8 @@ fn store_entries(
                 entry.key,
                 entry.state.as_str(),
                 entry.at_ms,
-                entry.logical
+                entry.logical,
+                entry.file
             ])
         })
         .collect::<Vec<_>>();
@@ -928,13 +972,17 @@ fn store_entries(
                   device_id, causal_frontier_json, deleted_at, purge_after)
              SELECT json_extract(entry.value, '$[0]'), json_extract(entry.value, '$[1]'),
                     json_extract(entry.value, '$[2]'), json_extract(entry.value, '$[3]'),
-                    json_extract(entry.value, '$[4]'), ?2, '{{}}', {NOW_SQL}, NULL
+                    json_extract(entry.value, '$[4]'), ?2,
+                    CASE WHEN json_extract(entry.value, '$[5]') IS NULL THEN '{{}}'
+                         ELSE json_object('file', json_extract(entry.value, '$[5]')) END,
+                    {NOW_SQL}, NULL
              FROM json_each(?1) entry WHERE true
              ON CONFLICT(object_kind, object_key) DO UPDATE SET
                  mutation_id = excluded.mutation_id,
                  hlc_physical_ms = excluded.hlc_physical_ms,
                  hlc_logical = excluded.hlc_logical,
                  device_id = excluded.device_id,
+                 causal_frontier_json = excluded.causal_frontier_json,
                  deleted_at = excluded.deleted_at"
         ),
         rusqlite::params![serde_json::to_string(&rows)?, device_id],
@@ -942,23 +990,33 @@ fn store_entries(
     Ok(())
 }
 
+/// A root of this library: its id, the time of its import, and the content
+/// hash of its file. A collection has no file of its own.
+type LocalRoot = (u32, i64, Option<String>);
+
 /// Returns, for each of `keys` that is the stable key of an item or a
-/// collection of this library, its root id and the time of its import.
+/// collection of this library, that root.
 fn local_roots<'a>(
     transaction: &rusqlite::Transaction<'_>,
     keys: &BTreeSet<&'a str>,
-) -> Result<HashMap<&'a str, (u32, i64)>> {
+) -> Result<HashMap<&'a str, LocalRoot>> {
     if keys.is_empty() {
         return Ok(HashMap::new());
     }
     let mut statement = transaction.prepare_cached(
-        "SELECT keys.value, root.root_id, root.imported_at_ms FROM json_each(?1) keys
+        "SELECT keys.value, root.root_id, root.imported_at_ms, file.content_hash
+         FROM json_each(?1) keys
          CROSS JOIN library_item item ON item.stable_key = keys.value
-         JOIN library_root root ON root.root_id = item.local_id",
+         JOIN library_root root ON root.root_id = item.local_id
+         LEFT JOIN media_item media ON media.media_id = root.root_id
+         LEFT JOIN media_file file ON file.file_id = media.file_id",
     )?;
     let rows = statement
         .query_map([serde_json::to_string(keys)?], |row| {
-            Ok((row.get::<_, String>(0)?, (row.get::<_, u32>(1)?, row.get::<_, i64>(2)?)))
+            Ok((
+                row.get::<_, String>(0)?,
+                (row.get::<_, u32>(1)?, row.get::<_, i64>(2)?, row.get(3)?),
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows

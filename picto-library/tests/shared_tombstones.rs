@@ -557,6 +557,58 @@ fn an_item_imported_again_after_its_deletion_stays_in_every_order_of_arrival() {
 }
 
 #[test]
+fn an_item_with_another_file_under_the_same_stable_key_is_not_deleted() {
+    let (_directory, a, b, _c) = devices();
+    // After the copies were made, both devices import a file from the same
+    // path in an import task of the same number, so the two items get one
+    // stable key. The files are different pictures.
+    let key = "task:9:/photos/a.png";
+    a.library.ingest(&imported(key, "hash-on-a")).unwrap();
+    b.library.ingest(&imported(key, "hash-on-b")).unwrap();
+
+    // The first device deletes its item. The entry names the file's hash.
+    a.delete(&[key]);
+    let entries = a.take();
+    let deletion = entries
+        .iter()
+        .find(|entry| entry.kind == EntryKind::Item && entry.key == key)
+        .unwrap();
+    assert_eq!(deletion.state, EntryState::Delete);
+    assert_eq!(deletion.file.as_deref(), Some("hash-on-a"));
+
+    // The second device merges the entry and keeps its own picture. The
+    // entry is stored and the tombstone is written, as for an item that the
+    // library does not hold.
+    let applied = b.receive(&a, &entries);
+    assert_eq!(applied.deleted, 0);
+    assert_eq!(b.status(key), Some(Lifecycle::Active));
+    assert_eq!(scalar(&b.library, "SELECT COUNT(*) FROM library_root"), 5);
+    assert!(b.tombstoned(key));
+    assert_eq!(b.receive(&a, &entries).won, 0);
+    assert_eq!(b.status(key), Some(Lifecycle::Active));
+
+    // An item with the same file is deleted, and so is a collection, whose
+    // entry names no file.
+    let post = post(&a);
+    a.delete(&["one", &post]);
+    let entries = a.take();
+    let file_of = |key: &str| {
+        entries
+            .iter()
+            .find(|entry| entry.kind == EntryKind::Item && entry.key == key)
+            .unwrap()
+            .file
+            .clone()
+    };
+    assert_eq!(file_of("one").as_deref(), Some("hash-one"));
+    assert_eq!(file_of(&post), None);
+    assert_eq!(b.receive(&a, &entries).deleted, 2);
+    assert_eq!(b.status("one"), None);
+    assert_eq!(b.status(&post), None);
+    assert_eq!(b.status(key), Some(Lifecycle::Active));
+}
+
+#[test]
 fn an_item_that_was_imported_on_another_device_after_the_deletion_stays_there() {
     let (_directory, a, b, _c) = devices();
     // Both devices import an item under one stable key after the copies

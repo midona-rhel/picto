@@ -384,6 +384,7 @@ mod tests {
             state: EntryState::Delete,
             at_ms: 7,
             logical: 1,
+            file: Some("0f".repeat(32)),
         }
     }
 
@@ -397,6 +398,7 @@ mod tests {
                 state: EntryState::Trash,
                 at_ms: 9,
                 logical: 0,
+                file: None,
             },
         ];
         let (name, bytes) = encode("library", "device", "0a", &entries).unwrap();

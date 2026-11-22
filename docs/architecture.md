@@ -425,11 +425,12 @@ reach another device.
 Cloud sync shares that model (`picto-library/src/mutation/shared.rs`). For every key that a
 deletion or its reversal touched, the library keeps one entry in `cloud_tombstone`: the state, the
 time of the library's hybrid logical clock (`cloud_state.hlc_physical_ms`, `hlc_logical`), and the
-device. The state is kept in the column `mutation_id`.
+device. The state is kept in the column `mutation_id`. A `delete` entry of an item that has a file
+also holds the content hash of that file, in the column `causal_frontier_json`.
 
 | Kind | Key | State | Written by |
 | --- | --- | --- | --- |
-| `item` | stable key of an item, a collection or a collection's member | `delete` | Delete Permanently, Empty Trash, a rejected Inbox item with "Delete permanently" (`delete_roots`) |
+| `item` | stable key of an item, a collection or a collection's member | `delete`, with the content hash of the item's file; a collection has no file and its entry no hash | Delete Permanently, Empty Trash, a rejected Inbox item with "Delete permanently" (`delete_roots`) |
 | `item` | the same | `add` | everything that removes a tombstone: an import of the item that is later than the deletion, a subscription run or reset, the undo of the deletion (`remove_item_tombstones`) |
 | `status` | stable key of an item or a collection | `trash`, `active`, `inbox` | a move into or out of the Trash, also by undo and redo |
 | `tag`, `folder`, `smart_folder` | stable key | `delete`, and `add` after an undo | the deletion of a tag, a folder with the folders below it, or a smart folder |
@@ -453,10 +454,14 @@ device also merges every 30 seconds while the library is idle (`cloud::receive_l
 entry is stored and applied in one publication, with no history entry:
 
 - `item`, `delete`: the item gets its tombstone, and if the library holds it as an item or a
-  collection, it is deleted through `delete_roots`, whatever its status is. One case is different:
-  the library holds no entry for the item, and the item was imported there after the time of the
-  deletion. Then the item was added again; it stays and gets an `add` entry of that device. This is
-  the rule of an import, which removes a tombstone that is earlier than the import.
+  collection, it is deleted through `delete_roots`, whatever its status is. Two cases are
+  different. An entry that names the content hash of a file deletes the item only when the item's
+  file in that library has the same hash. The stable key of a manual import is made from the number
+  of the import task and the file's path, so two devices can hold different files under one key;
+  an item with another file stays, and the entry is handled as if the library held no item with
+  that key. And when the library holds no entry for the item, and the item was imported there after
+  the time of the deletion, the item was added again: it stays and gets an `add` entry of that
+  device. This is the rule of an import, which removes a tombstone that is earlier than the import.
 - `item`, `add`: the item's tombstone is removed. The item itself is not copied.
 - `status`: an item of the library is moved to the Trash, or out of it when it is in the Trash.
 - `tag`, `delete`: the tag is deleted.
