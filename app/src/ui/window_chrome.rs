@@ -368,17 +368,21 @@ pub fn system_blurs(window: &Window) -> bool {
 }
 
 /// Prepares the pop-up window of a menu's panel, when the window opens.
+/// `dark` is whether the app's theme is a dark theme.
 ///
 /// Where the system blurs ([`system_blurs`]), the window gets the background
 /// appearance `Blurred`. On macOS, Wayland and X11 the blur is shown only
 /// under the panel that [`place_panel`] names, and nothing is blurred until
 /// a panel has been placed. On Windows the blur is the backdrop of the whole
-/// window (`platform::windows::show_backdrop`).
+/// window (`platform::windows::show_backdrop`), and it is the dark or the
+/// light backdrop according to `dark`.
 ///
 /// Where the system does not blur, the window stays transparent, and what
 /// the system draws around a window is taken away
 /// ([`without_system_frame`]).
-pub fn prepare_panel_window(window: &Window) {
+pub fn prepare_panel_window(window: &Window, dark: bool) {
+    #[cfg(not(target_os = "windows"))]
+    let _ = dark;
     if !system_blurs(window) {
         without_system_frame(window);
         return;
@@ -390,7 +394,7 @@ pub fn prepare_panel_window(window: &Window) {
         macos::with_ns_window(window, macos::backdrop::hide);
     }
     #[cfg(target_os = "windows")]
-    crate::platform::windows::show_backdrop(window);
+    crate::platform::windows::show_backdrop(window, dark);
 }
 
 /// Takes away what the system draws around a transparent pop-up window. The

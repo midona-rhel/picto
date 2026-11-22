@@ -155,9 +155,18 @@ impl Menu {
 
     /// Finds the display that the owner's window is on and where the
     /// window's content starts on that display, and opens the pop-up window
-    /// of the root panel. When the window has no display, the menu is drawn
-    /// inside the owner's window instead.
+    /// of the root panel. The menu is drawn inside the owner's window instead
+    /// when the system does not blur what is behind a pop-up window, and when
+    /// the owner's window has no display.
     pub(super) fn open_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // What is behind a pop-up window is other windows, which only the
+        // system can blur. Inside the owner's window the app blurs what is
+        // behind the panel itself. So where the system does not blur, the
+        // menu stays inside the owner's window and keeps its blur.
+        if !crate::ui::window_chrome::system_blurs(window) {
+            self.presentation = Presentation::InWindow;
+            return;
+        }
         let Some(display) = window.display(cx) else {
             self.presentation = Presentation::InWindow;
             return;
@@ -424,7 +433,8 @@ impl Menu {
             let asked_to_close = menu.downgrade();
             let opened = cx
                 .open_window(options, move |window, cx| {
-                    crate::ui::window_chrome::prepare_panel_window(window);
+                    let dark = !crate::theme::theme(cx).is_light();
+                    crate::ui::window_chrome::prepare_panel_window(window, dark);
                     pop_in(window, None);
                     // The first call only turns off the system's own
                     // animation. The scale animation is started on the

@@ -160,10 +160,15 @@ pub fn without_frame(window: &Window) {
 ///   colour, because the panel draws its own edge.
 /// - The animation that Windows plays when a window appears is switched
 ///   off, because the panel fades in itself.
-pub fn show_backdrop(window: &Window) {
+/// - Windows has a dark and a light backdrop, and GPUI gives a new window the
+///   one of the system's own theme. The window is given the one of the app's
+///   theme (`dark`), because the panel's translucent fill is laid over the
+///   backdrop: a light backdrop under the fill of a dark theme makes the
+///   panel grey.
+pub fn show_backdrop(window: &Window, dark: bool) {
     use windows::Win32::Graphics::Dwm::{
         DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_TRANSITIONS_FORCEDISABLED,
-        DwmExtendFrameIntoClientArea,
+        DWMWA_USE_IMMERSIVE_DARK_MODE, DwmExtendFrameIntoClientArea,
     };
     use windows::Win32::UI::Controls::MARGINS;
     let Some(hwnd) = hwnd(window) else {
@@ -171,6 +176,7 @@ pub fn show_backdrop(window: &Window) {
     };
     set_dwm_attribute(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, &1i32);
     set_dwm_attribute(hwnd, DWMWA_BORDER_COLOR, &DWMWA_COLOR_NONE);
+    set_dwm_attribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &i32::from(dark));
     let whole_window = MARGINS {
         cxLeftWidth: -1,
         cxRightWidth: -1,

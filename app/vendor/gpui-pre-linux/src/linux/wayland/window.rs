@@ -2559,6 +2559,9 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
         );
         state.surface.set_input_region(Some(&input));
         input.destroy();
+    } else {
+        // Without a content region the whole surface receives the pointer again.
+        state.surface.set_input_region(None);
     }
 
     // The blurred area is the content region when the window named one, and otherwise

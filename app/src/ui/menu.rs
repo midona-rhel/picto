@@ -61,10 +61,14 @@ pub enum Presentation {
 }
 
 /// Returns how menus are shown. No other code chooses between the two ways.
-/// Menus are in pop-up windows on every system. While
-/// `PICTO_GPUI_MENU=window` is set, they are drawn inside the owner's window.
-/// A menu whose pop-up window cannot be opened is also drawn inside the
-/// owner's window.
+/// A menu is in pop-up windows where the system blurs what is behind such a
+/// window (`window_chrome::system_blurs`): on macOS, on Windows 11 version
+/// 22H2 and later, on Wayland with a compositor that has a blur protocol,
+/// and on X11 with KWin. Everywhere else the menu is drawn inside the
+/// owner's window, where the app blurs what is behind the panel itself;
+/// `Menu::open_screen` makes that choice when the menu opens. While
+/// `PICTO_GPUI_MENU=window` is set, and when a pop-up window cannot be
+/// opened, the menu is also drawn inside the owner's window.
 ///
 /// A pop-up window never takes the activation from the owner's window. Each
 /// system has its own kind of pop-up window:
