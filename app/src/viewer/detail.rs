@@ -74,6 +74,8 @@ pub fn aspect_ratio(media: Option<(u32, u32)>) -> Option<f64> {
 pub struct Entry {
     pub root: RootId,
     pub hash: String,
+    /// The MIME type of the file `hash`.
+    pub mime: String,
     pub name: String,
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -85,6 +87,7 @@ impl From<&RootSummary> for Entry {
         Self {
             root: item.root_id,
             hash: item.content_hash.clone(),
+            mime: item.mime.clone(),
             name: item.name.clone(),
             width: item.width,
             height: item.height,
@@ -292,9 +295,10 @@ impl DetailWindow {
         self.entries.get(self.index)
     }
 
-    /// Shows the current entry: its thumbnail at once, and its file once its
-    /// details have been read. The previous entry stays on screen until the
-    /// thumbnail has been decoded.
+    /// Shows the current entry: at once its thumbnail, or for a video the
+    /// picture of its first frame ([`super::picture_while_loading`]), and
+    /// its file once its details have been read. The previous entry stays
+    /// on screen until that picture has been decoded.
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(entry) = self.entry().cloned() else {
             return;
@@ -309,8 +313,14 @@ impl DetailWindow {
             record_view(self.session.read(cx), entry.root);
         }
         if !entry.collection {
-            let thumbnail =
-                crate::grid::thumbnails::existing(self.session.read(cx).thumbnail(&entry.hash));
+            let (thumbnail, _) = {
+                let session = self.session.read(cx);
+                super::picture_while_loading(
+                    &entry.mime,
+                    session.first_frame(&entry.hash),
+                    session.thumbnail(&entry.hash),
+                )
+            };
             let natural = size_of(entry.width, entry.height);
             self.surface.update(cx, |surface, cx| {
                 surface.show(entry.hash.clone(), thumbnail, natural, cx)

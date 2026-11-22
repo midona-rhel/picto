@@ -6,9 +6,24 @@
 //! short wait, it loads what the item needs beyond its thumbnail. A
 //! picture's original is decoded on a background thread, never on the
 //! thread that draws the window.
+//!
+//! The thumbnail is the picture at the path that the host gives `open` and
+//! `show`. For a video the hosts give the path of the picture of the
+//! video's first frame, when the library has one
+//! (`viewer::picture_while_loading`).
 use super::*;
 
 impl MediaSurface {
+    /// Opens the item `key`: shows the picture at `thumbnail` at once, and
+    /// after 200 ms ([`motion::ORIGINAL_DELAY`]) starts what shows the file
+    /// `path` of type `mime` ([`Self::start`]). `natural` is the item's size
+    /// in image pixels, when the library knows it.
+    ///
+    /// `make_first_frame` is given for a video that has no first-frame
+    /// picture. It is the function that asks the application layer to make
+    /// that picture. It is called when the video's player is made, so it is
+    /// not called for a video that the user steps past within the 200 ms.
+    #[allow(clippy::too_many_arguments)]
     pub fn open(
         &mut self,
         key: String,
@@ -16,6 +31,7 @@ impl MediaSurface {
         natural: Option<Size>,
         path: PathBuf,
         mime: &str,
+        make_first_frame: Option<Rc<dyn Fn()>>,
         cx: &mut Context<Self>,
     ) {
         let media = crate::viewer::video::kind_of(mime);
@@ -61,7 +77,16 @@ impl MediaSurface {
             cx.background_executor().timer(motion::ORIGINAL_DELAY).await;
             let _ = this.update(cx, |this, cx| {
                 if this.key == key {
-                    this.start(mode, kind, key, thumbnail, path, &mime, cx);
+                    this.start(
+                        mode,
+                        kind,
+                        key,
+                        thumbnail,
+                        path,
+                        &mime,
+                        make_first_frame,
+                        cx,
+                    );
                 }
             });
         }));
@@ -70,7 +95,9 @@ impl MediaSurface {
 
     /// Starts showing the item in full, after the wait in [`Self::open`]:
     /// decodes the original picture, or opens the video or audio player,
-    /// the document or the Flash movie.
+    /// the document or the Flash movie. For a video it also calls
+    /// `make_first_frame`, when that is given (see [`Self::open`]).
+    #[allow(clippy::too_many_arguments)]
     fn start(
         &mut self,
         mode: Mode,
@@ -79,6 +106,7 @@ impl MediaSurface {
         thumbnail: PathBuf,
         path: PathBuf,
         mime: &str,
+        make_first_frame: Option<Rc<dyn Fn()>>,
         cx: &mut Context<Self>,
     ) {
         let media = crate::viewer::video::kind_of(mime);
@@ -169,6 +197,16 @@ impl MediaSurface {
                 // to 1, the player starts muted. Automated checks use this
                 // so that they make no sound.
                 options.muted |= crate::seams::silent();
+                // `make_first_frame` is given for a video that has no
+                // first-frame picture, for which the surface has drawn the
+                // thumbnail. The application layer is asked to make the
+                // picture now, and the next time the video is opened the
+                // surface draws that picture.
+                if kind == crate::viewer::video::model::Kind::Video
+                    && let Some(make_first_frame) = make_first_frame
+                {
+                    make_first_frame();
+                }
                 let mime = mime.to_owned();
                 let player = cx.new(|cx| {
                     crate::viewer::video::VideoPlayer::new(

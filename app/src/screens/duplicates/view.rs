@@ -425,6 +425,7 @@ impl DuplicatesScreen {
                     let entry = crate::viewer::detail::Entry {
                         root: details.root.root_id,
                         hash: side.file.file_hash.clone(),
+                        mime: side.file.mime_type.clone(),
                         name: side
                             .media
                             .as_ref()

@@ -15,9 +15,19 @@
 //!   is shown: a square of 120 px in the pane's bottom-right corner that
 //!   shows the whole picture and marks the part that is on screen.
 //! - A Flash movie is played by Ruffle. Its frames are fitted to the pane.
-//! - Video and audio play in the media player (`video/`).
+//! - Video and audio play in the media player (`video/`). A video's player
+//!   draws nothing until its first frame has arrived, and until then the
+//!   surface draws the picture whose path the host gave it. That is the
+//!   picture of the video's first frame, which the library keeps beside
+//!   the thumbnail, so the picture does not change when the player takes
+//!   over. For a video that has no such picture yet it is the thumbnail,
+//!   which is a frame from later in the video
+//!   (`viewer::picture_while_loading`).
 //! - A document, a font, and a file of a type that cannot be shown get a
 //!   [`Document`].
+//!
+//! In this file, an item's thumbnail is the picture at the path that the
+//! host gave `show` or `open` for the item.
 //!
 //! When another item is opened, what was on screen stays there until the
 //! new item has something of its own to show, and for at most 1,500 ms
@@ -34,7 +44,7 @@ use super::scaled;
 use crate::{motion, theme};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use std::{path::PathBuf, sync::Arc, time::Instant};
+use std::{path::PathBuf, rc::Rc, sync::Arc, time::Instant};
 
 /// The length in pixels of each side of the navigator, which is a square.
 const NAVIGATOR: f32 = 120.;
@@ -1103,10 +1113,10 @@ impl MediaSurface {
     /// picture, and the point of the picture at the centre of the pinch
     /// stays where it is. `event.delta` is the change of zoom that the
     /// event reports, for example 0.1 for 10% larger. The pinch is handled
-    /// as a scroll of the trackpad by −100 × ln(1 + delta) pixels is, so
-    /// the scale is multiplied by (1 + delta) to the power 0.4. When the
-    /// open item is not a picture, or the picture's size is not known, it
-    /// does nothing.
+    /// as a scroll of the trackpad by −100 × ln(1 + delta) pixels is
+    /// handled, so the scale is multiplied by (1 + delta) to the power
+    /// 0.4. When the open item is not a picture, or the picture's size is
+    /// not known, it does nothing.
     fn pinch(&mut self, event: &PinchEvent, cx: &mut Context<Self>) {
         if self.mode != Mode::Image || self.image_size().is_none() {
             return;
@@ -1974,7 +1984,15 @@ mod tests {
                 .update(&mut cx, |surface, _, cx| {
                     let natural = Some((4000., 3000.));
                     let (thumbnail, photo) = (thumbnail.clone(), photo.clone());
-                    surface.open(key.clone(), thumbnail, natural, photo, "image/jpeg", cx)
+                    surface.open(
+                        key.clone(),
+                        thumbnail,
+                        natural,
+                        photo,
+                        "image/jpeg",
+                        None,
+                        cx,
+                    )
                 })
                 .unwrap();
             draw(&mut cx);
@@ -2060,6 +2078,7 @@ mod tests {
                     Some((8000., 6000.)),
                     photo.clone(),
                     "image/jpeg",
+                    None,
                     cx,
                 )
             })

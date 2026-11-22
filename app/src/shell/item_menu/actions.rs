@@ -55,6 +55,7 @@ impl Shell {
                     let entry = crate::viewer::detail::Entry {
                         root: item.root_id,
                         hash: file.hash,
+                        mime: file.mime,
                         name: file.name,
                         width: size.and_then(|size| size.0),
                         height: size.and_then(|size| size.1),

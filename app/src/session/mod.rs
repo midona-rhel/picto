@@ -269,12 +269,22 @@ pub fn thumbnail_in(blobs: &std::path::Path, hash: &str) -> PathBuf {
     blob_in(blobs, "t", hash, "jpg")
 }
 
+/// The path of the first-frame picture of the video with content hash
+/// `hash`, inside a library's `blobs` folder:
+/// `blobs/t/<ab>/<cd>/<hash>.first-frame.jpg`. It is in the folder of the
+/// video's thumbnail. The application layer makes the picture
+/// (`BlobStore::first_frame_path` in the `picto_core` crate), and the file
+/// exists only once it has done so.
+pub fn first_frame_in(blobs: &std::path::Path, hash: &str) -> PathBuf {
+    blob_in(blobs, "t", hash, "first-frame.jpg")
+}
+
 /// Builds the path `blobs/<kind>/<ab>/<cd>/<hash>.<extension>`, where `<ab>`
 /// and `<cd>` are the first two and the next two characters of the hash. This
 /// is the layout that the blob store in the `picto_core` crate uses
-/// (`BlobStore::original_path_with_ext`, `thumbnail_path_with_ext`). The path
-/// is built here and not by a `BlobStore`, because opening a `BlobStore`
-/// creates its staging folder on disk.
+/// (`BlobStore::original_path_with_ext`, `thumbnail_path_with_ext`,
+/// `first_frame_path`). The path is built here and not by a `BlobStore`,
+/// because opening a `BlobStore` creates its staging folder on disk.
 ///
 /// Returns an empty path when `hash` is shorter than four characters or
 /// contains a character that is not a hexadecimal digit. Such a hash could
@@ -762,10 +772,11 @@ impl Session {
 
     /// Disconnects this session from the library before the library is closed
     /// (`libraries::host` calls this). The sender to the library's thread is
-    /// replaced by one that leads nowhere, so later requests are lost, and the
-    /// thread ends once it has answered the requests already sent. The
-    /// application layer is told to refuse commands. After this, nothing this
-    /// session does can reach the library that is opened next.
+    /// replaced by a sender whose receiver is dropped at once, so later
+    /// requests are lost, and the library's thread ends once it has answered
+    /// the requests already sent. The application layer is told to refuse
+    /// commands. After this, nothing this session does can reach the library
+    /// that is opened next.
     pub fn shut(&mut self) {
         let (sender, _) = std::sync::mpsc::channel();
         self.sender = sender;
@@ -881,6 +892,32 @@ impl Session {
     /// in the open library.
     pub fn thumbnail(&self, hash: &str) -> PathBuf {
         thumbnail_in(&self.blobs, hash)
+    }
+
+    /// Returns the path of the first-frame picture of the video with content
+    /// hash `hash` in the open library. The file exists only once the
+    /// application layer has made the picture.
+    pub fn first_frame(&self, hash: &str) -> PathBuf {
+        first_frame_in(&self.blobs, hash)
+    }
+
+    /// Returns a function that asks the application layer to make the
+    /// first-frame picture of the video with content hash `hash`. The
+    /// function sends the command `media.render_thumbnail_now`, which makes
+    /// the pictures that are missing for one file: its thumbnail, and for a
+    /// video the picture of its first frame. Nothing waits for the answer.
+    /// A viewer calls the function when it opens a video that has no
+    /// first-frame picture, and finds the picture the next time it opens
+    /// that video.
+    pub fn first_frame_request(&self, hash: &str) -> std::rc::Rc<dyn Fn()> {
+        let application = self.application.clone();
+        let hash = hash.to_owned();
+        std::rc::Rc::new(move || {
+            drop(application.dispatch(
+                "media.render_thumbnail_now",
+                serde_json::json!({ "file_hash": hash }),
+            ));
+        })
     }
 
     /// The item that the inspector and the viewer show, if there is one.
@@ -1047,7 +1084,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use super::{Coalesced, SubscriptionActivity, thumbnail_in};
+    use super::{Coalesced, SubscriptionActivity, first_frame_in, thumbnail_in};
 
     #[test]
     fn a_read_asked_for_while_one_runs_runs_once_more() {
@@ -1065,10 +1102,11 @@ mod tests {
     }
     use std::path::{Path, PathBuf};
 
-    /// A thumbnail's path follows the blob store's layout. A hash that is too
-    /// short or is not hexadecimal gives an empty path, so it cannot lead
-    /// outside the `blobs` folder or cut a character of several bytes in the
-    /// middle.
+    /// The paths of a thumbnail and of a video's first-frame picture follow
+    /// the blob store's layout, and the two files are in the same folder. A
+    /// hash that is too short or is not hexadecimal gives an empty path, so
+    /// it cannot lead outside the `blobs` folder or cut a character of
+    /// several bytes in the middle.
     #[test]
     fn blobs_are_found_under_their_hash_and_only_a_hash() {
         let blobs = Path::new("lib/blobs");
@@ -1076,8 +1114,13 @@ mod tests {
             thumbnail_in(blobs, "abcdef12"),
             Path::new("lib/blobs/t/ab/cd/abcdef12.jpg")
         );
+        assert_eq!(
+            first_frame_in(blobs, "abcdef12"),
+            Path::new("lib/blobs/t/ab/cd/abcdef12.first-frame.jpg")
+        );
         for hash in ["", "abc", "../../x", "ab/cdef", "é0123", "abcd\\x"] {
             assert_eq!(thumbnail_in(blobs, hash), PathBuf::new(), "{hash}");
+            assert_eq!(first_frame_in(blobs, hash), PathBuf::new(), "{hash}");
         }
     }
 
