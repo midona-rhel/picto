@@ -214,9 +214,12 @@ pub fn parse_probe(json: &str) -> Result<Info, String> {
 }
 
 /// Runs `ffprobe` on the file `path` and returns what it reports. Returns
-/// an error when `ffprobe` is not found, cannot be run or fails.
+/// an error when `ffprobe` is not found, cannot be run or fails. It writes
+/// to the log how long `ffprobe` ran, so that a user's log shows whether
+/// starting the program is what makes a video slow to open.
 fn probe(path: &Path) -> Result<Info, String> {
     let ffprobe = binary("ffprobe").ok_or("Picto's bundled ffprobe was not found")?;
+    let started = Instant::now();
     let output = command(&ffprobe)
         .args([
             "-v",
@@ -230,6 +233,12 @@ fn probe(path: &Path) -> Result<Info, String> {
         .stdin(Stdio::null())
         .output()
         .map_err(|error| format!("ffprobe: {error}"))?;
+    log::info!(
+        target: "timing.ffprobe",
+        "ffprobe ran for {} ms on {}",
+        started.elapsed().as_millis(),
+        path.display()
+    );
     if !output.status.success() {
         return Err(format!(
             "ffprobe: {}",
