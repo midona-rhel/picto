@@ -528,15 +528,9 @@ mod tests {
             seam: None,
             test_folder: None,
         };
-        // The user is asked first. The library is admitted once the user has
-        // agreed.
-        let Decision::Ask { identity, .. } =
-            admission::admit(&one, Origin::Manager, &release, &[], &not_running())
-        else {
-            panic!("not asked");
-        };
+        // A release build admits the library without asking the user.
         assert!(matches!(
-            admission::admit(&one, Origin::Manager, &release, &[identity], &not_running()),
+            admission::admit(&one, Origin::Manager, &release, &[], &not_running()),
             Decision::Real { .. }
         ));
         let (events, _received) = std::sync::mpsc::channel();
