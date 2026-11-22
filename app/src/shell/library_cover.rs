@@ -339,8 +339,9 @@ impl Render for LibraryCover {
 
 #[cfg(test)]
 mod tests {
-    use crate::paths::Canonical as _;
     use super::cover_frame;
+    #[cfg(unix)]
+    use crate::paths::Canonical as _;
     use crate::cover::Crop;
 
     /// The cover is written only into the library's folder. A cover file that

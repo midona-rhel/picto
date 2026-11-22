@@ -24,16 +24,29 @@ pub trait Canonical {
 
 impl Canonical for Path {
     fn canonical(&self) -> std::io::Result<PathBuf> {
-        dunce::canonicalize(self)
+        dunce::canonicalize(self).map(|path| without_share_prefix(&path))
+    }
+}
+
+/// Returns a path on a network share in its ordinary form:
+/// `\\?\UNC\server\share\…` becomes `\\server\share\…`. `dunce` leaves the
+/// extended form of such a path as it is. Every other path is returned
+/// unchanged.
+fn without_share_prefix(path: &Path) -> PathBuf {
+    match path.to_string_lossy().strip_prefix(r"\\?\UNC\") {
+        Some(share) => PathBuf::from(format!(r"\\{share}")),
+        None => path.to_path_buf(),
     }
 }
 
 /// Returns the ordinary form of a path that is stored as text, without
 /// reading the disk: on Windows `\\?\E:\Main.library` becomes
-/// `E:\Main.library`, and a path that cannot be written in the ordinary form
-/// is returned as it is. On other systems the text is returned unchanged.
+/// `E:\Main.library` and `\\?\UNC\server\share\Main.library` becomes
+/// `\\server\share\Main.library`. A path that cannot be written in the
+/// ordinary form is returned as it is. On other systems the text is returned
+/// unchanged.
 pub fn ordinary(path: &str) -> String {
-    dunce::simplified(Path::new(path))
+    without_share_prefix(dunce::simplified(Path::new(path)))
         .to_string_lossy()
         .into_owned()
 }
