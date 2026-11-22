@@ -909,14 +909,19 @@ impl Library {
             .collect::<Vec<_>>();
         let result = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let deleted = delete_folder_subtrees(transaction, revision, &snapshot, &requested)?;
+            record_entries(
+                transaction,
+                EntryKind::Folder,
+                EntryState::Delete,
+                &deleted.stable_keys,
+            )?;
             insert_cloud_journal(
                 transaction,
                 revision,
                 "folder.delete",
                 None,
                 serde_json::json!({
-                    "folder_ids": deleted.folder_ids.iter().map(|id| id.0).collect::<Vec<_>>(),
-                    "stable_keys": deleted.stable_keys,
+                    "folder_ids": deleted.folder_ids.iter().map(|id| id.0).collect::<Vec<_>>()
                 }),
                 now_ms(),
             )?;

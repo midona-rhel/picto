@@ -60,10 +60,15 @@ jobs:
           toolchain: 1.98.0
           components: clippy
 
+      # The build folder is saved only by a run on `dev` that succeeded.
+      # Every other branch restores what `dev` saved. A pull request cannot
+      # read the cache of another pull request, the caches of the whole
+      # repository are limited to 10 GB, and a failed or cancelled run would
+      # save a folder that holds only part of a build.
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: . -> target
-          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
 
       # Compiling the workspace's own crates takes most of the time of a
       # build that starts from nothing. The step above restores the `target`
@@ -153,12 +158,17 @@ jobs:
       # Two build folders are kept between runs: the app's own, and the
       # repository root's, where the program that generates the test library
       # is built when that library is not in the cache (see "Test library").
+      # The build folder is saved only by a run on `dev` that succeeded.
+      # Every other branch restores what `dev` saved. A pull request cannot
+      # read the cache of another pull request, the caches of the whole
+      # repository are limited to 10 GB, and a failed or cancelled run would
+      # save a folder that holds only part of a build.
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: |
             app -> target
             . -> target
-          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
 
       # The packages that building and running the app on Linux needs:
       # - for GPUI: Wayland, X11, Vulkan and fontconfig, and lavapipe

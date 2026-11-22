@@ -1,4 +1,5 @@
-//! Product-facing subscription definitions and persisted status reads.
+//! The subscriptions as the app shows and edits them: their definitions,
+//! and the status of their runs as it is stored in the library.
 
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -351,17 +352,20 @@ impl LibraryApplication {
                             "DELETE FROM subscription_issue WHERE subscription_id = ?1",
                             [subscription_id],
                         )?;
-                        transaction.execute(
-                            "DELETE FROM deletion_tombstone
-                             WHERE stable_key IN (
-                                 SELECT 'source:' || post.site_id || ':' || post.post_key || ':' || item.item_key
+                        // The tombstones of the subscription's items are
+                        // removed, so that a new run brings the items again,
+                        // and the other devices learn of the removal.
+                        let keys = transaction
+                            .prepare(
+                                "SELECT 'source:' || post.site_id || ':' || post.post_key || ':' || item.item_key
                                  FROM subscription_source_post linked
                                  JOIN source_post post USING(source_post_id)
                                  JOIN source_item item USING(source_post_id)
-                                 WHERE linked.subscription_id = ?1
-                             )",
-                            [subscription_id],
-                        )?;
+                                 WHERE linked.subscription_id = ?1",
+                            )?
+                            .query_map([subscription_id], |row| row.get::<_, String>(0))?
+                            .collect::<rusqlite::Result<Vec<_>>>()?;
+                        picto_library::remove_item_tombstones(transaction, &keys)?;
                         transaction.execute(
                             "DELETE FROM subscription_source_post
                              WHERE subscription_id = ?1",

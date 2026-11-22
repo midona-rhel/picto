@@ -612,12 +612,12 @@ impl Library {
 /// Files no other media item uses are queued for cleanup; those an undo entry
 /// still needs (`protected`) are queued but not returned for immediate removal.
 ///
-/// `origin` says what cloud sync does with the deletion. For a deletion that
-/// the user made while the library syncs, the journal row names every deleted
-/// root by its stable key and the content hashes of its files, so that the
-/// other devices can delete the same roots. For a deletion that came from
-/// another device, the originals are not queued for removal from the cloud
-/// folder, because the device that made the deletion removes them.
+/// `origin` says what cloud sync does with the deletion. A deletion that the
+/// user made gets a shared `delete` entry for every tombstone it writes
+/// (`shared.rs`), so that the other devices delete the same items. For a
+/// deletion that came from another device, the originals are not queued for
+/// removal from the cloud folder, because the device that made the deletion
+/// removes them.
 pub(super) fn delete_roots(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
@@ -645,30 +645,20 @@ pub(super) fn delete_roots(
     stage_delete_ids(transaction, "delete_media", &media_ids)?;
     stage_delete_ids(transaction, "delete_item", &item_ids)?;
 
-    let (device_id, retention_json, syncing) = transaction.query_row(
-        "SELECT device_id, retention_json, provider IS NOT NULL
-         FROM cloud_state WHERE singleton = 1",
+    let (device_id, retention_json) = transaction.query_row(
+        "SELECT device_id, retention_json FROM cloud_state WHERE singleton = 1",
         [],
-        |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, bool>(2)?,
-            ))
-        },
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
     )?;
-    let announced = origin == DeletionOrigin::User && syncing;
 
     // One set-based read of the deleted media's files. CROSS JOIN keeps
     // SQLite walking the staged ids rather than every media item.
     let mut files = std::collections::HashMap::new();
-    let mut media_hashes = std::collections::HashMap::new();
     {
         let mut statement = transaction.prepare_cached(
             "SELECT file.file_id, file.content_hash, file.file_path,
                     CASE WHEN cloud.remote_present = 1
-                         THEN cloud.remote_extension ELSE NULL END,
-                    media.media_id
+                         THEN cloud.remote_extension ELSE NULL END
              FROM temp.delete_media selected
              CROSS JOIN media_item media ON media.media_id = selected.local_id
              JOIN media_file file ON file.file_id = media.file_id
@@ -681,48 +671,15 @@ pub(super) fn delete_roots(
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, Option<String>>(3)?,
-                row.get::<_, u32>(4)?,
             ))
         })?;
         for row in rows {
-            let (file_id, content_hash, file_path, remote_extension, media_id) = row?;
-            if announced {
-                media_hashes.insert(media_id, content_hash.clone());
-            }
+            let (file_id, content_hash, file_path, remote_extension) = row?;
             files
                 .entry(file_id)
                 .or_insert((content_hash, file_path, remote_extension));
         }
     }
-    // What the other devices need to delete the same roots: each root's
-    // stable key and the content hashes of its files, read before the rows
-    // are removed.
-    let announced_items = if announced {
-        let mut keys = transaction.prepare_cached(
-            "SELECT selected.local_id, item.stable_key
-             FROM temp.delete_root selected
-             CROSS JOIN library_item item ON item.local_id = selected.local_id",
-        )?;
-        let rows = keys.query_map([], |row| {
-            Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
-        })?;
-        let mut items = Vec::new();
-        for row in rows {
-            let (root_id, key) = row?;
-            let mut hashes = match snapshot.collection_orders.get(&RootId(root_id)) {
-                Some(members) => members
-                    .iter()
-                    .filter_map(|media| media_hashes.get(&media.0).cloned())
-                    .collect::<Vec<_>>(),
-                None => media_hashes.get(&root_id).cloned().into_iter().collect(),
-            };
-            hashes.sort_unstable();
-            items.push(serde_json::json!({ "key": key, "files": hashes }));
-        }
-        Some(items)
-    } else {
-        None
-    };
     transaction.execute(
         "INSERT INTO deletion_tombstone(stable_key, revision, deleted_at_ms)
          SELECT item.stable_key, ?1, ?2
@@ -734,6 +691,7 @@ pub(super) fn delete_roots(
              deleted_at_ms = excluded.deleted_at_ms",
         rusqlite::params![revision as i64, deleted_at_ms],
     )?;
+    record_deleted_roots(transaction, origin)?;
     transaction.execute(
         "DELETE FROM root_fts WHERE rowid IN
              (SELECT local_id FROM temp.delete_root)",
@@ -916,18 +874,13 @@ pub(super) fn delete_roots(
     }
     crate::group::remove_root_projections(&mut next, &roots);
     crate::smart::settle_affected(transaction, &mut next, &roots)?;
-    let payload = match announced_items {
-        Some(items) => serde_json::json!({ "items": items }),
-        None => serde_json::json!({}),
-    };
     transaction.execute(
         "INSERT INTO cloud_journal
              (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-         VALUES (?1, 'root.permanent_delete', ?2, ?3, ?4)",
+         VALUES (?1, 'root.permanent_delete', ?2, '{}', ?3)",
         rusqlite::params![
             revision as i64,
             crate::bitmap::encode(&roots)?,
-            payload.to_string(),
             deleted_at_ms
         ],
     )?;
@@ -1227,11 +1180,14 @@ pub(super) fn restore_deleted_roots(
         [&items_json],
     )?;
     // The delete's tombstones and queued file removals no longer apply.
-    transaction.execute(
-        "DELETE FROM deletion_tombstone WHERE stable_key IN (
-             SELECT stable_key FROM library_item WHERE local_id IN (SELECT value FROM json_each(?1))
-         )",
-        [&items_json],
+    // The removal of the tombstones is recorded for the other devices.
+    remove_item_tombstones(
+        transaction,
+        &state
+            .items
+            .iter()
+            .map(|(_, key, _)| key.clone())
+            .collect::<Vec<_>>(),
     )?;
     transaction.execute(
         "DELETE FROM cloud_tombstone

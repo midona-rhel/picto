@@ -219,10 +219,10 @@ allows.
 ### Cloud
 
 Cloud sync signs in to nothing: a library publishes verified
-snapshots of its database, its originals and the deletions that the user made
-into the folder of a Google Drive or Dropbox desktop app on the device, which
-carries them on. Another device that syncs the library makes the same
-deletions. The core owns all of it (`core/src/cloud/`, commands `cloud.*`;
+snapshots of its database, its originals and the tombstones of what the user
+deleted into the folder of a Google Drive or Dropbox desktop app on the
+device, which carries them on. Another device that syncs the library merges
+the tombstones and makes the same deletions. The core owns all of it (`core/src/cloud/`, commands `cloud.*`;
 [`docs/architecture.md`](../docs/architecture.md), "Cloud sync"); the app sends
 those commands and keeps no tokens or secrets. The safety facts:
 
@@ -328,11 +328,9 @@ XDND source on X11, whose file-list encoders the app's Copy uses too), what
 a drop carries besides files (`ExternalDropData`, `PromisedFiles`), an
 interface zoom (`App::set_ui_zoom`), a way to ask whether the system blurs
 what is behind a window (`Window::is_background_blur_supported`), Acrylic on
-Windows 11 through the system's documented window attribute, what a menu's
-pop-up window needs on Windows, X11 and Wayland (a window that is never
-activated, a pointer grab, the blur behind a named region, a pop-up that
-the compositor places), and test-only hooks for the off-screen tool.
-`vendor/README.md` explains each change and holds the diff against 0.3.12.
+Windows 11 through the system's documented window attribute, and test-only
+hooks for the off-screen tool. `vendor/README.md` explains each change and
+holds the diff against 0.3.12.
 
 The `dev` profile builds this crate at `opt-level = 1` and dependencies at
 `opt-level = 2`, with line tables only and incremental compilation off, to
@@ -481,11 +479,10 @@ change the session through its methods; no view owns another's state.
 
 **Shared UI** (`ui/`). One implementation of each control. The pieces every view relies on: layers
 by name (`layer.rs`), floating panels (`popover.rs`), focus and tab scopes
-(`focus.rs`), the context menu (`menu.rs`, `menu/`; in pop-up windows of
-its own where the system blurs behind them, see "Per platform"), dialogs (`modal.rs` with its
-`Host`, which plays a dialog's exit and gives the keyboard back,
-`modal::backdrop` and `modal::dialog_panel`, the one backdrop and panel;
-`confirm.rs`, `form.rs`),
+(`focus.rs`), the context menu (`menu.rs`, `menu/`; pop-up windows on macOS,
+drawn in the window elsewhere), dialogs (`modal.rs` with its `Host`, which
+plays a dialog's exit and gives the keyboard back, `modal::backdrop` and
+`modal::dialog_panel`, the one backdrop and panel; `confirm.rs`, `form.rs`),
 the keys of every floating surface (`keys.rs`: Escape, the arrows, Enter and
 Tab, taken by the innermost surface holding the keyboard), rail rows
 (`rail_item`),
@@ -1001,9 +998,9 @@ PICTO_GPUI_SCRIPT=steps.txt PICTO_GPUI_OUT=shots \
 ```
 
 The window is 1213×865 (`PICTO_GPUI_WINDOW=WxH`). Set `PICTO_GPUI_MENU=window`
-so menus are in the shot: without it a menu is in a pop-up window of its
-own. Without `PICTO_GPUI_STATE=<folder>` nothing is kept between runs.
-Script lines (`#` comments and blank lines skipped):
+on macOS so menus are in the shot. Without `PICTO_GPUI_STATE=<folder>`
+nothing is kept between runs. Script lines (`#` comments and blank lines
+skipped):
 
 | Line | Effect |
 | --- | --- |
@@ -1061,7 +1058,7 @@ menu's blur nor its pop-in scale.
 | `PICTO_GPUI_POINTER` | debug | input lines from a FIFO |
 | `PICTO_GPUI_BACKGROUND` | debug | windows open without the keyboard and draw while covered |
 | `PICTO_GPUI_WINDOW=WxH` | debug, off-screen | exact window size, not remembered |
-| `PICTO_GPUI_MENU=window`, `PICTO_GPUI_APP_MENU=window` | debug | menus drawn in the window and not in pop-up windows; the in-window application menu on macOS |
+| `PICTO_GPUI_MENU=window`, `PICTO_GPUI_APP_MENU=window` | debug | menus in the window on macOS; the in-window application menu |
 | `PICTO_GPUI_STATE=<folder>` | debug, off-screen | keep per-machine state there |
 | `PICTO_GPUI_INSPECTOR=<width>` | debug | inspector width |
 | `PICTO_GPUI_HOLD_RUNS` | debug | Subscriptions answers runs and downloads itself, starting no network work |
@@ -1183,10 +1180,7 @@ app.
 | --- | --- | --- | --- |
 | Backdrop blur | yes (DirectX) | yes | yes |
 | Frosted material behind the sidebar and inspector | Acrylic, off by default | none | none |
-| Context menus | on Windows 11 version 22H2 and later: pop-up windows that are never activated, over the system's blurred backdrop; on earlier versions: in the window | with KWin: pop-up windows (override-redirect) with a pointer grab, blurred by KWin; otherwise: in the window | with a compositor that has a blur protocol: pop-ups that the compositor places (`xdg_popup`) with a grab; otherwise: in the window |
-| Blur behind a menu | Acrylic on Windows 11 22H2 and later; a more opaque glass before | with KWin; a more opaque glass elsewhere; opaque without a compositing manager | where the compositor has ext-background-effect or kde-blur; a more opaque glass elsewhere |
-| A menu's shadow and corners | the system's on Windows 11 22H2 and later; the app's before | the app's; none without a compositing manager | the app's |
-| A menu's opening | fades in (macOS scales it in) | fades in | fades in |
+| Context menus | in the window | in the window | in the window |
 | Application menu | titlebar button | titlebar button | titlebar button |
 | Inbox badge | none | Unity launcher D-Bus signal | same |
 | System notification | toast | freedesktop | same |

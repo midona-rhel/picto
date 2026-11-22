@@ -203,15 +203,18 @@ pub(crate) fn insert_one(
         if input.imported_at_ms <= deleted_at_ms {
             return Err(LibraryError::ImportDeleted);
         }
-        transaction
-            .prepare_cached("DELETE FROM deletion_tombstone WHERE stable_key = ?1")?
-            .execute([&input.stable_key])?;
+        // The import is later than the deletion, so the tombstone goes, and
+        // the other devices learn that the item was added again.
+        crate::mutation::remove_item_tombstones(
+            transaction,
+            std::slice::from_ref(&input.stable_key),
+        )?;
     }
 
-    // The file is imported again after it was deleted. The cloud folder
-    // stores an original under its hash, so the record that the original was
-    // deleted there is removed. The cloud worker then uses the copy that is
-    // still in the cloud folder and does not upload the file again.
+    // The file is imported again, so its original in the cloud folder is no
+    // longer waiting to be removed. Originals are stored there under their
+    // content hash, and the cloud worker finds the one that is still there
+    // and does not upload the file a second time.
     transaction
         .prepare_cached(
             "DELETE FROM cloud_tombstone

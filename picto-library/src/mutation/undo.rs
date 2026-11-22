@@ -73,17 +73,17 @@ impl Library {
                 serde_json::json!({"label": entry.label}),
                 changed_at_ms,
             )?;
-            // Cloud sync sends what this replay moved into or out of the
-            // Trash, and the tags, folders and smart folders that the redo
-            // of a deletion deleted again, as it does for the first edit.
+            // The other devices get what this replay moved into or out of
+            // the Trash, as they do for the first edit. They also get the
+            // undo of a deletion of tags, folders or smart folders, as
+            // entries that the deletion was taken back, and its redo, as
+            // entries that they are deleted.
             journal_trash_moves(transaction, revision, &snapshot, &next, changed_at_ms)?;
-            if use_after
-                && matches!(
-                    entry.command.as_str(),
-                    "tags.delete" | "tags.delete_unused" | "folders.delete" | "smart_folders.delete"
-                )
-            {
-                journal_redone_deletions(transaction, revision, &change, changed_at_ms)?;
+            if matches!(
+                entry.command.as_str(),
+                "tags.delete" | "tags.delete_unused" | "folders.delete" | "smart_folders.delete"
+            ) {
+                record_replayed_deletions(transaction, &change, use_after)?;
             }
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
@@ -104,15 +104,14 @@ impl Library {
     }
 }
 
-/// Records in the cloud journal the tags, folders and smart folders that the
-/// redo of a deletion deleted: the definitions that `change` holds before
-/// and not after. The rows have the kinds and the `stable_keys` payload that
-/// the first deletion writes.
-fn journal_redone_deletions(
+/// Records the shared entries of a replayed deletion of tags, folders or
+/// smart folders. `change` holds the deleted definitions before and not
+/// after. The redo deletes them again, so they get `delete` entries. The
+/// undo brings them back, so their `delete` entries become `add` entries.
+fn record_replayed_deletions(
     transaction: &rusqlite::Transaction<'_>,
-    revision: u64,
     change: &SemanticChange,
-    changed_at_ms: i64,
+    redo: bool,
 ) -> Result<()> {
     fn collect(change: &SemanticChange, keys: &mut [Vec<String>; 3]) {
         match change {
@@ -135,19 +134,14 @@ fn journal_redone_deletions(
     }
     let mut keys = [Vec::new(), Vec::new(), Vec::new()];
     collect(change, &mut keys);
-    for (kind, keys) in ["tag.delete", "folder.delete", "smart_folder.delete"]
+    for (kind, keys) in [EntryKind::Tag, EntryKind::Folder, EntryKind::SmartFolder]
         .into_iter()
         .zip(keys)
     {
-        if !keys.is_empty() {
-            insert_cloud_journal(
-                transaction,
-                revision,
-                kind,
-                None,
-                serde_json::json!({ "stable_keys": keys }),
-                changed_at_ms,
-            )?;
+        if redo {
+            record_entries(transaction, kind, EntryState::Delete, &keys)?;
+        } else {
+            record_added_again(transaction, kind, &keys)?;
         }
     }
     Ok(())

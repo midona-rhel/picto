@@ -106,10 +106,15 @@ jobs:
         with:
           toolchain: 1.98.0
 
+      # The build folder is saved only by a run on `dev` that succeeded.
+      # Every other branch restores what `dev` saved. A pull request cannot
+      # read the cache of another pull request, the caches of the whole
+      # repository are limited to 10 GB, and a failed or cancelled run would
+      # save a folder that holds only part of a build.
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: app -> target
-          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
 
       # The libraries that the app and the application core are built
       # against (the list in `app/README.md`, section 3).

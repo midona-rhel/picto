@@ -6,10 +6,9 @@
 //! between them. Either its panels are drawn over the owner's window and
 //! kept 12px inside it, or each panel (the menu and its open submenu) is in
 //! a pop-up window of its own and kept 12px inside the display, so that a
-//! menu can reach past the window's edge. In both ways a press anywhere
-//! outside the panels closes the menu. The keys are handled in whichever of
-//! the menu's windows has the keyboard: the owner's window on macOS, Windows
-//! and X11, and the root panel's pop-up window on Wayland (`menu/popup.rs`).
+//! menu can reach past the window's edge. In both ways the keyboard stays
+//! with the owner's window, where the menu's layer handles the keys, and a
+//! press anywhere outside the panels closes the menu.
 use super::{color_picker, glass_panel, icon, scrollbar, tip, tooltip};
 use crate::ui::text_input::TextInput;
 use crate::{motion, theme};
@@ -28,7 +27,7 @@ use layout::{
     Path, Rect, Row, clean, items_height, origin, place, place_submenu, row_offset, search, step,
 };
 use popup::close_window;
-pub(crate) use popup::compositor_places_pop_ups;
+pub(crate) use popup::without_system_shadow;
 pub use popup::{adopt, is_pop_up, release};
 
 /// Binds the menu's keys. The up and down arrows move the highlight, the
@@ -61,45 +60,28 @@ pub enum Presentation {
 }
 
 /// Returns how menus are shown. No other code chooses between the two ways.
-/// A menu is in pop-up windows where the system blurs what is behind such a
-/// window (`window_chrome::system_blurs`): on macOS, on Windows 11 version
-/// 22H2 and later, on Wayland with a compositor that has a blur protocol,
-/// and on X11 with KWin. Everywhere else the menu is drawn inside the
-/// owner's window, where the app blurs what is behind the panel itself;
-/// `Menu::open_screen` makes that choice when the menu opens. While
-/// `PICTO_GPUI_MENU=window` is set, and when a pop-up window cannot be
-/// opened, the menu is also drawn inside the owner's window.
+/// On macOS menus are in pop-up windows, because GPUI opens a
+/// `WindowKind::PopUp` there as a non-activating panel, which can be shown
+/// without taking the keyboard. On Windows and Linux, and on macOS when
+/// `PICTO_GPUI_MENU=window` is set, menus are drawn inside the owner's
+/// window. A menu whose pop-up window cannot be opened is also drawn inside
+/// the owner's window.
 ///
-/// A pop-up window never takes the activation from the owner's window. Each
-/// system has its own kind of pop-up window:
-///
-/// - macOS: a `WindowKind::PopUp`, which GPUI opens as a non-activating
-///   panel. The keyboard stays with the owner's window. The menu closes when
-///   the app is no longer the active one.
-/// - Windows: a `WindowKind::PopUp`, which GPUI creates with
-///   `WS_EX_NOACTIVATE`. The keyboard stays with the owner's window. The
-///   menu closes when the owner's window is no longer the active one, which
-///   it is not after a click on another application, on the desktop or on
-///   the taskbar.
-/// - X11: a `WindowKind::PopUp`, which is an override-redirect window. The
-///   window manager does not manage it and it never has the keyboard, so the
-///   keyboard stays with the owner's window. While a pop-up window is open,
-///   GPUI holds a pointer grab, as toolkits do for a menu. A press of a
-///   mouse button on anything that is not a window of the app is reported
-///   through the grab, and the menu closes. The menu also closes when the
-///   owner's window loses the keyboard.
-/// - Wayland: a `WindowKind::AnchoredPopup` (an `xdg_popup`), because a
-///   Wayland client cannot give a window a place on the display. The
-///   compositor places it beside a rectangle of its parent window and keeps
-///   it on the display. The root panel's pop-up takes the grab, so it has
-///   the keyboard and the compositor closes it when the user clicks on
-///   another application or on the desktop. GPUI reports the owner's window
-///   as active while one of its pop-ups has the keyboard.
+/// On Windows and Linux a menu is drawn inside the owner's window because
+/// only there it looks and moves as it does on macOS. What is behind a
+/// pop-up window is other windows, which the app cannot read, so the app's
+/// own blur cannot be drawn behind it; the system's own material (Acrylic on
+/// Windows, a compositor's blur on Linux) has another look, and it neither
+/// scales in with the panel nor fades out with it. Inside the owner's window
+/// the app blurs what is behind the panel itself and plays the panel's
+/// entrance and exit. The cost is that the menu cannot reach past the edge
+/// of the owner's window; it is placed so that it fits inside.
 pub fn presentation() -> Presentation {
-    if crate::seams::menus_in_window() {
-        Presentation::InWindow
-    } else {
+    let forced_in_window = crate::seams::menus_in_window();
+    if cfg!(target_os = "macos") && !forced_in_window {
         Presentation::PopUpWindows
+    } else {
+        Presentation::InWindow
     }
 }
 
@@ -137,8 +119,7 @@ const CHECK_SLOT: f32 = 16.;
 const SHORTCUT_GAP: f32 = 28.;
 /// The room a pop-up window leaves around its panel (a menu's panel, or a
 /// select's list) for the panel's shadow. The shadow (`Theme::panel_shadow`)
-/// reaches 24px out to the sides and 36px down. A menu's pop-up window on
-/// Windows leaves no room where the system blurs behind it (`Menu::room`).
+/// reaches 24px out to the sides and 36px down.
 pub(crate) const SHADOW_ROOM: f32 = 40.;
 /// How long the menu waits, after one of its windows loses the keyboard, for
 /// another of its windows to report that it now has the keyboard.
@@ -168,9 +149,7 @@ struct Screen {
     origin: (f32, f32),
     display: DisplayId,
     /// The part of the display the root panel's window covers. It is sized
-    /// for the tallest the panel can become while searching, or, where the
-    /// window follows the panel (`Menu::fit_root_window`), for the panel as
-    /// it is drawn now.
+    /// for the tallest the panel can become while searching.
     bounds: Rect,
     window: Option<AnyWindowHandle>,
 }
@@ -227,14 +206,6 @@ pub struct Menu {
     /// The value of the row or swatch last chosen.
     chosen: Option<SharedString>,
     presentation: Presentation,
-    /// Whether the compositor places the menu's pop-up windows, which it
-    /// does on Wayland (`popup::compositor_places_pop_ups`). It is set when
-    /// the first pop-up window is opened.
-    anchored: bool,
-    /// The room that each of the menu's pop-up windows leaves around its
-    /// panel: `SHADOW_ROOM`, or 0 on Windows where the system blurs behind
-    /// the whole window. It is set when the first pop-up window is opened.
-    room: f32,
     /// The window the owner draws the menu in.
     main: Option<AnyWindowHandle>,
     /// The size of the owner's window. A menu that is drawn inside the window
@@ -275,10 +246,6 @@ impl Menu {
             })
         });
         let mut subscriptions = Vec::new();
-        let this = cx.weak_entity();
-        subscriptions.push(cx.on_window_closed(move |cx, closed| {
-            let _ = this.update(cx, |this, cx| this.window_closed(closed, cx));
-        }));
         if let Some(search) = &search {
             subscriptions.push(cx.observe(search, |this, search, cx| {
                 let query = search.read(cx).value();
@@ -310,8 +277,6 @@ impl Menu {
             closing: None,
             chosen: None,
             presentation: presentation(),
-            anchored: false,
-            room: SHADOW_ROOM,
             main: None,
             viewport: Rect::default(),
             screen: None,
@@ -441,17 +406,15 @@ impl Menu {
     /// and a panel that grows while its contents stay the same size does
     /// not look like a panel that is scaled, so the panel never changes
     /// size. The opacity rises from 0 to 1 over `motion::MENU_IN` after the
-    /// panel is first drawn, except in a pop-up window on macOS, which the
-    /// system scales in as a whole (`popup::window_scales_in`). The opacity
-    /// falls to 0 after the menu is dismissed. A submenu has no animation:
-    /// an open submenu is drawn unchanged until the menu is dropped.
+    /// panel is first drawn, except in a pop-up window, which the system
+    /// scales in as a whole (see `pop_in`). The opacity falls to 0 after the
+    /// menu is dismissed. A submenu has no animation: an open submenu is
+    /// drawn unchanged until the menu is dropped.
     fn root_motion(&self) -> (f32, f32) {
-        let scaled_in =
-            self.presentation == Presentation::PopUpWindows && popup::window_scales_in();
         let opacity = match (self.closing, self.shown) {
             (Some(since), _) => motion::menu_out(since.elapsed()).1,
             // The layer of the pop-up window is scaled in instead.
-            (None, _) if scaled_in => 1.,
+            (None, _) if self.presentation == Presentation::PopUpWindows => 1.,
             (None, Some(shown)) => {
                 motion::EASE_SCALE_IN.ease(motion::progress(shown.elapsed(), motion::MENU_IN))
             }
@@ -878,7 +841,7 @@ impl Menu {
             current: None,
             rect,
             window: None,
-            bounds: self.submenu_window_bounds(rect, parent, area),
+            bounds: Rect::submenu_window(rect, parent, SHADOW_ROOM, area),
             serial: self.serial,
         });
         if keyboard {
