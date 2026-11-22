@@ -448,11 +448,13 @@ impl Library {
         Ok(receipt)
     }
 
-    /// Delete Trash roots for good. A delete of at most `undo_limit` media items is
-    /// undoable: its rows are kept in history and its files stay on disk
-    /// until the entry leaves history (when the app closes, or it falls off
-    /// the stack). A larger one cannot be undone and frees its files at once.
-    /// With `require_undoable`, refuse instead of silently dropping undo.
+    /// Deletes roots that are in the Trash permanently. A deletion of at most
+    /// `undo_limit` media items can be undone: its rows are kept in the
+    /// history and its files stay on disk until the entry leaves the
+    /// history, which is when the app closes or when newer entries take its
+    /// place. A larger deletion cannot be undone and its files are removed
+    /// at once. With `require_undoable`, a deletion that could not be undone
+    /// is refused.
     pub fn permanently_delete(
         &self,
         target: &SelectionTarget,
@@ -517,7 +519,9 @@ impl Library {
                 return Err(LibraryError::UndoLimitExceeded);
             }
             let state = undoable
-                .then(|| capture_deleted_roots(transaction, &snapshot, &roots))
+                .then(|| {
+                    capture_deleted_roots(transaction, &snapshot, &roots, DeletionOrigin::User)
+                })
                 .transpose()?;
             // Files an undoable delete keeps are not freed now.
             let mut protected = self.history.protected_cleanup_files();
@@ -531,6 +535,7 @@ impl Library {
                 &roots,
                 deleted_at_ms,
                 &protected,
+                DeletionOrigin::User,
             )?;
             let history = state.map(|state| {
                 HistoryEntry::for_command(
@@ -606,6 +611,13 @@ impl Library {
 /// tombstones, projections, orders, smart folders and the cloud journal.
 /// Files no other media item uses are queued for cleanup; those an undo entry
 /// still needs (`protected`) are queued but not returned for immediate removal.
+///
+/// `origin` says what cloud sync does with the deletion. For a deletion that
+/// the user made while the library syncs, the journal row names every deleted
+/// root by its stable key and the content hashes of its files, so that the
+/// other devices can delete the same roots. For a deletion that came from
+/// another device, the originals are not queued for removal from the cloud
+/// folder, because the device that made the deletion removes them.
 pub(super) fn delete_roots(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
@@ -613,6 +625,7 @@ pub(super) fn delete_roots(
     roots: &RoaringBitmap,
     deleted_at_ms: i64,
     protected_cleanup_files: &std::collections::BTreeSet<crate::FileId>,
+    origin: DeletionOrigin,
 ) -> Result<(ProjectionSnapshot, Vec<crate::PendingBlobCleanup>, MutationReceipt)> {
     let roots = roots.clone();
     let mut media_ids = RoaringBitmap::new();
@@ -632,14 +645,30 @@ pub(super) fn delete_roots(
     stage_delete_ids(transaction, "delete_media", &media_ids)?;
     stage_delete_ids(transaction, "delete_item", &item_ids)?;
 
+    let (device_id, retention_json, syncing) = transaction.query_row(
+        "SELECT device_id, retention_json, provider IS NOT NULL
+         FROM cloud_state WHERE singleton = 1",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, bool>(2)?,
+            ))
+        },
+    )?;
+    let announced = origin == DeletionOrigin::User && syncing;
+
     // One set-based read of the deleted media's files. CROSS JOIN keeps
     // SQLite walking the staged ids rather than every media item.
     let mut files = std::collections::HashMap::new();
+    let mut media_hashes = std::collections::HashMap::new();
     {
         let mut statement = transaction.prepare_cached(
             "SELECT file.file_id, file.content_hash, file.file_path,
                     CASE WHEN cloud.remote_present = 1
-                         THEN cloud.remote_extension ELSE NULL END
+                         THEN cloud.remote_extension ELSE NULL END,
+                    media.media_id
              FROM temp.delete_media selected
              CROSS JOIN media_item media ON media.media_id = selected.local_id
              JOIN media_file file ON file.file_id = media.file_id
@@ -652,15 +681,48 @@ pub(super) fn delete_roots(
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, Option<String>>(3)?,
+                row.get::<_, u32>(4)?,
             ))
         })?;
         for row in rows {
-            let (file_id, content_hash, file_path, remote_extension) = row?;
+            let (file_id, content_hash, file_path, remote_extension, media_id) = row?;
+            if announced {
+                media_hashes.insert(media_id, content_hash.clone());
+            }
             files
                 .entry(file_id)
                 .or_insert((content_hash, file_path, remote_extension));
         }
     }
+    // What the other devices need to delete the same roots: each root's
+    // stable key and the content hashes of its files, read before the rows
+    // are removed.
+    let announced_items = if announced {
+        let mut keys = transaction.prepare_cached(
+            "SELECT selected.local_id, item.stable_key
+             FROM temp.delete_root selected
+             CROSS JOIN library_item item ON item.local_id = selected.local_id",
+        )?;
+        let rows = keys.query_map([], |row| {
+            Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut items = Vec::new();
+        for row in rows {
+            let (root_id, key) = row?;
+            let mut hashes = match snapshot.collection_orders.get(&RootId(root_id)) {
+                Some(members) => members
+                    .iter()
+                    .filter_map(|media| media_hashes.get(&media.0).cloned())
+                    .collect::<Vec<_>>(),
+                None => media_hashes.get(&root_id).cloned().into_iter().collect(),
+            };
+            hashes.sort_unstable();
+            items.push(serde_json::json!({ "key": key, "files": hashes }));
+        }
+        Some(items)
+    } else {
+        None
+    };
     transaction.execute(
         "INSERT INTO deletion_tombstone(stable_key, revision, deleted_at_ms)
          SELECT item.stable_key, ?1, ?2
@@ -697,11 +759,6 @@ pub(super) fn delete_roots(
     )?;
 
     let mut cleanup = Vec::new();
-    let (device_id, retention_json) = transaction.query_row(
-        "SELECT device_id, retention_json FROM cloud_state WHERE singleton = 1",
-        [],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-    )?;
     let retention_days = serde_json::from_str::<serde_json::Value>(&retention_json)
         .ok()
         .and_then(|value| value.get("deleted_blobs_days")?.as_i64())
@@ -726,7 +783,9 @@ pub(super) fn delete_roots(
     };
     for (file_id, (content_hash, file_path, remote_extension)) in files {
         if !still_referenced.contains(&file_id) {
-            if let Some(remote_extension) = remote_extension {
+            if let Some(remote_extension) =
+                remote_extension.filter(|_| origin != DeletionOrigin::OtherDevice)
+            {
                 transaction.execute(
                     "INSERT INTO cloud_tombstone
                          (object_kind, object_key, mutation_id, hlc_physical_ms,
@@ -857,13 +916,18 @@ pub(super) fn delete_roots(
     }
     crate::group::remove_root_projections(&mut next, &roots);
     crate::smart::settle_affected(transaction, &mut next, &roots)?;
+    let payload = match announced_items {
+        Some(items) => serde_json::json!({ "items": items }),
+        None => serde_json::json!({}),
+    };
     transaction.execute(
         "INSERT INTO cloud_journal
              (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-         VALUES (?1, 'root.permanent_delete', ?2, '{}', ?3)",
+         VALUES (?1, 'root.permanent_delete', ?2, ?3, ?4)",
         rusqlite::params![
             revision as i64,
             crate::bitmap::encode(&roots)?,
+            payload.to_string(),
             deleted_at_ms
         ],
     )?;
@@ -894,6 +958,7 @@ pub(super) fn capture_deleted_roots(
     transaction: &rusqlite::Transaction<'_>,
     snapshot: &ProjectionSnapshot,
     roots: &RoaringBitmap,
+    origin: DeletionOrigin,
 ) -> Result<crate::history::DeletedRootsState> {
     let mut media = RoaringBitmap::new();
     for root_id in roots {
@@ -981,6 +1046,7 @@ pub(super) fn capture_deleted_roots(
         .into_iter()
         .collect();
     Ok(crate::history::DeletedRootsState {
+        origin,
         roots: Arc::new(roots.clone()),
         structure: capture_structure(transaction, snapshot, roots, None)?,
         items: Arc::new(items),

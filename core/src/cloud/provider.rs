@@ -26,6 +26,9 @@ pub trait CloudProvider: Send + Sync {
     fn connectivity(&self) -> ProviderFuture<'_, bool>;
     fn exists(&self, path: &str) -> ProviderFuture<'_, bool>;
     fn list(&self, prefix: &str) -> ProviderFuture<'_, Vec<RemoteObject>>;
+    /// Returns the names of the folders directly inside `prefix`, without
+    /// reading what they hold. A `prefix` that does not exist has none.
+    fn children(&self, prefix: &str) -> ProviderFuture<'_, Vec<String>>;
     fn download(&self, path: &str) -> ProviderFuture<'_, Vec<u8>>;
     fn download_file(
         &self,
@@ -57,9 +60,10 @@ pub trait CloudProvider: Send + Sync {
 
 pub type ProviderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>;
 
-/// Filesystem transport backed by an installed Drive or Dropbox desktop app.
-/// Picto owns only the checked artifacts inside this directory; the desktop
-/// client owns authentication, networking, and cross-device transfer.
+/// The transport of cloud sync: a folder that an installed Google Drive or
+/// Dropbox desktop app syncs. Picto reads and writes only its own files
+/// below `picto/` in that folder. The desktop app signs in, uses the network
+/// and carries the files to the other devices.
 pub struct DirectoryProvider {
     root: PathBuf,
 }
@@ -140,8 +144,9 @@ impl DirectoryProvider {
         Ok(path)
     }
 
-    /// Finds only immediate Picto library manifests. Blob and epoch trees may
-    /// contain millions of files and must never be traversed for discovery.
+    /// Returns the `library.json` of every library folder directly below
+    /// `picto/`. It does not look into the folders below a library's folder,
+    /// which can hold millions of files.
     pub fn library_manifests(&self) -> Result<Vec<PathBuf>, String> {
         let picto_root = self.resolve("picto")?;
         let entries = match std::fs::read_dir(&picto_root) {
@@ -290,7 +295,10 @@ fn publish_file(
     })
 }
 
-pub fn detect_roots() -> Vec<DetectedProviderRoot> {
+/// Returns the folders that the variables `PICTO_GOOGLE_DRIVE_ROOT` and
+/// `PICTO_DROPBOX_ROOT` name. Each stands in for the folder of that
+/// provider's desktop app.
+fn named_roots() -> Vec<DetectedProviderRoot> {
     let mut roots = Vec::new();
     if let Ok(path) = std::env::var("PICTO_GOOGLE_DRIVE_ROOT") {
         push_provider_directory(
@@ -303,6 +311,11 @@ pub fn detect_roots() -> Vec<DetectedProviderRoot> {
     if let Ok(path) = std::env::var("PICTO_DROPBOX_ROOT") {
         push_provider_directory(&mut roots, "dropbox", "Dropbox", PathBuf::from(path));
     }
+    roots
+}
+
+pub fn detect_roots() -> Vec<DetectedProviderRoot> {
+    let mut roots = named_roots();
     let Some(home) = home_directory() else {
         return roots;
     };
@@ -355,9 +368,14 @@ pub fn detect_roots() -> Vec<DetectedProviderRoot> {
     roots
 }
 
-/// Resolve a user choice to an installed provider root. A writable arbitrary
-/// directory is deliberately not enough: otherwise Picto can claim cloud sync
-/// while writing to a location no provider uploads.
+/// Returns the provider folder that the user's choice `root` is, or an error
+/// when it is not the folder of an installed desktop app of `provider`. A
+/// folder that can be written to is not enough: Picto would then say that a
+/// library syncs while it writes to a folder that no provider uploads.
+///
+/// A folder that `PICTO_GOOGLE_DRIVE_ROOT` or `PICTO_DROPBOX_ROOT` names is
+/// accepted before the installed desktop apps are looked for, so a check
+/// that uses such a stand-in folder does not read the home folder.
 pub fn validate_root(
     provider: &str,
     root: impl Into<PathBuf>,
@@ -367,11 +385,14 @@ pub fn validate_root(
     }
     let selected = root.into();
     let selected_identity = path_identity(&selected);
-    let detected = detect_roots().into_iter().find(|candidate| {
+    let chosen = |candidate: &DetectedProviderRoot| {
         candidate.provider == provider
             && path_identity(Path::new(&candidate.path)) == selected_identity
-    });
-    if let Some(detected) = detected {
+    };
+    if let Some(named) = named_roots().into_iter().find(chosen) {
+        return Ok(named);
+    }
+    if let Some(detected) = detect_roots().into_iter().find(chosen) {
         return Ok(detected);
     }
     #[cfg(target_os = "windows")]
@@ -612,6 +633,28 @@ impl CloudProvider for DirectoryProvider {
             }
             objects.sort_by(|a, b| a.path.cmp(&b.path));
             Ok(objects)
+        })
+    }
+
+    fn children(&self, prefix: &str) -> ProviderFuture<'_, Vec<String>> {
+        let base = self.resolve(prefix);
+        Box::pin(async move {
+            let entries = match std::fs::read_dir(base?) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(Vec::new())
+                }
+                Err(error) => return Err(format!("Failed to list cloud objects: {error}")),
+            };
+            let mut names = Vec::new();
+            for entry in entries {
+                let entry = entry.map_err(|error| error.to_string())?;
+                // A link is not a folder of the sync.
+                if entry.file_type().map_err(|error| error.to_string())?.is_dir() {
+                    names.push(entry.file_name().to_string_lossy().into_owned());
+                }
+            }
+            Ok(names)
         })
     }
 

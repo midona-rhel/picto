@@ -799,6 +799,7 @@ impl Library {
                 .collect::<Vec<_>>();
             let mut next = (*snapshot).clone();
             let mut changes = Vec::new();
+            let mut stable_keys = Vec::new();
             for tag_id in &unused {
                 let (_, tag_changes) = remove_tag_in_transaction(
                     transaction,
@@ -807,6 +808,7 @@ impl Library {
                     None,
                     revision,
                 )?;
+                stable_keys.extend(removed_tag_key(&tag_changes));
                 changes.extend(tag_changes);
             }
             let settings_changed =
@@ -821,7 +823,10 @@ impl Library {
                 revision,
                 "tag.delete_unused",
                 None,
-                serde_json::json!({"tag_ids": unused.iter().map(|id| id.0).collect::<Vec<_>>() }),
+                serde_json::json!({
+                    "tag_ids": unused.iter().map(|id| id.0).collect::<Vec<_>>(),
+                    "stable_keys": stable_keys,
+                }),
                 now_ms(),
             )?;
             next.revision = revision;
@@ -919,6 +924,12 @@ impl Library {
                     serde_json::json!({
                         "source_tag_id": source.0,
                         "destination_tag_id": destination.map(|tag| tag.0),
+                        "stable_keys": destination
+                            .is_none()
+                            .then(|| removed_tag_key(&history_changes))
+                            .flatten()
+                            .into_iter()
+                            .collect::<Vec<_>>(),
                     })
                     .to_string(),
                     changed_at_ms
@@ -1249,6 +1260,19 @@ pub(super) fn remove_tag_in_transaction(
         },
     );
     Ok((source_members, history_changes))
+}
+
+/// Returns the stable key of the tag that `remove_tag_in_transaction`
+/// removed, read from the changes it returned.
+pub(super) fn removed_tag_key(changes: &[SemanticChange]) -> Option<String> {
+    changes.iter().find_map(|change| match change {
+        SemanticChange::TagDefinition {
+            before: Some(state),
+            after: None,
+            ..
+        } => Some(state.stable_key.clone()),
+        _ => None,
+    })
 }
 
 pub(super) fn prune_deleted_starred_tags(

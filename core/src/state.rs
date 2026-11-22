@@ -1,7 +1,11 @@
-//! Process ownership for the schema-1 media-library backend.
+//! The library that this process has open. At most one library is open at a
+//! time.
 //!
-//! Exactly one canonical library is open. No legacy Store or Application is
-//! constructed on this path.
+//! This file opens and closes the library and sends each command to it. It
+//! also carries out the two commands that replace a library's database while
+//! the library is closed: Restore, which puts a snapshot's database in place
+//! of the current one, and Open from Cloud…, which makes a new library from a
+//! snapshot.
 
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -475,6 +479,8 @@ struct RestoredCloudSnapshot {
     restored: bool,
 }
 
+/// What a restore keeps of the library that it replaces, because it belongs
+/// to this device and to its sync, and not to the snapshot.
 struct LocalCloudConfiguration {
     device_id: String,
     provider: Option<String>,
@@ -482,6 +488,9 @@ struct LocalCloudConfiguration {
     remote_root: Option<String>,
     paused: bool,
     retention_json: String,
+    /// The rows of `cloud_device_frontier`: for each device, the number and
+    /// the time of its last deletion file that this library holds.
+    deletion_files: Vec<(String, i64, i64, String)>,
 }
 
 async fn restore_cloud_snapshot(args_json: &str) -> Result<String, String> {
@@ -494,6 +503,15 @@ async fn restore_cloud_snapshot(args_json: &str) -> Result<String, String> {
         .auxiliary_read(
             picto_library::database::WorkPriority::VisibleRead,
             |connection| {
+                let deletion_files = connection
+                    .prepare(
+                        "SELECT device_id, hlc_physical_ms, hlc_logical, updated_at
+                         FROM cloud_device_frontier",
+                    )?
+                    .query_map([], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
                 Ok(connection.query_row(
                     "SELECT device_id, provider, account_label, remote_root, paused, retention_json
                      FROM cloud_state WHERE singleton = 1",
@@ -506,6 +524,7 @@ async fn restore_cloud_snapshot(args_json: &str) -> Result<String, String> {
                             remote_root: row.get(3)?,
                             paused: row.get::<_, i64>(4)? != 0,
                             retention_json: row.get(5)?,
+                            deletion_files,
                         })
                     },
                 )?)
@@ -635,7 +654,12 @@ async fn join_cloud_library(args_json: &str) -> Result<String, String> {
     .map_err(|error| error.to_string())
 }
 
-fn initialize_joined_database(
+/// Turns the database of a snapshot into the database of a new device's
+/// library: it gets a device id of its own and the cloud folder it was made
+/// from, loses what belongs to the device that made the snapshot (watched
+/// folders, view settings, the change journal), and queues every original
+/// for download.
+pub(crate) fn initialize_joined_database(
     database_path: &std::path::Path,
     provider: &str,
     account_label: &str,
@@ -668,6 +692,12 @@ fn initialize_joined_database(
             ],
         )
         .map_err(|error| format!("Failed to assign joined device identity: {error}"))?;
+    // The journal rows are the changes of the device that made the snapshot,
+    // and that device has written the deletions among them to the cloud
+    // folder. This device must not write them a second time as its own.
+    transaction
+        .execute("DELETE FROM cloud_journal", [])
+        .map_err(|error| format!("Failed to clear the joined change journal: {error}"))?;
     transaction
         .execute(
             "UPDATE folder_definition
@@ -698,9 +728,30 @@ fn initialize_restored_database(
     database_path: &std::path::Path,
     local: &LocalCloudConfiguration,
 ) -> Result<(), String> {
-    let connection = rusqlite::Connection::open(database_path)
+    let mut connection = rusqlite::Connection::open(database_path)
         .map_err(|error| format!("Failed to open the restored database: {error}"))?;
     picto_library::schema::validate(&connection).map_err(|error| error.to_string())?;
+    let connection = connection
+        .transaction()
+        .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;
+    // The restored library keeps this device's position in every device's
+    // deletion files. A deletion that was applied before the restore is not
+    // applied to the restored library again, so an item that the restore
+    // brought back stays. The journal rows of the snapshot are dropped: the
+    // device that made the snapshot has written their deletions already.
+    connection
+        .execute_batch("DELETE FROM cloud_device_frontier; DELETE FROM cloud_journal;")
+        .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;
+    for (device_id, written_at_ms, sequence, updated_at) in &local.deletion_files {
+        connection
+            .execute(
+                "INSERT INTO cloud_device_frontier
+                     (device_id, hlc_physical_ms, hlc_logical, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![device_id, written_at_ms, sequence, updated_at],
+            )
+            .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;
+    }
     connection
         .execute(
             "UPDATE cloud_state SET device_id = ?1, provider = ?2, account_label = ?3,
@@ -719,7 +770,9 @@ fn initialize_restored_database(
             ],
         )
         .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;
-    Ok(())
+    connection
+        .commit()
+        .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))
 }
 
 fn consolidate_closed_database(database_path: &std::path::Path) -> Result<(), String> {

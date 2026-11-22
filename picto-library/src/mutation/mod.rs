@@ -7,7 +7,7 @@ use roaring::RoaringBitmap;
 use crate::bitmap::{self, BitmapDomain, BitmapKey};
 use crate::database::WorkPriority;
 use crate::history::{
-    FolderDefinitionState, HistoryEntry, SemanticChange, SessionHistory,
+    DeletionOrigin, FolderDefinitionState, HistoryEntry, SemanticChange, SessionHistory,
     SmartFolderDefinitionState, StructuralMediaNoteState, StructuralRootState, StructuralState,
     TagDefinitionState, TagNamespaceDefinitionState,
 };
@@ -38,6 +38,7 @@ mod duplicates;
 mod structure;
 mod merge;
 mod undo;
+mod synced;
 pub(crate) mod tasks;
 use tags::*;
 use folders::*;
@@ -45,6 +46,10 @@ use smart_folders::*;
 use structure::*;
 use merge::*;
 pub use merge::{SharedFileMerge, merged_notes};
+pub use synced::{
+    AppliedDeletions, OutgoingCursor, OutgoingDeletions, ReceivedDeletions, SyncedDeletion,
+    reset_synced_deletions,
+};
 use undo::*;
 
 struct PublishedDelta {
@@ -139,9 +144,11 @@ impl Library {
         Ok(library)
     }
 
-    /// Merge the legacy explicit `general` namespace into the canonical
-    /// unnamespaced group. This is safe to run on every open and publishes the
-    /// merge so cloud peers converge on the repaired tag identities as well.
+    /// Merges a tag group named `general`, which an older library can hold,
+    /// into the tag group that has no name. It changes nothing when the
+    /// library has no such group, so it runs at every open. The merge is
+    /// published like any other change, and it is not kept in the undo
+    /// history.
     pub fn canonicalize_general_tag_namespace(&self) -> Result<Option<MutationReceipt>> {
         let namespace_ids = self
             .tag_namespaces()?
@@ -1796,41 +1803,14 @@ impl Library {
         let receipt = self.publish(priority, |transaction, revision, snapshot| {
             let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some((&self.match_cache, &self.order_cache)))?;
             let mut next = (*snapshot).clone();
-            let mut changes = Vec::new();
-            for key_id in &partition_keys {
-                let key = BitmapKey {
-                    domain,
-                    key_id: *key_id,
-                };
-                let before = projection_bitmap(&next, key);
-                let mut after = before.clone();
-                if *key_id == destination {
-                    after |= &selection;
-                } else {
-                    after -= &selection;
-                }
-                if before != after {
-                    set_projection_bitmap(&mut next, key, after.clone());
-                    bitmap::replace_changed(transaction, revision, key, &after, &(&before ^ &after))?;
-                    changes.push(SemanticChange::Bitmap {
-                        key,
-                        before: Arc::new(before),
-                        after: Arc::new(after),
-                    });
-                }
-            }
-            let smart_change = match domain {
-                BitmapDomain::Lifecycle => crate::predicate::DependencyChange::Lifecycle,
-                BitmapDomain::Rating => crate::predicate::DependencyChange::Rating,
-                BitmapDomain::Tag => {
-                    crate::predicate::DependencyChange::Tag(crate::TagId(destination))
-                }
-            };
-            crate::smart::settle_affected_for(
+            let changes = move_to_partition(
                 transaction,
+                revision,
                 &mut next,
+                domain,
+                destination,
+                &partition_keys,
                 &selection,
-                &[smart_change],
             )?;
             if !changes.is_empty() {
                 insert_cloud_journal(
@@ -1845,6 +1825,9 @@ impl Library {
                     serde_json::json!({"destination": destination}),
                     changed_at_ms,
                 )?;
+            }
+            if domain == BitmapDomain::Lifecycle {
+                journal_trash_moves(transaction, revision, &snapshot, &next, changed_at_ms)?;
             }
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
@@ -1914,6 +1897,93 @@ impl Library {
         }
         Ok(snapshot)
     }
+}
+
+/// Moves `selection` into the partition `destination` of `domain` and out of
+/// the other partitions in `partition_keys`, in SQLite and in `next`, and
+/// re-checks the smart folders that the change can affect. Returns one
+/// bitmap change for each partition that changed.
+fn move_to_partition(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    next: &mut ProjectionSnapshot,
+    domain: BitmapDomain,
+    destination: u32,
+    partition_keys: &[u32],
+    selection: &RoaringBitmap,
+) -> Result<Vec<SemanticChange>> {
+    let mut changes = Vec::new();
+    for key_id in partition_keys {
+        let key = BitmapKey {
+            domain,
+            key_id: *key_id,
+        };
+        let before = projection_bitmap(next, key);
+        let mut after = before.clone();
+        if *key_id == destination {
+            after |= selection;
+        } else {
+            after -= selection;
+        }
+        if before != after {
+            set_projection_bitmap(next, key, after.clone());
+            bitmap::replace_changed(transaction, revision, key, &after, &(&before ^ &after))?;
+            changes.push(SemanticChange::Bitmap {
+                key,
+                before: Arc::new(before),
+                after: Arc::new(after),
+            });
+        }
+    }
+    let smart_change = match domain {
+        BitmapDomain::Lifecycle => crate::predicate::DependencyChange::Lifecycle,
+        BitmapDomain::Rating => crate::predicate::DependencyChange::Rating,
+        BitmapDomain::Tag => crate::predicate::DependencyChange::Tag(crate::TagId(destination)),
+    };
+    crate::smart::settle_affected_for(transaction, next, selection, &[smart_change])?;
+    Ok(changes)
+}
+
+/// Records in the cloud journal which roots a change moved into the Trash
+/// and which it took out of it, by comparing the Trash of `before` with the
+/// Trash of `after`. Cloud sync sends these rows to the other devices. One
+/// row of the kind `root.trash` is written for the roots that entered the
+/// Trash, and one for each lifecycle that restored roots now have. A change
+/// that moved nothing into or out of the Trash writes no row.
+fn journal_trash_moves(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    before: &ProjectionSnapshot,
+    after: &ProjectionSnapshot,
+    changed_at_ms: i64,
+) -> Result<()> {
+    if Arc::ptr_eq(&before.lifecycle, &after.lifecycle) {
+        return Ok(());
+    }
+    let (was, now) = (
+        before.lifecycle(Lifecycle::Trash),
+        after.lifecycle(Lifecycle::Trash),
+    );
+    let entered = now - was;
+    let left = was - now;
+    let moves = [
+        (Lifecycle::Trash, entered),
+        (Lifecycle::Active, &left & after.lifecycle(Lifecycle::Active)),
+        (Lifecycle::Inbox, &left & after.lifecycle(Lifecycle::Inbox)),
+    ];
+    for (lifecycle, roots) in moves {
+        if !roots.is_empty() {
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "root.trash",
+                Some(&roots),
+                serde_json::json!({"lifecycle": lifecycle.bitmap_key()}),
+                changed_at_ms,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn projection_bitmap(snapshot: &ProjectionSnapshot, key: BitmapKey) -> RoaringBitmap {

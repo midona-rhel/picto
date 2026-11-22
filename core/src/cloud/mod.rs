@@ -1,4 +1,24 @@
-//! Low-priority schema-1 cloud snapshot configuration and publication.
+//! Cloud sync. A library writes its data into the folder of a Google Drive
+//! or Dropbox desktop app, below `picto/<library id>/`:
+//!
+//! - `library.json`, which names the library. It is written once.
+//! - `blobs/f/`, the original files, each under its content hash.
+//! - `snapshots/`, compressed copies of the whole database, each with a
+//!   manifest (`snapshot.rs`). A device writes a new one when the library
+//!   has changed and has been idle for 30 seconds.
+//! - `deletions/<device id>/`, the deletions that the user made on that
+//!   device (`deletions.rs`).
+//!
+//! Another device gets the library by taking the newest snapshot as its
+//! database (Open from Cloud…) and copying the originals. After that, the
+//! only thing that one device takes over from another by itself is a
+//! deletion: an item that was moved to the Trash, restored or deleted
+//! permanently, and a deleted tag, folder or smart folder. An item that is
+//! added or edited on one device reaches another device only when a
+//! snapshot is restored there.
+//!
+//! This file holds the configuration and the state of the sync
+//! (`cloud_state`) and the commands that switch it on and off.
 
 use std::collections::BTreeMap;
 
@@ -9,10 +29,20 @@ use ts_rs::TS;
 
 use crate::library_application::LibraryApplication;
 
+pub mod deletions;
 pub mod provider;
 pub mod snapshot;
 
 pub const CLOUD_SCHEMA_GENERATION: i64 = 1;
+
+/// The message that a library shows while a deletion file of another device
+/// is expected and cannot be read yet.
+pub(crate) const WAITING_FOR_DELETIONS: &str =
+    "Waiting for a deletion file from another device to arrive in the cloud folder.";
+
+/// Held by everything that reads or writes a library's cloud data: a sync
+/// and the check for deletion files. So the two never run at the same time.
+static SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS,
@@ -167,6 +197,18 @@ pub fn configure_library(
             ["cloud".to_string(), "tasks".to_string()],
             [],
             |transaction, _| {
+                let connected = transaction.query_row(
+                    "SELECT provider IS ?1 AND remote_root IS ?2
+                     FROM cloud_state WHERE singleton = 1",
+                    params![input.provider, root_path],
+                    |row| row.get::<_, bool>(0),
+                )?;
+                if !connected {
+                    // The library starts to sync with this folder. Its
+                    // position in every device's deletion files belongs to
+                    // the cloud data it synced with before.
+                    picto_library::reset_synced_deletions(transaction)?;
+                }
                 let changed = transaction.execute(
                     "UPDATE cloud_state
                      SET provider = ?1, account_label = ?2, remote_root = ?3,
@@ -177,7 +219,7 @@ pub fn configure_library(
                             OR state != 'idle' OR phase != 'idle' OR message != '')",
                     params![input.provider, input.account_label, root_path],
                 )?;
-                Ok((changed != 0).then_some(()))
+                Ok((changed != 0 || !connected).then_some(()))
             },
         )
         .map_err(|error| error.to_string())?;
@@ -413,6 +455,8 @@ pub fn set_paused_library(
     cloud_receipt_or_current(application, published)
 }
 
+/// Switches cloud sync off for the library on this device (Stop Syncing).
+/// The library and its cloud data stay as they are.
 pub fn disable_library(
     application: &LibraryApplication,
 ) -> Result<picto_library::MutationReceipt, String> {
@@ -443,6 +487,66 @@ pub fn disable_library(
         )
         .map_err(|error| error.to_string())?;
     cloud_receipt_or_current(application, published)
+}
+
+/// Returns whether the worker should look for deletion files of other
+/// devices now: cloud sync is on, not paused, and no sync runs or failed.
+pub fn receive_due_library(application: &LibraryApplication) -> Result<bool, String> {
+    application
+        .library()
+        .auxiliary_read(picto_library::database::WorkPriority::Cloud, |connection| {
+            Ok(connection.query_row(
+                "SELECT provider IS NOT NULL AND paused = 0 AND state = 'idle'
+                 FROM cloud_state WHERE singleton = 1",
+                [],
+                |row| row.get::<_, bool>(0),
+            )?)
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// Looks for deletion files of other devices in the cloud folder and
+/// applies them. The worker calls it between two snapshots, so that a
+/// deletion made on another device arrives while this library is idle.
+/// While files are applied the sync state is `reconciling`. A damaged file
+/// leaves the state `error` with a message that names it.
+pub async fn receive_library(
+    application: &LibraryApplication,
+    provider: &dyn provider::CloudProvider,
+) -> Result<deletions::Received, String> {
+    let _running = SYNC.lock().await;
+    let library_id = configuration_library(application)?.library_id;
+    let (waiting, gap) = deletions::waiting_files(application, provider, &library_id).await?;
+    if waiting.is_empty() {
+        snapshot::settle_notice(application, if gap { WAITING_FOR_DELETIONS } else { "" })?;
+        return Ok(deletions::Received {
+            files: 0,
+            incomplete: gap,
+        });
+    }
+    snapshot::set_sync_state(
+        application,
+        "reconciling",
+        "deletions",
+        "Applying deletions from another device",
+    )?;
+    match deletions::apply_files(application, provider, &library_id, waiting, gap).await {
+        Ok(received) => {
+            snapshot::finish_sync_state(
+                application,
+                if received.incomplete {
+                    WAITING_FOR_DELETIONS
+                } else {
+                    ""
+                },
+            )?;
+            Ok(received)
+        }
+        Err(error) => {
+            let _ = snapshot::set_sync_state(application, "error", "idle", &error);
+            Err(error)
+        }
+    }
 }
 
 fn cloud_receipt_or_current(
@@ -489,6 +593,9 @@ fn seed_local_originals_library(application: &LibraryApplication) -> Result<(), 
 fn json_sql_error(error: serde_json::Error) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
 }
+
+#[cfg(test)]
+mod two_device_tests;
 
 #[cfg(test)]
 mod tests {
@@ -661,7 +768,12 @@ mod tests {
         assert_eq!(retention["full_media_history"], false);
     }
 
-    fn image_job(directory: &std::path::Path, index: u8) -> picto_library::PreparedIngestJob {
+    /// Returns an import job for a PNG that it writes into `directory`. The
+    /// picture's colour, and so its content hash, depends on `index`.
+    pub(super) fn image_job(
+        directory: &std::path::Path,
+        index: u8,
+    ) -> picto_library::PreparedIngestJob {
         use sha2::Digest;
         let path = directory.join(format!("cloud-{index}.png"));
         image::RgbaImage::from_pixel(8, 8, image::Rgba([index, 20, 30, 255]))

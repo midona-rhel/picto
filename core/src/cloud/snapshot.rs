@@ -1,3 +1,7 @@
+//! One sync of a library with its cloud folder ([`publish_library`]), and the
+//! snapshots: compressed copies of the whole database, which Open from
+//! Cloud… and Restore take as a library's database.
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -126,10 +130,23 @@ pub fn create_verified_library(
         revision,
     ))
 }
+/// Syncs the library with its cloud folder once (Sync Now, Create Recovery
+/// Snapshot, and the worker when a snapshot is due). In this order it:
+///
+/// 1. applies the deletion files of the other devices;
+/// 2. copies the database, which then holds those deletions;
+/// 3. writes this device's own deletions as deletion files;
+/// 4. removes the originals of deleted items whose "Keep deleted files" time
+///    has passed, and uploads or downloads the originals that are missing on
+///    one side;
+/// 5. uploads the copy of the database and its manifest as a new snapshot.
+///
+/// A failure leaves the sync state `error` with the failure as its message.
 pub async fn publish_library(
     application: &LibraryApplication,
     provider: &dyn CloudProvider,
 ) -> Result<SnapshotManifest, String> {
+    let _running = super::SYNC.lock().await;
     set_sync_state(
         application,
         "reconciling",
@@ -147,9 +164,14 @@ async fn publish_library_inner(
     application: &LibraryApplication,
     provider: &dyn CloudProvider,
 ) -> Result<SnapshotManifest, String> {
+    let (library_id, _) = identity_and_frontier_library(application)?;
+    let received =
+        super::deletions::receive_library(application, provider, &library_id).await?;
     let (artifact, database_revision) = create_verified_library(application)?;
     let (library_id, frontier) = identity_and_frontier_library(application)?;
     ensure_manifest_library(application, provider, &library_id).await?;
+    super::deletions::write_library(application, provider, &library_id, database_revision)
+        .await?;
     purge_expired_cloud_blobs(application, provider, &library_id).await?;
     sync_snapshot_blobs(application, provider, &artifact.database_path, &library_id).await?;
     finish_blocking_restore(application)?;
@@ -204,7 +226,9 @@ async fn publish_library_inner(
                         manifest_path,
                     ],
                 )?;
-                // The snapshot now contains these changes; nothing reads them again.
+                // The snapshot holds these changes, and the deletions among
+                // them were written as deletion files above. Nothing reads
+                // the rows again.
                 transaction.execute(
                     "DELETE FROM cloud_journal WHERE revision <= ?1",
                     [database_revision as i64],
@@ -213,9 +237,16 @@ async fn publish_library_inner(
                     "UPDATE cloud_state
                      SET last_snapshot_at = ?1, last_sync_at = ?1,
                          state = CASE WHEN paused THEN 'paused' ELSE 'idle' END,
-                         phase = 'idle', message = ''
+                         phase = 'idle', message = ?2
                      WHERE singleton = 1",
-                    [manifest.created_at.as_str()],
+                    rusqlite::params![
+                        manifest.created_at.as_str(),
+                        if received.incomplete {
+                            super::WAITING_FOR_DELETIONS
+                        } else {
+                            ""
+                        },
+                    ],
                 )?;
                 Ok(())
             },
@@ -304,8 +335,8 @@ async fn purge_expired_cloud_blobs(
             .maintenance_write(
                 picto_library::database::WorkPriority::Cloud,
                 |transaction| {
-                    // Keep the logical tombstone for offline peers, but mark
-                    // the physical object as purged so it is not retried.
+                    // The row stays and loses the time at which the original
+                    // was to be removed, so the removal is not tried again.
                     transaction.execute(
                         "UPDATE cloud_tombstone SET purge_after = NULL
                          WHERE object_kind = 'blob' AND object_key = ?1",
@@ -608,7 +639,61 @@ fn finish_blocking_restore(application: &LibraryApplication) -> Result<(), Strin
         .map_err(|error| error.to_string())
 }
 
-fn set_sync_state(
+/// Ends a sync that did not publish a snapshot: the state becomes `idle`, or
+/// `paused` when the user paused the sync, and `message` becomes the sync's
+/// message.
+pub(super) fn finish_sync_state(
+    application: &LibraryApplication,
+    message: &str,
+) -> Result<(), String> {
+    application
+        .library()
+        .auxiliary_write(
+            picto_library::database::WorkPriority::Cloud,
+            ["cloud".to_string()],
+            [],
+            |transaction, _| {
+                transaction.execute(
+                    "UPDATE cloud_state
+                     SET state = CASE WHEN paused THEN 'paused' ELSE 'idle' END,
+                         phase = 'idle', message = ?1,
+                         completed_units = 0, total_units = NULL
+                     WHERE singleton = 1",
+                    [message],
+                )?;
+                Ok(())
+            },
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Shows or clears the notice that a deletion file is awaited, while the
+/// sync is idle. `notice` is that message or an empty text. Another message
+/// is left as it is, and nothing is written when the message is `notice`
+/// already.
+pub(super) fn settle_notice(application: &LibraryApplication, notice: &str) -> Result<(), String> {
+    application
+        .library()
+        .auxiliary_write_if_changed(
+            picto_library::database::WorkPriority::Cloud,
+            ["cloud".to_string()],
+            [],
+            |transaction, _| {
+                let changed = transaction.execute(
+                    "UPDATE cloud_state SET message = ?1
+                     WHERE singleton = 1 AND state = 'idle'
+                       AND message != ?1 AND message IN ('', ?2)",
+                    [notice, super::WAITING_FOR_DELETIONS],
+                )?;
+                Ok((changed != 0).then_some(()))
+            },
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+pub(super) fn set_sync_state(
     application: &LibraryApplication,
     state: &str,
     phase: &str,
@@ -701,7 +786,9 @@ pub async fn list_remote_library(
         .collect())
 }
 
-/// Stage the newest verified schema-1 snapshot without touching an open library.
+/// Downloads the newest snapshot of the cloud library `library_id`, checks
+/// it, and writes its database into a staging folder inside `target_root`,
+/// which must not hold a library yet. A library that is open is not touched.
 pub async fn prepare_join(
     provider: &dyn CloudProvider,
     library_id: &str,
@@ -734,7 +821,11 @@ pub async fn prepare_join(
     })
 }
 
-/// Stage a verified replacement while the active database remains mounted.
+/// Downloads the snapshot `snapshot_id` of the open library, checks it, and
+/// writes its database into a staging folder inside the library's folder.
+/// The library stays open and unchanged. The result says where the staged
+/// database is and where the current database is to be kept as an emergency
+/// copy when the restore replaces it.
 pub async fn prepare_restore(
     application: &LibraryApplication,
     provider: &dyn CloudProvider,

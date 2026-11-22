@@ -187,35 +187,18 @@ impl Library {
     ) -> Result<SmartFolderDeleteResult> {
         let changed_at_ms = now_ms();
         let result = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
-            let mut definitions = load_smart_folder_subtree(transaction, smart_folder_id)?;
-            let fallback_smart_folder_id = definitions
-                .iter()
-                .find(|(definition, _)| definition.smart_folder_id == smart_folder_id)
-                .and_then(|(definition, _)| definition.parent_id);
-            definitions.sort_by_key(|(_, depth)| std::cmp::Reverse(*depth));
             let mut next = (*snapshot).clone();
-            let mut changes = Vec::with_capacity(definitions.len());
-            for (definition, _) in &definitions {
-                transaction.execute(
-                    "DELETE FROM smart_folder_definition WHERE smart_folder_id = ?1",
-                    [definition.smart_folder_id.0],
-                )?;
-                crate::smart::remove(&mut next, definition.smart_folder_id);
-                changes.push(SemanticChange::SmartFolderDefinition {
-                    smart_folder_id: definition.smart_folder_id,
-                    before: Some(Box::new(definition.clone())),
-                    after: None,
-                });
-            }
+            let deleted = delete_smart_folder_subtree(transaction, &mut next, smart_folder_id)?;
             insert_cloud_journal(
                 transaction,
                 revision,
                 "smart_folder.delete",
                 None,
                 serde_json::json!({
-                    "smart_folder_ids": definitions.iter()
-                        .map(|(definition, _)| definition.smart_folder_id.0)
-                        .collect::<Vec<_>>()
+                    "smart_folder_ids": deleted.smart_folder_ids.iter()
+                        .map(|id| id.0)
+                        .collect::<Vec<_>>(),
+                    "stable_keys": deleted.stable_keys,
                 }),
                 changed_at_ms,
             )?;
@@ -225,13 +208,11 @@ impl Library {
                 vec!["smart-folders".into(), "navigation".into()],
                 Vec::new(),
             );
+            let count = deleted.smart_folder_ids.len() as u64;
             Ok((
                 SmartFolderDeleteResult {
-                    deleted_smart_folder_ids: definitions
-                        .iter()
-                        .map(|(definition, _)| definition.smart_folder_id)
-                        .collect(),
-                    fallback_smart_folder_id,
+                    deleted_smart_folder_ids: deleted.smart_folder_ids,
+                    fallback_smart_folder_id: deleted.fallback_smart_folder_id,
                     receipt: receipt.clone(),
                 },
                 PublishedDelta {
@@ -241,9 +222,9 @@ impl Library {
                         HistoryEntry::for_command(
                             "smart_folders.delete",
                             "Delete smart folder",
-                            SemanticChange::Compound(changes),
+                            SemanticChange::Compound(deleted.changes),
                         )
-                        .about(definitions.len() as u64, None),
+                        .about(count, None),
                     ),
                 },
             ))
@@ -353,6 +334,59 @@ impl Library {
         })?;
         Ok(receipt)
     }
+}
+
+/// What `delete_smart_folder_subtree` removed.
+pub(super) struct DeletedSmartFolders {
+    /// The deleted smart folder and every smart folder below it, the
+    /// deepest first.
+    pub smart_folder_ids: Vec<SmartFolderId>,
+    /// Their stable keys, in the order of `smart_folder_ids`.
+    pub stable_keys: Vec<String>,
+    /// The group that held the deleted smart folder, for the view to show
+    /// next.
+    pub fallback_smart_folder_id: Option<SmartFolderId>,
+    pub changes: Vec<SemanticChange>,
+}
+
+/// Deletes the smart folder `smart_folder_id` and every smart folder below
+/// it, in SQLite and in `next`, inside a publication.
+pub(super) fn delete_smart_folder_subtree(
+    transaction: &rusqlite::Transaction<'_>,
+    next: &mut ProjectionSnapshot,
+    smart_folder_id: SmartFolderId,
+) -> Result<DeletedSmartFolders> {
+    let mut definitions = load_smart_folder_subtree(transaction, smart_folder_id)?;
+    let fallback_smart_folder_id = definitions
+        .iter()
+        .find(|(definition, _)| definition.smart_folder_id == smart_folder_id)
+        .and_then(|(definition, _)| definition.parent_id);
+    definitions.sort_by_key(|(_, depth)| std::cmp::Reverse(*depth));
+    let mut changes = Vec::with_capacity(definitions.len());
+    for (definition, _) in &definitions {
+        transaction.execute(
+            "DELETE FROM smart_folder_definition WHERE smart_folder_id = ?1",
+            [definition.smart_folder_id.0],
+        )?;
+        crate::smart::remove(next, definition.smart_folder_id);
+        changes.push(SemanticChange::SmartFolderDefinition {
+            smart_folder_id: definition.smart_folder_id,
+            before: Some(Box::new(definition.clone())),
+            after: None,
+        });
+    }
+    Ok(DeletedSmartFolders {
+        smart_folder_ids: definitions
+            .iter()
+            .map(|(definition, _)| definition.smart_folder_id)
+            .collect(),
+        stable_keys: definitions
+            .iter()
+            .map(|(definition, _)| definition.stable_key.clone())
+            .collect(),
+        fallback_smart_folder_id,
+        changes,
+    })
 }
 
 pub(super) fn validate_smart_parent(

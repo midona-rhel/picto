@@ -868,108 +868,15 @@ impl Library {
             .into_iter()
             .collect::<Vec<_>>();
         let result = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
-            let subtree = load_folder_subtree(transaction, &requested)?;
-            let present = subtree
-                .iter()
-                .map(|(folder_id, _)| *folder_id)
-                .collect::<BTreeSet<_>>();
-            if requested
-                .iter()
-                .any(|folder_id| !present.contains(folder_id))
-            {
-                return Err(LibraryError::NotFound(
-                    "one or more selected folders do not exist".into(),
-                ));
-            }
-            let definitions = subtree
-                .iter()
-                .map(|(folder_id, depth)| {
-                    load_folder_definition(transaction, *folder_id)?
-                        .map(|definition| (definition, *depth))
-                        .ok_or_else(|| {
-                            LibraryError::InvalidState(format!(
-                                "folder {} disappeared during deletion",
-                                folder_id.0
-                            ))
-                        })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let fallback_folder_id = if requested.len() == 1 {
-                let mut parent = definitions
-                    .iter()
-                    .find(|(definition, _)| definition.folder_id == requested[0])
-                    .and_then(|(definition, _)| definition.parent_id);
-                while parent.is_some_and(|folder_id| present.contains(&folder_id)) {
-                    parent = definitions
-                        .iter()
-                        .find(|(definition, _)| Some(definition.folder_id) == parent)
-                        .and_then(|(definition, _)| definition.parent_id);
-                }
-                parent
-            } else {
-                None
-            };
-
-            let mut next = (*snapshot).clone();
-            let mut affected = RoaringBitmap::new();
-            let mut history_changes = Vec::new();
-            for (definition, _) in &definitions {
-                let before = next
-                    .folder_orders
-                    .get(&definition.folder_id)
-                    .map(|order| order.iter().map(|root| root.0).collect::<Vec<_>>())
-                    .unwrap_or_default();
-                if !before.is_empty() {
-                    history_changes.push(SemanticChange::Order {
-                        owner_kind: OrderOwnerKind::Folder,
-                        owner_id: definition.folder_id.0,
-                        before: Arc::new(before.clone()),
-                        after: Arc::new(Vec::new()),
-                    });
-                }
-                let members = before.iter().copied().collect::<RoaringBitmap>();
-                affected |= &members;
-                let counts = Arc::make_mut(&mut next.folder_count);
-                for root_id in &members {
-                    let current = counts.value(root_id).unwrap_or(0);
-                    counts.insert(root_id, current.saturating_sub(1));
-                }
-                ordering::delete(transaction, OrderOwnerKind::Folder, definition.folder_id.0)?;
-                Arc::make_mut(&mut next.folder_orders).remove(&definition.folder_id);
-                Arc::make_mut(&mut next.folders).remove(&definition.folder_id);
-            }
-
-            let mut child_first = definitions.clone();
-            child_first.sort_by_key(|(_, depth)| std::cmp::Reverse(*depth));
-            for (definition, _) in &child_first {
-                transaction.execute(
-                    "DELETE FROM folder_definition WHERE folder_id = ?1",
-                    [definition.folder_id.0],
-                )?;
-                history_changes.push(SemanticChange::FolderDefinition {
-                    folder_id: definition.folder_id,
-                    before: Some(Box::new(definition.clone())),
-                    after: None,
-                });
-            }
-            crate::smart::settle_affected_for(
-                transaction,
-                &mut next,
-                &affected,
-                &[crate::predicate::DependencyChange::Folders],
-            )?;
-            next.revision = revision;
-            let deleted_folder_ids = definitions
-                .iter()
-                .map(|(definition, _)| definition.folder_id)
-                .collect::<Vec<_>>();
+            let deleted = delete_folder_subtrees(transaction, revision, &snapshot, &requested)?;
             insert_cloud_journal(
                 transaction,
                 revision,
                 "folder.delete",
                 None,
                 serde_json::json!({
-                    "folder_ids": deleted_folder_ids.iter().map(|id| id.0).collect::<Vec<_>>()
+                    "folder_ids": deleted.folder_ids.iter().map(|id| id.0).collect::<Vec<_>>(),
+                    "stable_keys": deleted.stable_keys,
                 }),
                 now_ms(),
             )?;
@@ -981,27 +888,27 @@ impl Library {
                     "sidebar".into(),
                     "smart-folders".into(),
                 ],
-                if affected.len() <= 256 {
-                    affected.iter().map(RootId).collect()
+                if deleted.affected.len() <= 256 {
+                    deleted.affected.iter().map(RootId).collect()
                 } else {
                     Vec::new()
                 },
             );
             Ok((
                 FolderDeleteResult {
-                    deleted_folder_ids: deleted_folder_ids.clone(),
-                    fallback_folder_id,
+                    deleted_folder_ids: deleted.folder_ids.clone(),
+                    fallback_folder_id: deleted.fallback_folder_id,
                     receipt: receipt.clone(),
                 },
                 PublishedDelta {
-                    snapshot: next,
+                    snapshot: deleted.next,
                     receipt,
                     history: Some(HistoryEntry::for_command(
                         "folders.delete",
                         "Delete folders",
-                        SemanticChange::Compound(history_changes),
+                        SemanticChange::Compound(deleted.history_changes),
                     )
-                    .about(deleted_folder_ids.len() as u64, None)),
+                    .about(deleted.folder_ids.len() as u64, None)),
                 },
             ))
         })?;
@@ -1394,6 +1301,137 @@ impl Library {
         })?;
         Ok(receipt)
     }
+}
+
+/// What `delete_folder_subtrees` removed, and the snapshot without it.
+pub(super) struct DeletedFolders {
+    pub next: ProjectionSnapshot,
+    /// Every deleted folder: the requested ones and all folders below them.
+    pub folder_ids: Vec<FolderId>,
+    /// The stable keys of the deleted folders, in the order of `folder_ids`.
+    pub stable_keys: Vec<String>,
+    /// The nearest folder above a single requested folder that still
+    /// exists, for the view to show next.
+    pub fallback_folder_id: Option<FolderId>,
+    /// The roots that were in a deleted folder.
+    pub affected: RoaringBitmap,
+    pub history_changes: Vec<SemanticChange>,
+}
+
+/// Deletes the folders `requested` and every folder below them, inside a
+/// publication. The items in the folders stay in the library. The smart
+/// folders that look at folders are re-checked for the affected roots.
+pub(super) fn delete_folder_subtrees(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    snapshot: &ProjectionSnapshot,
+    requested: &[FolderId],
+) -> Result<DeletedFolders> {
+    let subtree = load_folder_subtree(transaction, requested)?;
+    let present = subtree
+        .iter()
+        .map(|(folder_id, _)| *folder_id)
+        .collect::<BTreeSet<_>>();
+    if requested
+        .iter()
+        .any(|folder_id| !present.contains(folder_id))
+    {
+        return Err(LibraryError::NotFound(
+            "one or more selected folders do not exist".into(),
+        ));
+    }
+    let definitions = subtree
+        .iter()
+        .map(|(folder_id, depth)| {
+            load_folder_definition(transaction, *folder_id)?
+                .map(|definition| (definition, *depth))
+                .ok_or_else(|| {
+                    LibraryError::InvalidState(format!(
+                        "folder {} disappeared during deletion",
+                        folder_id.0
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let fallback_folder_id = if requested.len() == 1 {
+        let mut parent = definitions
+            .iter()
+            .find(|(definition, _)| definition.folder_id == requested[0])
+            .and_then(|(definition, _)| definition.parent_id);
+        while parent.is_some_and(|folder_id| present.contains(&folder_id)) {
+            parent = definitions
+                .iter()
+                .find(|(definition, _)| Some(definition.folder_id) == parent)
+                .and_then(|(definition, _)| definition.parent_id);
+        }
+        parent
+    } else {
+        None
+    };
+
+    let mut next = snapshot.clone();
+    let mut affected = RoaringBitmap::new();
+    let mut history_changes = Vec::new();
+    for (definition, _) in &definitions {
+        let before = next
+            .folder_orders
+            .get(&definition.folder_id)
+            .map(|order| order.iter().map(|root| root.0).collect::<Vec<_>>())
+            .unwrap_or_default();
+        if !before.is_empty() {
+            history_changes.push(SemanticChange::Order {
+                owner_kind: OrderOwnerKind::Folder,
+                owner_id: definition.folder_id.0,
+                before: Arc::new(before.clone()),
+                after: Arc::new(Vec::new()),
+            });
+        }
+        let members = before.iter().copied().collect::<RoaringBitmap>();
+        affected |= &members;
+        let counts = Arc::make_mut(&mut next.folder_count);
+        for root_id in &members {
+            let current = counts.value(root_id).unwrap_or(0);
+            counts.insert(root_id, current.saturating_sub(1));
+        }
+        ordering::delete(transaction, OrderOwnerKind::Folder, definition.folder_id.0)?;
+        Arc::make_mut(&mut next.folder_orders).remove(&definition.folder_id);
+        Arc::make_mut(&mut next.folders).remove(&definition.folder_id);
+    }
+
+    let mut child_first = definitions.clone();
+    child_first.sort_by_key(|(_, depth)| std::cmp::Reverse(*depth));
+    for (definition, _) in &child_first {
+        transaction.execute(
+            "DELETE FROM folder_definition WHERE folder_id = ?1",
+            [definition.folder_id.0],
+        )?;
+        history_changes.push(SemanticChange::FolderDefinition {
+            folder_id: definition.folder_id,
+            before: Some(Box::new(definition.clone())),
+            after: None,
+        });
+    }
+    crate::smart::settle_affected_for(
+        transaction,
+        &mut next,
+        &affected,
+        &[crate::predicate::DependencyChange::Folders],
+    )?;
+    next.revision = revision;
+    Ok(DeletedFolders {
+        next,
+        folder_ids: definitions
+            .iter()
+            .map(|(definition, _)| definition.folder_id)
+            .collect(),
+        stable_keys: definitions
+            .iter()
+            .map(|(definition, _)| definition.stable_key.clone())
+            .collect(),
+        fallback_folder_id,
+        affected,
+        history_changes,
+    })
 }
 
 pub(super) fn rename_folder_definition(
