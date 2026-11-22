@@ -29,6 +29,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use picto_library::RootId;
 use std::path::PathBuf;
+use std::rc::Rc;
 use surface::MediaSurface;
 use toolbar::ViewerToolbar;
 
@@ -218,16 +219,27 @@ impl Boundary {
     }
 }
 
-/// What a media surface needs to open one file: the item's name, the file's
-/// key (its content hash), the path of its thumbnail, its size in pixels
-/// when that is known, the path of the file and its MIME type.
+/// What a media surface needs to open one file.
 pub struct Media {
+    /// The item's name.
     pub name: SharedString,
+    /// The file's key, which is its content hash.
     pub key: String,
+    /// The path of the picture that the surface draws until the file itself
+    /// is shown ([`picture_while_loading`]): the file's thumbnail, or for a
+    /// video the picture of its first frame.
     pub thumbnail: PathBuf,
+    /// The file's size in pixels, when the library knows it.
     pub natural: Option<camera::Size>,
+    /// The path of the file.
     pub path: PathBuf,
+    /// The file's MIME type.
     pub mime: String,
+    /// Set for a video that has no first-frame picture: the function that
+    /// asks the application layer to make the picture
+    /// ([`Session::first_frame_request`]). The surface calls it when it
+    /// makes the video's player.
+    pub make_first_frame: Option<Rc<dyn Fn()>>,
 }
 
 impl Media {
@@ -238,15 +250,22 @@ impl Media {
         details: &picto_library::RootDetails,
         member: usize,
     ) -> Option<Self> {
-        details.media.get(member).map(|media| Self {
-            name: details.root.name.clone().into(),
-            key: media.facts.content_hash.clone(),
-            thumbnail: crate::grid::thumbnails::existing(
-                session.thumbnail(&media.facts.content_hash),
-            ),
-            natural: size_of(media.facts.width, media.facts.height),
-            path: PathBuf::from(&media.file_path),
-            mime: media.facts.mime.clone(),
+        details.media.get(member).map(|media| {
+            let hash = &media.facts.content_hash;
+            let (thumbnail, first_frame_missing) = picture_while_loading(
+                &media.facts.mime,
+                session.first_frame(hash),
+                session.thumbnail(hash),
+            );
+            Self {
+                name: details.root.name.clone().into(),
+                key: hash.clone(),
+                thumbnail,
+                natural: size_of(media.facts.width, media.facts.height),
+                path: PathBuf::from(&media.file_path),
+                mime: media.facts.mime.clone(),
+                make_first_frame: first_frame_missing.then(|| session.first_frame_request(hash)),
+            }
         })
     }
 
@@ -258,9 +277,42 @@ impl Media {
             self.natural,
             self.path,
             &self.mime,
+            self.make_first_frame,
             cx,
         )
     }
+}
+
+/// Returns the path of the picture that a viewer draws for a file until the
+/// file itself is shown, and whether the file is a video that has no
+/// first-frame picture.
+///
+/// `mime` is the file's MIME type, `first_frame` is the path of its
+/// first-frame picture ([`Session::first_frame`]) and `thumbnail` is the
+/// `.jpg` path of its thumbnail ([`Session::thumbnail`]).
+///
+/// - For a video, the picture is the first-frame picture when that file
+///   exists. A video's thumbnail is a frame from 35% of the way into the
+///   video, and playback starts at the first frame. With the thumbnail, the
+///   picture on screen would change from the later frame to the first frame
+///   when the video's player draws its first frame.
+/// - For a video that has no first-frame picture, and for every other file,
+///   the picture is the thumbnail: the `.jpg` when it exists, otherwise the
+///   `.png`.
+///
+/// A video is a file that the media player plays as a video
+/// ([`video::kind_of`]). The grid and every other view that shows a video as
+/// a tile or as a small preview draw the thumbnail and do not call this.
+pub fn picture_while_loading(
+    mime: &str,
+    first_frame: PathBuf,
+    thumbnail: PathBuf,
+) -> (PathBuf, bool) {
+    let video = video::kind_of(mime) == Some(video::model::Kind::Video);
+    if video && first_frame.exists() {
+        return (first_frame, false);
+    }
+    (crate::grid::thumbnails::existing(thumbnail), video)
 }
 
 /// Returns what the media view shows: the shown member of the selected item.
@@ -269,16 +321,22 @@ fn session_media(session: &Session) -> Option<Media> {
     Media::of(session, session.details.as_ref()?, session.member)
 }
 
-/// Shows the selected item's thumbnail on `surface` at once. The original
-/// file is opened afterwards, by the `present` function of the host that
-/// owns the surface.
+/// Shows the selected item on `surface` at once, as the picture that
+/// [`picture_while_loading`] returns for it: its thumbnail, or for a video
+/// the picture of its first frame. The original file is opened afterwards,
+/// by the `present` function of the host that owns the surface.
 fn show_selection(session: &Entity<Session>, surface: &Entity<MediaSurface>, cx: &mut App) {
     let shown = {
         let session = session.read(cx);
         session.selected_item().map(|item| {
+            let (picture, _) = picture_while_loading(
+                &item.mime,
+                session.first_frame(&item.content_hash),
+                session.thumbnail(&item.content_hash),
+            );
             (
                 item.content_hash.clone(),
-                crate::grid::thumbnails::existing(session.thumbnail(&item.content_hash)),
+                picture,
                 size_of(item.width, item.height),
             )
         })
@@ -971,7 +1029,51 @@ impl Render for Viewer {
 
 #[cfg(test)]
 mod tests {
-    use super::{End, step_within};
+    use super::{End, picture_while_loading, step_within};
+
+    /// While a video loads, a viewer draws the picture of the video's first
+    /// frame, and its thumbnail only when the library has no such picture
+    /// yet. For every other file it draws the thumbnail.
+    #[test]
+    fn a_loading_video_is_drawn_as_its_first_frame_and_other_files_as_their_thumbnail() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = |name: &str| {
+            let path = folder.path().join(name);
+            std::fs::write(&path, b"picture").unwrap();
+            path
+        };
+        // This video has a thumbnail and a first-frame picture.
+        let (thumbnail, first_frame) = (file("a.jpg"), file("a.first-frame.jpg"));
+        assert_eq!(
+            picture_while_loading("video/mp4", first_frame.clone(), thumbnail.clone()),
+            (first_frame.clone(), false)
+        );
+        // A file that is not a video is shown as its thumbnail, whatever is
+        // at the path of a first-frame picture.
+        for mime in ["image/jpeg", "audio/mpeg", "application/pdf"] {
+            assert_eq!(
+                picture_while_loading(mime, first_frame.clone(), thumbnail.clone()),
+                (thumbnail.clone(), false),
+                "{mime}"
+            );
+        }
+        // This video has a thumbnail and no first-frame picture. The
+        // thumbnail is drawn, and the picture is reported as missing.
+        let thumbnail = file("b.jpg");
+        let missing = folder.path().join("b.first-frame.jpg");
+        assert_eq!(
+            picture_while_loading("video/webm", missing, thumbnail.clone()),
+            (thumbnail, true)
+        );
+        // The thumbnail of this video is the `.png` that "Set as Thumbnail"
+        // wrote. It has no `.jpg`.
+        let png = file("c.png");
+        let missing = folder.path().join("c.first-frame.jpg");
+        assert_eq!(
+            picture_while_loading("video/quicktime", missing, folder.path().join("c.jpg")),
+            (png, true)
+        );
+    }
 
     #[test]
     fn a_step_lands_inside_or_names_the_end_it_ran_into() {

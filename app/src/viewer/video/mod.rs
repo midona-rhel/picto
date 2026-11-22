@@ -462,10 +462,12 @@ pub struct VideoPlayer {
     frame: Option<Frame>,
     /// The moment the player was created. A video's player draws nothing
     /// until its first frame arrives, and the viewer keeps drawing what it
-    /// showed before. So the first picture of a video that the user sees is
-    /// the video's first frame, and not the item's thumbnail, which is
-    /// taken from a later point in the video. The player stops waiting
-    /// 1,500 ms (`motion::MEDIA_HOLD`) after this moment (see
+    /// showed before. That is the picture of the video's first frame that
+    /// the library keeps, so the picture on screen does not change when the
+    /// player draws its first frame. For a video that has no such picture
+    /// yet it is the video's thumbnail, which is taken from a later point
+    /// in the video (`viewer::picture_while_loading`). The player stops
+    /// waiting 1,500 ms (`motion::MEDIA_HOLD`) after this moment (see
     /// `presentable`).
     opened: Instant,
     /// Whether the controls are shown, and when they are due to be hidden.
