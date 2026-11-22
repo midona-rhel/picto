@@ -79,6 +79,13 @@ actions!(
 /// only in this context.
 const FULLSCREEN_CONTEXT: &str = "PlayerFullscreen";
 
+/// Starts the two programs that play and read videos once in the
+/// background (`ffmpeg::start_programs_once`), so that the first video
+/// opens as fast as the later ones.
+pub fn start_programs_once() {
+    ffmpeg::start_programs_once();
+}
+
 /// Binds Escape to `ExitFullscreen` in the key context `PlayerFullscreen`,
 /// so that Escape ends the player's fullscreen. The layer that shows the
 /// fullscreen player has that context and the keyboard focus. GPUI tries

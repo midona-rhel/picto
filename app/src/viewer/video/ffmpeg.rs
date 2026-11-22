@@ -65,6 +65,29 @@ fn command(program: &Path) -> Command {
     command
 }
 
+/// Starts `ffprobe` and `ffmpeg` once each with `-version`, on a thread of
+/// its own, and returns at once. The first start of a program after the
+/// computer started takes longer than the later ones: the system reads the
+/// program's file from the disk, and on Windows the malware scanner checks
+/// it. For these two programs that is more than half a second each on
+/// Windows. The app calls this when it starts, so that the first video the
+/// user opens does not wait for it.
+pub fn start_programs_once() {
+    std::thread::spawn(|| {
+        for name in ["ffprobe", "ffmpeg"] {
+            let Some(program) = binary(name) else {
+                continue;
+            };
+            let _ = command(&program)
+                .arg("-version")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    });
+}
+
 /// Searches for the program `name` and returns its path, or `None` when it
 /// is not found. It looks in the folder that the environment variable
 /// `PICTO_FFMPEG_DIR` names, then in `vendor/ffmpeg/` in the working

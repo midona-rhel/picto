@@ -474,6 +474,9 @@ fn run(
         // The Dock badge and the system notifications are switched on here,
         // which only the app itself does and the off-screen tool does not.
         desktop::enable(cx);
+        // The first start of `ffprobe` and `ffmpeg` is slow, so both are
+        // started once now, in the background, and not by the first video.
+        viewer::video::start_programs_once();
         // On Windows and Linux the system lists the app's notifications
         // under this id and name. macOS takes both from the app's bundle.
         if !cfg!(target_os = "macos") {

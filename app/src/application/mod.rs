@@ -333,12 +333,14 @@ impl Application {
             return receiver;
         }
         let mut opened = self.opened.clone();
-        let started = std::time::Instant::now();
         self.runtime.spawn(async move {
             let ready = match opened.wait_for(Option::is_some).await {
                 Ok(state) => state.clone().unwrap_or(Ok(())),
                 Err(_) => Err(STOPPED.to_owned()),
             };
+            // The clock starts when the library is open, so that the time in
+            // the log is the command's own and holds no wait for the library.
+            let started = std::time::Instant::now();
             let result = match ready {
                 Ok(()) => picto_core::state::invoke(&command, &args.to_string())
                     .await
