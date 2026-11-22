@@ -19,6 +19,7 @@ keeps its `LICENSE-APACHE` file. This project added the following to them:
 - a way to ask whether the system blurs what is behind a window;
 - Acrylic on Windows 11, set through the system's documented window
   attribute;
+- what a menu in a pop-up window needs on Windows, X11 and Wayland;
 - the distance and the animation of a scroll with the mouse wheel on Windows
   and Linux.
 
@@ -587,14 +588,128 @@ used only an undocumented call.
   whether Windows replaces it with a solid colour while the window is not
   the active one.
 
-`gpui-pre-linux` has no change for this. On Wayland, 0.3.12 asks the
-compositor to blur behind a `Blurred` window when the compositor has the
-ext-background-effect or the kde-blur protocol. The Linux windows do not
-answer `is_background_blur_supported` yet, so the app never asks for
-`Blurred` on Linux. To answer it, the Wayland window would have to report
-whether the compositor offers one of the two protocols, and for
-ext-background-effect also whether the compositor has announced the `blur`
-capability, which 0.3.12 does not record.
+`gpui-pre-linux` has no change for the frosted material, and the app does
+not offer the material on Linux. The Linux windows answer
+`is_background_blur_supported` for the app's menus, which is described
+next.
+
+Menus in pop-up windows on Windows, X11 and Wayland. The app shows a menu
+in pop-up windows of its own: one for the menu's panel and one for its open
+submenu (`src/ui/menu/popup.rs`). On macOS 0.3.12 has everything this needs.
+The other three systems each lacked something.
+
+`gpui-pre`
+- `src/platform.rs`: the trait `PlatformWindow` has two new methods.
+  `is_transparency_supported` answers whether a window with a transparent
+  background shows what is behind it; its default answer is `true`.
+  `set_content_region` takes the rounded rectangle of the window that holds
+  its content; its default does nothing.
+- `src/window.rs`: `Window::is_transparency_supported` and
+  `Window::set_content_region` are the public methods that an application
+  calls. `set_content_region` multiplies the rectangle and the radius by the
+  interface zoom. The documentation of
+  `Window::is_background_blur_supported` says what the Linux windows now
+  answer.
+- `src/platform/popup.rs`: `PopupOptions` has a new field,
+  `geometry_inset`. It says how far inside the popup's surface the
+  rectangle is that the platform places and keeps on the screen. A popup
+  that draws a shadow around its content sets it, so that the shadow may
+  leave the screen while the content stays on it.
+
+`gpui-pre-windows`
+- `src/window.rs`: a `WindowKind::PopUp` window is created with
+  `WS_EX_NOACTIVATE` in addition to `WS_EX_TOOLWINDOW` and `WS_EX_TOPMOST`.
+  Without it, Windows makes the pop-up window the foreground window when
+  the foreground window goes away, for example after a click on the
+  taskbar, and the window that opened the pop-up then looks inactive.
+- `src/events.rs`: a window with `WS_EX_NOACTIVATE` answers
+  `WM_MOUSEACTIVATE` with `MA_NOACTIVATE`. Every other window still answers
+  `MA_ACTIVATE`. A click in a pop-up window therefore reaches the window's
+  content and leaves the window that opened it active.
+
+`gpui-pre-linux` (X11)
+- `Cargo.toml`: the dependency `x11rb` also has its feature `shape`, for
+  the Shape extension.
+- `src/linux/x11/window.rs`: This file has these changes.
+  - A window records, when it is created, whether a compositing manager is
+    running on its screen (the owner of the selection `_NET_WM_CM_S<screen>`)
+    and whether that manager has put the property
+    `_KDE_NET_WM_BLUR_BEHIND_REGION` on the root window, which is how KWin
+    announces its blur effect. `is_transparency_supported` answers the
+    first and `is_background_blur_supported` answers the second.
+  - `set_content_region` keeps the region, and `apply_content_region` tells
+    the server about it.
+    - With a compositing manager that blurs, a `Blurred` window gets the
+      property `_KDE_NET_WM_BLUR_BEHIND_REGION` with the rectangles of the
+      region, in device pixels; the rounded corners are rows that are one
+      pixel high. A `Blurred` window without a region gets the property
+      with no rectangles, which stands for the whole window, and a window
+      that is not `Blurred` has the property removed.
+    - With any compositing manager, the window's input shape is the
+      rectangle of the region (`shape::rectangles` with `SK::INPUT`), so
+      the pointer reaches what is behind the transparent room around the
+      content.
+    - Without a compositing manager, the window's shape is set to the
+      region (`SK::BOUNDING`), because the transparent room around the
+      content would be drawn black.
+  - A `WindowKind::PopUp` window is created exactly where it was asked for.
+    Every other window is still created 2 pixels to the right, which the
+    window manager corrects; nothing corrects it for a pop-up window.
+  - `map_window` asks the client to grab the pointer when the window is a
+    `WindowKind::PopUp`.
+  - `has_content_at` answers whether a point is inside the content region,
+    or inside the window when it has no region.
+- `src/linux/x11/client.rs`: This file has the pointer grab.
+  - `grab_pointer_for_popup` grabs the pointer for the first pop-up window
+    that is mapped (`XIGrabDevice` on the client's pointer, with
+    `owner_events`). A pop-up window is override-redirect: the window
+    manager does not manage it and it never has the keyboard, so without a
+    grab nothing tells the application that the user clicked somewhere
+    else. With `owner_events` the application's own windows receive their
+    pointer events as usual. The grab is an XInput grab because the windows
+    select their pointer events through XInput, and under a grab of the
+    core protocol the server does not send them their enter and leave
+    events.
+  - A press of a button on anything that is not a window of the
+    application arrives at the grab window, at a position outside its
+    content. The handler of `XinputButtonPress` then asks every pop-up
+    window to close, as the client does for `WM_DELETE_WINDOW`: it calls
+    the window's `should_close` callback and closes the window when the
+    callback agrees.
+  - When the pop-up window that holds the grab is destroyed, the server
+    ends the grab. `drop_window` then grabs the pointer for another pop-up
+    window that is still open.
+
+`gpui-pre-linux` (Wayland)
+- `src/linux/wayland/window.rs`: This file has these changes.
+  - `build_popup_positioner` gives the positioner the size of the surface
+    less `geometry_inset` on every side, and `WaylandWindowState::inset`
+    returns `geometry_inset` for a popup, so the popup's window geometry is
+    that inner rectangle. The compositor places and constrains the window
+    geometry.
+  - `set_content_region` keeps the region. While it is set, `update_window`
+    asks for the blur behind that rounded rectangle and not behind the area
+    inside the client inset, and makes the region's rectangle the surface's
+    input region, so the pointer reaches what is behind the transparent
+    room around the content. With the kde-blur protocol the blur region is
+    passed with `set_region` while a content region is set; without one the
+    whole surface is blurred, as before.
+  - `is_background_blur_supported` answers `true` when the compositor has
+    ext-background-effect and has announced the `blur` capability, or, when
+    it has no ext-background-effect, has the kde-blur protocol.
+  - `popup_parent`, `has_popup`, `is_or_descends_from` and `is_focused` are
+    helpers for the keyboard focus of popups.
+- `src/linux/wayland/client.rs`: This file has these changes.
+  - The `capabilities` event of ext-background-effect is recorded in
+    `Globals::background_blur_capability`. Before, the event was ignored.
+  - A popup that takes the grab gets the keyboard, and the compositor sends
+    `leave` to the window it is anchored to. That window is now reported as
+    focused for as long as the keyboard is in one of its popups. When the
+    keyboard leaves a window that has a popup, or leaves a popup, the
+    windows are told that they lost the focus only after the `enter` event
+    that follows has been handled, and only if the keyboard did not go to
+    one of their popups. A window without a popup is told at once, as
+    before.
 
 The mouse wheel on Windows and Linux. A mouse wheel reports how far it
 turned in lines there, three lines for one notch by default. 0.3.12 scrolls
@@ -675,6 +790,12 @@ Check the result in these ways:
   "Frosted glass sidebar and inspector" in a real window on macOS with
   another window behind it. On Windows, do the same with "Acrylic sidebar
   and inspector".
+- For the menus, start the app on Windows, on X11 and on Wayland with its
+  window smaller than the display and another application behind it.
+  Right-click an item near the bottom edge of the window: the menu reaches
+  past the window. Use the arrow keys, type in the search row and press
+  Escape. Open the menu again and click on the other application, on the
+  desktop and in the app's window: each click closes the menu.
 - For the mouse wheel, run `motion::wheel_scroll_tests` in `app`, and turn
   the wheel of a mouse over the grid on Windows and on Linux. One notch
   moves the grid 100 pixels in about 200 ms.
@@ -757,13 +878,10 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/div.rs b/gpui-pre/src/elements/di
  };
  use collections::HashMap;
  use gpui_util::ResultExt;
-@@ -1440,9 +1441,70 @@
-     /// Set the selected state for this element.
-     fn aria_selected(mut self, selected: bool) -> Self {
-         self.interactivity().aria.selected = Some(selected);
-+        self
-+    }
-+
+@@ -1443,6 +1444,67 @@
+         self
+     }
+ 
 +    /// Set the disabled state for this element: assistive technology shows
 +    /// it but does not offer to press or edit it.
 +    fn aria_disabled(mut self, disabled: bool) -> Self {
@@ -775,9 +893,9 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/div.rs b/gpui-pre/src/elements/di
 +    /// read and selected but not changed).
 +    fn aria_read_only(mut self, read_only: bool) -> Self {
 +        self.interactivity().aria.read_only = read_only;
-         self
-     }
- 
++        self
++    }
++
 +    /// Mark this element as modal: while it is shown, assistive technology
 +    /// treats what lies outside it as inert (`aria-modal`).
 +    fn aria_modal(mut self, modal: bool) -> Self {
@@ -1252,18 +1370,17 @@ diff --color -ruN gpui-pre-0.3.12/src/gpui.rs b/gpui-pre/src/gpui.rs
 diff --color -ruN gpui-pre-0.3.12/src/interactive.rs b/gpui-pre/src/interactive.rs
 --- a/gpui-pre/src/interactive.rs
 +++ b/gpui-pre/src/interactive.rs
-@@ -621,7 +621,26 @@
-         &self.modifiers
+@@ -622,6 +622,25 @@
      }
  }
-+
+ 
 +/// The distance that one line of a mouse wheel scrolls a scroll container on
 +/// Windows and Linux. A wheel reports three lines for one notch there by
 +/// default, so one notch scrolls 100 pixels, which is what Chromium scrolls
 +/// for one notch on Windows. Without this, a line would be the height of a
 +/// text line of the window, and an app with small text would scroll slowly.
 +pub const WHEEL_LINE: Pixels = crate::px(100. / 3.);
- 
++
 +/// Returns the distance that one line of a mouse wheel scrolls a scroll
 +/// container whose text lines are `text_line` high: [`WHEEL_LINE`] on Windows
 +/// and Linux, and `text_line` on macOS, where the system has already scaled
@@ -1279,11 +1396,10 @@ diff --color -ruN gpui-pre-0.3.12/src/interactive.rs b/gpui-pre/src/interactive.
  impl ScrollDelta {
      /// Returns true if this is a precise scroll delta in pixels.
      pub fn precise(&self) -> bool {
-@@ -718,9 +737,158 @@
-     /// Convert this collection of paths into a slice.
+@@ -719,6 +738,155 @@
      pub fn paths(&self) -> &[PathBuf] {
          &self.0
-+    }
+     }
 +}
 +
 +/// What a drag from another application offered besides files on disk: what
@@ -1356,7 +1472,7 @@ diff --color -ruN gpui-pre-0.3.12/src/interactive.rs b/gpui-pre/src/interactive.
 +            arrival: std::sync::Arc::new(std::sync::Mutex::new(Some(receiver))),
 +        };
 +        (promised, sender)
-     }
++    }
 +
 +    /// The files' reports as they come, once (`None` after the first call).
 +    /// The stream ends after `count` reports, or earlier when the platform
@@ -1367,8 +1483,8 @@ diff --color -ruN gpui-pre-0.3.12/src/interactive.rs b/gpui-pre/src/interactive.
 +            .unwrap_or_else(|poison| poison.into_inner())
 +            .take()
 +    }
- }
- 
++}
++
 +impl Debug for PromisedFiles {
 +    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 +        f.debug_struct("PromisedFiles")
@@ -1433,15 +1549,13 @@ diff --color -ruN gpui-pre-0.3.12/src/interactive.rs b/gpui-pre/src/interactive.
 +        .lock()
 +        .unwrap_or_else(|poison| poison.into_inner())
 +        .take()
-+}
-+
+ }
+ 
  /// Data offered to the platform when an internal drag leaves the window and is
- /// promoted to a native drag session.
- #[derive(Debug, Clone, Eq, PartialEq)]
 diff --color -ruN gpui-pre-0.3.12/src/platform.rs b/gpui-pre/src/platform.rs
 --- a/gpui-pre/src/platform.rs
 +++ b/gpui-pre/src/platform.rs
-@@ -1300,6 +1300,12 @@
+@@ -1300,6 +1300,21 @@
      fn background_appearance(&self) -> WindowBackgroundAppearance;
      fn set_title(&mut self, title: &str);
      fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance);
@@ -1451,10 +1565,19 @@ diff --color -ruN gpui-pre-0.3.12/src/platform.rs b/gpui-pre/src/platform.rs
 +    fn is_background_blur_supported(&self) -> bool {
 +        false
 +    }
++    /// Whether a window with a transparent background shows what is behind
++    /// it. A platform that does not implement this answers `true`.
++    fn is_transparency_supported(&self) -> bool {
++        true
++    }
++    /// Names the rounded rectangle of this window that holds its content, in
++    /// logical pixels, with its corner radius. A platform that does not
++    /// implement this ignores it.
++    fn set_content_region(&self, _region: Option<(Bounds<Pixels>, Pixels)>) {}
      fn minimize(&self);
      fn zoom(&self);
      fn toggle_fullscreen(&self);
-@@ -2147,9 +2153,17 @@
+@@ -2147,9 +2162,17 @@
              .ok();
      }
  
@@ -1473,7 +1596,7 @@ diff --color -ruN gpui-pre-0.3.12/src/platform.rs b/gpui-pre/src/platform.rs
              .ok()
              .flatten()
      }
-@@ -2157,8 +2171,12 @@
+@@ -2157,8 +2180,12 @@
      pub fn selection_bounds_for_range(&mut self, range_utf16: Range<usize>) -> Vec<Bounds<Pixels>> {
          self.cx
              .update(|window, cx| {
@@ -1486,7 +1609,7 @@ diff --color -ruN gpui-pre-0.3.12/src/platform.rs b/gpui-pre/src/platform.rs
              })
              .unwrap_or_default()
      }
-@@ -2226,7 +2244,10 @@
+@@ -2226,7 +2253,10 @@
      #[allow(unused)]
      pub fn character_index_for_point(&mut self, point: Point<Pixels>) -> Option<usize> {
          self.cx
@@ -1498,7 +1621,7 @@ diff --color -ruN gpui-pre-0.3.12/src/platform.rs b/gpui-pre/src/platform.rs
              .ok()
              .flatten()
      }
-@@ -2244,7 +2265,11 @@
+@@ -2244,7 +2274,11 @@
      /// See [`InputHandler::element_bounds`].
      pub fn element_bounds(&mut self) -> Option<Bounds<Pixels>> {
          self.cx
@@ -1511,6 +1634,24 @@ diff --color -ruN gpui-pre-0.3.12/src/platform.rs b/gpui-pre/src/platform.rs
              .ok()
              .flatten()
      }
+diff --color -ruN gpui-pre-0.3.12/src/platform/popup.rs b/gpui-pre/src/platform/popup.rs
+--- a/gpui-pre/src/platform/popup.rs
++++ b/gpui-pre/src/platform/popup.rs
+@@ -36,6 +36,14 @@
+     /// An additional offset applied to the popup after anchoring.
+     pub offset: Point<Pixels>,
+ 
++    /// How far inside the popup's surface, on every side, the rectangle is
++    /// that the platform positions and keeps on the screen (on Wayland, the
++    /// popup's window geometry). A popup that draws a shadow around its
++    /// content sets this to the width of the part that may leave the screen.
++    /// The anchor point, the gravity and the offset place this rectangle,
++    /// not the whole surface.
++    pub geometry_inset: Pixels,
++
+     /// Whether the popup should take an explicit input grab.
+     ///
+     /// Grabbing popups behave like menus: they take keyboard focus and are dismissed when the
 diff --color -ruN gpui-pre-0.3.12/src/platform/test/window.rs b/gpui-pre/src/platform/test/window.rs
 --- a/gpui-pre/src/platform/test/window.rs
 +++ b/gpui-pre/src/platform/test/window.rs
@@ -2559,7 +2700,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      }
  
      /// Returns the client_inset value by [`Self::set_client_inset`].
-@@ -3297,6 +3356,22 @@
+@@ -3297,6 +3356,54 @@
              .set_background_appearance(background_appearance);
      }
  
@@ -2572,17 +2713,49 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +    /// - macOS: `true` unless the user has turned on Reduce Transparency.
 +    /// - Windows: `true` on Windows 10 version 1809 (build 17763) and later,
 +    ///   in a window that is drawn through DirectComposition.
-+    /// - Linux: always `false`. The Linux windows do not answer the question
-+    ///   yet, although a Wayland compositor with a blur protocol does blur
-+    ///   behind a `Blurred` window.
++    /// - Wayland: `true` when the compositor has the ext-background-effect
++    ///   protocol and has announced that it can blur, or has the kde-blur
++    ///   protocol.
++    /// - X11: `true` when a compositing manager is running and it has put
++    ///   the property `_KDE_NET_WM_BLUR_BEHIND_REGION` on the root window,
++    ///   which is how KWin says that its blur effect is loaded.
 +    pub fn is_background_blur_supported(&self) -> bool {
 +        self.platform_window.is_background_blur_supported()
++    }
++
++    /// Whether a window with a transparent background shows what is behind
++    /// it. It is `false` only on an X11 screen without a compositing manager,
++    /// where the transparent parts of a window are drawn black.
++    pub fn is_transparency_supported(&self) -> bool {
++        self.platform_window.is_transparency_supported()
++    }
++
++    /// Names the rounded rectangle of this window that holds its content:
++    /// `region` in the window's coordinates, with corners of `radius`. This
++    /// is for a transparent pop-up window that draws one panel and leaves
++    /// room around it for the panel's shadow. `None` takes the region away.
++    ///
++    /// - Wayland and X11 with a compositing manager: a window whose
++    ///   background appearance is [`WindowBackgroundAppearance::Blurred`]
++    ///   has only this region blurred. Without a region, the area inside the
++    ///   client inset is blurred. The window receives the pointer only in
++    ///   the region's rectangle, and the pointer reaches what is behind the
++    ///   rest of the window.
++    /// - X11 without a compositing manager: the window is cut to this
++    ///   region with the Shape extension, because the transparent room
++    ///   around the panel would be drawn black.
++    /// - macOS and Windows: nothing.
++    pub fn set_content_region(&self, region: Option<(Bounds<Pixels>, Pixels)>) {
++        let zoom = self.ui_zoom;
++        self.platform_window.set_content_region(
++            region.map(|(bounds, radius)| (zoomed_out_bounds(bounds, zoom), radius * zoom)),
++        );
 +    }
 +
      /// Mark the window as dirty at the platform level.
      pub fn set_window_edited(&mut self, edited: bool) {
          self.platform_window.set_edited(edited);
-@@ -3331,10 +3406,32 @@
+@@ -3331,10 +3438,32 @@
      /// Overrides the display scale factor for tests.
      #[cfg(any(test, feature = "test-support"))]
      pub fn set_scale_factor(&mut self, scale_factor: f32) {
@@ -2616,7 +2789,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      /// The size of an em for the base font of the application. Adjusting this value allows the
      /// UI to scale, just like zooming a web page.
      pub fn rem_size(&self) -> Pixels {
-@@ -3672,6 +3769,7 @@
+@@ -3672,6 +3801,7 @@
          if self.platform_window.prepare_frame() {
              self.refresh();
          }
@@ -2624,7 +2797,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          self.invalidate_entities();
          cx.entities.clear_accessed();
          debug_assert!(self.rendered_entity_stack.is_empty());
-@@ -3907,7 +4005,7 @@
+@@ -3907,7 +4037,7 @@
  
          self.a11y.sync_active_flag();
          if self.a11y.is_active() {
@@ -2633,7 +2806,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          }
  
          let _inspector_width: Pixels = rems(30.0).to_pixels(self.rem_size());
-@@ -4811,6 +4909,31 @@
+@@ -4811,6 +4941,31 @@
          corner_radii: Corners<Pixels>,
          shadows: &[BoxShadow],
      ) {
@@ -2665,7 +2838,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          self.invalidator.debug_assert_paint();
  
          let scale_factor = self.scale_factor();
-@@ -4832,12 +4955,52 @@
+@@ -4832,12 +4987,52 @@
                  color: shadow.color.opacity(opacity),
                  element_bounds,
                  element_corner_radii,
@@ -2719,7 +2892,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      /// Paint the inset shadows from `shadows` into the scene at the current z-index. Should
      /// be called after the element's background so the shadow layers on top of the fill.
      /// Drop shadows are skipped; paint those with [`Self::paint_drop_shadows`] before the background.
-@@ -5215,7 +5378,7 @@
+@@ -5215,7 +5410,7 @@
  
              self.next_frame.scene.insert_primitive(PolychromeSprite {
                  order: 0,
@@ -2728,7 +2901,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
                  grayscale: false.into(),
                  bounds,
                  corner_radii: Default::default(),
-@@ -5309,6 +5472,31 @@
+@@ -5309,6 +5504,31 @@
          frame_index: usize,
          grayscale: bool,
      ) -> Result<()> {
@@ -2760,7 +2933,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          self.invalidator.debug_assert_paint();
  
          let visible_bounds = bounds.intersect(&image_bounds);
-@@ -5387,7 +5575,7 @@
+@@ -5387,7 +5607,7 @@
  
          self.next_frame.scene.insert_primitive(PolychromeSprite {
              order: 0,
@@ -2769,7 +2942,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
              grayscale: grayscale.into(),
              bounds: visible_bounds_snapped,
              content_mask,
-@@ -5861,7 +6049,23 @@
+@@ -5861,7 +6081,23 @@
              .unwrap_or_else(|| action.name().to_string())
      }
  
@@ -2794,7 +2967,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      #[profiling::function]
      pub fn dispatch_event(&mut self, event: PlatformInput, cx: &mut App) -> DispatchEventResult {
          #[cfg(feature = "profiler")]
-@@ -6037,6 +6241,16 @@
+@@ -6037,6 +6273,16 @@
          }
      }
  
@@ -2811,7 +2984,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      fn promote_external_drag_to_platform(&mut self, event: &PlatformInput, cx: &mut App) {
          let PlatformInput::MouseMove(mouse_move) = event else {
              return;
-@@ -6946,7 +7160,9 @@
+@@ -6946,7 +7192,9 @@
          self.on_next_frame(|window, cx| {
              if let Some(mut input_handler) = window.platform_window.take_input_handler() {
                  if let Some(bounds) = input_handler.selected_bounds(window, cx) {
@@ -2822,7 +2995,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
                  }
                  window.platform_window.set_input_handler(input_handler);
              }
-@@ -7304,6 +7520,41 @@
+@@ -7304,6 +7552,41 @@
          self.a11y.debug_tree_json()
      }
  
@@ -2864,7 +3037,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      /// Register a listener for an accessibility action on a specific node.
      /// The listener will be called when a screen reader requests the given
      /// action on the node identified by `node_id`.
-@@ -8160,6 +8411,104 @@
+@@ -8160,6 +8443,104 @@
          Ok(())
      } else {
          ELEMENT_ARENA.try_with(|arena| callback(&mut arena.borrow_mut()))
@@ -4838,13 +5011,13 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/directx_renderer.rs b/gpui-pre-win
          })
      }
  
-@@ -935,6 +1144,48 @@
+@@ -935,8 +1144,50 @@
          self.path_intermediate_msaa_view = path_intermediate_msaa_view;
          self.path_intermediate_srv = path_intermediate_srv;
          self.viewport = viewport;
 +        self.backdrop_blur_frame_copy = None;
-+        Ok(())
-+    }
+         Ok(())
+     }
 +
 +    /// Makes the textures that a backdrop blur needs when they are missing
 +    /// or too small: the copy of a frame of `width` by `height` pixels, and
@@ -4884,9 +5057,11 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/directx_renderer.rs b/gpui-pre-win
 +            width,
 +            height,
 +        });
-         Ok(())
-     }
++        Ok(())
++    }
  }
+ 
+ impl DirectXRenderPipelines {
 @@ -997,6 +1248,7 @@
              16,
              create_blend_state(device)?,
@@ -4946,11 +5121,10 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/directx_renderer.rs b/gpui-pre-win
  impl DirectComposition {
      pub fn new(dxgi_device: &IDXGIDevice, hwnd: HWND) -> Result<Self> {
          let comp_device = get_comp_device(dxgi_device)?;
-@@ -1084,6 +1376,106 @@
- }
+@@ -1085,6 +1377,106 @@
  
  const _: () = assert!(std::mem::size_of::<BatchParams>() == 16);
-+
+ 
 +/// What the backdrop blur shaders read. It mirrors the constant buffer
 +/// `BackdropBlurParams` in shaders.hlsl. Every field is one or more vectors
 +/// of four floats, so that Rust and HLSL lay the fields out at the same
@@ -5050,15 +5224,14 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/directx_renderer.rs b/gpui-pre-win
 +        }
 +    }
 +}
- 
++
  struct PipelineState<T> {
      label: &'static str,
-@@ -1465,6 +1857,29 @@
-     let mut msaa_view = None;
-     unsafe { device.CreateRenderTargetView(&msaa_texture, None, Some(&mut msaa_view))? };
+     vertex: ID3D11VertexShader,
+@@ -1467,6 +1859,29 @@
      Ok((msaa_texture, Some(msaa_view.unwrap())))
-+}
-+
+ }
+ 
 +/// Makes a texture of `width` by `height` texels in the format of the frame
 +/// that a shader can read. With `drawable` it can also be a render target.
 +fn create_backdrop_blur_texture(
@@ -5080,13 +5253,20 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/directx_renderer.rs b/gpui-pre-win
 +        view,
 +        target,
 +    })
++}
++
+ #[inline]
+ fn set_rasterizer_state(device: &ID3D11Device, device_context: &ID3D11DeviceContext) -> Result<()> {
+     let desc = D3D11_RASTERIZER_DESC {
+@@ -1570,6 +1985,19 @@
+     }
  }
  
- #[inline]
-@@ -1562,6 +1977,19 @@
-     desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
-     desc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
-     desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
++/// Makes a blend state that writes the colour of the shader over what the
++/// render target holds, without blending the two.
++fn create_replacing_blend_state(device: &ID3D11Device) -> Result<ID3D11BlendState> {
++    let mut desc = D3D11_BLEND_DESC::default();
++    desc.RenderTarget[0].BlendEnable = false.into();
 +    desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8;
 +    unsafe {
 +        let mut state = None;
@@ -5095,14 +5275,9 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/directx_renderer.rs b/gpui-pre-win
 +    }
 +}
 +
-+/// Makes a blend state that writes the colour of the shader over what the
-+/// render target holds, without blending the two.
-+fn create_replacing_blend_state(device: &ID3D11Device) -> Result<ID3D11BlendState> {
-+    let mut desc = D3D11_BLEND_DESC::default();
-+    desc.RenderTarget[0].BlendEnable = false.into();
-     desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8;
+ #[inline]
+ fn create_vertex_shader(device: &ID3D11Device, bytes: &[u8]) -> Result<ID3D11VertexShader> {
      unsafe {
-         let mut state = None;
 @@ -1716,6 +2144,9 @@
          MonochromeSprite,
          SubpixelSprite,
@@ -5893,6 +6068,111 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/drop_data.rs b/gpui-pre-windows/sr
 +        Err(windows::Win32::Foundation::OLE_E_ADVISENOTSUPPORTED.into())
 +    }
 +}
+diff --color -ruN gpui-pre-windows-0.3.12/src/events.rs b/gpui-pre-windows/src/events.rs
+--- a/gpui-pre-windows/src/events.rs
++++ b/gpui-pre-windows/src/events.rs
+@@ -92,7 +92,18 @@
+             // whichever window was active before the click. If that handler consumes the
+             // press, `DefWindowProc` never sees it, so the window is never activated at all.
+             // So, let's eagerly activate the window.
+-            WM_MOUSEACTIVATE => Some(MA_ACTIVATE as isize),
++            //
++            // A window that is never activated (`WS_EX_NOACTIVATE`, a pop-up window)
++            // answers `MA_NOACTIVATE`, so that a click in it does not activate it and
++            // the click is still delivered.
++            WM_MOUSEACTIVATE => {
++                let ex_style = WINDOW_EX_STYLE(unsafe { get_window_long(handle, GWL_EXSTYLE) } as _);
++                if ex_style.contains(WS_EX_NOACTIVATE) {
++                    Some(MA_NOACTIVATE as isize)
++                } else {
++                    Some(MA_ACTIVATE as isize)
++                }
++            }
+             WM_ACTIVATE => self.handle_activate_msg(wparam),
+             WM_CREATE => self.handle_create_msg(handle),
+             WM_MOVE => self.handle_move_msg(handle, lparam),
+@@ -1061,6 +1072,20 @@
+         wparam: WPARAM,
+         lparam: LPARAM,
+     ) -> Option<isize> {
++        // A left press on the minimise, maximise or close button is recorded
++        // before the app sees the press. The release carries the button out
++        // (`handle_nc_mouse_up_msg`). It is recorded first because an app's
++        // button may stop the press from propagating, and the press then
++        // counts as handled below.
++        let caption_button = match wparam.0 as u32 {
++            pressed @ (HTMINBUTTON | HTMAXBUTTON | HTCLOSE) if button == MouseButton::Left => {
++                Some(pressed)
++            }
++            _ => None,
++        };
++        if caption_button.is_some() {
++            self.state.nc_button_pressed.set(caption_button);
++        }
+         if let Some(mut func) = self.state.callbacks.input.take() {
+             let scale_factor = self.state.scale_factor.get();
+             let mut cursor_point = POINT {
+@@ -1087,18 +1112,9 @@
+         } else {
+         };
+ 
+-        // Since these are handled in handle_nc_mouse_up_msg we must prevent the default window proc
+-        if button == MouseButton::Left {
+-            match wparam.0 as u32 {
+-                HTMINBUTTON => self.state.nc_button_pressed.set(Some(HTMINBUTTON)),
+-                HTMAXBUTTON => self.state.nc_button_pressed.set(Some(HTMAXBUTTON)),
+-                HTCLOSE => self.state.nc_button_pressed.set(Some(HTCLOSE)),
+-                _ => return None,
+-            };
+-            Some(0)
+-        } else {
+-            None
+-        }
++        // The release carries a caption button out, so the default window
++        // procedure must not handle the press of one.
++        caption_button.map(|_| 0)
+     }
+ 
+     fn handle_nc_mouse_up_msg(
+@@ -1108,6 +1124,11 @@
+         wparam: WPARAM,
+         lparam: LPARAM,
+     ) -> Option<isize> {
++        // The caption button that the press was on is taken before the app
++        // sees the release, and the button is carried out below whether or
++        // not the app also handled the release.
++        let last_pressed = self.state.nc_button_pressed.take();
++        let mut handled_by_app = false;
+         if let Some(mut func) = self.state.callbacks.input.take() {
+             let scale_factor = self.state.scale_factor.get();
+ 
+@@ -1122,16 +1143,10 @@
+                 modifiers: current_modifiers(),
+                 click_count: 1,
+             });
+-            let handled = !func(input).propagate;
++            handled_by_app = !func(input).propagate;
+             self.state.callbacks.input.set(Some(func));
+-
+-            if handled {
+-                return Some(0);
+-            }
+-        } else {
+         }
+ 
+-        let last_pressed = self.state.nc_button_pressed.take();
+         if button == MouseButton::Left
+             && let Some(last_pressed) = last_pressed
+         {
+@@ -1164,7 +1179,7 @@
+             }
+         }
+ 
+-        None
++        handled_by_app.then_some(0)
+     }
+ 
+     fn handle_cursor_changed(&self, lparam: LPARAM) -> Option<isize> {
 diff --color -ruN gpui-pre-windows-0.3.12/src/gpui_windows.rs b/gpui-pre-windows/src/gpui_windows.rs
 --- a/gpui-pre-windows/src/gpui_windows.rs
 +++ b/gpui-pre-windows/src/gpui_windows.rs
@@ -6062,7 +6342,7 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/shaders.hlsl b/gpui-pre-windows/sr
 +        sum /= float(pairs * pairs);
 +    }
 +    return sum;
- }
++}
 +
 +BackdropBlurVertexOutput backdrop_blur_gaussian_vertex(uint vertex_id: SV_VertexID) {
 +    return backdrop_blur_pass_vertex(vertex_id);
@@ -6123,11 +6403,27 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/shaders.hlsl b/gpui-pre-windows/sr
 +    float3 rgb = lerp(float3(luma, luma, luma), color.rgb, blur_filter.x) * blur_filter.y;
 +    color.rgb = clamp(rgb, float3(0., 0., 0.), color.aaa);
 +    return color * coverage;
-+}
+ }
 diff --color -ruN gpui-pre-windows-0.3.12/src/window.rs b/gpui-pre-windows/src/window.rs
 --- a/gpui-pre-windows/src/window.rs
 +++ b/gpui-pre-windows/src/window.rs
-@@ -909,6 +909,18 @@
+@@ -492,7 +492,14 @@
+         );
+ 
+         let (mut dwexstyle, dwstyle) = if params.kind == WindowKind::PopUp {
+-            (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WINDOW_STYLE(0x0))
++            // A pop-up window is never activated (`WS_EX_NOACTIVATE`): a click in it
++            // leaves the window that opened it active, and the system does not make
++            // it the foreground window when the foreground window goes away. Chromium
++            // gives its menu windows the same style.
++            (
++                WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
++                WINDOW_STYLE(0x0),
++            )
+         } else {
+             let mut dwstyle = WS_SYSMENU;
+ 
+@@ -909,6 +916,18 @@
          true
      }
  
@@ -6146,7 +6442,7 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/window.rs b/gpui-pre-windows/src/w
      fn set_title(&mut self, title: &str) {
          unsafe { SetWindowTextW(self.0.hwnd, &HSTRING::from(title)) }
              .inspect_err(|e| log::error!("Set title failed: {e}"))
-@@ -916,9 +928,22 @@
+@@ -916,9 +935,22 @@
      }
  
      fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
@@ -6170,7 +6466,7 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/window.rs b/gpui-pre-windows/src/w
          // using Dwm APIs for Mica and MicaAlt backdrops.
          // others follow the set_window_composition_attribute approach
          match background_appearance {
-@@ -929,7 +954,20 @@
+@@ -929,7 +961,20 @@
                  set_window_composition_attribute(hwnd, None, 2);
              }
              WindowBackgroundAppearance::Blurred => {
@@ -6192,7 +6488,7 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/window.rs b/gpui-pre-windows/src/w
              }
              WindowBackgroundAppearance::MicaBackdrop => {
                  // DWMSBT_MAINWINDOW => MicaBase
-@@ -974,6 +1012,38 @@
+@@ -974,6 +1019,38 @@
          self.state.callbacks.request_frame.set(Some(callback));
      }
  
@@ -6231,7 +6527,7 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/window.rs b/gpui-pre-windows/src/w
      fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
          self.state.callbacks.input.set(Some(callback));
      }
-@@ -1204,6 +1274,24 @@
+@@ -1204,6 +1281,24 @@
                      paths: ExternalPaths(paths),
                  });
                  self.handle_drag_drop(input);
@@ -6256,7 +6552,7 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/window.rs b/gpui-pre-windows/src/w
              } else {
                  *pdweffect = DROPEFFECT_NONE;
              }
-@@ -1274,6 +1362,7 @@
+@@ -1274,6 +1369,7 @@
                  .ok()
                  .log_err();
          }
@@ -6264,7 +6560,7 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/window.rs b/gpui-pre-windows/src/w
          let scale_factor = self.0.state.scale_factor.get();
          let input = PlatformInput::FileDrop(FileDropEvent::Submit {
              position: logical_point(
-@@ -1601,6 +1690,26 @@
+@@ -1601,6 +1697,26 @@
      let bounds = bounds.to_device_pixels(display.scale_factor());
      placement.rcNormalPosition = calculate_window_rect(bounds, border_offset);
      Ok(placement)
@@ -6640,6 +6936,17 @@ diff --color -ruN gpui-pre-macos-0.3.12/src/window.rs b/gpui-pre-macos/src/windo
      for file in filenames {
          let path = unsafe {
              let f = file.UTF8String();
+diff --color -ruN gpui-pre-linux-0.3.12/Cargo.toml b/gpui-pre-linux/Cargo.toml
+--- a/gpui-pre-linux/Cargo.toml
++++ b/gpui-pre-linux/Cargo.toml
+@@ -247,6 +247,7 @@
+     "xinput",
+     "cursor",
+     "resource_manager",
++    "shape",
+     "sync",
+     "dri3",
+ ]
 diff --color -ruN gpui-pre-linux-0.3.12/src/gpui_linux.rs b/gpui-pre-linux/src/gpui_linux.rs
 --- a/gpui-pre-linux/src/gpui_linux.rs
 +++ b/gpui-pre-linux/src/gpui_linux.rs
@@ -6775,7 +7082,32 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/drop_data.rs b/gpui-pre-linux/
 diff --color -ruN gpui-pre-linux-0.3.12/src/linux/wayland/client.rs b/gpui-pre-linux/src/linux/wayland/client.rs
 --- a/gpui-pre-linux/src/linux/wayland/client.rs
 +++ b/gpui-pre-linux/src/linux/wayland/client.rs
-@@ -426,6 +426,9 @@
+@@ -1,5 +1,5 @@
+ use std::{
+-    cell::{RefCell, RefMut},
++    cell::{Cell, RefCell, RefMut},
+     hash::Hash,
+     os::{
+         fd::{AsRawFd, BorrowedFd, FromRawFd as _, RawFd},
+@@ -259,6 +259,9 @@
+     pub kde_blur_manager: Option<org_kde_kwin_blur_manager::OrgKdeKwinBlurManager>,
+     pub background_effects_manager:
+         Option<ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1>,
++    /// Whether the compositor has announced, with the `capabilities` event of
++    /// ext-background-effect, that it can blur.
++    pub background_blur_capability: Rc<Cell<bool>>,
+     pub text_input_manager: Option<zwp_text_input_manager_v3::ZwpTextInputManagerV3>,
+     pub gesture_manager: Option<zwp_pointer_gestures_v1::ZwpPointerGesturesV1>,
+     pub dialog: Option<xdg_wm_dialog_v1::XdgWmDialogV1>,
+@@ -310,6 +313,7 @@
+             layer_shell: globals.bind(&qh, 1..=5, ()).ok(),
+             kde_blur_manager: globals.bind(&qh, 1..=1, ()).ok(),
+             background_effects_manager: globals.bind(&qh, 1..=1, ()).ok(),
++            background_blur_capability: Rc::new(Cell::new(false)),
+             text_input_manager: globals.bind(&qh, 1..=1, ()).ok(),
+             gesture_manager: globals.bind(&qh, 1..=3, ()).ok(),
+             dialog: globals.bind(&qh, dialog_v..=dialog_v, ()).ok(),
+@@ -426,6 +430,9 @@
      window: Option<Window>,
      position: Point<Pixels>,
      uri_read_generation: u64,
@@ -6785,7 +7117,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/wayland/client.rs b/gpui-pre-l
  }
  
  impl<DataOffer, Window> DragState<DataOffer, Window> {
-@@ -465,6 +468,7 @@
+@@ -465,6 +472,7 @@
  {
      fn handle_leave(&mut self) -> Option<(Window, PlatformInput)> {
          self.invalidate_uri_read();
@@ -6793,7 +7125,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/wayland/client.rs b/gpui-pre-l
          let window = self.window.clone()?;
          let data_offer = self.data_offer.clone()?;
          data_offer.destroy();
-@@ -475,6 +479,7 @@
+@@ -475,6 +483,7 @@
  
      fn handle_drop(&mut self) -> Option<(Window, PlatformInput)> {
          self.invalidate_uri_read();
@@ -6801,7 +7133,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/wayland/client.rs b/gpui-pre-l
          let window = self.window.clone()?;
          let data_offer = self.data_offer.clone()?;
          data_offer.finish();
-@@ -1095,6 +1100,7 @@
+@@ -1095,6 +1104,7 @@
                  window: None,
                  position: Point::default(),
                  uri_read_generation: 0,
@@ -6809,7 +7141,105 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/wayland/client.rs b/gpui-pre-l
              },
              external_drag: None,
              click: ClickState {
-@@ -2925,17 +2931,45 @@
+@@ -1674,7 +1684,6 @@
+ delegate_noop!(WaylandClientStatePtr: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
+ delegate_noop!(WaylandClientStatePtr: ignore xdg_positioner::XdgPositioner);
+ delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur_manager::OrgKdeKwinBlurManager);
+-delegate_noop!(WaylandClientStatePtr: ignore ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1);
+ delegate_noop!(WaylandClientStatePtr: ignore ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1);
+ delegate_noop!(WaylandClientStatePtr: ignore zwp_text_input_manager_v3::ZwpTextInputManagerV3);
+ delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur::OrgKdeKwinBlur);
+@@ -1924,6 +1933,33 @@
+     }
+ }
+ 
++impl Dispatch<ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1, ()>
++    for WaylandClientStatePtr
++{
++    fn event(
++        this: &mut Self,
++        _: &ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1,
++        event: <ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1 as Proxy>::Event,
++        _: &(),
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++        // The compositor sends its capabilities when the global is bound and again
++        // whenever they change.
++        if let ext_background_effect_manager_v1::Event::Capabilities {
++            flags: WEnum::Value(flags),
++        } = event
++        {
++            let client = this.get_client();
++            let state = client.borrow();
++            state
++                .globals
++                .background_blur_capability
++                .set(flags.contains(ext_background_effect_manager_v1::Capability::Blur));
++        }
++    }
++}
++
+ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for WaylandClientStatePtr {
+     fn event(
+         _: &mut Self,
+@@ -2101,6 +2137,16 @@
+                 if let Some(window) = state.keyboard_focused_window.clone() {
+                     drop(state);
+                     window.set_focused(true);
++                    // A popup that grabs the keyboard takes it from the window it is
++                    // anchored to. That window counts as focused while the keyboard is in
++                    // one of its popups.
++                    let mut parent = window.popup_parent();
++                    while let Some(window) = parent {
++                        if !window.is_focused() {
++                            window.set_focused(true);
++                        }
++                        parent = window.popup_parent();
++                    }
+                 }
+             }
+             wl_keyboard::Event::Leave { surface, .. } => {
+@@ -2116,9 +2162,37 @@
+                         compose.reset();
+                     }
+                     state.pre_edit_text.take();
++                    let executor = state.globals.executor.clone();
+                     drop(state);
+                     window.handle_ime(ImeInput::DeleteText);
+-                    window.set_focused(false);
++                    if window.popup_parent().is_none() && !window.has_popup() {
++                        window.set_focused(false);
++                    } else {
++                        // The keyboard is moving between a window and one of its popups,
++                        // or away from both. The compositor says where it went with the
++                        // `enter` event that follows. The windows are therefore told that
++                        // they lost the keyboard only after that event has been handled,
++                        // and a window whose popup now has the keyboard is not told.
++                        let client = this.clone();
++                        executor
++                            .spawn(async move {
++                                let Some(client) = client.try_get_client() else {
++                                    return;
++                                };
++                                let focused = client.borrow().keyboard_focused_window.clone();
++                                let mut left = Some(window);
++                                while let Some(window) = left {
++                                    let keeps = focused.as_ref().is_some_and(|focused| {
++                                        focused.is_or_descends_from(&window)
++                                    });
++                                    if !keeps && window.is_focused() {
++                                        window.set_focused(false);
++                                    }
++                                    left = window.popup_parent();
++                                }
++                            })
++                            .detach();
++                    }
+                 }
+             }
+             wl_keyboard::Event::Modifiers {
+@@ -2925,17 +2999,45 @@
                      const ACTIONS: DndAction = DndAction::Copy;
                      data_offer.set_actions(ACTIONS, ACTIONS);
  
@@ -6864,7 +7294,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/wayland/client.rs b/gpui-pre-l
                      });
  
                      let this = this.clone();
-@@ -2945,8 +2979,8 @@
+@@ -2945,8 +3047,8 @@
                          .foreground_executor
                          .clone()
                          .spawn(async move {
@@ -6875,7 +7305,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/wayland/client.rs b/gpui-pre-l
                                  Err(err) => {
                                      log::error!("error reading drag and drop pipe: {err:?}");
                                      return;
-@@ -2966,8 +3000,14 @@
+@@ -2966,8 +3068,14 @@
                                  .collect();
                              let position = Point::new(x.into(), y.into());
  
@@ -6892,7 +7322,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/wayland/client.rs b/gpui-pre-l
                                  data_offer.destroy();
                                  return;
                              }
-@@ -2984,6 +3024,9 @@
+@@ -2984,6 +3092,9 @@
                                  gpui::ExternalPaths(paths),
                              );
  
@@ -6902,7 +7332,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/wayland/client.rs b/gpui-pre-l
                              drop(state);
                              if let Some((drag_window, input)) = input {
                                  drag_window.handle_input(input);
-@@ -3040,7 +3083,9 @@
+@@ -3040,7 +3151,9 @@
  
          if let wl_data_offer::Event::Offer { mime_type } = event {
              // Drag and drop
@@ -6913,7 +7343,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/wayland/client.rs b/gpui-pre-l
                  let serial = state.serial_tracker.get(SerialKind::DataDevice);
                  let mime_type = mime_type.clone();
                  data_offer.accept(serial.as_raw(), Some(mime_type));
-@@ -3296,6 +3341,7 @@
+@@ -3296,6 +3409,7 @@
              window: None,
              position: Point::default(),
              uri_read_generation: 0,
@@ -6936,6 +7366,192 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/wayland/clipboard.rs b/gpui-pr
      pub fn add_mime_type(&mut self, mime_type: String) {
          self.mime_types.push(mime_type)
      }
+diff --color -ruN gpui-pre-linux-0.3.12/src/linux/wayland/window.rs b/gpui-pre-linux/src/linux/wayland/window.rs
+--- a/gpui-pre-linux/src/linux/wayland/window.rs
++++ b/gpui-pre-linux/src/linux/wayland/window.rs
+@@ -142,6 +142,11 @@
+     window_controls: WindowControls,
+     client_inset: Option<Pixels>,
+     client_corner_radii: Corners<Pixels>,
++    /// The rounded rectangle that holds the window's content, and its corner
++    /// radius (`PlatformWindow::set_content_region`). While it is set, a
++    /// `Blurred` window has only this rectangle blurred, and the surface
++    /// receives the pointer only in this rectangle.
++    content_region: Option<(Bounds<Pixels>, Pixels)>,
+     accesskit_adapter: Option<accesskit_unix::Adapter>,
+ }
+ 
+@@ -331,10 +336,12 @@
+     parent_geometry: Bounds<Pixels>,
+ ) -> xdg_positioner::XdgPositioner {
+     let positioner = globals.wm_base.create_positioner(&globals.qh, ());
+-    // A zero or negative size is a protocol error.
++    // The positioner places the popup's window geometry, which is the surface less
++    // `geometry_inset` on every side. A zero or negative size is a protocol error.
++    let inset = f32::from(options.geometry_inset);
+     positioner.set_size(
+-        f32::from(size.width).max(1.0) as i32,
+-        f32::from(size.height).max(1.0) as i32,
++        (f32::from(size.width) - 2.0 * inset).max(1.0) as i32,
++        (f32::from(size.height) - 2.0 * inset).max(1.0) as i32,
+     );
+ 
+     // The protocol wants the anchor rect relative to the parent's window geometry, while
+@@ -644,6 +651,7 @@
+             window_controls: WindowControls::default(),
+             client_inset: None,
+             client_corner_radii: Corners::default(),
++            content_region: None,
+             accesskit_adapter: None,
+         })
+     }
+@@ -687,7 +695,12 @@
+         scale
+     }
+ 
++    /// How far the window geometry is inside the surface. For a popup this is the
++    /// `geometry_inset` it was opened with. For any other window it is the client inset.
+     pub fn inset(&self) -> Pixels {
++        if let WaylandSurfaceState::Popup(popup) = &self.surface_state {
++            return popup.options.geometry_inset;
++        }
+         match self.decorations {
+             WindowDecorations::Server => px(0.0),
+             WindowDecorations::Client => self.client_inset.unwrap_or(px(0.0)),
+@@ -945,6 +958,39 @@
+         state.children.values().any(|&blocking| blocking)
+     }
+ 
++    /// The window this popup is anchored to. `None` for a window that is not a popup.
++    pub fn popup_parent(&self) -> Option<WaylandWindowStatePtr> {
++        let state = self.state.borrow();
++        match state.surface_state {
++            WaylandSurfaceState::Popup(_) => state.parent.clone(),
++            _ => None,
++        }
++    }
++
++    /// Whether a popup is anchored to this window.
++    pub fn has_popup(&self) -> bool {
++        let state = self.state.borrow();
++        state.children.values().any(|&blocking| !blocking)
++    }
++
++    /// Whether this window is `other`, or a popup anchored to `other` or to one of its
++    /// popups.
++    pub fn is_or_descends_from(&self, other: &WaylandWindowStatePtr) -> bool {
++        let mut current = Some(self.clone());
++        while let Some(window) = current {
++            if window.ptr_eq(other) {
++                return true;
++            }
++            current = window.popup_parent();
++        }
++        false
++    }
++
++    /// Whether the window was last told that it has the keyboard (`set_focused`).
++    pub fn is_focused(&self) -> bool {
++        self.state.borrow().active
++    }
++
+     pub fn frame(&self, signal_at: Option<Instant>, signal_source: FrameRequestSource) {
+         self.frame_loop.set(FrameLoop::Ticking);
+         let mut state = self.state.borrow_mut();
+@@ -1928,6 +1974,25 @@
+         self.borrow().background_appearance
+     }
+ 
++    fn is_background_blur_supported(&self) -> bool {
++        let state = self.borrow();
++        // `update_window` prefers ext-background-effect, so the answer follows the same order.
++        if state.globals.background_effects_manager.is_some() {
++            state.globals.background_blur_capability.get()
++        } else {
++            state.globals.kde_blur_manager.is_some()
++        }
++    }
++
++    fn set_content_region(&self, region: Option<(Bounds<Pixels>, Pixels)>) {
++        let mut state = self.borrow_mut();
++        if region != state.content_region {
++            state.content_region = region;
++            update_window(state);
++            self.0.request_redraw();
++        }
++    }
++
+     fn is_subpixel_rendering_supported(&self) -> bool {
+         let client = self.borrow().client.get_client();
+         let state = client.borrow();
+@@ -2476,6 +2541,38 @@
+         state.surface.set_opaque_region(None);
+     }
+ 
++    // A window that named its content region receives the pointer only there. The
++    // pointer reaches what is behind the rest of the surface, which holds only a shadow.
++    if let Some((bounds, _)) = state.content_region {
++        let bounds = bounds
++            .map(|value| value.to_i32())
++            .map_size(|value| value.max(0));
++        let input = state
++            .globals
++            .compositor
++            .create_region(&state.globals.qh, ());
++        input.add(
++            bounds.origin.x,
++            bounds.origin.y,
++            bounds.size.width,
++            bounds.size.height,
++        );
++        state.surface.set_input_region(Some(&input));
++        input.destroy();
++    }
++
++    // The blurred area is the content region when the window named one, and otherwise
++    // the area inside the client inset with the client corner radii.
++    let (blur_area, blur_radii) = match state.content_region {
++        Some((bounds, radius)) => (
++            bounds
++                .map(|value| value.to_i32())
++                .map_size(|value| value.max(0)),
++            Corners::all(radius),
++        ),
++        None => (area, state.client_corner_radii),
++    };
++
+     // Prefer the ext-background-effect protocol, as it is DE agnostic and
+     // replaces the deprecated kde-blur protocol, which is no longer supported
+     // since KDE Plasma 6.7.
+@@ -2492,7 +2589,7 @@
+                 state.background_effects = Some(background_effects);
+             }
+ 
+-            add_rounded_rect(area, state.client_corner_radii, |x, y, width, height| {
++            add_rounded_rect(blur_area, blur_radii, |x, y, width, height| {
+                 region.add(x, y, width, height);
+             });
+ 
+@@ -2511,7 +2608,18 @@
+                 let blur = blur_manager.create(&state.surface, &state.globals.qh, ());
+                 state.kde_blur = Some(blur);
+             }
+-            state.kde_blur.as_ref().unwrap().commit();
++            let blur = state.kde_blur.as_ref().unwrap();
++            // Without a region KWin blurs behind the whole surface. A window that named
++            // its content region has only that region blurred.
++            if state.content_region.is_some() {
++                add_rounded_rect(blur_area, blur_radii, |x, y, width, height| {
++                    region.add(x, y, width, height);
++                });
++                blur.set_region(Some(&region));
++            } else {
++                blur.set_region(None);
++            }
++            blur.commit();
+         } else {
+             blur_manager.unset(&state.surface);
+             if let Some(b) = state.kde_blur.take() {
 diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11.rs b/gpui-pre-linux/src/linux/x11.rs
 --- a/gpui-pre-linux/src/linux/x11.rs
 +++ b/gpui-pre-linux/src/linux/x11.rs
@@ -6971,7 +7587,17 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
  }
  
  #[derive(Debug)]
-@@ -239,6 +243,8 @@
+@@ -210,6 +214,9 @@
+     pub(crate) windows: HashMap<xproto::Window, WindowRef>,
+     pub(crate) mouse_focused_window: Option<xproto::Window>,
+     pub(crate) keyboard_focused_window: Option<xproto::Window>,
++    /// The pop-up window that holds the pointer grab which is active while a
++    /// pop-up window is open (`grab_pointer_for_popup`).
++    popup_grab: Option<xproto::Window>,
+     pub(crate) xkb: xkbc::State,
+     keyboard_layout: LinuxKeyboardLayout,
+     pub(crate) ximc: Option<X11rbClient<Rc<XCBConnection>>>,
+@@ -239,6 +246,8 @@
      pub(crate) clipboard: Clipboard,
      pub(crate) clipboard_item: Option<ClipboardItem>,
      pub(crate) xdnd_state: Xdnd,
@@ -6980,7 +7606,62 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
  }
  
  #[derive(Clone)]
-@@ -554,6 +560,7 @@
+@@ -272,8 +281,46 @@
+             state.cursor_hidden_window = None;
+         }
+         state.cursor_styles.remove(&x_window);
++        if state.popup_grab == Some(x_window) {
++            // The server ended the grab when it destroyed the window. Another
++            // pop-up window that is still open takes the grab.
++            state.popup_grab = None;
++            let next = state
++                .windows
++                .iter()
++                .find(|(_, window)| window.window.is_popup())
++                .map(|(x_window, _)| *x_window);
++            if let Some(next) = next {
++                state.grab_pointer(next);
++            }
++        }
+     }
+ 
++    /// Grabs the pointer for the pop-up window `x_window`, which has just
++    /// been mapped, unless another pop-up window already holds the grab.
++    ///
++    /// A pop-up window is not managed by the window manager and never has
++    /// the keyboard, so nothing tells the application when the user clicks
++    /// somewhere else. Toolkits grab the pointer for a menu for this reason,
++    /// and so does this. The grab reports pointer events to this
++    /// application's windows as usual (`owner_events`), so the pop-up
++    /// windows and the window that opened them keep their hover and their
++    /// clicks. A press of a button anywhere else is reported to the grab
++    /// window, and `handle_event` then asks every pop-up window to close.
++    /// While the grab is held, a window manager that gives the keyboard to
++    /// the window under the pointer receives no crossing events, so the
++    /// window that opened the pop-up keeps the keyboard while the pointer is
++    /// over the pop-up.
++    pub fn grab_pointer_for_popup(&self, x_window: xproto::Window) {
++        let Some(client) = self.get_client() else {
++            return;
++        };
++        let mut state = client.0.borrow_mut();
++        if state.popup_grab.is_none() {
++            state.grab_pointer(x_window);
++        }
++    }
++
+     pub fn update_ime_position(&self, bounds: Bounds<Pixels>) {
+         let Some(client) = self.get_client() else {
+             return;
+@@ -531,6 +578,7 @@
+                 windows: HashMap::default(),
+                 mouse_focused_window: None,
+                 keyboard_focused_window: None,
++                popup_grab: None,
+                 xkb: xkb_state,
+                 keyboard_layout,
+                 ximc,
+@@ -554,6 +602,7 @@
                  clipboard,
                  clipboard_item: None,
                  xdnd_state: Xdnd::default(),
@@ -6988,7 +7669,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
              })
          })));
          // From here on, `Drop` removes whatever was registered if a later step fails.
-@@ -879,6 +886,52 @@
+@@ -879,6 +928,52 @@
              .map(|window_reference| window_reference.window.clone())
      }
  
@@ -7041,7 +7722,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
      fn handle_event(&self, event: Event) -> Option<()> {
          match event {
              Event::UnmapNotify(event) => {
-@@ -925,8 +978,35 @@
+@@ -925,8 +1020,35 @@
                          })
                  }
  
@@ -7077,7 +7758,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
                      if (arg1 & 0x1) == 0x1 {
                          state.xdnd_state.drag_type = xdnd_get_supported_atom(
                              &state.xcb_connection,
-@@ -956,6 +1036,28 @@
+@@ -956,6 +1078,28 @@
                          state.xdnd_state.position =
                              Point::new(px(pos.win_x as f32), px(pos.win_y as f32));
                      }
@@ -7106,7 +7787,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
                      if !state.xdnd_state.retrieved {
                          check_reply(
                              || "Failed to convert selection for drag and drop",
-@@ -981,12 +1083,45 @@
+@@ -981,12 +1125,45 @@
                      window
                          .handle_input(PlatformInput::FileDrop(FileDropEvent::Pending { position }));
                  } else if event.type_ == state.atoms.XdndDrop {
@@ -7158,7 +7839,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
                      let position = state.xdnd_state.position;
                      drop(state);
                      window
-@@ -994,6 +1129,15 @@
+@@ -994,6 +1171,15 @@
                      self.0.borrow_mut().xdnd_state = Xdnd::default();
                  }
              }
@@ -7174,7 +7855,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
              Event::SelectionNotify(event) => {
                  let window = self.get_window(event.requestor)?;
                  let state = self.0.borrow_mut();
-@@ -1024,13 +1168,16 @@
+@@ -1024,13 +1210,16 @@
                              }
                          })
                          .collect();
@@ -7192,7 +7873,39 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
                  }
              }
              Event::ConfigureNotify(event) => {
-@@ -1309,6 +1456,47 @@
+@@ -1240,6 +1429,31 @@
+                     px(event.event_y as f32 / u16::MAX as f32 / state.scale_factor),
+                 );
+ 
++                // While a pop-up window holds the pointer grab, a press on anything
++                // that is not a window of this application is reported to the grab
++                // window, at a position outside its content. Every pop-up window is
++                // then asked to close, as the window manager asks a managed window
++                // with `WM_DELETE_WINDOW`. A turn of the wheel there does nothing.
++                if state.popup_grab == Some(event.event) && !window.has_content_at(position) {
++                    let pressed = matches!(
++                        button_or_scroll_from_event_detail(event.detail),
++                        Some(ButtonOrScroll::Button(_))
++                    );
++                    let popups = state
++                        .windows
++                        .values()
++                        .filter(|window| pressed && window.window.is_popup())
++                        .map(|window| window.window.clone())
++                        .collect::<Vec<_>>();
++                    drop(state);
++                    for popup in popups {
++                        if popup.should_close() {
++                            popup.close();
++                        }
++                    }
++                    return Some(());
++                }
++
+                 if state.composing && state.ximc.is_some() {
+                     drop(state);
+                     self.reset_ime();
+@@ -1309,6 +1523,47 @@
              }
              Event::XinputButtonRelease(event) => {
                  let window = self.get_window(event.event)?;
@@ -7240,7 +7953,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
                  let mut state = self.0.borrow_mut();
                  let modifiers = modifiers_from_xinput_info(event.mods);
                  state.modifiers = modifiers;
-@@ -1334,6 +1522,26 @@
+@@ -1334,6 +1589,26 @@
              }
              Event::XinputMotion(event) => {
                  let window = self.get_window(event.event)?;
@@ -7267,7 +7980,57 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
                  let mut state = self.0.borrow_mut();
                  state.restore_cursor_after_hide();
                  if window.is_blocked() {
-@@ -2406,6 +2614,39 @@
+@@ -2250,6 +2525,49 @@
+     value.integral as f32 + value.frac as f32 / u32::MAX as f32
+ }
+ 
++impl X11ClientState {
++    /// Grabs the pointer with `x_window` as the grab window and records the
++    /// grab in `popup_grab` if the server granted it
++    /// (`X11ClientStatePtr::grab_pointer_for_popup`). The grab is an XInput
++    /// grab of the pointer that this client's requests act on. The windows
++    /// select their pointer events through XInput, and under a grab of the
++    /// core protocol the server would not send them their enter and leave
++    /// events.
++    fn grab_pointer(&mut self, x_window: xproto::Window) {
++        let Some(pointer) = get_reply(
++            || "X11 XIGetClientPointer failed.",
++            self.xcb_connection.xinput_xi_get_client_pointer(x11rb::NONE),
++        )
++        .log_err()
++        .filter(|reply| reply.set)
++        .map(|reply| reply.deviceid) else {
++            return;
++        };
++        let events = xinput::XIEventMask::BUTTON_PRESS
++            | xinput::XIEventMask::BUTTON_RELEASE
++            | xinput::XIEventMask::MOTION
++            | xinput::XIEventMask::ENTER
++            | xinput::XIEventMask::LEAVE;
++        let granted = get_reply(
++            || "X11 XIGrabDevice for a pop-up window failed.",
++            self.xcb_connection.xinput_xi_grab_device(
++                x_window,
++                x11rb::CURRENT_TIME,
++                x11rb::NONE,
++                pointer,
++                xproto::GrabMode::ASYNC,
++                xproto::GrabMode::ASYNC,
++                xinput::GrabOwner::OWNER,
++                &[u32::from(events)],
++            ),
++        )
++        .log_err()
++        .is_some_and(|reply| reply.status == xproto::GrabStatus::SUCCESS);
++        xcb_flush(&self.xcb_connection);
++        self.popup_grab = granted.then_some(x_window);
++    }
++}
++
+ fn detect_compositor_gpu(
+     xcb_connection: &XCBConnection,
+     screen: &xproto::Screen,
+@@ -2406,6 +2724,39 @@
          }
      }
      0
@@ -7831,7 +8594,15 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/window.rs b/gpui-pre-linux
  };
  use gpui_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig};
  
-@@ -30,7 +30,8 @@
+@@ -21,6 +21,7 @@
+     errors::ConnectionError,
+     properties::{WmHints, WmSizeHints},
+     protocol::{
++        shape::{self, ConnectionExt as _},
+         sync,
+         xinput::{self, ConnectionExt as _},
+         xproto::{self, ClientMessageEvent, ConnectionExt, TranslateCoordinatesReply},
+@@ -30,7 +31,8 @@
  };
  
  use std::{
@@ -7841,7 +8612,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/window.rs b/gpui-pre-linux
  };
  
  use super::{X11Display, XINPUT_ALL_DEVICE_GROUPS, XINPUT_ALL_DEVICES};
-@@ -48,6 +49,8 @@
+@@ -48,6 +50,8 @@
          XdndFinished,
          XdndTypeList,
          XdndActionCopy,
@@ -7850,7 +8621,352 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/window.rs b/gpui-pre-linux
          TextUriList: b"text/uri-list",
          UTF8_STRING,
          TEXT,
-@@ -1827,6 +1830,25 @@
+@@ -75,6 +79,7 @@
+         _NET_WM_MOVERESIZE,
+         _NET_WM_WINDOW_TYPE,
+         _NET_WM_WINDOW_TYPE_NOTIFICATION,
++        _KDE_NET_WM_BLUR_BEHIND_REGION,
+         _NET_WM_WINDOW_TYPE_DIALOG,
+         _NET_WM_STATE_MODAL,
+         _NET_WM_SYNC,
+@@ -227,6 +232,67 @@
+     set
+ }
+ 
++/// Returns whether a compositing manager is running on the screen. A
++/// compositing manager owns the selection `_NET_WM_CM_S<screen number>`
++/// while it runs.
++fn compositing_manager_runs(xcb: &XCBConnection, screen_index: usize) -> bool {
++    let name = format!("_NET_WM_CM_S{screen_index}");
++    let Some(selection) = get_reply(
++        || "X11 InternAtom for the compositing manager's selection failed.",
++        xcb.intern_atom(false, name.as_bytes()),
++    )
++    .log_err() else {
++        return false;
++    };
++    get_reply(
++        || "X11 GetSelectionOwner for the compositing manager's selection failed.",
++        xcb.get_selection_owner(selection.atom),
++    )
++    .log_err()
++    .is_some_and(|reply| reply.owner != x11rb::NONE)
++}
++
++/// Returns whether the compositing manager blurs behind the region that a
++/// window names in its property `_KDE_NET_WM_BLUR_BEHIND_REGION`. KWin says
++/// so by putting a property of that name on the root window while its blur
++/// effect is loaded. KWindowSystem asks in the same way.
++fn blur_behind_region_is_announced(
++    xcb: &XCBConnection,
++    root: xproto::Window,
++    blur_behind_region: xproto::Atom,
++) -> bool {
++    get_reply(
++        || "X11 ListProperties of the root window failed.",
++        xcb.list_properties(root),
++    )
++    .log_err()
++    .is_some_and(|reply| reply.atoms.contains(&blur_behind_region))
++}
++
++/// Returns rectangles that together cover a rounded rectangle, as
++/// `[x, y, width, height]` in device pixels. The rows in the rounded corners
++/// are one pixel high each, and one rectangle covers the rows between them.
++fn rounded_rectangles(x: i32, y: i32, width: i32, height: i32, radius: i32) -> Vec<[i32; 4]> {
++    if width <= 0 || height <= 0 {
++        return Vec::new();
++    }
++    let radius = radius.max(0).min(width / 2).min(height / 2);
++    let mut rectangles = Vec::new();
++    for row in 0..radius {
++        // How far the corner's circle is from the side of the rectangle at
++        // the middle of this row.
++        let above = radius as f32 - (row as f32 + 0.5);
++        let inset = (radius as f32 - ((radius * radius) as f32 - above * above).sqrt()).round()
++            as i32;
++        rectangles.push([x + inset, y + row, width - 2 * inset, 1]);
++        rectangles.push([x + inset, y + height - 1 - row, width - 2 * inset, 1]);
++    }
++    if height > 2 * radius {
++        rectangles.push([x, y + radius, width, height - 2 * radius]);
++    }
++    rectangles
++}
++
+ #[derive(Debug, Clone, Copy)]
+ struct RawWindow {
+     connection: *mut c_void,
+@@ -292,6 +358,20 @@
+     pub handle: AnyWindowHandle,
+     last_insets: [u32; 4],
+     accesskit_adapter: Option<accesskit_unix::Adapter>,
++    /// Whether the window is a `WindowKind::PopUp`, which the window manager
++    /// does not manage (override-redirect).
++    is_popup: bool,
++    /// Whether a compositing manager was running on the window's screen when
++    /// the window was created. Without one, the transparent parts of a
++    /// window are drawn black.
++    composited: bool,
++    /// Whether the compositing manager had announced, when the window was
++    /// created, that it blurs behind the region a window names in
++    /// `_KDE_NET_WM_BLUR_BEHIND_REGION`.
++    blur_supported: bool,
++    /// The rounded rectangle that holds the window's content, and its corner
++    /// radius (`PlatformWindow::set_content_region`).
++    content_region: Option<(Bounds<Pixels>, Pixels)>,
+ }
+ 
+ impl X11WindowState {
+@@ -483,6 +563,8 @@
+         let x_screen_index = params
+             .display_id
+             .map_or(x_main_screen_index, |did| u64::from(did) as usize);
++        let is_popup = params.kind == WindowKind::PopUp;
++        let composited = compositing_manager_runs(xcb, x_screen_index);
+ 
+         let visual_set = find_visuals(xcb, x_screen_index);
+ 
+@@ -550,7 +632,10 @@
+                 visual.depth,
+                 x_window,
+                 visual_set.root,
+-                (bounds.origin.x.0 + 2) as i16,
++                // A pop-up window is not managed by the window manager, so it stays
++                // where it is created, and it is created exactly where it was asked
++                // for. Every other window is created 2 pixels to the right.
++                (bounds.origin.x.0 + if is_popup { 0 } else { 2 }) as i16,
+                 bounds.origin.y.0 as i16,
+                 bounds.size.width.0 as u16,
+                 bounds.size.height.0 as u16,
+@@ -576,7 +661,7 @@
+             )?;
+ 
+             let reply = get_reply(|| "X11 GetGeometry failed.", xcb.get_geometry(x_window))?;
+-            if reply.x == 0 && reply.y == 0 {
++            if reply.x == 0 && reply.y == 0 && !is_popup {
+                 bounds.origin.x.0 += 2;
+                 // Work around a bug where our rendered content appears
+                 // outside the window bounds when opened at the default position
+@@ -824,6 +909,12 @@
+             }
+ 
+             let display = Rc::new(X11Display::new(xcb, scale_factor, x_screen_index)?);
++            let blur_supported = composited
++                && blur_behind_region_is_announced(
++                    xcb,
++                    visual_set.root,
++                    atoms._KDE_NET_WM_BLUR_BEHIND_REGION,
++                );
+ 
+             Ok(Self {
+                 parent,
+@@ -858,6 +949,10 @@
+                 accesskit_adapter: None,
+                 counter_id: sync_request_counter,
+                 last_sync_counter: None,
++                is_popup,
++                composited,
++                blur_supported,
++                content_region: None,
+             })
+         });
+ 
+@@ -1049,6 +1144,150 @@
+ }
+ 
+ impl X11WindowStatePtr {
++    /// Whether the window is a `WindowKind::PopUp`.
++    pub fn is_popup(&self) -> bool {
++        self.state
++            .try_borrow()
++            .is_ok_and(|state| state.is_popup)
++    }
++
++    /// Whether `position`, in the window's logical pixels, is inside the
++    /// window's content region, or inside the window's rectangle when the
++    /// window has no content region.
++    pub fn has_content_at(&self, position: Point<Pixels>) -> bool {
++        let state = self.state.borrow();
++        let content = match state.content_region {
++            Some((bounds, _)) => bounds,
++            None => Bounds {
++                origin: Point::default(),
++                size: state.bounds.size,
++            },
++        };
++        content.contains(&position)
++    }
++
++    /// Tells the X server about the window's content region.
++    ///
++    /// With a compositing manager that blurs behind a named region, a window
++    /// whose background appearance is `Blurred` gets the property
++    /// `_KDE_NET_WM_BLUR_BEHIND_REGION`: the rectangles of the content region,
++    /// or an empty list, which stands for the whole window, when it has no
++    /// content region. A window that is not `Blurred` has no such property.
++    ///
++    /// Without a compositing manager, the window's shape is set to the
++    /// content region, so that the room around the content, which would be
++    /// drawn black, is not part of the window. Without a content region the
++    /// window has its whole rectangle as its shape.
++    ///
++    /// With any compositing manager, the window's input shape is set to the
++    /// rectangle of the content region, so that the pointer reaches what is
++    /// behind the room around the content.
++    fn apply_content_region(&self) {
++        let state = self.state.borrow();
++        let scale = state.scale_factor;
++        let rectangles = state.content_region.map(|(bounds, radius)| {
++            let device = |length: Pixels| (f32::from(length) * scale).round() as i32;
++            rounded_rectangles(
++                device(bounds.origin.x),
++                device(bounds.origin.y),
++                device(bounds.size.width),
++                device(bounds.size.height),
++                device(radius),
++            )
++        });
++        if !state.composited {
++            let result = match &rectangles {
++                Some(rectangles) => {
++                    let rectangles = rectangles
++                        .iter()
++                        .map(|[x, y, width, height]| xproto::Rectangle {
++                            x: *x as i16,
++                            y: *y as i16,
++                            width: *width as u16,
++                            height: *height as u16,
++                        })
++                        .collect::<Vec<_>>();
++                    self.xcb.shape_rectangles(
++                        shape::SO::SET,
++                        shape::SK::BOUNDING,
++                        xproto::ClipOrdering::UNSORTED,
++                        self.x_window,
++                        0,
++                        0,
++                        &rectangles,
++                    )
++                }
++                None => self.xcb.shape_mask(
++                    shape::SO::SET,
++                    shape::SK::BOUNDING,
++                    self.x_window,
++                    0,
++                    0,
++                    x11rb::NONE,
++                ),
++            };
++            check_reply(|| "X11 Shape request for the content region failed.", result).log_err();
++        } else {
++            // With a compositing manager the window keeps its rectangle, and the
++            // pointer reaches what is behind the room around the content: the
++            // window's input shape is the rectangle of the content region.
++            let result = match state.content_region {
++                Some((bounds, _)) => {
++                    let device = |length: Pixels| (f32::from(length) * scale).round();
++                    self.xcb.shape_rectangles(
++                        shape::SO::SET,
++                        shape::SK::INPUT,
++                        xproto::ClipOrdering::UNSORTED,
++                        self.x_window,
++                        0,
++                        0,
++                        &[xproto::Rectangle {
++                            x: device(bounds.origin.x) as i16,
++                            y: device(bounds.origin.y) as i16,
++                            width: device(bounds.size.width).max(0.) as u16,
++                            height: device(bounds.size.height).max(0.) as u16,
++                        }],
++                    )
++                }
++                None => self.xcb.shape_mask(
++                    shape::SO::SET,
++                    shape::SK::INPUT,
++                    self.x_window,
++                    0,
++                    0,
++                    x11rb::NONE,
++                ),
++            };
++            check_reply(|| "X11 Shape request for the input region failed.", result).log_err();
++        }
++        if state.composited && state.blur_supported {
++            let property = state.atoms._KDE_NET_WM_BLUR_BEHIND_REGION;
++            let result = if state.background_appearance == WindowBackgroundAppearance::Blurred {
++                let values = rectangles
++                    .unwrap_or_default()
++                    .into_iter()
++                    .flatten()
++                    .map(|value| value.max(0) as u32)
++                    .collect::<Vec<_>>();
++                self.xcb.change_property32(
++                    xproto::PropMode::REPLACE,
++                    self.x_window,
++                    property,
++                    xproto::AtomEnum::CARDINAL,
++                    &values,
++                )
++            } else {
++                self.xcb.delete_property(self.x_window, property)
++            };
++            check_reply(
++                || "X11 change of _KDE_NET_WM_BLUR_BEHIND_REGION failed.",
++                result,
++            )
++            .log_err();
++        }
++        xcb_flush(&self.xcb);
++    }
++
+     pub fn should_close(&self) -> bool {
+         let mut cb = self.callbacks.borrow_mut();
+         if let Some(mut should_close) = cb.should_close.take() {
+@@ -1619,6 +1858,13 @@
+             || "X11 MapWindow failed.",
+             self.0.xcb.map_window(self.0.x_window),
+         )?;
++        let (is_popup, client) = {
++            let state = self.0.state.borrow();
++            (state.is_popup, state.client.clone())
++        };
++        if is_popup {
++            client.grab_pointer_for_popup(self.0.x_window);
++        }
+         Ok(())
+     }
+ 
+@@ -1626,8 +1872,28 @@
+         let mut state = self.0.state.borrow_mut();
+         state.background_appearance = background_appearance;
+         state.update_transparency();
++        drop(state);
++        self.0.apply_content_region();
+     }
+ 
++    fn is_background_blur_supported(&self) -> bool {
++        self.0.state.borrow().blur_supported
++    }
++
++    fn is_transparency_supported(&self) -> bool {
++        self.0.state.borrow().composited
++    }
++
++    fn set_content_region(&self, region: Option<(Bounds<Pixels>, Pixels)>) {
++        let mut state = self.0.state.borrow_mut();
++        if state.content_region == region {
++            return;
++        }
++        state.content_region = region;
++        drop(state);
++        self.0.apply_content_region();
++    }
++
+     fn background_appearance(&self) -> WindowBackgroundAppearance {
+         self.0.state.borrow().background_appearance
+     }
+@@ -1827,6 +2093,25 @@
              ),
          )
          .log_err();

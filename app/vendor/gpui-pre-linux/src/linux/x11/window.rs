@@ -21,6 +21,7 @@ use x11rb::{
     errors::ConnectionError,
     properties::{WmHints, WmSizeHints},
     protocol::{
+        shape::{self, ConnectionExt as _},
         sync,
         xinput::{self, ConnectionExt as _},
         xproto::{self, ClientMessageEvent, ConnectionExt, TranslateCoordinatesReply},
@@ -78,6 +79,7 @@ x11rb::atom_manager! {
         _NET_WM_MOVERESIZE,
         _NET_WM_WINDOW_TYPE,
         _NET_WM_WINDOW_TYPE_NOTIFICATION,
+        _KDE_NET_WM_BLUR_BEHIND_REGION,
         _NET_WM_WINDOW_TYPE_DIALOG,
         _NET_WM_STATE_MODAL,
         _NET_WM_SYNC,
@@ -230,6 +232,67 @@ fn find_visuals(xcb: &XCBConnection, screen_index: usize) -> VisualSet {
     set
 }
 
+/// Returns whether a compositing manager is running on the screen. A
+/// compositing manager owns the selection `_NET_WM_CM_S<screen number>`
+/// while it runs.
+fn compositing_manager_runs(xcb: &XCBConnection, screen_index: usize) -> bool {
+    let name = format!("_NET_WM_CM_S{screen_index}");
+    let Some(selection) = get_reply(
+        || "X11 InternAtom for the compositing manager's selection failed.",
+        xcb.intern_atom(false, name.as_bytes()),
+    )
+    .log_err() else {
+        return false;
+    };
+    get_reply(
+        || "X11 GetSelectionOwner for the compositing manager's selection failed.",
+        xcb.get_selection_owner(selection.atom),
+    )
+    .log_err()
+    .is_some_and(|reply| reply.owner != x11rb::NONE)
+}
+
+/// Returns whether the compositing manager blurs behind the region that a
+/// window names in its property `_KDE_NET_WM_BLUR_BEHIND_REGION`. KWin says
+/// so by putting a property of that name on the root window while its blur
+/// effect is loaded. KWindowSystem asks in the same way.
+fn blur_behind_region_is_announced(
+    xcb: &XCBConnection,
+    root: xproto::Window,
+    blur_behind_region: xproto::Atom,
+) -> bool {
+    get_reply(
+        || "X11 ListProperties of the root window failed.",
+        xcb.list_properties(root),
+    )
+    .log_err()
+    .is_some_and(|reply| reply.atoms.contains(&blur_behind_region))
+}
+
+/// Returns rectangles that together cover a rounded rectangle, as
+/// `[x, y, width, height]` in device pixels. The rows in the rounded corners
+/// are one pixel high each, and one rectangle covers the rows between them.
+fn rounded_rectangles(x: i32, y: i32, width: i32, height: i32, radius: i32) -> Vec<[i32; 4]> {
+    if width <= 0 || height <= 0 {
+        return Vec::new();
+    }
+    let radius = radius.max(0).min(width / 2).min(height / 2);
+    let mut rectangles = Vec::new();
+    for row in 0..radius {
+        // How far the corner's circle is from the side of the rectangle at
+        // the middle of this row.
+        let above = radius as f32 - (row as f32 + 0.5);
+        let inset = (radius as f32 - ((radius * radius) as f32 - above * above).sqrt()).round()
+            as i32;
+        rectangles.push([x + inset, y + row, width - 2 * inset, 1]);
+        rectangles.push([x + inset, y + height - 1 - row, width - 2 * inset, 1]);
+    }
+    if height > 2 * radius {
+        rectangles.push([x, y + radius, width, height - 2 * radius]);
+    }
+    rectangles
+}
+
 #[derive(Debug, Clone, Copy)]
 struct RawWindow {
     connection: *mut c_void,
@@ -295,6 +358,20 @@ pub struct X11WindowState {
     pub handle: AnyWindowHandle,
     last_insets: [u32; 4],
     accesskit_adapter: Option<accesskit_unix::Adapter>,
+    /// Whether the window is a `WindowKind::PopUp`, which the window manager
+    /// does not manage (override-redirect).
+    is_popup: bool,
+    /// Whether a compositing manager was running on the window's screen when
+    /// the window was created. Without one, the transparent parts of a
+    /// window are drawn black.
+    composited: bool,
+    /// Whether the compositing manager had announced, when the window was
+    /// created, that it blurs behind the region a window names in
+    /// `_KDE_NET_WM_BLUR_BEHIND_REGION`.
+    blur_supported: bool,
+    /// The rounded rectangle that holds the window's content, and its corner
+    /// radius (`PlatformWindow::set_content_region`).
+    content_region: Option<(Bounds<Pixels>, Pixels)>,
 }
 
 impl X11WindowState {
@@ -486,6 +563,8 @@ impl X11WindowState {
         let x_screen_index = params
             .display_id
             .map_or(x_main_screen_index, |did| u64::from(did) as usize);
+        let is_popup = params.kind == WindowKind::PopUp;
+        let composited = compositing_manager_runs(xcb, x_screen_index);
 
         let visual_set = find_visuals(xcb, x_screen_index);
 
@@ -553,7 +632,10 @@ impl X11WindowState {
                 visual.depth,
                 x_window,
                 visual_set.root,
-                (bounds.origin.x.0 + 2) as i16,
+                // A pop-up window is not managed by the window manager, so it stays
+                // where it is created, and it is created exactly where it was asked
+                // for. Every other window is created 2 pixels to the right.
+                (bounds.origin.x.0 + if is_popup { 0 } else { 2 }) as i16,
                 bounds.origin.y.0 as i16,
                 bounds.size.width.0 as u16,
                 bounds.size.height.0 as u16,
@@ -579,7 +661,7 @@ impl X11WindowState {
             )?;
 
             let reply = get_reply(|| "X11 GetGeometry failed.", xcb.get_geometry(x_window))?;
-            if reply.x == 0 && reply.y == 0 {
+            if reply.x == 0 && reply.y == 0 && !is_popup {
                 bounds.origin.x.0 += 2;
                 // Work around a bug where our rendered content appears
                 // outside the window bounds when opened at the default position
@@ -827,6 +909,12 @@ impl X11WindowState {
             }
 
             let display = Rc::new(X11Display::new(xcb, scale_factor, x_screen_index)?);
+            let blur_supported = composited
+                && blur_behind_region_is_announced(
+                    xcb,
+                    visual_set.root,
+                    atoms._KDE_NET_WM_BLUR_BEHIND_REGION,
+                );
 
             Ok(Self {
                 parent,
@@ -861,6 +949,10 @@ impl X11WindowState {
                 accesskit_adapter: None,
                 counter_id: sync_request_counter,
                 last_sync_counter: None,
+                is_popup,
+                composited,
+                blur_supported,
+                content_region: None,
             })
         });
 
@@ -1052,6 +1144,150 @@ impl X11Window {
 }
 
 impl X11WindowStatePtr {
+    /// Whether the window is a `WindowKind::PopUp`.
+    pub fn is_popup(&self) -> bool {
+        self.state
+            .try_borrow()
+            .is_ok_and(|state| state.is_popup)
+    }
+
+    /// Whether `position`, in the window's logical pixels, is inside the
+    /// window's content region, or inside the window's rectangle when the
+    /// window has no content region.
+    pub fn has_content_at(&self, position: Point<Pixels>) -> bool {
+        let state = self.state.borrow();
+        let content = match state.content_region {
+            Some((bounds, _)) => bounds,
+            None => Bounds {
+                origin: Point::default(),
+                size: state.bounds.size,
+            },
+        };
+        content.contains(&position)
+    }
+
+    /// Tells the X server about the window's content region.
+    ///
+    /// With a compositing manager that blurs behind a named region, a window
+    /// whose background appearance is `Blurred` gets the property
+    /// `_KDE_NET_WM_BLUR_BEHIND_REGION`: the rectangles of the content region,
+    /// or an empty list, which stands for the whole window, when it has no
+    /// content region. A window that is not `Blurred` has no such property.
+    ///
+    /// Without a compositing manager, the window's shape is set to the
+    /// content region, so that the room around the content, which would be
+    /// drawn black, is not part of the window. Without a content region the
+    /// window has its whole rectangle as its shape.
+    ///
+    /// With any compositing manager, the window's input shape is set to the
+    /// rectangle of the content region, so that the pointer reaches what is
+    /// behind the room around the content.
+    fn apply_content_region(&self) {
+        let state = self.state.borrow();
+        let scale = state.scale_factor;
+        let rectangles = state.content_region.map(|(bounds, radius)| {
+            let device = |length: Pixels| (f32::from(length) * scale).round() as i32;
+            rounded_rectangles(
+                device(bounds.origin.x),
+                device(bounds.origin.y),
+                device(bounds.size.width),
+                device(bounds.size.height),
+                device(radius),
+            )
+        });
+        if !state.composited {
+            let result = match &rectangles {
+                Some(rectangles) => {
+                    let rectangles = rectangles
+                        .iter()
+                        .map(|[x, y, width, height]| xproto::Rectangle {
+                            x: *x as i16,
+                            y: *y as i16,
+                            width: *width as u16,
+                            height: *height as u16,
+                        })
+                        .collect::<Vec<_>>();
+                    self.xcb.shape_rectangles(
+                        shape::SO::SET,
+                        shape::SK::BOUNDING,
+                        xproto::ClipOrdering::UNSORTED,
+                        self.x_window,
+                        0,
+                        0,
+                        &rectangles,
+                    )
+                }
+                None => self.xcb.shape_mask(
+                    shape::SO::SET,
+                    shape::SK::BOUNDING,
+                    self.x_window,
+                    0,
+                    0,
+                    x11rb::NONE,
+                ),
+            };
+            check_reply(|| "X11 Shape request for the content region failed.", result).log_err();
+        } else {
+            // With a compositing manager the window keeps its rectangle, and the
+            // pointer reaches what is behind the room around the content: the
+            // window's input shape is the rectangle of the content region.
+            let result = match state.content_region {
+                Some((bounds, _)) => {
+                    let device = |length: Pixels| (f32::from(length) * scale).round();
+                    self.xcb.shape_rectangles(
+                        shape::SO::SET,
+                        shape::SK::INPUT,
+                        xproto::ClipOrdering::UNSORTED,
+                        self.x_window,
+                        0,
+                        0,
+                        &[xproto::Rectangle {
+                            x: device(bounds.origin.x) as i16,
+                            y: device(bounds.origin.y) as i16,
+                            width: device(bounds.size.width).max(0.) as u16,
+                            height: device(bounds.size.height).max(0.) as u16,
+                        }],
+                    )
+                }
+                None => self.xcb.shape_mask(
+                    shape::SO::SET,
+                    shape::SK::INPUT,
+                    self.x_window,
+                    0,
+                    0,
+                    x11rb::NONE,
+                ),
+            };
+            check_reply(|| "X11 Shape request for the input region failed.", result).log_err();
+        }
+        if state.composited && state.blur_supported {
+            let property = state.atoms._KDE_NET_WM_BLUR_BEHIND_REGION;
+            let result = if state.background_appearance == WindowBackgroundAppearance::Blurred {
+                let values = rectangles
+                    .unwrap_or_default()
+                    .into_iter()
+                    .flatten()
+                    .map(|value| value.max(0) as u32)
+                    .collect::<Vec<_>>();
+                self.xcb.change_property32(
+                    xproto::PropMode::REPLACE,
+                    self.x_window,
+                    property,
+                    xproto::AtomEnum::CARDINAL,
+                    &values,
+                )
+            } else {
+                self.xcb.delete_property(self.x_window, property)
+            };
+            check_reply(
+                || "X11 change of _KDE_NET_WM_BLUR_BEHIND_REGION failed.",
+                result,
+            )
+            .log_err();
+        }
+        xcb_flush(&self.xcb);
+    }
+
     pub fn should_close(&self) -> bool {
         let mut cb = self.callbacks.borrow_mut();
         if let Some(mut should_close) = cb.should_close.take() {
@@ -1622,6 +1858,13 @@ impl PlatformWindow for X11Window {
             || "X11 MapWindow failed.",
             self.0.xcb.map_window(self.0.x_window),
         )?;
+        let (is_popup, client) = {
+            let state = self.0.state.borrow();
+            (state.is_popup, state.client.clone())
+        };
+        if is_popup {
+            client.grab_pointer_for_popup(self.0.x_window);
+        }
         Ok(())
     }
 
@@ -1629,6 +1872,26 @@ impl PlatformWindow for X11Window {
         let mut state = self.0.state.borrow_mut();
         state.background_appearance = background_appearance;
         state.update_transparency();
+        drop(state);
+        self.0.apply_content_region();
+    }
+
+    fn is_background_blur_supported(&self) -> bool {
+        self.0.state.borrow().blur_supported
+    }
+
+    fn is_transparency_supported(&self) -> bool {
+        self.0.state.borrow().composited
+    }
+
+    fn set_content_region(&self, region: Option<(Bounds<Pixels>, Pixels)>) {
+        let mut state = self.0.state.borrow_mut();
+        if state.content_region == region {
+            return;
+        }
+        state.content_region = region;
+        drop(state);
+        self.0.apply_content_region();
     }
 
     fn background_appearance(&self) -> WindowBackgroundAppearance {

@@ -142,6 +142,11 @@ pub struct WaylandWindowState {
     window_controls: WindowControls,
     client_inset: Option<Pixels>,
     client_corner_radii: Corners<Pixels>,
+    /// The rounded rectangle that holds the window's content, and its corner
+    /// radius (`PlatformWindow::set_content_region`). While it is set, a
+    /// `Blurred` window has only this rectangle blurred, and the surface
+    /// receives the pointer only in this rectangle.
+    content_region: Option<(Bounds<Pixels>, Pixels)>,
     accesskit_adapter: Option<accesskit_unix::Adapter>,
 }
 
@@ -331,10 +336,12 @@ fn build_popup_positioner(
     parent_geometry: Bounds<Pixels>,
 ) -> xdg_positioner::XdgPositioner {
     let positioner = globals.wm_base.create_positioner(&globals.qh, ());
-    // A zero or negative size is a protocol error.
+    // The positioner places the popup's window geometry, which is the surface less
+    // `geometry_inset` on every side. A zero or negative size is a protocol error.
+    let inset = f32::from(options.geometry_inset);
     positioner.set_size(
-        f32::from(size.width).max(1.0) as i32,
-        f32::from(size.height).max(1.0) as i32,
+        (f32::from(size.width) - 2.0 * inset).max(1.0) as i32,
+        (f32::from(size.height) - 2.0 * inset).max(1.0) as i32,
     );
 
     // The protocol wants the anchor rect relative to the parent's window geometry, while
@@ -644,6 +651,7 @@ impl WaylandWindowState {
             window_controls: WindowControls::default(),
             client_inset: None,
             client_corner_radii: Corners::default(),
+            content_region: None,
             accesskit_adapter: None,
         })
     }
@@ -687,7 +695,12 @@ impl WaylandWindowState {
         scale
     }
 
+    /// How far the window geometry is inside the surface. For a popup this is the
+    /// `geometry_inset` it was opened with. For any other window it is the client inset.
     pub fn inset(&self) -> Pixels {
+        if let WaylandSurfaceState::Popup(popup) = &self.surface_state {
+            return popup.options.geometry_inset;
+        }
         match self.decorations {
             WindowDecorations::Server => px(0.0),
             WindowDecorations::Client => self.client_inset.unwrap_or(px(0.0)),
@@ -943,6 +956,39 @@ impl WaylandWindowStatePtr {
     pub fn is_blocked(&self) -> bool {
         let state = self.state.borrow();
         state.children.values().any(|&blocking| blocking)
+    }
+
+    /// The window this popup is anchored to. `None` for a window that is not a popup.
+    pub fn popup_parent(&self) -> Option<WaylandWindowStatePtr> {
+        let state = self.state.borrow();
+        match state.surface_state {
+            WaylandSurfaceState::Popup(_) => state.parent.clone(),
+            _ => None,
+        }
+    }
+
+    /// Whether a popup is anchored to this window.
+    pub fn has_popup(&self) -> bool {
+        let state = self.state.borrow();
+        state.children.values().any(|&blocking| !blocking)
+    }
+
+    /// Whether this window is `other`, or a popup anchored to `other` or to one of its
+    /// popups.
+    pub fn is_or_descends_from(&self, other: &WaylandWindowStatePtr) -> bool {
+        let mut current = Some(self.clone());
+        while let Some(window) = current {
+            if window.ptr_eq(other) {
+                return true;
+            }
+            current = window.popup_parent();
+        }
+        false
+    }
+
+    /// Whether the window was last told that it has the keyboard (`set_focused`).
+    pub fn is_focused(&self) -> bool {
+        self.state.borrow().active
     }
 
     pub fn frame(&self, signal_at: Option<Instant>, signal_source: FrameRequestSource) {
@@ -1928,6 +1974,25 @@ impl PlatformWindow for WaylandWindow {
         self.borrow().background_appearance
     }
 
+    fn is_background_blur_supported(&self) -> bool {
+        let state = self.borrow();
+        // `update_window` prefers ext-background-effect, so the answer follows the same order.
+        if state.globals.background_effects_manager.is_some() {
+            state.globals.background_blur_capability.get()
+        } else {
+            state.globals.kde_blur_manager.is_some()
+        }
+    }
+
+    fn set_content_region(&self, region: Option<(Bounds<Pixels>, Pixels)>) {
+        let mut state = self.borrow_mut();
+        if region != state.content_region {
+            state.content_region = region;
+            update_window(state);
+            self.0.request_redraw();
+        }
+    }
+
     fn is_subpixel_rendering_supported(&self) -> bool {
         let client = self.borrow().client.get_client();
         let state = client.borrow();
@@ -2476,6 +2541,41 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
         state.surface.set_opaque_region(None);
     }
 
+    // A window that named its content region receives the pointer only there. The
+    // pointer reaches what is behind the rest of the surface, which holds only a shadow.
+    if let Some((bounds, _)) = state.content_region {
+        let bounds = bounds
+            .map(|value| value.to_i32())
+            .map_size(|value| value.max(0));
+        let input = state
+            .globals
+            .compositor
+            .create_region(&state.globals.qh, ());
+        input.add(
+            bounds.origin.x,
+            bounds.origin.y,
+            bounds.size.width,
+            bounds.size.height,
+        );
+        state.surface.set_input_region(Some(&input));
+        input.destroy();
+    } else {
+        // Without a content region the whole surface receives the pointer again.
+        state.surface.set_input_region(None);
+    }
+
+    // The blurred area is the content region when the window named one, and otherwise
+    // the area inside the client inset with the client corner radii.
+    let (blur_area, blur_radii) = match state.content_region {
+        Some((bounds, radius)) => (
+            bounds
+                .map(|value| value.to_i32())
+                .map_size(|value| value.max(0)),
+            Corners::all(radius),
+        ),
+        None => (area, state.client_corner_radii),
+    };
+
     // Prefer the ext-background-effect protocol, as it is DE agnostic and
     // replaces the deprecated kde-blur protocol, which is no longer supported
     // since KDE Plasma 6.7.
@@ -2492,7 +2592,7 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
                 state.background_effects = Some(background_effects);
             }
 
-            add_rounded_rect(area, state.client_corner_radii, |x, y, width, height| {
+            add_rounded_rect(blur_area, blur_radii, |x, y, width, height| {
                 region.add(x, y, width, height);
             });
 
@@ -2511,7 +2611,18 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
                 let blur = blur_manager.create(&state.surface, &state.globals.qh, ());
                 state.kde_blur = Some(blur);
             }
-            state.kde_blur.as_ref().unwrap().commit();
+            let blur = state.kde_blur.as_ref().unwrap();
+            // Without a region KWin blurs behind the whole surface. A window that named
+            // its content region has only that region blurred.
+            if state.content_region.is_some() {
+                add_rounded_rect(blur_area, blur_radii, |x, y, width, height| {
+                    region.add(x, y, width, height);
+                });
+                blur.set_region(Some(&region));
+            } else {
+                blur.set_region(None);
+            }
+            blur.commit();
         } else {
             blur_manager.unset(&state.surface);
             if let Some(b) = state.kde_blur.take() {

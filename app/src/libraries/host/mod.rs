@@ -12,6 +12,7 @@
 //! otherwise reach the library that is opened next. It shows the gate's
 //! loading state. It closes the library (`close_library`) on a thread of
 //! its own. It opens the next library in a new shell.
+use crate::paths::Canonical as _;
 use super::admission::{self, Decision, Origin, Probes, Refusal};
 use super::{Kind, history};
 use crate::application::Application;
@@ -275,7 +276,7 @@ pub fn create(path: PathBuf, cx: &mut App) {
             cx,
         );
     }
-    let root = path.canonicalize().unwrap_or(path);
+    let root = path.canonical().unwrap_or(path);
     host(cx).update(cx, |host, _| host.created = Some(root.clone()));
     begin(root, Kind::Real, cx);
 }
@@ -369,7 +370,7 @@ pub fn request(path: &Path, origin: Origin, cx: &mut App) {
     }
     // When `path` is the library that is already open, the main window is
     // brought forward and nothing is opened.
-    if let Ok(canonical) = path.canonicalize()
+    if let Ok(canonical) = path.canonical()
         && current(cx).is_some_and(|(root, _)| root == canonical)
     {
         crate::app_menu::bring_forward(cx);
@@ -465,7 +466,7 @@ pub fn locate(missing: PathBuf, open: bool, cx: &mut App) {
                     cx,
                 );
             };
-            let found = found.canonicalize().unwrap_or(found);
+            let found = found.canonical().unwrap_or(found);
             if found == missing {
                 return;
             }

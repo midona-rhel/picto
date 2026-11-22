@@ -208,6 +208,8 @@ pub struct Manager {
     /// end of the right side, so the right side is scrolled to its end when
     /// a new error appears.
     detail_scroll: ScrollHandle,
+    /// The scroll position of the list of libraries on the left side.
+    list_scroll: ScrollHandle,
     error_shown: Option<String>,
     /// The Remove from List question. Its content is the path of the library
     /// that is taken off the list when the user confirms.
@@ -309,6 +311,7 @@ impl Manager {
             message: None,
             error: host.read(cx).failure.clone().map(|(_, message)| message),
             detail_scroll: ScrollHandle::new(),
+            list_scroll: ScrollHandle::new(),
             error_shown: None,
             removing: Default::default(),
             deleting: Default::default(),
@@ -876,16 +879,30 @@ impl Render for Manager {
                 });
             }
         }
+        // The right side scrolls when the library's cards are higher than
+        // the window. Its scrollbar is drawn in the 22px of padding on the
+        // right, so it covers none of the content.
         let detail = div()
-            .id("library-detail")
+            .relative()
             .flex_1()
             .min_w_0()
             .h_full()
-            .p(px(22.))
-            .overflow_y_scroll()
-            .track_scroll(&self.detail_scroll)
-            .child(detail)
-            .children(self.feedback(cx));
+            .child(
+                div()
+                    .id("library-detail")
+                    .size_full()
+                    .p(px(22.))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.detail_scroll)
+                    .child(detail)
+                    .children(self.feedback(cx)),
+            )
+            .child(ui::scrollbar(
+                "library-detail-scrollbar",
+                &self.detail_scroll,
+                window,
+                cx,
+            ));
         div()
             .id("library-manager")
             .track_focus(&self.focus)
@@ -904,7 +921,7 @@ impl Render for Manager {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(self.sidebar(cx))
+                    .child(self.sidebar(window, cx))
                     .child(detail),
             )
             .child(self.footer(cx))

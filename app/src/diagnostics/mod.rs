@@ -329,7 +329,9 @@ pub fn record_ipc(command: &str, duration_ms: f64, error: Option<&str>) {
 /// the decoders report through that crate, for example a skipped frame, a
 /// lost drawable or a failed upload. Warnings and errors are written to
 /// standard error and added to the log window with the source `Renderer`.
-/// Records of a lower level are ignored.
+/// Records of a lower level are ignored, with one exception: the app's own
+/// timing notes, which are informational records whose target starts with
+/// [`TIMING`], are added as informational lines.
 ///
 /// It is installed before the core starts its tracing. The core's tracing
 /// would otherwise install its own receiver for the `log` crate, and only
@@ -338,9 +340,15 @@ pub fn record_ipc(command: &str, duration_ms: f64, error: Option<&str>) {
 /// not log through the `log` crate.
 struct Logger;
 
+/// The start of the target of a timing note. The video player writes such
+/// notes with `log::info!` and the targets `timing.ffprobe` and
+/// `timing.first_frame`.
+const TIMING: &str = "timing.";
+
 impl log::Log for Logger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
         metadata.level() <= log::Level::Warn
+            || (metadata.level() == log::Level::Info && metadata.target().starts_with(TIMING))
     }
 
     fn log(&self, record: &log::Record) {
@@ -349,6 +357,7 @@ impl log::Log for Logger {
         }
         let level = match record.level() {
             log::Level::Error => Level::Error,
+            log::Level::Info => Level::Info,
             _ => Level::Warn,
         };
         let message = record.args().to_string();
@@ -377,13 +386,14 @@ impl log::Log for Logger {
     fn flush(&self) {}
 }
 
-/// Installs `Logger` as the logger of the `log` crate, and sets warnings
-/// as the lowest level that the crate passes on. It does nothing if a logger
-/// is already installed.
+/// Installs `Logger` as the logger of the `log` crate, and sets
+/// informational records as the lowest level that the crate passes on, so
+/// that the timing notes reach `Logger`, which ignores every other
+/// informational record. It does nothing if a logger is already installed.
 pub fn install_logger() {
     static LOGGER: Logger = Logger;
     if log::set_logger(&LOGGER).is_ok() {
-        log::set_max_level(log::LevelFilter::Warn);
+        log::set_max_level(log::LevelFilter::Info);
     }
 }
 

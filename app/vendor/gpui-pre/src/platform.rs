@@ -1306,6 +1306,15 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn is_background_blur_supported(&self) -> bool {
         false
     }
+    /// Whether a window with a transparent background shows what is behind
+    /// it. A platform that does not implement this answers `true`.
+    fn is_transparency_supported(&self) -> bool {
+        true
+    }
+    /// Names the rounded rectangle of this window that holds its content, in
+    /// logical pixels, with its corner radius. A platform that does not
+    /// implement this ignores it.
+    fn set_content_region(&self, _region: Option<(Bounds<Pixels>, Pixels)>) {}
     fn minimize(&self);
     fn zoom(&self);
     fn toggle_fullscreen(&self);

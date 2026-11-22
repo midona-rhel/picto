@@ -54,8 +54,10 @@ pub fn recover(application: &LibraryApplication) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
 
     let stored_originals = application.blobs().list_originals();
-    // One listing of the thumbnail tree answers for almost every original;
-    // only one it does not name is looked for on the file system.
+    // The thumbnails are read from one listing of the thumbnail folder. The
+    // listing leaves out symbolic links, so an original that it does not
+    // name is looked for on the file system before its thumbnail counts as
+    // missing.
     let thumbnails = application.blobs().list_thumbnails();
     let mut recovered = Vec::with_capacity(stored_originals.len());
     for (hash, extension) in stored_originals {
@@ -183,6 +185,12 @@ pub async fn drain_batch(
     Ok(report)
 }
 
+/// Makes the pictures that are missing for the file with the hash
+/// `content_hash`, without waiting for the background work: its thumbnail,
+/// and for a video also the picture of its first frame. The command
+/// `media.render_thumbnail_now` runs this. The app sends that command for a
+/// tile whose thumbnail is missing, when the user regenerates a thumbnail,
+/// and when a viewer opens a video that has no first-frame picture.
 pub async fn render_thumbnail_now(
     application: &LibraryApplication,
     content_hash: &str,
@@ -231,8 +239,9 @@ async fn execute(
     );
     match work.kind {
         MediaWorkKind::Thumbnail => {
-            // Browser-rendered formats are generated on the first protocol
-            // request. The durable worker only needs to settle its queue row.
+            // The core cannot draw a Flash movie. The app makes that
+            // thumbnail itself when the movie's tile is shown, so the work
+            // item is completed here without a thumbnail.
             if source.caps.thumbnail_backend == Some(ThumbnailBackend::Browser) {
                 return Ok((false, None));
             }
@@ -367,17 +376,39 @@ fn load_target(application: &LibraryApplication, file_id: FileId) -> Result<Work
         .map_err(|error| error.to_string())
 }
 
+/// Returns the bytes of the file's thumbnail, and makes the thumbnail first
+/// when the file has none.
+///
+/// For a video it also makes the picture of the first frame
+/// ([`make_first_frame`]). When the thumbnail was made by this call, that
+/// picture is made again, so that Regenerate Thumbnails replaces both
+/// pictures. When the thumbnail existed, the picture is made only if the
+/// video has none. That is the case for a video that was imported before
+/// first-frame pictures were kept, and for a video whose thumbnail a
+/// subscription wrote when it downloaded the file.
 async fn ensure_thumbnail(
     application: &LibraryApplication,
     target: &WorkTarget,
     source: &mut PreparedMediaSource,
 ) -> Result<Vec<u8>, String> {
+    let (bytes, made) = read_or_make_thumbnail(application, target, source).await?;
+    make_first_frame(application, target, made).await;
+    Ok(bytes)
+}
+
+/// Returns the bytes of the file's thumbnail, and whether this call made
+/// the thumbnail because the file had none.
+async fn read_or_make_thumbnail(
+    application: &LibraryApplication,
+    target: &WorkTarget,
+    source: &mut PreparedMediaSource,
+) -> Result<(Vec<u8>, bool), String> {
     if let Some(bytes) = application
         .blobs()
         .read_thumbnail(&target.content_hash)
         .map_err(|error| format!("Thumbnail read failed: {error}"))?
     {
-        return Ok(bytes);
+        return Ok((bytes, false));
     }
     if !source.caps.can_thumbnail() {
         return Err(format!("No thumbnail backend for {}", target.mime));
@@ -402,7 +433,63 @@ async fn ensure_thumbnail(
         .blobs()
         .write_thumbnail(&target.content_hash, &bytes, &extension)
         .map_err(|error| format!("Thumbnail write failed: {error}"))?;
-    Ok(bytes)
+    Ok((bytes, true))
+}
+
+/// Makes the picture of a video's first frame and stores it beside the
+/// video's thumbnail (`BlobStore::write_first_frame`). The viewers draw
+/// this picture while the video loads, because playback starts at that
+/// frame, and the thumbnail is taken from 35% of the way into the video.
+///
+/// - A video is a file whose MIME type starts with `video/`. Those are the
+///   files that the app opens in its video player. For any other file
+///   nothing is done.
+/// - With `replace` false, nothing is done when the video already has a
+///   first-frame picture.
+/// - The picture is made as the thumbnail is made: by `ffmpeg`, as a JPEG
+///   that fits inside `DEFAULT_THUMBNAIL_DIMENSIONS`.
+/// - The picture is always the first frame, also when that frame is black.
+///   No other frame is tried.
+/// - A failure is written to the log and is not returned, so the work that
+///   made the thumbnail still succeeds. The video then has no first-frame
+///   picture, the viewers draw its thumbnail, and the picture is asked for
+///   again the next time a viewer opens the video.
+async fn make_first_frame(application: &LibraryApplication, target: &WorkTarget, replace: bool) {
+    if !target.mime.starts_with("video/") {
+        return;
+    }
+    let made = async {
+        if !replace
+            && application
+                .blobs()
+                .find_first_frame_path(&target.content_hash)
+                .map_err(|error| error.to_string())?
+                .is_some()
+        {
+            return Ok(());
+        }
+        // With no seek position `ffmpeg` writes the first frame it decodes.
+        let jpeg = crate::media_processing::ffmpeg::render_video_thumbnail(
+            &target.file_path,
+            DEFAULT_THUMBNAIL_DIMENSIONS,
+            0,
+            None,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        application
+            .blobs()
+            .write_first_frame(&target.content_hash, &jpeg)
+            .map_err(|error| error.to_string())
+    };
+    let made: Result<(), String> = made.await;
+    if let Err(error) = made {
+        tracing::warn!(
+            file_hash = %target.content_hash,
+            %error,
+            "The first-frame picture of a video could not be made"
+        );
+    }
 }
 
 async fn derivative_image(

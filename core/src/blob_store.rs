@@ -1,22 +1,34 @@
-//! The blob store of a library: the folder `blobs/`, which holds each
-//! imported file and its thumbnail under the SHA-256 hash of the file.
+//! The blob store: the folder `blobs` of a library, which holds the
+//! library's original files and the pictures that are made from them.
 //!
-//! The files are plain files in a tree of folders that are named after the
-//! hash:
+//! Every file is stored as a plain file, under the SHA-256 hash of the
+//! original's content, written as 64 hexadecimal characters:
 //! ```text
 //! blobs/
-//! ├── f/<ab>/<cd>/<fullhash>.<ext>   # originals (e.g. abc123.jpg)
-//! └── t/<ab>/<cd>/<fullhash>.jpg     # thumbnails (always JPEG)
+//! ├── f/<ab>/<cd>/<hash>.<ext>              an original, for example <hash>.mp4
+//! └── t/<ab>/<cd>/<hash>.jpg or <hash>.png  the original's thumbnail
+//!     t/<ab>/<cd>/<hash>.first-frame.jpg    a video's first frame
 //! ```
 //!
-//! - The two folder levels are the first two and the next two characters of
-//!   the hash.
-//! - A file's extension is derived from its MIME type when it is written,
-//!   and the MIME type is derived from the extension when it is read.
-//! - A write does nothing when the file already exists.
-//! - A file is first written into `blobs/tmp/` and then renamed to its final
-//!   path. So a file at a final path is always complete. That is why a write
-//!   may skip a file that exists, and why the hash can be the file's name.
+//! - `<ab>` is the first two characters of the hash and `<cd>` is the next
+//!   two.
+//! - An original's extension is the one that belongs to its MIME type
+//!   ([`mime_to_extension`]).
+//! - A thumbnail is the `.jpg` when that file exists, and the `.png`
+//!   otherwise ([`BlobStore::find_thumbnail_path`]).
+//! - The first-frame picture exists only for a video. It is the video's
+//!   first frame at the size of a thumbnail. The viewers draw it while the
+//!   video loads, because playback starts at that frame, and a video's
+//!   thumbnail is taken from a later point in the video.
+//! - The thumbnail and the first-frame picture are made from the original
+//!   and can be made again at any time. They are deleted with the original
+//!   (`BlobStore::delete`).
+//! - A write of an original or of a thumbnail does nothing when the file
+//!   already exists.
+//! - A file is written to a temporary file in `blobs/tmp/` and then renamed
+//!   to its final path. A file at its final path is therefore always
+//!   complete. This is why a write may skip a file that exists, and why a
+//!   file's name can be trusted to be the hash of the original's content.
 
 use std::collections::HashSet;
 use std::fs;
@@ -110,13 +122,14 @@ pub fn extension_to_mime(ext: &str) -> &'static str {
     }
 }
 
-/// The blob store of one library. It reads and writes the originals and the
-/// thumbnails.
+/// Reads and writes the files of one library's `blobs` folder.
 pub struct BlobStore {
     root: PathBuf,
-    /// The staging folder of this instance, `blobs/tmp/<pid>-<nonce>/`. Each
-    /// open gets a folder of its own, so opening the library again does not
-    /// disturb a write that still uses the earlier instance.
+    /// The folder in which this store writes its temporary files:
+    /// `blobs/tmp/<process id>-<random number>/`. Every `BlobStore` has a
+    /// folder of its own. When a library is opened again in the same
+    /// process, a write that the earlier `BlobStore` has not finished
+    /// therefore keeps its temporary file.
     staging: PathBuf,
 }
 
@@ -127,11 +140,13 @@ impl Drop for BlobStore {
 }
 
 impl BlobStore {
-    /// Open or create a blob store at `<library_root>/blobs/`.
+    /// Opens the blob store at `<library_root>/blobs/`, and creates the
+    /// folder when it does not exist.
     ///
-    /// Sweeps staging leftovers from other (dead) processes. Same-pid entries
-    /// are left alone: they may belong to a still-live writer from an earlier
-    /// open of this library in this process.
+    /// The temporary folders that other processes left in `blobs/tmp/` are
+    /// deleted. A folder whose name starts with this process's id is kept,
+    /// because an earlier `BlobStore` of this process may still be writing
+    /// in it.
     pub fn open(library_root: &Path) -> BlobResult<Self> {
         let root = library_root.join("blobs");
         fs::create_dir_all(&root)?;
@@ -162,21 +177,22 @@ impl BlobStore {
         Ok(Self { root, staging })
     }
 
-    /// Writes an original with its extension. It does nothing when the file
-    /// already exists.
+    /// Writes `data` as the original with the hash `hex_hash` and the
+    /// extension `ext`. Does nothing when that file already exists.
     pub fn write_original(&self, hex_hash: &str, data: &[u8], ext: Option<&str>) -> BlobResult<()> {
-        // A file that is already stored is not written again.
         let path = self.original_path_with_ext(hex_hash, ext)?;
         if path.exists() {
             return Ok(());
         }
-        // An original cannot be made again, so the file is synced to disk
-        // before it is renamed into place.
+        // An original cannot be made again, so its bytes are flushed to the
+        // disk before the file is renamed to its final path.
         self.write_atomic(&path, data, true, true)
     }
 
-    /// Stream an original from disk into content-addressed storage while
-    /// verifying that the staged source still matches its recorded hash.
+    /// Copies the file `source` into the store as the original with the
+    /// hash `hex_hash`. The hash of the bytes is computed while they are
+    /// copied. When it differs from `hex_hash`, nothing is stored and the
+    /// error is `BlobError::HashMismatch`.
     pub fn write_original_from_path(
         &self,
         hex_hash: &str,
@@ -231,10 +247,12 @@ impl BlobStore {
         Ok(())
     }
 
-    /// Atomically move an already hashed and fsynced owned staging file into
-    /// content-addressed storage. The caller must have produced `source`
-    /// itself while calculating `hex_hash`; arbitrary external paths must use
-    /// `write_original_from_path`, which verifies their bytes while copying.
+    /// Moves the file `source` into the store as the original with the hash
+    /// `hex_hash`, by renaming it. The caller must have written `source`
+    /// itself, computed `hex_hash` from the bytes it wrote, and flushed the
+    /// file to the disk, because this function does not read the file. A
+    /// file from anywhere else is stored with `write_original_from_path`,
+    /// which checks the hash while it copies.
     pub fn promote_verified_original(
         &self,
         hex_hash: &str,
@@ -265,11 +283,15 @@ impl BlobStore {
         Ok(final_path)
     }
 
-    /// Stage `data` in this instance's staging dir and atomically rename onto
-    /// `final_path`, so a partial file can never exist at a content-addressed
-    /// path. `durable` additionally fsyncs the file (and its directory) so the
-    /// blob survives power loss once this returns. The temp file is cleaned
-    /// up on every error path (RAII via `NamedTempFile`).
+    /// Writes `data` to a temporary file in this store's staging folder and
+    /// renames that file to `final_path`, so that a file at `final_path` is
+    /// never incomplete. A file that is already at `final_path` is replaced.
+    ///
+    /// With `durable`, the file and its folder are flushed to the disk, so
+    /// that the file survives a loss of power after this function returns.
+    /// With `existing_is_success`, a rename that fails counts as success
+    /// when a file is at `final_path` afterwards. The temporary file is
+    /// deleted when the function returns an error.
     fn write_atomic(
         &self,
         final_path: &Path,
@@ -277,8 +299,9 @@ impl BlobStore {
         durable: bool,
         existing_is_success: bool,
     ) -> BlobResult<()> {
-        // Startup cleanup or another Picto process may remove an idle staging
-        // directory. The write boundary must be able to recover on its own.
+        // Another Picto process deletes this staging folder when it opens
+        // the same library, so the folder is created again when it is
+        // missing.
         fs::create_dir_all(&self.staging)?;
         let mut file = tempfile::NamedTempFile::new_in(&self.staging)?;
         file.write_all(data)?;
@@ -290,8 +313,10 @@ impl BlobStore {
             fs::create_dir_all(parent)?;
         }
         if let Err(err) = file.persist(final_path) {
-            // A concurrent writer of the same hash landing first is success:
-            // content-addressed, so the bytes are identical.
+            // The rename failed. When a file is at this path all the same,
+            // another writer put it there. A file is named by the hash of
+            // its original, so that file was made from the same original,
+            // and the write counts as done.
             if !existing_is_success || !final_path.exists() {
                 return Err(err.error.into());
             }
@@ -307,7 +332,7 @@ impl BlobStore {
         Ok(())
     }
 
-    /// Returns the stored originals as pairs of hash and extension.
+    /// Returns every original in the store, as its hash and its extension.
     pub fn list_originals(&self) -> Vec<(String, String)> {
         let mut out = Vec::new();
         let f_root = self.root.join("f");
@@ -332,11 +357,15 @@ impl BlobStore {
         out
     }
 
-    /// The thumbnails present in their own shard (`t/<ab>/<cd>/<hash>.jpg`
-    /// or `.png`), by exact file stem, read from one listing of the
-    /// thumbnail tree. A hash in the set is one `find_thumbnail_path` finds.
-    /// Symbolic links are left out: whether one leads anywhere takes a look
-    /// at its target, which `find_thumbnail_path` does.
+    /// Returns the hashes of the originals that have a thumbnail, read from
+    /// one listing of the folder `t`. A thumbnail counts when its name is
+    /// exactly `<hash>.jpg` or `<hash>.png` and it is in the folder
+    /// `t/<ab>/<cd>/` of its own hash. `find_thumbnail_path` finds a
+    /// thumbnail for every hash in the result. A first-frame picture
+    /// (`<hash>.first-frame.jpg`) is not a thumbnail and is not counted.
+    /// Symbolic links are left out, because only a look at a link's target
+    /// tells whether the link leads to a file. `find_thumbnail_path` takes
+    /// that look.
     pub fn list_thumbnails(&self) -> HashSet<String> {
         let mut out = HashSet::new();
         let shards = |dir: &Path| -> Vec<(String, PathBuf)> {
@@ -377,14 +406,18 @@ impl BlobStore {
         out
     }
 
-    /// Read an original file's bytes.
+    /// Returns the bytes of the original with the hash `hex_hash` and the
+    /// extension `ext`.
     pub fn read_original(&self, hex_hash: &str, ext: Option<&str>) -> BlobResult<Vec<u8>> {
         let path = self.original_path_with_ext(hex_hash, ext)?;
         Ok(fs::read(&path)?)
     }
 
-    /// Find the original file on disk. Returns (path, extension) if found.
-    /// Strict mode requires an extension hint and performs no directory scans.
+    /// Returns the path and the extension of the original with the hash
+    /// `hex_hash`, or `None` when the store has no such file. The caller
+    /// must give the extension in `ext_hint`, because no folder is searched
+    /// for the file. Without an extension the error is
+    /// `BlobError::MissingExtension`.
     pub fn find_original(
         &self,
         hex_hash: &str,
@@ -401,22 +434,22 @@ impl BlobStore {
         Ok(None)
     }
 
-    /// Write a thumbnail with the given extension (e.g. `"jpg"` or `"png"`).
-    /// Skips if a thumbnail already exists (any extension).
+    /// Writes `data` as the thumbnail of the original with the hash
+    /// `hex_hash`, with the extension `ext` (`"jpg"` or `"png"`). Does
+    /// nothing when the original already has a thumbnail with either
+    /// extension.
     pub fn write_thumbnail(&self, hex_hash: &str, data: &[u8], ext: &str) -> BlobResult<()> {
-        // Skip if any thumbnail variant already exists.
         if self.find_thumbnail_path(hex_hash)?.is_some() {
             return Ok(());
         }
         let path = self.thumbnail_path_with_ext(hex_hash, ext)?;
-        // A thumbnail can be made again, so it is renamed into place without
-        // a sync to disk.
+        // A thumbnail can be made again, so it is not flushed to the disk.
         self.write_atomic(&path, data, false, true)
     }
 
     /// Copies the thumbnail file `source`, which is another library's
-    /// thumbnail of the original with this hash, into this store. Does
-    /// nothing when this store already holds a thumbnail for the hash.
+    /// thumbnail of the original with the hash `hex_hash`, into this store.
+    /// Does nothing when this store already holds a thumbnail for the hash.
     pub fn adopt_thumbnail(&self, hex_hash: &str, source: &Path) -> BlobResult<()> {
         if self.find_thumbnail_path(hex_hash)?.is_some() {
             return Ok(());
@@ -428,7 +461,8 @@ impl BlobStore {
         self.write_thumbnail(hex_hash, &fs::read(source)?, extension)
     }
 
-    /// Read a thumbnail, returning `Ok(None)` if missing.
+    /// Returns the bytes of the thumbnail of the original with the hash
+    /// `hex_hash`, or `None` when it has no thumbnail.
     pub fn read_thumbnail(&self, hex_hash: &str) -> BlobResult<Option<Vec<u8>>> {
         if let Some(path) = self.find_thumbnail_path(hex_hash)? {
             return Ok(Some(fs::read(&path)?));
@@ -436,14 +470,32 @@ impl BlobStore {
         Ok(None)
     }
 
-    /// Delete all thumbnail variants for a hash (both `.jpg` and `.png`).
+    /// Deletes the thumbnail of the original with the hash `hex_hash`, both
+    /// the `.jpg` and the `.png`.
     pub fn delete_thumbnail(&self, hex_hash: &str) -> BlobResult<()> {
         remove_file_if_exists(self.thumbnail_path_with_ext(hex_hash, "jpg")?)?;
         remove_file_if_exists(self.thumbnail_path_with_ext(hex_hash, "png")?)?;
         Ok(())
     }
 
-    /// Remove all files and thumbnails, then recreate empty directories.
+    /// Writes `jpeg` as the first-frame picture of the video with the hash
+    /// `hex_hash`. A first-frame picture that already exists is replaced,
+    /// so that the picture can be made again.
+    pub fn write_first_frame(&self, hex_hash: &str, jpeg: &[u8]) -> BlobResult<()> {
+        let path = self.first_frame_path(hex_hash)?;
+        // The picture can be made again, so it is not flushed to the disk.
+        self.write_atomic(&path, jpeg, false, true)
+    }
+
+    /// Returns the path of the first-frame picture of the video with the
+    /// hash `hex_hash`, or `None` when that file does not exist.
+    pub fn find_first_frame_path(&self, hex_hash: &str) -> BlobResult<Option<PathBuf>> {
+        let path = self.first_frame_path(hex_hash)?;
+        Ok(path.exists().then_some(path))
+    }
+
+    /// Deletes every original, every thumbnail and every first-frame
+    /// picture, and leaves the folders `f` and `t` empty.
     pub fn wipe(&self) -> BlobResult<()> {
         let f_dir = self.root.join("f");
         let t_dir = self.root.join("t");
@@ -458,10 +510,13 @@ impl BlobStore {
         Ok(())
     }
 
-    /// Returns the hashes of the stored files that `referenced` does not
-    /// name and that are at least `min_age` old. It deletes nothing. The
-    /// files are deleted by the cleanup that reads the database, so that a
-    /// hash cannot come into use between this listing and the deletion.
+    /// Returns the hashes in the store that are not in `referenced` and
+    /// whose files were all last changed at least `min_age` ago, each with
+    /// the number of its files and their size together. The files counted
+    /// are the original, the thumbnail and the first-frame picture. Nothing
+    /// is deleted here. The library deletes a file only inside the database
+    /// write that has checked that no item uses the file
+    /// (`Library::clean_pending_blobs`).
     pub fn orphan_candidates(
         &self,
         referenced: &std::collections::HashSet<String>,
@@ -532,9 +587,11 @@ impl BlobStore {
             .collect())
     }
 
-    /// Delete both original and thumbnail for a hash.
+    /// Deletes every file the store holds for the hash `hex_hash`: the
+    /// original, the thumbnail and the first-frame picture.
     pub(crate) fn delete(&self, hex_hash: &str) -> BlobResult<()> {
-        // Delete originals matching `<hash>.<ext>` in shard dir.
+        // The original's extension is not known here, so every file named
+        // `<hash>.<extension>` in the hash's folder under `f` is deleted.
         let (ab, cd) = shard_prefix(hex_hash)?;
         let orig_dir = self.root.join("f").join(ab).join(cd);
         match fs::read_dir(&orig_dir) {
@@ -552,11 +609,12 @@ impl BlobStore {
             Err(error) => return Err(error.into()),
         }
         self.delete_thumbnail(hex_hash)?;
+        remove_file_if_exists(self.first_frame_path(hex_hash)?)?;
         Ok(())
     }
 
-    /// Returns the path of the original with this hash and extension:
-    /// `blobs/f/<ab>/<cd>/<hash>.<ext>`.
+    /// Returns the path of the original with the hash `hex_hash` and the
+    /// extension `ext`: `blobs/f/<ab>/<cd>/<hash>.<ext>`.
     pub fn original_path_with_ext(&self, hex_hash: &str, ext: Option<&str>) -> BlobResult<PathBuf> {
         let (ab, cd) = shard_prefix(hex_hash)?;
         let e = match ext {
@@ -567,8 +625,8 @@ impl BlobStore {
         Ok(self.root.join("f").join(ab).join(cd).join(filename))
     }
 
-    /// Returns the path of the thumbnail with this hash and extension:
-    /// `blobs/t/<ab>/<cd>/<hash>.<ext>`.
+    /// Returns the path of the thumbnail with the extension `ext` of the
+    /// original with the hash `hex_hash`: `blobs/t/<ab>/<cd>/<hash>.<ext>`.
     pub fn thumbnail_path_with_ext(&self, hex_hash: &str, ext: &str) -> BlobResult<PathBuf> {
         let (ab, cd) = shard_prefix(hex_hash)?;
         Ok(self
@@ -579,15 +637,31 @@ impl BlobStore {
             .join(format!("{}.{}", hex_hash, ext)))
     }
 
-    /// Compute disk usage for originals (`blobs/f/`) and thumbnails (`blobs/t/`).
+    /// Returns the path of the first-frame picture of the video with the
+    /// hash `hex_hash`: `blobs/t/<ab>/<cd>/<hash>.first-frame.jpg`. It is
+    /// in the same folder as the video's thumbnail.
+    pub fn first_frame_path(&self, hex_hash: &str) -> BlobResult<PathBuf> {
+        let (ab, cd) = shard_prefix(hex_hash)?;
+        Ok(self
+            .root
+            .join("t")
+            .join(ab)
+            .join(cd)
+            .join(format!("{hex_hash}.first-frame.jpg")))
+    }
+
+    /// Returns two sizes in bytes: of the folder `blobs/f/`, which holds
+    /// the originals, and of the folder `blobs/t/`, which holds the
+    /// thumbnails and the first-frame pictures.
     pub fn disk_usage(&self) -> (u64, u64) {
         let originals = dir_size(&self.root.join("f"));
         let thumbnails = dir_size(&self.root.join("t"));
         (originals, thumbnails)
     }
 
-    /// Find thumbnail path, checking `.jpg` first then `.png` for backwards
-    /// compatibility with existing libraries.
+    /// Returns the path of the thumbnail of the original with the hash
+    /// `hex_hash`: the `.jpg` when it exists, otherwise the `.png` when
+    /// that exists, otherwise `None`.
     pub fn find_thumbnail_path(&self, hex_hash: &str) -> BlobResult<Option<PathBuf>> {
         let jpg = self.thumbnail_path_with_ext(hex_hash, "jpg")?;
         if jpg.exists() {
@@ -602,9 +676,9 @@ impl BlobStore {
 }
 
 /// Returns the path at which the library in the folder `library_root` stores
-/// the original with this hash and extension:
+/// the original with the hash `hex_hash` and the extension `ext`:
 /// `blobs/f/<ab>/<cd>/<hash>.<ext>`. Nothing is read or created, so this is
-/// how a library that is not open is read.
+/// how a file of a library that is not open is found.
 pub fn library_original_path(
     library_root: &Path,
     hex_hash: &str,
@@ -620,7 +694,7 @@ pub fn library_original_path(
 }
 
 /// Returns the thumbnail that belongs to `original` when `original` is the
-/// file of this hash in the blob store of a library
+/// file with the hash `hex_hash` in the blob store of a library
 /// (`<library>/blobs/f/<ab>/<cd>/<hash>.<ext>`) and that library holds a
 /// thumbnail for it (`<library>/blobs/t/<ab>/<cd>/<hash>.jpg` or `.png`).
 /// Returns `None` for any other file.
@@ -644,9 +718,10 @@ pub fn thumbnail_beside_original(original: &Path, hex_hash: &str) -> Option<Path
         .find(|path| path.is_file())
 }
 
-/// Whether a directory entry is a directory, following a symbolic link as
-/// `Path::is_dir` does. The kind comes from the directory listing itself, so
-/// only a link costs a look at the file system.
+/// Returns whether the directory entry `entry` is a folder. A symbolic link
+/// counts as a folder when it leads to one, as with `Path::is_dir`. The kind
+/// of an entry is taken from the directory listing, so the file system is
+/// asked again only for a symbolic link.
 fn entry_is_dir(entry: &fs::DirEntry) -> bool {
     match entry.file_type() {
         Ok(kind) if !kind.is_symlink() => kind.is_dir(),
@@ -654,7 +729,8 @@ fn entry_is_dir(entry: &fs::DirEntry) -> bool {
     }
 }
 
-/// Recursively sum file sizes under a directory.
+/// Returns the size in bytes of all files in the folder `path` and in the
+/// folders inside it.
 fn dir_size(path: &Path) -> u64 {
     let mut total = 0u64;
     if let Ok(entries) = fs::read_dir(path) {
@@ -673,10 +749,13 @@ fn dir_size(path: &Path) -> u64 {
     total
 }
 
-/// Extract two-level shard prefix from a hex hash: `("ab", "cd")` from `"abcd..."`.
+/// Returns the first two and the next two characters of the hash
+/// `hex_hash`, which name the two folders its files are stored in:
+/// `("ab", "cd")` for `"abcd..."`.
 ///
-/// Validates that the hash is exactly 64 lowercase hex characters to prevent
-/// path traversal attacks (e.g., a hash containing `../`).
+/// The hash must be exactly 64 hexadecimal characters. Any other text is
+/// refused with `BlobError::InvalidHash`, so that a text such as `../..`
+/// cannot make a path that leads outside the `blobs` folder.
 fn shard_prefix(hex_hash: &str) -> BlobResult<(&str, &str)> {
     if hex_hash.len() != 64 || !hex_hash.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(BlobError::InvalidHash(hex_hash.to_string()));
@@ -713,17 +792,20 @@ mod tests {
         assert_eq!(data, b"first");
     }
 
-    /// The listings the recovery pass reads agree with a look at each file:
-    /// originals behind a linked shard are found, and a thumbnail is listed
-    /// exactly when `find_thumbnail_path` finds it.
+    /// Checks the two listings that the recovery pass reads
+    /// (`list_originals`, `list_thumbnails`) against a look at each file.
+    /// An original in a folder that is reached through a symbolic link is
+    /// listed. Every thumbnail that is listed is one that
+    /// `find_thumbnail_path` finds. A first-frame picture is not listed as
+    /// a thumbnail.
     #[cfg(unix)]
     #[test]
     fn listings_agree_with_looking_at_each_file() {
         let dir = TempDir::new().unwrap();
         let store = BlobStore::open(dir.path()).unwrap();
         let hash = |n: u8| format!("ab{:02x}{}", n, "0".repeat(60));
-        // There are three originals: two in their folders, and one in a
-        // folder that is reached through a link.
+        // There are three originals. Two are in their own folders, and the
+        // third is in a folder that is reached through a symbolic link.
         store.write_original(&hash(1), b"one", Some("png")).unwrap();
         store.write_original(&hash(2), b"two", Some("jpg")).unwrap();
         let elsewhere = dir.path().join("elsewhere");
@@ -740,9 +822,11 @@ mod tests {
                 (hash(3), "gif".to_string()),
             ]
         );
-        // There are five thumbnails: a .jpg, a .png, one in the wrong
-        // folder, one that is a link to nothing, and one that is a link to a
-        // file.
+        // There are five thumbnails: a `.jpg`, a `.png`, one in the folder of
+        // another hash, one that is a symbolic link to nothing, and one that
+        // is a symbolic link to a file. The seventh hash has a first-frame
+        // picture and no thumbnail.
+        store.write_first_frame(&hash(7), b"f").unwrap();
         store.write_thumbnail(&hash(1), b"t", "jpg").unwrap();
         store.write_thumbnail(&hash(2), b"t", "png").unwrap();
         let wrong = store.root.join("t/ab/01");
@@ -756,11 +840,13 @@ mod tests {
         fs::create_dir_all(alive.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&target, &alive).unwrap();
         let listed = store.list_thumbnails();
-        for n in 1..=6 {
+        for n in 1..=7 {
             let found = store.find_thumbnail_path(&hash(n)).unwrap().is_some();
-            // A listed thumbnail is always found; a link is left to the look.
+            // Every listed thumbnail is found. A symbolic link is not
+            // listed, whether `find_thumbnail_path` finds it or not.
             assert!(!listed.contains(&hash(n)) || found, "{n}");
         }
+        assert!(store.find_thumbnail_path(&hash(7)).unwrap().is_none());
         let mut listed = listed.into_iter().collect::<Vec<_>>();
         listed.sort();
         assert_eq!(listed, vec![hash(1), hash(2)]);
@@ -771,7 +857,62 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = BlobStore::open(dir.path()).unwrap();
 
-        assert!(store.original_path_with_ext("ab", Some("jpg")).is_err()); // too short
+        // A hash of two characters is too short.
+        assert!(store.original_path_with_ext("ab", Some("jpg")).is_err());
+    }
+
+    /// A video's first-frame picture is stored in the folder of the video's
+    /// thumbnail, under its own name, so the two do not replace each other.
+    /// Writing the first-frame picture again replaces it.
+    #[test]
+    fn a_first_frame_picture_is_kept_beside_the_thumbnail() {
+        let dir = TempDir::new().unwrap();
+        let store = BlobStore::open(dir.path()).unwrap();
+        let hash = test_hash();
+        assert!(store.find_first_frame_path(&hash).unwrap().is_none());
+
+        store.write_thumbnail(&hash, b"thumbnail", "jpg").unwrap();
+        store.write_first_frame(&hash, b"first frame").unwrap();
+
+        let thumbnail = store.find_thumbnail_path(&hash).unwrap().unwrap();
+        let first_frame = store.find_first_frame_path(&hash).unwrap().unwrap();
+        assert_eq!(
+            first_frame,
+            dir.path()
+                .join("blobs/t/ab/cd")
+                .join(format!("{hash}.first-frame.jpg"))
+        );
+        assert_eq!(first_frame.parent(), thumbnail.parent());
+        assert_eq!(fs::read(&thumbnail).unwrap(), b"thumbnail");
+        assert_eq!(fs::read(&first_frame).unwrap(), b"first frame");
+
+        store.write_first_frame(&hash, b"made again").unwrap();
+        assert_eq!(fs::read(&first_frame).unwrap(), b"made again");
+    }
+
+    /// Deleting a hash removes its original, its thumbnail and its
+    /// first-frame picture. The files of another hash in the same folder
+    /// stay.
+    #[test]
+    fn delete_removes_the_original_and_both_pictures() {
+        let dir = TempDir::new().unwrap();
+        let store = BlobStore::open(dir.path()).unwrap();
+        let hash = test_hash();
+        let other = format!("abcd{}", "0".repeat(60));
+        for hash in [&hash, &other] {
+            store.write_original(hash, b"video", Some("mp4")).unwrap();
+            store.write_thumbnail(hash, b"thumbnail", "jpg").unwrap();
+            store.write_first_frame(hash, b"first frame").unwrap();
+        }
+
+        store.delete(&hash).unwrap();
+
+        assert!(store.find_original(&hash, Some("mp4")).unwrap().is_none());
+        assert!(store.find_thumbnail_path(&hash).unwrap().is_none());
+        assert!(store.find_first_frame_path(&hash).unwrap().is_none());
+        assert!(store.find_original(&other, Some("mp4")).unwrap().is_some());
+        assert!(store.find_thumbnail_path(&other).unwrap().is_some());
+        assert!(store.find_first_frame_path(&other).unwrap().is_some());
     }
 
     #[test]
@@ -855,12 +996,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let tmp = dir.path().join("blobs").join("tmp");
         fs::create_dir_all(&tmp).unwrap();
-        // This folder was left behind by another process that has ended.
+        // This staging folder was left by another process, which no longer
+        // runs.
         let dead = tmp.join("999999999-deadbeef");
         fs::create_dir_all(&dead).unwrap();
         fs::write(dead.join("partial.png"), b"partial").unwrap();
-        // This staging folder belongs to a store that is still open in this
-        // process.
+        // This staging folder belongs to an earlier `BlobStore` of this
+        // process, which is still writing a file in it.
         let live = tmp.join(format!("{}-cafebabe", std::process::id()));
         fs::create_dir_all(&live).unwrap();
         fs::write(live.join("inflight.png"), b"inflight").unwrap();

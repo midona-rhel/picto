@@ -14,6 +14,7 @@
 //! The texts of the dialog have no key in the locale files, so they are
 //! shown in English in every language.
 use super::*;
+use crate::paths::Canonical as _;
 use std::collections::HashMap;
 
 /// The width of the dialog. At this width its two paragraphs take two lines
@@ -62,7 +63,7 @@ impl Merge {
 fn is_open(path: &str, cx: &App) -> bool {
     let path = Path::new(path);
     host::current(cx).is_some_and(|(root, _)| {
-        root == path || path.canonicalize().is_ok_and(|path| path == root)
+        root == path || path.canonical().is_ok_and(|path| path == root)
     })
 }
 
@@ -82,13 +83,13 @@ impl Manager {
     fn merge_partners(&self, first: &str) -> Vec<Row> {
         // The consent question passes a library's path in its canonical
         // form, which can be written differently from the path in the list.
-        let canonical = Path::new(first).canonicalize().ok();
+        let canonical = Path::new(first).canonical().ok();
         self.rows
             .iter()
             .filter(|row| {
                 row.path != first
                     && !row.missing
-                    && (canonical.is_none() || Path::new(&row.path).canonicalize().ok() != canonical)
+                    && (canonical.is_none() || Path::new(&row.path).canonical().ok() != canonical)
             })
             .cloned()
             .collect()

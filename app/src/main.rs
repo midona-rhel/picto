@@ -36,6 +36,9 @@ mod net_check;
 #[cfg(test)]
 mod offscreen;
 mod opening;
+// `Canonical` resolves a path in the form the app works with, which on
+// Windows is the ordinary form and not the one that starts with `\\?\`.
+mod paths;
 mod platform;
 // This module plays recorded input into the app's windows. It is a test
 // seam, and a release build does not hold it (`seams.rs`).
