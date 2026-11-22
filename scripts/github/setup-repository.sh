@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sets up the GitHub repository for the flow dev -> release/<version> -> main:
+# Sets up the GitHub repository for the flow dev -> release/<version> -> dev:
 # the `dev` branch, the merge settings, the labels and the rulesets. The
 # script can be run again at any time. A second run updates the labels and
 # the rulesets that exist and creates nothing twice.
@@ -21,9 +21,9 @@ if ! api "repos/$REPO/branches/dev" >/dev/null 2>&1; then
 fi
 
 echo "== repository settings"
-# A pull request into dev is squashed, which gives one commit per issue. A
-# release pull request into main is merged with a merge commit, so that the
-# released commit stays in main's ancestry. scripts/ci/find-release-gate.mjs
+# A work pull request into dev is squashed, which gives one commit per issue.
+# A release pull request into dev is merged with a merge commit, so that the
+# released commit stays in dev's ancestry. scripts/ci/find-release-gate.mjs
 # requires that before a release is published.
 api -X PATCH "repos/$REPO" \
   -f default_branch=dev \
@@ -74,7 +74,9 @@ upsert_ruleset() {
   fi
 }
 
-# The checks that a pull request into `dev` or `main` must pass. The names
+# The checks that a pull request into `dev` must pass. The ruleset for `main`
+# requires the same checks. `main` is not used any more, and its ruleset only
+# keeps the branch from being changed. The names
 # are the ones GitHub shows for the jobs of `ci.yml`: `verify / ` and the name
 # of a job of `verify.yml`, and `branch-policy`.
 checks='[
@@ -133,4 +135,4 @@ upsert_ruleset "release tag creation" "$(jq -n '{
   bypass_actors: [{actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always"}],
   rules: [{type: "creation"}]}')"
 
-echo "done: default branch is dev; main accepts release/<version> PRs only."
+echo "done: default branch is dev; releases are merged into dev and tagged there."

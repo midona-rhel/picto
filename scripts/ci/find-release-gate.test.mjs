@@ -22,7 +22,7 @@ function fixture() {
 }
 
 describe('release artifact provenance', () => {
-  it.each(['identical', 'ahead'])('selects the three package IDs when main is %s', comparison => {
+  it.each(['identical', 'ahead'])('selects the three package IDs when dev is %s', comparison => {
     const { state, api } = fixture();
     state.comparison = comparison;
     expect(findReleaseGate(input, api)).toEqual({ runId: 42, artifactIds: [1, 2, 3] });
@@ -35,9 +35,9 @@ describe('release artifact provenance', () => {
     const { state, api } = fixture(); state.ref = 'b'.repeat(40);
     expect(() => findReleaseGate(input, api)).toThrow('does not match the release branch');
   });
-  it.each(['behind', 'diverged'])('rejects a commit absent from main (%s)', comparison => {
+  it.each(['behind', 'diverged'])('rejects a commit absent from dev (%s)', comparison => {
     const { state, api } = fixture(); state.comparison = comparison;
-    expect(() => findReleaseGate(input, api)).toThrow('landed on main');
+    expect(() => findReleaseGate(input, api)).toThrow('merged into dev');
   });
   it.each([
     { head_sha: 'b'.repeat(40) }, { head_branch: 'main' }, { event: 'pull_request' },

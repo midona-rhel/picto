@@ -1,12 +1,11 @@
 # Contributing to Picto
 
 Work is tracked as GitHub issues and lands through reviewed pull requests.
-`main` contains released code only; development happens on `dev`.
+Development happens on `dev`, and releases are made from `dev`. The branch
+`main` is not used.
 
 ```
-feature/… bug/… ──PR (squash)──▶ dev ──cut──▶ release/<version> ──PR (merge)──▶ main ──tag v<version>
-                                  ▲                                                │
-                                  └──────────────── PR main → dev (merge) ─────────┘
+feature/… bug/… ──PR (squash)──▶ dev ──cut──▶ release/<version> ──PR (merge)──▶ dev ──tag v<version>
 ```
 
 ## 1. Start from an issue
@@ -55,7 +54,8 @@ only issue-owned changes.
 - Schema changes need a migration with backup, a reopen test, and the
   `schema change` label.
 - Merge with **squash**: one commit per issue on `dev`, titled by the PR.
-- Merge commits are also enabled on `dev` for the post-release `main` sync.
+- A release branch is merged into `dev` with a **merge commit**, so that the
+  commit whose packages are published is in `dev`.
 - Do not merge before review. Resolve every review thread first.
 - The app is developed on macOS, and CI has no macOS job. Before you open a
   pull request that changes the app (`app/`) or a crate that it uses
@@ -66,17 +66,15 @@ only issue-owned changes.
   which builds the package for each of the three systems and checks it.
 - The required `branch-policy` check is a guard for trusted maintainers, not
   tamper-proof enforcement: a same-repository PR can change its Actions job.
-  Zero required approvals therefore do not mechanically guarantee release-only
-  changes to `main`. Review workflow changes explicitly; stronger enforcement
+  Zero required approvals therefore do not mechanically guarantee that a
+  release was gated. Review workflow changes explicitly; stronger enforcement
   needs an independently controlled required check or organization workflow.
 
 ## 4. Release
 
 Releases are cut from an accepted `dev` commit to `release/<version>`, gated,
-merged into `main` with a merge commit, tagged, and merged back into `dev`.
-The full procedure and its gates live in
-[docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md). Hotfixes cut
-`release/<version>` from `main` and follow the same steps.
+merged into `dev` with a merge commit, and tagged. The full procedure and its
+gates live in [docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md).
 
 ## Engineering rules
 
