@@ -27,10 +27,12 @@ mod shader_compilation {
 
         println!("cargo:rerun-if-changed={}", shader_path.display());
 
-        // Check if fxc.exe is available
+        // The build stops here when `fxc.exe`, the shader compiler, cannot be
+        // found.
         let fxc_path = find_fxc_compiler();
 
-        // Define all modules
+        // For each name in this list, `shaders.hlsl` has a vertex shader
+        // `<name>_vertex` and a fragment shader `<name>_fragment`.
         let modules = [
             "quad",
             "shadow",
@@ -40,6 +42,9 @@ mod shader_compilation {
             "monochrome_sprite",
             "subpixel_sprite",
             "polychrome_sprite",
+            "backdrop_blur_downsample",
+            "backdrop_blur_gaussian",
+            "backdrop_blur_composite",
         ];
 
         let rust_binding_path = format!("{}/shaders_bytes.rs", out_dir);
