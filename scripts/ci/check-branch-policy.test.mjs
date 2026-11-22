@@ -16,7 +16,6 @@ function gate({ completed = true, missingArtifact = false } = {}) {
       path: '.github/workflows/alpha-gate.yml', head_repository: { full_name: repository } }] : [] };
     if (endpoint.includes('/artifacts')) return { artifacts: (missingArtifact ? [] : [
       'picto-macos-arm64', 'picto-windows-x64', 'picto-linux-x64',
-      'alpha-smoke-macos', 'alpha-smoke-windows', 'alpha-smoke-linux',
     ]).map((name, id) => ({ id, name, expired: false, size_in_bytes: 100 })) };
     throw new Error(`Unexpected API request: ${endpoint}`);
   };

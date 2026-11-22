@@ -10,7 +10,6 @@ function fixture() {
     head_repository: { full_name: input.repository } };
   const state = { ref: input.sha, comparison: 'identical', runs: [run], artifacts: [
     'picto-macos-arm64', 'picto-windows-x64', 'picto-linux-x64',
-    'alpha-smoke-macos', 'alpha-smoke-windows', 'alpha-smoke-linux',
   ].map((name, index) => ({ id: index + 1, name, expired: false, size_in_bytes: 100 })) };
   const api = endpoint => {
     if (endpoint.includes('/git/ref/')) return { object: { sha: state.ref } };
@@ -23,7 +22,7 @@ function fixture() {
 }
 
 describe('release artifact provenance', () => {
-  it.each(['identical', 'ahead'])('selects only three package IDs when main is %s', comparison => {
+  it.each(['identical', 'ahead'])('selects the three package IDs when main is %s', comparison => {
     const { state, api } = fixture();
     state.comparison = comparison;
     expect(findReleaseGate(input, api)).toEqual({ runId: 42, artifactIds: [1, 2, 3] });
@@ -48,7 +47,7 @@ describe('release artifact provenance', () => {
     const { state, api } = fixture(); Object.assign(state.runs[0], changed);
     expect(() => findReleaseGate(input, api)).toThrow('No successful release-branch gate');
   });
-  it.each([0, 1, 2, 3, 4, 5])('requires each platform package and smoke report (%i)', index => {
+  it.each([0, 1, 2])('requires each platform package (%i)', index => {
     const { state, api } = fixture(); state.artifacts.splice(index, 1);
     expect(() => findReleaseGate(input, api)).toThrow('Missing, expired, or ambiguous');
   });
@@ -61,10 +60,14 @@ describe('release artifact provenance', () => {
 it('runs packaging beside verification, then publishes existing artifacts without rebuilding', () => {
   const workflow = yaml.load(readFileSync('.github/workflows/alpha-gate.yml', 'utf8'));
   const jobs = workflow.jobs;
-  expect(jobs['alpha-package'].needs).toBeUndefined();
-  expect(jobs['alpha-package'].if).toContain("!startsWith(github.ref, 'refs/tags/')");
-  expect(jobs['alpha-package'].if).toContain("github.event_name != 'pull_request'");
-  expect(jobs['alpha-package'].strategy.matrix.include.map(row => row.platform).sort()).toEqual(['linux', 'macos', 'windows']);
+  expect(jobs.package.needs).toBeUndefined();
+  expect(jobs.package.if).toContain("!startsWith(github.ref, 'refs/tags/')");
+  expect(jobs.package.if).toContain("github.event_name != 'pull_request'");
+  expect(jobs.package.uses).toBe('./.github/workflows/package.yml');
+  expect(jobs.package.with['require-mac-signing']).toBe(true);
+  const packaging = yaml.load(readFileSync('.github/workflows/package.yml', 'utf8'));
+  expect(packaging.jobs.package.strategy.matrix.include.map(row => `picto-${row.artifact}`).sort())
+    .toEqual(['picto-linux-x64', 'picto-macos-arm64', 'picto-windows-x64']);
   const publish = jobs['alpha-release-assets'];
   expect(publish.needs).toBeUndefined();
   expect(publish.permissions).toEqual({ contents: 'write', actions: 'read' });
@@ -72,5 +75,5 @@ it('runs packaging beside verification, then publishes existing artifacts withou
   expect(download.with['run-id']).toBe('${{ steps.gate.outputs.run-id }}');
   expect(download.with['artifact-ids']).toBe('${{ steps.gate.outputs.artifact-ids }}');
   expect(download.with['digest-mismatch']).toBe('error');
-  expect(publish.steps.some(step => step.run?.includes('alpha:package'))).toBe(false);
+  expect(publish.steps.some(step => step.run?.includes('package.sh'))).toBe(false);
 });

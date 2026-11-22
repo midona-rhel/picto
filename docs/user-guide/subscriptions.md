@@ -2,30 +2,31 @@
 
 [← User Guide](README.md)
 
-A subscription follows one subject (an artist, a tag, a character) across one or more sources and
-downloads new posts into the Inbox.
+A subscription follows one subject, for example an artist, a tag or a character, on one or more
+sources, and downloads new posts into the Inbox.
 
-- **Subscription** — a name, a schedule, a posts-per-run limit, and optional folders and tags for
-  new files.
-- **Query** (source) — one search or one account on one site. A subscription can have many.
+- A **subscription** has a name, a schedule, a limit of posts per run, and the folders and tags
+  that its new files get.
+- A **query** (also called a source) is one search or one account on one site. A subscription can
+  have many queries.
 
 ## Create a subscription
 
-1. Open **Subscriptions** in the sidebar.
-2. Click **Add**, enter a name, and click **Add**.
-3. In the subscription, at the bottom of **Sources**, pick a site, type the search or account (the
-   box shows an example for the chosen site) and click **Add**.
-4. Add more queries if the same subject lives on other sites.
+1. Open **Subscriptions** in the sidebar. The screen shows each subscription as a tile.
+2. Click **Add** in the title bar, enter a name, and click **Add**.
+3. Open the subscription. At the bottom of the **Sources** tab, pick a site, type the search or
+   the account, and click **Add**. The field shows an example for the site you picked.
+4. Add more queries if the same subject is on other sites.
 
-New subscriptions use the defaults from **Settings → Subscriptions** (schedule, posts per run,
-grouping).
+A new subscription gets the schedule and the posts per run that are set in **Settings →
+Subscriptions**. A new query gets the grouping that is set there.
 
 ## Supported sources
 
 | Source | Query type | Example | Login |
 |---|---|---|---|
 | Pixiv | Search | `風景` | Required (Pixiv account) |
-| Pixiv (user) | Account | `12345` | Required (same Pixiv account) |
+| Pixiv (user) | Account | `12345` | Required (the same Pixiv account) |
 | Gelbooru | Search | `1girl solo` | Required (API key) |
 | Rule34.xxx | Search | `1girl solo` | Required (API key) |
 | Danbooru | Search | `1girl solo` | Optional |
@@ -41,110 +42,140 @@ grouping).
 | pixivFANBOX | Account | `creator-slug` | Recommended for full access |
 | SubscribeStar | Account | `https://www.subscribestar.com/creator-slug` | Recommended for full access |
 | OnlyFans | Account | `creator-name` | Required |
+| OnlyHaven | Account | `onlyfans:12345` | None |
 | Pawchive | Account (URL) | `https://pawchive.pw/patreon/user/12345` | None |
-| E-Hentai / ExHentai | Gallery URL | `https://e-hentai.org/g/12345/67890abcde/` | Optional; ExHentai needs an E-Hentai login |
+| E-Hentai / ExHentai | Gallery URL | `https://e-hentai.org/g/12345/67890abcde/` | Optional. ExHentai needs an E-Hentai login. |
 
-"Search" sources take tags or search text. "Account" sources take a user name, ID or creator URL.
-Anonymous Danbooru searches allow at most two tags.
+A "Search" source takes tags or search text. An "Account" source takes a user name, an ID or the
+URL of a creator. A Danbooru search without a login allows at most two tags.
 
-Konachan, Sankaku, Idol Complex and Baraag are no longer supported. Subscriptions to them are paused
-with a note saying so, and their saved logins are removed. Items they already imported stay in the
-library.
+Konachan, Sankaku, Idol Complex and Baraag are no longer supported. Subscriptions to them are
+paused with a note that says so, and their saved logins are removed. The items that they imported
+stay in the library.
 
-E-Hentai is not in the source picker. See [Gallery downloads](#gallery-downloads).
+E-Hentai is not in the list of sites of a query. See [Gallery downloads](#gallery-downloads).
 
 ## Accounts
 
-Click **Accounts** in the Subscriptions view (or **Fix login** on a problem) to open **Site
-accounts**. Pick a site and click **Log In**: Picto opens the site's own login page and stores the
-resulting session, OAuth token or API key. **Refresh Login** renews it and **Remove** deletes it.
+Click **Accounts** in the title bar of the Subscriptions screen, or **Fix login** on a problem, to
+open the **Site accounts** dialog. Pick a site and click **Log In**. Picto opens the site's own
+login page in a sign-in window and stores the session, the OAuth token or the API key that the
+login gives. **Refresh Login** renews the login, and **Remove** deletes it.
 
 - Pixiv and Pixiv (user) share one login.
-- SubscribeStar stores one login at a time; choose the service (`.com`, `.adult`, `.art`) first.
-- OnlyFans also accepts a session entered by hand (**Enter session manually…**: Cookie,
-  User-Agent, X-BC).
+- SubscribeStar stores one login at a time. Choose the service (`.com`, `.adult` or `.art`) first.
+- OnlyFans also takes a session that you enter by hand. Click **Enter session manually…** and fill
+  in Cookie, User-Agent and X-BC.
 
-Credentials are stored in the operating system's credential store (Keychain on macOS, Credential
-Manager on Windows, Secret Service on Linux).
+Picto stores the logins in the credential store of the operating system: the Keychain on macOS,
+the Credential Manager on Windows and the Secret Service on Linux.
+
+The sign-in window uses the system's web view. On Windows it needs the WebView2 Runtime. On Linux
+it needs WebKitGTK 4.1.
 
 ## Run a subscription
 
-Click **Run now**, or right-click a subscription → **Run Now**. Right-click lets you run several
-selected subscriptions at once.
+Open the subscription and click **Run now**, or right-click a subscription and choose **Run Now**.
+When several subscriptions are selected, the right-click menu runs, holds or deletes all of them.
 
 During a run:
 
-- Each post is processed once. Media already in the library or already handled is skipped.
-- New media goes to the **Inbox**, into the subscription's folders and with its tags (set under
-  **New files** in the subscription: **Automatically add to folders** and **Add tags**).
-- **Pause** stops the run so it can be resumed; **Stop** ends it. Posts already added stay.
-- The next run continues from where the last one stopped.
+- Each post is handled once. Media that is already in the library, or that was handled before, is
+  skipped.
+- New media goes to the **Inbox**. It is added to the subscription's folders and gets the
+  subscription's tags. You set both under **New files** in the subscription, with **Add to
+  folders** and **Add tags**.
+- **Pause** stops the run so that it can be resumed. **Stop** ends the run. The posts that were
+  already added stay.
+- The next run continues where the last run stopped.
 
 ### Posts per run
 
-**Posts per run** (1–10,000) caps how many posts a run settles. Both **added** and **skipped**
-posts count toward the limit; failed posts do not. Set the default in **Settings → Subscriptions**
-and override it per subscription.
+**Posts per run** is a number from 1 to 10,000. A run stops when it has handled that many posts
+for each source. Posts that were **added** and posts that were **skipped** both count. Failed posts
+do not count. Set the default in **Settings → Subscriptions**, and change it for one subscription
+in that subscription.
 
 ### Multi-file posts
 
-By default, a post with several files is imported as one collection after all of its files arrive
-("Group multi-media posts"). Click the group button on a query row to switch it to **Keep post
-media separate**, which imports each file as its own item. The default for new queries is in
-**Settings → Subscriptions**.
+By default a post with several files is imported as one collection after all of its files have
+arrived. Each query row has a button that changes this for the query. Its tooltip is **Group
+multi-media posts** or **Keep post media separate**. With **Keep post media separate**, each file
+is imported as an item of its own. The default for new queries is in **Settings → Subscriptions**.
 
 ### Inbox limit
 
-Subscription work waits when the Inbox holds **Settings → Subscriptions → Maximum Inbox items**
-top-level items (default 1,000). The subscription shows **Inbox full**. Accept or reject Inbox
-items, then run again.
+The work of the subscriptions waits when the Inbox holds as many top-level items as **Settings →
+Subscriptions → Maximum Inbox items** says, which is 1,000 by default. The subscription then shows
+**Inbox full**. Accept or reject items in the Inbox, then run the subscription again.
 
 ## Schedules
 
-| Schedule | Runs |
+| Schedule | When the subscription runs |
 |---|---|
-| Manual | Only when you click **Run now** |
-| Daily | Once a day |
-| Weekly | Once a week |
-| Monthly | Once a month |
+| Manual | Only when you click **Run now**. |
+| Daily | Once a day. |
+| Weekly | Once a week. |
+| Monthly | Once a month. |
 
-Scheduled runs happen while Picto is running.
+Scheduled runs happen only while Picto is running.
 
 ## Hold, reset and edit
 
-**Subscription** (right-click, or the buttons in the header):
+For a **subscription**, use the right-click menu or the buttons in the title bar:
 
-- **Hold** — skips future runs until you **Release** it.
-- **Schedule**, **Rename**, **Set Cover Photo…**
-- **Reset Sync History…** — forgets which posts were handled and scans every query from the
-  beginning. Existing media and logins are untouched; media you deleted may download again.
-- **Delete Subscription…** — downloaded files stay in the library.
+- **Hold** skips the future runs until you choose **Release** (**Release Hold** in the menu).
+- **Schedule**, **Rename** and **Set Cover Photo…** change the schedule, the name and the picture
+  of the tile.
+- **Reset Sync History…** makes Picto forget which posts it handled and scan every query from the
+  beginning. The media and the logins are not changed. Media that you deleted may be downloaded
+  again.
+- **Delete Subscription…** deletes the subscription and its queries. The downloaded files stay in
+  the library.
 
-**Query** (buttons on each row):
+For a **query**, use the buttons on its row:
 
-- **Run only this source now**
-- **Put query on hold** / **Resume query** — the source is skipped in subscription runs while held
-- Group toggle (see above)
-- **Edit** — change the site, query, an optional display name and notes
-- **Delete** — the query stops syncing; downloaded files stay
-- Double-click a row for **Source details** (posts, media, last check, state, last error)
+- **Run only this source now** runs this query alone.
+- The hold button puts the query on hold until it is resumed. A subscription run skips a query
+  that is on hold.
+- The group button is described under [Multi-file posts](#multi-file-posts).
+- **Edit** changes the site, the query, a display name and notes. The display name and the notes
+  are optional.
+- **Delete** stops the query. The downloaded files stay in the library.
+- A double-click on the row opens **Source details**, with the numbers of posts and media, the
+  last check, the state and the last error.
 
 ## History and problems
 
-- **History** lists past runs with start time, status and counts.
-- **Problems** lists failed posts and source issues with the reason. Use **Retry**, **Retry all**,
-  **Open post**, **Fix login** or **Review source**.
+A subscription has three tabs: **Sources**, **History** and **Problems**.
 
-The header shows totals: posts traversed, added and skipped, files downloaded and files already in
-the library.
+- **History** lists the past runs with the time they started, their status and their counts.
+- **Problems** lists the posts that failed and the problems of the sources. Each row has the
+  status, the post, the reason and the time it was last seen. A click on the post opens it in your
+  browser. A problem with a login has a **Fix login** button, which opens the **Site accounts**
+  dialog at that site.
+
+When a run stopped on a failure, the title bar has a **Retry** button.
+
+A rail at the right of the subscription, in the place of the inspector, shows the totals: Posts
+traversed, Posts added, Posts skipped, Files downloaded, Files already in library and Last check.
+It also holds the schedule, the posts per run and the **New files** section. `Mod+Alt+2` hides or
+shows the rail.
+
+A subscription shows a warning only when it will stay broken until you act: when a run stopped on
+a failure and waits for **Retry**, or when the last run of a source failed for a lasting reason.
+The badge then reads **Login required** or **Failed**. A network error, a rate limit, a full Inbox
+and single files that could not be downloaded do not show a warning. The **Problems** tab still
+lists them.
 
 ## Gallery downloads
 
-E-Hentai and ExHentai galleries are downloaded one at a time, not followed.
+An E-Hentai or ExHentai gallery is downloaded once. It is not followed for new posts.
 
-1. In Subscriptions, click **Add Gallery**.
-2. Choose **E-Hentai** or **ExHentai** and paste the gallery URL.
+1. In Subscriptions, click **Add Gallery** in the title bar.
+2. Choose **E-Hentai** or **ExHentai** and paste the URL of the gallery.
 3. Click **Add Gallery**.
 
-The gallery is imported into the Inbox as one collection. Progress appears under **Gallery
-downloads**, where you can pause, resume, retry or stop it. Only one gallery downloads at a time.
+The gallery is imported into the Inbox as one collection. A bar above the subscription tiles has
+one row for each gallery download, with its progress and with buttons to pause, resume, retry or
+stop it. Only one gallery is downloaded at a time.

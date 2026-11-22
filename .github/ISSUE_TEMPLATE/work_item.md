@@ -7,7 +7,7 @@ assignees: ""
 ---
 
 <!-- P2 is the default. If another priority fits, change both the title prefix
-and the priority label. Add one area label (backend, sources, renderer, ...).
+and the priority label. Add one area label (library, core, sources, gpui).
 Search existing issues first and link related work below. -->
 
 ## Problem

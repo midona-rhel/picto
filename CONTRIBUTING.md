@@ -18,8 +18,10 @@ Every change starts as an issue, created from a template:
   test card, implementation boundary, acceptance criteria.
 
 Give each issue one `priority:` label (P2 is the default), one `type:` label
-and one `area:` label. The `area:` labels are `library`, `core`, `sources`,
-`renderer`, `electron` and `gpui`. An issue without evidence stays `status: triage`.
+and one `area:` label. The `area:` labels are `library` (the crate
+`picto-library`), `core` (the crate `core`), `sources` (the crate
+`picto-sources`) and `gpui` (the app in `app/`). An issue without evidence
+stays `status: triage`.
 Search for related issues first and link them rather than restating them.
 
 ## 2. Branch from `dev`
@@ -34,8 +36,14 @@ only issue-owned changes.
 ## 3. Open a pull request into `dev`
 
 - Fill in the template; start with `Closes #<issue>`.
-- CI runs `verify` (renderer typecheck/tests, localization, command parity,
-  Rust clippy `-D warnings` and tests). It must be green before merge.
+- CI runs the `verify` workflow for every pull request. It must pass before
+  the merge. Its jobs are:
+  - `verify:scripts`, which runs the tests of the scripts in `scripts/`;
+  - `verify:rust`, which runs the source audit, Clippy with `-D warnings`
+    and the tests of the crates `core`, `picto-library` and `picto-sources`;
+  - `verify:app (linux)` and `verify:app (windows)`, which build and test
+    the app on those two systems and save pictures of it as artifacts of
+    the run.
 - Pull requests are reviewed by the Codex GitHub integration against the
   review guidelines in [AGENTS.md](AGENTS.md). Enable Automatic review for
   this repository in Codex settings, including review after new pushes.
@@ -49,14 +57,13 @@ only issue-owned changes.
 - Merge with **squash**: one commit per issue on `dev`, titled by the PR.
 - Merge commits are also enabled on `dev` for the post-release `main` sync.
 - Do not merge before review. Resolve every review thread first.
-- A change to the GPUI app (`experiments/gpui/`), or to a shared crate that
-  it uses (`core`, `picto-library`, `picto-sources`), must also build and
-  pass its tests on Windows and Linux. `verify` does not build the GPUI app.
-  The `GPUI experiment` workflow does. It runs by itself for every pull
-  request into `dev` that changes one of those folders. Wait for it before
-  merging. Its pictures of the app on both systems are attached to the run.
-  [`experiments/gpui/README.md`](experiments/gpui/README.md), section 6,
-  says how to check a change locally. Give the issue the `area: gpui` label.
+- The app is developed on macOS, and CI has no macOS job. Before you open a
+  pull request that changes the app (`app/`) or a crate that it uses
+  (`core`, `picto-library`, `picto-sources`), build the app and run its
+  tests on macOS. [`app/README.md`](app/README.md), section 6, says how.
+- A pull request that changes the packaging (`app/package.sh`,
+  `app/packaging/`, the signing scripts) also starts the `Package` workflow,
+  which builds the package for each of the three systems and checks it.
 - The required `branch-policy` check is a guard for trusted maintainers, not
   tamper-proof enforcement: a same-repository PR can change its Actions job.
   Zero required approvals therefore do not mechanically guarantee release-only
@@ -99,10 +106,10 @@ PR, and session attribution. Keep that configuration when using the tool.
 - **Tests protect user-visible behavior and data-safety invariants**, not
   internal mechanisms: a different correct implementation should still pass,
   and the expected result must not come from the code under test.
-- **IPC payloads are a tested contract.** A new or changed command needs its
-  payload in `core/tests/fixtures/ipc_payloads.json`: add a call to
-  `src/platform/ipcContract.test.ts` and run it with `-u`; `cargo test`
-  feeds every recorded payload through the core dispatcher.
+- **The payloads of the core's commands are a tested contract.** A new or
+  changed command needs an example of its payload in
+  `core/tests/fixtures/ipc_payloads.json`. `cargo test` sends every payload
+  in that file through the core's dispatcher (`core/tests/ipc_contract.rs`).
 - **Durable concepts get one normative doc home**; others link to it.
   `docs/architecture.md` describes the shipped system, not plans.
 

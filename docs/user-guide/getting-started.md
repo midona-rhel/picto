@@ -6,13 +6,24 @@
 
 Download the latest release from the [releases page](https://github.com/midona-rhel/picto/releases).
 
-| Platform | Package |
-|----------|---------|
-| Windows | `.exe` installer |
-| macOS | `.dmg` (drag Picto to Applications) |
-| Linux | `.AppImage` (make it executable and run it) |
+| Platform | Package | How to install it |
+|----------|---------|-------------------|
+| Windows | `.exe` installer | Run the installer. |
+| macOS | `.dmg` disk image | Open the disk image and drag Picto to the Applications folder. |
+| Linux | `.AppImage` file | Make the file executable and run it. |
 
-FFmpeg is bundled. Nothing else needs to be installed.
+FFmpeg is included in every package. On Windows and macOS nothing else needs to be installed.
+
+On Linux, Picto uses these libraries of the system: GTK 3, WebKitGTK 4.1 with libsoup 3, ALSA,
+D-Bus, xcb and xkbcommon. Ubuntu and Xubuntu have all of them after a normal installation. A
+system with the KDE desktop, such as Kubuntu, usually has no WebKitGTK 4.1. When a library is
+missing, Picto does not start and shows a message that names the missing library and the package
+to install: `libwebkit2gtk-4.1-0` on Ubuntu and Debian, `webkit2gtk4.1` on Fedora, and
+`webkit2gtk-4.1` on Arch. On Ubuntu 24.04 the full list of packages is `libwebkit2gtk-4.1-0`,
+`libgtk-3-0t64`, `libasound2t64`, `libfontconfig1`, `libxkbcommon-x11-0`, `libwayland-client0`
+and `libvulkan1`.
+
+Only one Picto runs at a time. A second Picto that you start while Picto is open ends at once.
 
 ### The first start
 
@@ -44,64 +55,76 @@ of your computer, so decide for yourself whether you want that.
 On a computer that your employer or school manages, the administrator may have removed
 **Run anyway**. Ask the administrator in that case.
 
-**Linux.** Nothing warns. Make the `.AppImage` file executable (`chmod +x`), then start it.
+**Linux.** Linux shows no warning. Make the `.AppImage` file executable (`chmod +x`), then start
+it.
 
-### Upgrading to the rewritten Picto
+### Upgrading from Picto 0.6.19 or earlier
 
-Picto is being rewritten as a native app that does not use Electron. From the first release that
-is built from the rewritten app, the downloads on the releases page are that app; its release
-notes say so. It has the same name as before and installs over the version you have: run the new
-installer on Windows, replace Picto in the Applications folder on macOS, and replace the
-`.AppImage` file on Linux. Quit Picto first. Only one Picto runs at a time: a second one that
-you start while Picto is open ends at once.
+This version has the same name as Picto 0.6.19 and earlier, and it installs over the version you
+have. Quit Picto first. Then run the new installer on Windows, replace Picto in the Applications
+folder on macOS, or replace the `.AppImage` file on Linux.
 
 After the upgrade:
 
-- Your libraries are untouched, with all their items, tags, folders and settings.
-- Your libraries are listed in the Library Manager, but none opens by itself the first time.
+- Your libraries are unchanged. They keep all their items, tags, folders and settings.
+- Your libraries are listed in the Library Manager, but no library opens by itself the first time.
   Choose your library there. Picto asks once for each library whether it may open that library.
 - Your site logins and the downloaded AI models are still there.
-- The window's size and position, the widths of the sidebar and the inspector, saved filters,
-  changed keyboard shortcuts, the language and the zoom start from their defaults. Set them again.
-- On Linux the rewritten Picto needs GTK 3 and WebKitGTK 4.1, which most desktop systems have. On
-  Ubuntu 24.04 the packages are `libgtk-3-0t64` and `libwebkit2gtk-4.1-0`.
+- The window's size and position, the widths of the sidebar and the inspector, the saved filters,
+  the recent tags and folders, the keyboard layout and the changed keyboard shortcuts, the language
+  and the interface zoom start from their defaults. Set them again.
+- A library whose stored theme made the whole window translucent opens in the Dark theme, because
+  this version does not have those themes. **Settings → General** has a switch that makes the
+  sidebar and the inspector translucent on macOS and Windows. See [Settings](settings.md).
+- A view whose thumbnail size was saved by Picto 0.6.19 or earlier can open with one column more
+  or one column fewer than before.
+- On Linux this version needs the system libraries that are listed under [Install](#install).
+  Picto 0.6.19 and earlier did not need them.
 
 ## Create your first library
 
-A library is a folder on disk (`<name>.library`) that holds Picto's database and a copy of every
-imported file.
+A library is a folder on disk named `<name>.library`. It holds Picto's database and a copy of
+every imported file.
 
-1. On first launch Picto shows **Open a library to start**. Click **Choose Library…**.
+1. On the first start Picto shows **Open a library to start**. Click **Choose Library…**.
 2. In the Library Manager, click **New Library…** and enter a name.
 3. Click **Choose Location…** and pick the folder that will contain the library.
 
-Picto creates the library and opens it. On later launches it reopens the last library you used.
-See [Library Management](library-management.md) for switching, renaming, and moving libraries.
+Picto creates the library and opens it. On later starts Picto opens the library that was open
+last. [Library Management](library-management.md) says how to switch, rename and move libraries.
 
 ## Import some files
 
+You can import files in three ways:
+
 - Drag files or a folder onto the grid.
-- **File → Import Files…** (`Mod+I`) or **File → Import Folder…** (`Mod+Shift+I`).
-- Copy files or an image and press `Mod+V` in the grid.
+- Choose **File → Import Files…** (`Mod+I`) or **File → Import Folder…** (`Mod+Shift+I`).
+- Copy files or an image, then press `Mod+V` in the grid.
 
-Picto copies files into the library. Your originals are not changed.
+Picto copies the files into the library. Your original files are not changed.
 
-Files imported while the **Inbox** view is open go to the Inbox for review. Files imported
-anywhere else go straight into the library. See [Importing Files](importing-files.md).
+Files that you import while the **Inbox** view is open go to the Inbox for review. Files that you
+import in any other view go straight into the library. See [Importing Files](importing-files.md).
 
 ## Find your way around
 
-- **Sidebar** (left): views, Quick Access, smart folders, folders.
-- **Grid** (center): thumbnails of the current view.
-- **Inspector** (right): name, notes, tags, folders, rating, and properties of the selection.
-- **Title bar** (top): back/forward, view options, filters, search.
+- The **sidebar** is on the left. It lists the views, Quick Access, the smart folders and the
+  folders.
+- The **grid** is in the center. It shows thumbnails of the items in the current view.
+- The **inspector** is on the right. It shows the name, notes, tags, folders, rating and properties
+  of the selection.
+- The **title bar** is at the top. It has the Back and Forward buttons, the thumbnail size control,
+  the view options, the filters and the search field.
 
-`Mod+Alt+1` toggles the sidebar, `Mod+Alt+2` the inspector, `Tab` both.
+`Mod+Alt+1` hides or shows the sidebar, and `Mod+Alt+2` hides or shows the inspector. `Tab` hides
+both when at least one of them is showing, and shows both when both are hidden. `Mod+T` opens
+Quick Search, which finds commands, views, folders, tags and items by name.
 See [Interface Overview](interface-overview.md).
 
 ## Next steps
 
-- Organize with [tags](tags.md), [folders](folders.md), and [smart folders](smart-folders.md)
-- Group related media into [collections](collections.md)
-- Download automatically with [subscriptions](subscriptions.md)
-- Learn the keyboard shortcuts in **Settings → Shortcuts**
+- Organize your media with [tags](tags.md), [folders](folders.md) and
+  [smart folders](smart-folders.md).
+- Group related media into [collections](collections.md).
+- Download new posts automatically with [subscriptions](subscriptions.md).
+- Read the keyboard shortcuts in **Settings → Shortcuts**.

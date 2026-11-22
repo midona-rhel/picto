@@ -1,8 +1,14 @@
 name: Verify
 
-# The one definition of "this commit is healthy". Pull requests into dev and
-# main, pushes to dev, and the release gate all call this workflow, so a check
-# cannot pass in review and differ at release time.
+# The checks that every commit must pass. The CI workflow calls this
+# workflow for pull requests and for pushes to `dev`, and the Alpha Gate
+# calls it for a release, so a check cannot pass in review and differ at
+# release time.
+#
+# - `verify:scripts` runs the tests of the scripts in `scripts/`.
+# - `verify:rust` audits the sources, and lints and tests the crates of the
+#   root Cargo workspace (`core`, `picto-library`, `picto-sources`).
+# - `verify:app` builds and tests the app (`app/`) on Linux and Windows.
 on:
   workflow_call:
 
@@ -13,10 +19,12 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  verify-renderer:
-    name: verify:renderer
+  # Runs the tests of the scripts in `scripts/`: the release gate, the branch
+  # policy and the macOS signing code.
+  verify-scripts:
+    name: verify:scripts
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -26,20 +34,11 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Install root dependencies
+      - name: Install the scripts' packages
         run: npm ci
 
-      - name: Check localization
-        run: npm run check:localization
-
-      - name: Typecheck renderer
-        run: npx tsc -p tsconfig.json --noEmit
-
-      - name: Test renderer
-        run: npm run test -- --run
-
-      - name: Check command parity
-        run: npm run check:command-parity
+      - name: Test the scripts
+        run: npm test
 
   verify-rust:
     name: verify:rust
@@ -51,8 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # release-audit is a Node script, but this job does not install the
-      # renderer dependency tree.
+      # `release-audit.mjs` runs on Node.js and needs no npm packages.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -67,9 +65,11 @@ jobs:
           workspaces: . -> target
           cache-on-failure: true
 
-      # The workspace crates dominate clean CI builds. The target cache keeps
-      # Cargo's local dependency graph; sccache reuses unchanged compilation
-      # units when a source change prevents an exact target-cache hit.
+      # Compiling the workspace's own crates takes most of the time of a
+      # build that starts from nothing. The step above restores the `target`
+      # folder of an earlier run. When a source file changed since that run,
+      # sccache still returns the compiled output of every unit that did not
+      # change.
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
       - name: Install Rust system dependencies
@@ -90,19 +90,21 @@ jobs:
       - name: Audit release inputs
         run: node scripts/release-audit.mjs
 
-      # Keep strict lint ahead of the long Rust test suite. A new compiler lint
-      # should fail one named step immediately, not surface after every test has run.
-      # Short messages through a problem matcher put each lint on the pull
-      # request's diff, so a failure is readable without downloading the log.
+      # The lint runs before the tests, which take much longer, so that a
+      # lint failure is reported early and in a step of its own. Clippy
+      # prints its messages in the short format, and the problem matcher
+      # turns each one into an annotation on the pull request's diff, so a
+      # failure can be read without downloading the log.
       - name: Lint Rust workspace
-        # rust-toolchain forces colour; plain text is what the matcher reads.
+        # The toolchain action switches colour on. The matcher reads plain
+        # text, so colour is switched off for this step.
         env:
           CARGO_TERM_COLOR: never
         run: |
           set -o pipefail
           echo "::add-matcher::.github/rust-problem-matcher.json"
-          # Errors without a source location (lockfile, build scripts) become
-          # annotations too.
+          # An error without a source location, such as one from the lock
+          # file or from a build script, is printed as an annotation too.
           cargo clippy --workspace --all-targets --locked --message-format=short -- -D warnings 2>&1 \
             | tee clippy.log || {
               (grep -E '^(error|thread)' clippy.log || tail -n 15 clippy.log) \
@@ -112,3 +114,442 @@ jobs:
 
       - name: Test Rust workspace
         run: cargo test --workspace --lib --tests --locked --quiet
+
+  # Builds and tests the app (`app/`) on Linux and Windows, and saves
+  # pictures of it drawn in an off-screen window on each system. The app is
+  # developed on macOS, so this job is the only place where it is compiled
+  # and run on the other two systems. The pictures are uploaded as the
+  # artifacts `pictures-linux` and `pictures-windows`.
+  #
+  # A run for a pull request can read the build cache that a run on `dev`
+  # saved, but not the cache of another pull request. The CI workflow
+  # therefore also runs for every push to `dev`. Without those runs, the
+  # first run of every pull request would compile about 1,100 packages from
+  # nothing, which takes close to an hour on Windows.
+  verify-app:
+    name: verify:app (${{ matrix.platform }})
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+          - os: windows-latest
+            platform: windows
+
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: app
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: 1.98.0
+
+      # Two build folders are kept between runs: the app's own, and the
+      # repository root's, where the program that generates the test library
+      # is built when that library is not in the cache (see "Test library").
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          workspaces: |
+            app -> target
+            . -> target
+          cache-on-failure: true
+
+      # The packages that building and running the app on Linux needs:
+      # - for GPUI: Wayland, X11, Vulkan and fontconfig, and lavapipe
+      #   (`mesa-vulkan-drivers`), the software Vulkan driver that draws the
+      #   pictures on a machine without a graphics card;
+      # - for Ruffle, the Flash player: the ALSA audio library;
+      # - for the application core: D-Bus for the keyring and libclang for
+      #   its generated bindings;
+      # - for the sign-in window: GTK and WebKitGTK;
+      # - for the steps that open a real window: a virtual X display (`xvfb`).
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            clang \
+            cmake \
+            libasound2-dev \
+            libclang-dev \
+            libdbus-1-dev \
+            libfontconfig-dev \
+            libglib2.0-dev \
+            libssl-dev \
+            libvulkan1 \
+            libwayland-dev \
+            libx11-xcb-dev \
+            libxkbcommon-x11-dev \
+            libzstd-dev \
+            libudev-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            mesa-vulkan-drivers \
+            xvfb \
+            xauth \
+            dbus
+
+      # Builds everything the later steps run, once: the test program, and
+      # the app itself, which Cargo builds together with the tests because
+      # the crate has an integration test. Every later step starts one of
+      # these two programs and compiles nothing.
+      #
+      # Both are built with the features that the tests switch on in GPUI
+      # (`test-support`). A plain `cargo build` leaves those features off,
+      # and Cargo then compiles GPUI, the shared crates and the app a second
+      # time. The last step of this job checks that the app also compiles
+      # without them.
+      #
+      # The step writes the paths of the two programs for the later steps:
+      # `PICTO_APP` is the app and `PICTO_TESTS` is the test program. A step
+      # that starts one of them first reads `ci/env.sh`, which puts the
+      # folders of the ONNX Runtime libraries on the loader's search path.
+      - name: Build
+        run: |
+          unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
+          build="$(unix "$RUNNER_TEMP")/build.json"
+          cargo test --locked --no-run --message-format=json-render-diagnostics > "$build"
+          # Cargo writes one line of JSON for each thing it built. The test
+          # program and the app are both built from the target named
+          # `picto-gpui-spike`; the test program is the one built as a test.
+          tests="$(jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .target.name == "picto-gpui-spike") | .executable' "$build" | tail -n 1)"
+          app="$(jq -r 'select(.reason == "compiler-artifact" and .profile.test == false and .target.name == "picto-gpui-spike" and (.target.kind | index("bin"))) | .executable' "$build" | tail -n 1)"
+          test -n "$tests" && test -n "$app"
+          echo "PICTO_TESTS=$(unix "$tests")" >> "$GITHUB_ENV"
+          echo "PICTO_APP=$(unix "$app")" >> "$GITHUB_ENV"
+
+      # Runs the tests by starting the test program that the step above
+      # built.
+      - name: Test
+        run: |
+          . ci/env.sh
+          "$PICTO_TESTS"
+
+      # Checks that a file dragged from a program that offers to save it
+      # arrives whole. Browsers and archive managers drag files this way on
+      # X11 (the XDS protocol). The test makes such a drag source on a
+      # virtual X display, and the app's own X11 code receives the drop.
+      # Windows needs no step of this kind: its drop of virtual files is
+      # checked by a test in the step above, which needs no display.
+      - name: Drop check (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          . ci/env.sh
+          xvfb-run -a -s "-screen 0 1024x768x24" \
+            "$PICTO_TESTS" --ignored --exact \
+            imports::drop::tests::an_x11_drop_of_a_file_offered_to_save_arrives_whole
+
+      # The library that the pictures are taken in holds 2,000 generated
+      # pictures. A program of the application core generates it
+      # (`core/examples/million_grid_demo.rs`). That program belongs to the
+      # repository root's Cargo workspace, so building it compiles the
+      # shared crates once more, which takes several minutes. The generated
+      # library depends only on the shared crates, so it is kept in the
+      # cache under a key made from their files, and it is generated again
+      # only when one of them changed.
+      #
+      # The library is always made in the same folder, because it stores the
+      # full paths of its files.
+      - name: Test library (from the cache)
+        id: library
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/picto-synthetic
+          key: picto-synthetic-2000-${{ runner.os }}-${{ hashFiles('core/**', 'picto-library/**', 'picto-sources/**', 'Cargo.lock') }}
+
+      - name: Test library (generate)
+        if: steps.library.outputs.cache-hit != 'true'
+        run: |
+          # This step calls Cargo, so it does not read `ci/env.sh`.
+          native() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
+          unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
+          library="$(unix "$RUNNER_TEMP")/picto-synthetic/Synthetic.library"
+          rm -rf "$(dirname "$library")"
+          mkdir -p "$(dirname "$library")"
+          (cd .. && PICTO_DEMO_ITEMS=2000 cargo run --locked -p picto_core --example million_grid_demo -- "$(native "$library")")
+          # The marker file says that the folder is a generated library and
+          # not one a person keeps. The app copies only a marked folder
+          # without asking.
+          printf 'synthetic:million_grid_demo\n' > "$library/.gpui-disposable"
+
+      # Takes the pictures. The app first makes its own copy of the test
+      # library, as a user on this system would (`--make-copy`), in a
+      # `picto-gpui-…` folder in the system's temporary folder, which is the
+      # only place where the app opens a copy. Then the test program plays
+      # `ci/smoke.txt` into the app in an off-screen window and saves a
+      # picture at each `shot` line. The window is drawn by GPUI's wgpu
+      # renderer on the software adapter: lavapipe on Linux, and WARP
+      # through Direct3D 12 on Windows.
+      - name: Pictures
+        run: |
+          . ci/env.sh
+          library="$(unix "$RUNNER_TEMP")/picto-synthetic/Synthetic.library"
+          copy="$("$PICTO_APP" --make-copy "$(native "$library")" | tail -n 1)"
+          echo "copy: $copy"
+          echo "PICTO_CI_COPY=$copy" >> "$GITHUB_ENV"
+          out="$(unix "$RUNNER_TEMP")/pictures"
+          mkdir -p "$out"
+          PICTO_GPUI_SILENT=1 PICTO_GPUI_MENU=window \
+          PICTO_GPUI_COPY="$copy" \
+          PICTO_GPUI_SCRIPT="$(native "$PWD/ci/smoke.txt")" \
+          PICTO_GPUI_OUT="$(native "$out")" \
+            "$PICTO_TESTS" --ignored --exact offscreen::plays_a_script --nocapture
+
+      - name: Upload pictures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pictures-${{ matrix.platform }}
+          path: ${{ runner.temp }}/pictures
+          if-no-files-found: warn
+
+      # Checks cloud sync from start to end, with the script `ci/cloud.txt`
+      # played in an off-screen window. The script creates a library in a
+      # test folder and connects it to a plain folder that stands in for the
+      # Dropbox desktop folder. It syncs, takes a snapshot, changes the
+      # library, and then restores the snapshot in Settings › Cloud. A
+      # restore closes the library, replaces its database and opens it
+      # again; on Windows that fails if the app still has the database open.
+      # The lines after the script check that the library is back in the
+      # state of the snapshot. No cloud provider and no account is
+      # contacted.
+      - name: Cloud
+        run: |
+          . ci/env.sh
+          if [[ "$RUNNER_OS" == Windows ]]; then temp="$(unix "$TEMP")"; else temp=/tmp; fi
+          scratch="$(mktemp -d "$temp/picto-gpui-cloud.XXXXXX")"
+          mkdir -p "$scratch/libraries" "$scratch/Dropbox" "$scratch/state" "$scratch/data"
+          out="$(unix "$RUNNER_TEMP")/cloud"
+          mkdir -p "$out"
+          cloud="$(native "$scratch/Dropbox")"
+          # `twice` doubles every backslash of a Windows path. The script is
+          # JSON, where a backslash is written twice, and `sed` halves the
+          # backslashes of its replacement text once more.
+          twice() { printf '%s' "$1" | sed 's/\\/\\\\/g'; }
+          image() { twice "$(native "$(cd .. && pwd)/resources/tutorial/$1")"; }
+          sed -e "s|__LIBRARIES__|$(twice "$(native "$scratch/libraries")")|" \
+              -e "s|__CLOUD__|$(twice "$(twice "$cloud")")|" \
+              -e "s|__IMAGE1__|$(image mona-lisa.jpg)|" \
+              -e "s|__IMAGE2__|$(image inbox-study.jpg)|" \
+              -e "s|__IMAGE3__|$(image collection-a.jpg)|" \
+              ci/cloud.txt > "$scratch/cloud.txt"
+          PICTO_GPUI_SILENT=1 PICTO_GPUI_MENU=window \
+          PICTO_DROPBOX_ROOT="$cloud" \
+          PICTO_GPUI_TEST_LIBRARIES="$(native "$scratch/libraries")" \
+          PICTO_GPUI_STATE="$(native "$scratch/state")" \
+          PICTO_GPUI_APP_DATA="$(native "$scratch/data")" \
+          PICTO_GPUI_SCRIPT="$(native "$scratch/cloud.txt")" \
+          PICTO_GPUI_OUT="$(native "$out")" \
+            "$PICTO_TESTS" --ignored --exact offscreen::plays_a_script --nocapture 2>&1 | tee "$out/cloud.log"
+          answers="$(grep -E '^(navigation\.get|cloud\.)' "$out/cloud.log")"
+          before="$(grep '^navigation.get' "$out/cloud.log" | head -n 1)"
+          after="$(grep '^navigation.get' "$out/cloud.log" | tail -n 1)"
+          echo "$answers" | cut -c1-200
+          # The script makes a folder named "Before", takes the snapshot,
+          # and then makes a folder named "After". Before the restore both
+          # folders exist. After the restore only "Before" exists.
+          [[ "$before" == *'String("After")'* ]]
+          [[ "$after" == *'String("Before")'* ]]
+          [[ "$after" != *'String("After")'* ]]
+          grep -q '^cloud.restore.list -> Ok(Array \[Object' "$out/cloud.log"
+          grep -q '^cloud.configuration.get -> Ok(Object {"provider": Null' "$out/cloud.log"
+          test -n "$(ls "$scratch/libraries/Cloudy.library/cloud/emergency")"
+
+      - name: Upload cloud check
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cloud-${{ matrix.platform }}
+          path: ${{ runner.temp }}/cloud
+          if-no-files-found: warn
+
+      # The sign-in window is drawn by the system's web view. On Windows
+      # that is WebView2, which needs its runtime installed, and a Windows
+      # image may not have it. This step installs the runtime from Microsoft
+      # with the Evergreen bootstrapper when it is missing.
+      - name: WebView2 Runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $id = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          function Installed {
+            foreach ($key in @("HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$id",
+                               "HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$id",
+                               "HKCU:\Software\Microsoft\EdgeUpdate\Clients\$id")) {
+              if (Test-Path $key) {
+                $version = (Get-ItemProperty $key).pv
+                if ($version -and $version -ne '0.0.0.0') { return $version }
+              }
+            }
+            return $null
+          }
+          $version = Installed
+          if (-not $version) {
+            $setup = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $setup
+            Start-Process -FilePath $setup -ArgumentList '/silent', '/install' -Wait
+            $version = Installed
+          }
+          if (-not $version) { throw 'The WebView2 Runtime is not installed.' }
+          "WebView2 Runtime $version"
+
+      # Checks the window in which a user signs in to a subscription site.
+      # The app is started for real on the copy made above and opens its
+      # sign-in window on the system's web view: WebKitGTK in a GTK window
+      # on a virtual X display on Linux, and WebView2 on Windows. The page
+      # it shows is a login page that the app serves itself on this machine
+      # (`src/logins/check.rs`). The check goes through four cases: a page
+      # that cannot be loaded, Cancel, the window being closed, and a
+      # sign-in whose cookie is saved, read back and removed again. No real
+      # site is contacted, no subscription runs, nothing is downloaded, and
+      # the login is kept in memory only.
+      - name: Sign-in window
+        run: |
+          . ci/env.sh
+          out="$(unix "$RUNNER_TEMP")/login-check"
+          mkdir -p "$out/state" "$out/data"
+          export PICTO_GPUI_HOLD_RUNS=1 PICTO_GPUI_HOLD_DOWNLOADS=1 PICTO_GPUI_SILENT=1
+          export PICTO_GPUI_STATE="$(native "$out/state")" PICTO_GPUI_APP_DATA="$(native "$out/data")"
+          export PICTO_GPUI_LOGIN_ORIGIN=http://127.0.0.1:47613
+          export PICTO_GPUI_LOGIN_CHECK="$(native "$out")"
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            # WebKit's renderer normally shares graphics buffers with the
+            # display. A virtual display has none, so that way of drawing
+            # is switched off.
+            export WEBKIT_DISABLE_DMABUF_RENDERER=1
+            run=(xvfb-run -a -s "-screen 0 1920x1080x24" dbus-run-session --)
+          else
+            run=()
+          fi
+          status=0
+          timeout 900 "${run[@]}" "$PICTO_APP" "$PICTO_CI_COPY" > "$out/app.log" 2>&1 || status=$?
+          echo "app ended with $status"
+          grep -i "login check\|panic\|sign-in window" "$out/app.log" || true
+          test -f "$out/login-check.log"
+          grep -qx 'result: pass' "$out/login-check.log"
+
+      # Checks the features that use the network. The app is started for
+      # real on the copy made above, and everything it would fetch from the
+      # internet is served by the app itself on this machine
+      # (`src/net_check.rs`). No real service is contacted and no real
+      # installer is started. The check covers:
+      # - the icons of the subscription services: fetched, kept, and drawn,
+      #   or replaced by the globe icon when there is none;
+      # - an update: it is found, and its installer is downloaded and
+      #   compared with the checksum in this system's feed file (`latest.yml`
+      #   on Windows, `latest-linux.yml` on Linux). An installer that does
+      #   not match is refused and deleted, and one that is changed after it
+      #   was compared is never started. The installer here is a stand-in
+      #   that the check builds, which only writes down how it was started;
+      # - Search by Image on every engine, in the hidden web view. Each
+      #   engine must receive exactly the file's bytes, name and type;
+      # - Restart and Install: the app must quit, and the stand-in must be
+      #   started the way electron-updater starts an installer. On Windows
+      #   that is with `--updated --force-run`. On Linux the new AppImage is
+      #   moved over the file that `$APPIMAGE` names (a stand-in here) under
+      #   its new name and run with `APPIMAGE_SILENT_INSTALL=true`;
+      # - a second run of the app that is quit while the update waits. The
+      #   update must then be installed silently: with `--updated /S` on
+      #   Windows, and on Linux run until it exits, with
+      #   `APPIMAGE_EXIT_AFTER_INSTALL`.
+      - name: Network features
+        run: |
+          . ci/env.sh
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            export WEBKIT_DISABLE_DMABUF_RENDERER=1
+            run=(xvfb-run -a -s "-screen 0 1920x1080x24" dbus-run-session --)
+          else
+            run=()
+          fi
+          check() {
+            out="$1"
+            mkdir -p "$out/state" "$out/data" "$out/app"
+            if [[ "$RUNNER_OS" == Linux ]]; then
+              printf 'the AppImage being replaced\n' > "$out/app/Picto-0.6.1-alpha.AppImage"
+              chmod 755 "$out/app/Picto-0.6.1-alpha.AppImage"
+              export APPIMAGE="$out/app/Picto-0.6.1-alpha.AppImage"
+            fi
+            export PICTO_GPUI_HOLD_RUNS=1 PICTO_GPUI_SILENT=1
+            export PICTO_GPUI_STATE="$(native "$out/state")" PICTO_GPUI_APP_DATA="$(native "$out/data")"
+            export PICTO_GPUI_NET_ORIGIN=http://127.0.0.1:47614
+            export PICTO_GPUI_NET_CHECK="$(native "$out")"
+            status=0
+            timeout 900 "${run[@]}" "$PICTO_APP" "$PICTO_CI_COPY" > "$out/app.log" 2>&1 || status=$?
+            echo "app ended with $status"
+            grep -i "net check\|panic\|search by image\|web view\|install" "$out/app.log" || true
+            # Status 124 means that `timeout` stopped the app. The app must
+            # end by itself.
+            test "$status" != 124
+            test -f "$out/net-check.log"
+            grep -qx 'result: pass' "$out/net-check.log"
+            for _ in $(seq 60); do test -f "$out/installer-ran.txt" && break; sleep 1; done
+            echo "the stand-in installer wrote:"
+            cat "$out/installer-ran.txt"
+            tr -d '\r' < "$out/installer-ran.txt" > "$out/ran.txt"
+          }
+          out="$(unix "$RUNNER_TEMP")/net-check"
+          check "$out"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            grep -qi '^path=.*\\updates\\Picto-Setup-0\.7\.0-alpha\.exe$' "$out/ran.txt"
+            test "$(grep '^arg=' "$out/ran.txt")" = "$(printf 'arg=--updated\narg=--force-run')"
+          else
+            test ! -e "$out/app/Picto-0.6.1-alpha.AppImage"
+            test -x "$out/app/Picto-0.7.0-alpha.AppImage"
+            grep -qx "path=$out/app/Picto-0.7.0-alpha.AppImage" "$out/ran.txt"
+            test -z "$(grep '^arg=' "$out/ran.txt" || true)"
+            grep -qx 'silent=true' "$out/ran.txt"
+            grep -qx 'exit-after=' "$out/ran.txt"
+          fi
+          quit="$(unix "$RUNNER_TEMP")/net-check-quit"
+          mkdir -p "$quit"
+          touch "$quit/install-on-quit"
+          check "$quit"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            grep -qi '^path=.*\\updates\\Picto-Setup-0\.7\.0-alpha\.exe$' "$quit/ran.txt"
+            test "$(grep '^arg=' "$quit/ran.txt")" = "$(printf 'arg=--updated\narg=/S')"
+          else
+            test ! -e "$quit/app/Picto-0.6.1-alpha.AppImage"
+            test -x "$quit/app/Picto-0.7.0-alpha.AppImage"
+            grep -qx "path=$quit/app/Picto-0.7.0-alpha.AppImage" "$quit/ran.txt"
+            grep -qx 'silent=true' "$quit/ran.txt"
+            grep -qx 'exit-after=true' "$quit/ran.txt"
+          fi
+
+      - name: Upload network check
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: net-check-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/net-check/*.log
+            ${{ runner.temp }}/net-check/installer-ran.txt
+            ${{ runner.temp }}/net-check-quit/*.log
+            ${{ runner.temp }}/net-check-quit/installer-ran.txt
+          if-no-files-found: warn
+
+      - name: Upload sign-in window check
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: login-check-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/login-check/*.log
+            ${{ runner.temp }}/login-check/*.png
+          if-no-files-found: warn
+
+      # Checks that the app compiles the way a release compiles it: without
+      # the GPUI features that only the tests switch on. Everything above
+      # was built with them. This step only type-checks and produces no
+      # program, so it takes much less time than a second build. It is the
+      # last step so that a failure in it does not hide the results above.
+      - name: Compiles without the test features
+        run: cargo check --locked

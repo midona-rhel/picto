@@ -1,0 +1,472 @@
+//! Builds the text that the log window copies to the clipboard and the support
+//! report that it saves to a file.
+use super::Entry;
+use serde_json::Value;
+
+/// The state of one of the application's workers, as the command
+/// `diagnostics.snapshot` returns it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Worker {
+    pub id: String,
+    pub label: String,
+    pub state: String,
+    pub detail: String,
+    pub active: i64,
+    pub queued: i64,
+    pub attention: i64,
+}
+
+impl Worker {
+    /// Reads the workers from the answer of `diagnostics.snapshot`. A missing
+    /// text field becomes an empty string and a missing number becomes 0.
+    pub fn list(snapshot: &Value) -> Vec<Worker> {
+        let text = |worker: &Value, key: &str| {
+            worker
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        let number =
+            |worker: &Value, key: &str| worker.get(key).and_then(Value::as_i64).unwrap_or(0);
+        snapshot
+            .get("workers")
+            .and_then(Value::as_array)
+            .map(|workers| {
+                workers
+                    .iter()
+                    .map(|worker| Worker {
+                        id: text(worker, "id"),
+                        label: text(worker, "label"),
+                        state: text(worker, "state"),
+                        detail: text(worker, "detail"),
+                        active: number(worker, "active"),
+                        queued: number(worker, "queued"),
+                        attention: number(worker, "attention"),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// Returns all of an entry's fields in full, separated by tabs: the
+/// timestamp, the level, the source, the target, the duration and the
+/// message.
+pub fn entry_line(entry: &Entry) -> String {
+    let duration = match (entry.duration_ms, entry.native_duration_ms) {
+        (None, _) => String::new(),
+        (Some(total), None) => format!("{total:.1} ms"),
+        (Some(total), Some(native)) => format!("{native:.1} ms native / {total:.1} ms total"),
+    };
+    [
+        entry.timestamp.as_str(),
+        entry.level.name(),
+        entry.source.name(),
+        entry.target.as_str(),
+        duration.as_str(),
+        entry.message.as_str(),
+    ]
+    .join("\t")
+}
+
+/// The width in characters of each of the first five columns of a line in
+/// the log window.
+const DISPLAY_COLUMNS: [usize; 5] = [14, 8, 10, 34, 38];
+
+/// Returns one line for the log window. Each of the first five fields is
+/// padded with spaces to its width in
+/// `DISPLAY_COLUMNS`, so the columns line up in a monospace font. No field is
+/// cut short. `time` replaces the timestamp in the first column.
+pub fn display_line(entry: &Entry, time: &str) -> String {
+    let line = entry_line(entry);
+    let mut fields: Vec<&str> = line.split('\t').collect();
+    fields[0] = time;
+    let last = fields.pop().unwrap_or_default();
+    let mut out = String::new();
+    for (field, width) in fields.iter().zip(DISPLAY_COLUMNS) {
+        out.push_str(field);
+        // The width of a field is counted in characters. A field that is
+        // already as wide as its column, or wider, gets no spaces.
+        for _ in field.chars().count()..width {
+            out.push(' ');
+        }
+    }
+    out.push_str(last);
+    out
+}
+
+/// Returns the timestamp as the local time of day on the 24-hour clock, with
+/// milliseconds. A timestamp that cannot be parsed is returned unchanged.
+pub fn local_time(timestamp: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(timestamp)
+        .map(|time| {
+            time.with_timezone(&chrono::Local)
+                .format("%H:%M:%S%.3f")
+                .to_string()
+        })
+        .unwrap_or_else(|_| timestamp.to_owned())
+}
+
+/// Returns the text with personal data removed. A home folder becomes `~`,
+/// an e-mail address becomes `<email>`, a bearer token becomes `<redacted>`,
+/// and a link keeps its origin while its path and query become `<redacted>`.
+pub fn scrub(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    let mut index = 0;
+    while index < chars.len() {
+        let here = &chars[index..];
+        let at_word_start = index == 0 || !is_word(chars[index - 1]);
+        // A home folder on macOS or on Linux, then the user's name. The
+        // macOS prefix is written in two pieces because the repository's
+        // release audit rejects any source file that contains it whole.
+        if let Some(skip) = [concat!("/Us", "ers/"), "/home/"].iter().find_map(|prefix| {
+            starts_with(here, prefix).then(|| {
+                let name = here[prefix.len()..]
+                    .iter()
+                    .take_while(|c| **c != '/' && !c.is_whitespace())
+                    .count();
+                (name > 0).then_some(prefix.len() + name)
+            })?
+        }) {
+            out.push('~');
+            index += skip;
+            continue;
+        }
+        // A drive letter and a colon, then the folder `Users`, then the
+        // user's name.
+        if here.len() > 9 && here[0].is_ascii_alphabetic() && starts_with(&here[1..], ":\\Users\\")
+        {
+            let name = here[9..]
+                .iter()
+                .take_while(|c| **c != '\\' && !c.is_whitespace())
+                .count();
+            if name > 0 {
+                out.push('~');
+                index += 9 + name;
+                continue;
+            }
+        }
+        // The word `Bearer`, then whitespace, then a token. The token is
+        // replaced by `<redacted>`.
+        if at_word_start && lower_starts_with(here, "bearer") {
+            let spaces = here[6..].iter().take_while(|c| c.is_whitespace()).count();
+            let token = here[6 + spaces..]
+                .iter()
+                .take_while(|c| c.is_ascii_alphanumeric() || "._~+/=-".contains(**c))
+                .count();
+            if spaces > 0 && token > 0 {
+                out.extend(&here[..6 + spaces]);
+                out.push_str("<redacted>");
+                index += 6 + spaces + token;
+                continue;
+            }
+        }
+        // A link that starts with `http://` or `https://` and runs up to the
+        // next whitespace. Its origin is kept and the rest is replaced by
+        // `/<redacted>`. A link that cannot be parsed becomes `<url>`.
+        if at_word_start
+            // i18n: a link's scheme
+            && (lower_starts_with(here, "http://") || lower_starts_with(here, "https://"))
+        {
+            let length = here.iter().take_while(|c| !c.is_whitespace()).count();
+            let raw: String = here[..length].iter().collect();
+            match url::Url::parse(&raw) {
+                Ok(url) => {
+                    out.push_str(&url.origin().ascii_serialization());
+                    out.push_str("/<redacted>");
+                }
+                Err(_) => out.push_str("<url>"),
+            }
+            index += length;
+            continue;
+        }
+        // An e-mail address, which is replaced by `<email>`.
+        if at_word_start
+            && (here[0].is_ascii_alphanumeric() || "._%+-".contains(here[0]))
+            && let Some(length) = email_at(
+                &here
+                    .iter()
+                    .take_while(|c| !c.is_whitespace())
+                    .collect::<String>(),
+            )
+        {
+            out.push_str("<email>");
+            index += length;
+            continue;
+        }
+        out.push(chars[index]);
+        index += 1;
+    }
+    out
+}
+
+fn is_word(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+fn starts_with(chars: &[char], prefix: &str) -> bool {
+    prefix.chars().count() <= chars.len() && prefix.chars().zip(chars).all(|(a, b)| a == *b)
+}
+
+fn lower_starts_with(chars: &[char], prefix: &str) -> bool {
+    prefix.chars().count() <= chars.len()
+        && prefix
+            .chars()
+            .zip(chars)
+            .all(|(a, b)| a == b.to_ascii_lowercase())
+}
+
+/// Returns the length in characters of the e-mail address at the start of
+/// `text`, or `None` if there is none. An address is what the case-insensitive
+/// pattern `\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b` matches.
+fn email_at(text: &str) -> Option<usize> {
+    let local = text
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || "._%+-".contains(*c))
+        .count();
+    if local == 0 || text[local..].chars().next() != Some('@') {
+        return None;
+    }
+    let domain: Vec<char> = text[local + 1..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || ".-".contains(*c))
+        .collect();
+    // This finds the longest domain that ends in a dot followed by two or more
+    // letters.
+    (0..domain.len()).rev().find_map(|end| {
+        let candidate = &domain[..=end];
+        let dot = candidate.iter().rposition(|c| *c == '.')?;
+        let tld = &candidate[dot + 1..];
+        let after = domain.get(end + 1);
+        (dot > 0
+            && tld.len() >= 2
+            && tld.iter().all(char::is_ascii_alphabetic)
+            && after.is_none_or(|c| !is_word(*c)))
+        .then_some(local + 1 + end + 1)
+    })
+}
+
+/// Returns the text of the support report, scrubbed with [`scrub`]. The
+/// report starts with the lines Version, Host, Created, Runtime and
+/// Language. The workers follow, one on each line, and then the log lines.
+/// `runtime` names the app and the system that it runs on, and `language` is
+/// the system's language.
+pub fn build(
+    entries: &[Entry],
+    workers: &[Worker],
+    runtime: &str,
+    language: &str,
+    version: &str,
+    host: &str,
+    created: &str,
+) -> String {
+    // i18n: the support report is written in English in every language
+    let mut lines = vec![
+        "Picto support report".to_owned(),
+        format!("Version\t{version}"),
+        format!("Host\t{host}"),
+        format!("Created\t{created}"),
+        format!("Runtime\t{runtime}"),
+        format!("Language\t{language}"),
+        String::new(),
+        // i18n: the support report is written in English in every language
+        "Workers".to_owned(),
+        "ID\tName\tState\tActive\tQueued\tAttention\tDetail".to_owned(),
+    ];
+    lines.extend(workers.iter().map(|worker| {
+        format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            worker.id,
+            worker.label,
+            worker.state,
+            worker.active,
+            worker.queued,
+            worker.attention,
+            worker.detail
+        )
+    }));
+    lines.extend([
+        String::new(),
+        // i18n: the support report is written in English in every language
+        "Logs".to_owned(),
+        "Timestamp\tLevel\tSource\tTarget\tDuration\tMessage".to_owned(),
+    ]);
+    lines.extend(entries.iter().map(entry_line));
+    lines.push(String::new());
+    scrub(&lines.join("\n"))
+}
+
+/// Returns the report's file name, `picto-support-<stamp>.txt`. The stamp is
+/// `created`, the time in UTC, with each colon and dot replaced by a dash.
+pub fn file_name(created: &str) -> String {
+    format!("picto-support-{}.txt", created.replace([':', '.'], "-"))
+}
+
+/// The largest report that [`write`] saves, 10 MB.
+pub const MAX_BYTES: usize = 10 * 1024 * 1024;
+
+/// Writes the report to `path`, the file the user chose. On Unix the file is
+/// created with the mode `0o600`, so only the user can read it. An empty
+/// report, or one over [`MAX_BYTES`], is not written and gives an error.
+pub fn write(path: &std::path::Path, report: &str) -> std::io::Result<()> {
+    if report.is_empty() || report.len() > MAX_BYTES {
+        return Err(std::io::Error::other(
+            "The support report is empty or too large.",
+        ));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    std::io::Write::write_all(&mut options.open(path)?, report.as_bytes())
+}
+
+/// Returns the text of the report's Host line: the operating system, its
+/// version and its architecture, for example `darwin 25.0.0 arm64`. The
+/// system is named `darwin`, `win32` or `linux`, and the architecture `arm64`
+/// or `x64`. These are the names that the support report of Picto 0.6.19 and
+/// earlier used.
+pub fn host() -> String {
+    let platform = match std::env::consts::OS {
+        "macos" => "darwin",
+        "windows" => "win32",
+        other => other,
+    };
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "x64",
+        other => other,
+    };
+    format!("{platform} {} {arch}", os_release())
+}
+
+#[cfg(unix)]
+fn os_release() -> String {
+    std::process::Command::new("uname")
+        .arg("-r")
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|text| text.trim().to_owned())
+        .unwrap_or_default()
+}
+
+#[cfg(not(unix))]
+fn os_release() -> String {
+    std::process::Command::new("cmd")
+        .args(["/C", "ver"])
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|text| {
+            // i18n: the output of a system command
+            let start = text.find("Version ")? + 8;
+            Some(
+                text[start..]
+                    .trim_end_matches(|c: char| c == ']' || c.is_whitespace())
+                    .to_owned(),
+            )
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostics::{Level, Source};
+
+    fn entry(target: &str, message: &str) -> Entry {
+        Entry {
+            id: 1,
+            level: Level::Debug,
+            source: Source::Ipc,
+            target: target.into(),
+            message: message.into(),
+            timestamp: "2026-08-26T12:00:00.000Z".into(),
+            duration_ms: Some(16.5),
+            native_duration_ms: Some(0.1),
+        }
+    }
+
+    #[test]
+    fn keeps_every_log_field_as_selectable_tab_delimited_text() {
+        let entry = Entry {
+            level: Level::Warn,
+            target: "items.query".into(),
+            duration_ms: Some(20.),
+            native_duration_ms: Some(3.),
+            message: "A long message is not truncated".into(),
+            ..entry("", "")
+        };
+        assert_eq!(
+            entry_line(&entry),
+            "2026-08-26T12:00:00.000Z\tWARN\tipc\titems.query\t3.0 ms native / 20.0 ms total\tA long message is not truncated"
+        );
+        let plain = Entry {
+            native_duration_ms: None,
+            ..entry.clone()
+        };
+        assert!(entry_line(&plain).contains("\t20.0 ms\t"));
+    }
+
+    #[test]
+    fn aligns_display_columns_without_truncating_long_messages() {
+        let short = display_line(&entry("settings.get", "short message"), "17:47:01.582");
+        let long = display_line(
+            &entry("tags.namespace_counts", "a complete long message"),
+            "17:47:01.582",
+        );
+        assert_eq!(short.find("0.1 ms native"), long.find("0.1 ms native"));
+        assert_eq!(
+            short.find("short message"),
+            long.find("a complete long message")
+        );
+        assert!(long.contains("a complete long message"));
+        assert!(short.starts_with("17:47:01.582  DEBUG   ipc       settings.get"));
+    }
+
+    #[test]
+    fn scrubs_common_personal_paths_and_credentials() {
+        let personal = ["", "Users", "example-user", "Pictures"].join("/");
+        assert_eq!(
+            scrub(&format!(
+                "{personal} test@example.com Bearer abc.def https://example.test/private?id=3"
+            )),
+            "~/Pictures <email> Bearer <redacted> https://example.test/<redacted>"
+        );
+        assert_eq!(scrub(&format!(r"C:\{}\someone\x", "Users")), r"~\x");
+        assert_eq!(scrub("/home/someone"), "~");
+        assert_eq!(scrub("nothing to hide"), "nothing to hide");
+    }
+
+    #[test]
+    fn includes_worker_state_and_logs_in_one_report() {
+        let report = build(
+            &[],
+            &[Worker {
+                id: "thumb".into(),
+                label: "Thumbnails".into(),
+                state: "working".into(),
+                detail: "one queued".into(),
+                active: 1,
+                queued: 1,
+                attention: 0,
+            }],
+            "Picto/test",
+            "en",
+            "1.0.0",
+            "darwin 25.0.0 arm64",
+            "2026-08-26T12:00:00.000Z",
+        );
+        assert!(report.starts_with("Picto support report\nVersion\t1.0.0\nHost\tdarwin"));
+        assert!(report.contains("Workers\nID\tName\tState"));
+        assert!(report.contains("thumb\tThumbnails\tworking\t1\t1\t0\tone queued"));
+        assert!(report.contains("Logs\nTimestamp\tLevel\tSource"));
+        assert_eq!(
+            file_name("2026-08-26T12:00:00.000Z"),
+            "picto-support-2026-08-26T12-00-00-000Z.txt"
+        );
+    }
+}

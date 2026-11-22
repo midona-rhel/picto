@@ -1,1 +1,0 @@
-export { KbdTooltip } from './KbdTooltip';
