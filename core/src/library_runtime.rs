@@ -356,6 +356,10 @@ fn start_checkpoint_worker(
                     let result = tokio::task::spawn_blocking(move || {
                         if projection {
                             library.write_projection_checkpoint()?;
+                            // The moves into and out of the Trash become
+                            // shared tombstones here as well, so that they
+                            // are kept while the library does not sync.
+                            while library.settle_trash_moves(20_000)? {}
                             // While the library does not sync, no snapshot
                             // removes the rows of the change journal, so
                             // they are removed here.
@@ -451,8 +455,8 @@ fn start_cloud_snapshot_worker(
     heavy_jobs: Arc<Semaphore>,
 ) -> tokio::task::JoinHandle<()> {
     const CLOUD_IDLE_DELAY: Duration = Duration::from_secs(30);
-    // Every sixth tick, which is every 30 seconds, the worker looks for
-    // deletion files of other devices when no snapshot is due.
+    // Every sixth tick, which is every 30 seconds, the worker merges the
+    // tombstones of the other devices when no snapshot is due.
     const RECEIVE_EVERY: u32 = 6;
     tokio::spawn(async move {
         if let Err(error) = crate::cloud::recover_interrupted_sync_library(&application) {
@@ -504,7 +508,7 @@ fn start_cloud_snapshot_worker(
                             tracing::warn!(%error, "Canonical cloud snapshot failed");
                         }
                     } else if let Err(error) = crate::cloud::receive_library(&application, &provider).await {
-                        tracing::warn!(%error, "Canonical cloud deletions were not applied");
+                        tracing::warn!(%error, "Canonical cloud tombstones were not merged");
                     }
                     drop(permit);
                 }

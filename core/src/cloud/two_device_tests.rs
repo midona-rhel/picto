@@ -166,7 +166,7 @@ fn rows(application: &LibraryApplication, left_out: &[&str]) -> BTreeMap<String,
 /// Two devices that sync one library through the folder `cloud`, and that
 /// folder as a provider. Both hold the items 0, 1 and 2 in All, with their
 /// files. Item 0 has the tag `sync:tag`, and item 1 is in the folder
-/// `Folder`. Both have synced, and the cloud folder holds no deletion file.
+/// `Folder`. Both have synced, and the cloud folder holds no tombstone file.
 /// The two folders that hold the libraries are returned to keep them.
 async fn two_devices(
     cloud: &Path,
@@ -239,13 +239,44 @@ fn cloud_data(cloud: &Path, application: &LibraryApplication) -> PathBuf {
         .join(configuration_library(application).unwrap().library_id)
 }
 
-/// The deletion file `sequence` that `application` wrote.
-fn deletion_file(cloud: &Path, application: &LibraryApplication, sequence: u32) -> PathBuf {
+/// The tombstone files that `application`'s device wrote, in the order of
+/// their names.
+fn tombstone_files(cloud: &Path, application: &LibraryApplication) -> Vec<PathBuf> {
     let configuration = configuration_library(application).unwrap();
-    cloud_data(cloud, application)
-        .join("deletions")
-        .join(configuration.device_id)
-        .join(format!("{sequence:010}.jsonl.zst"))
+    let folder = cloud_data(cloud, application)
+        .join("tombstones")
+        .join(configuration.device_id);
+    let mut files = match std::fs::read_dir(folder) {
+        Ok(entries) => entries.map(|entry| entry.unwrap().path()).collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+    files.sort();
+    files
+}
+
+/// Imports the picture `index` into `application` a minute from now, which
+/// is later than every deletion that a test makes.
+fn import_later(application: &LibraryApplication, folder: &Path, index: u8) {
+    let mut job = super::tests::image_job(folder, index);
+    if let picto_library::PreparedIngestPayload::Item(import) = &mut job.payload {
+        import.imported_at_ms = chrono::Utc::now().timestamp_millis() + 60_000;
+    }
+    application
+        .library()
+        .enqueue_ingest_job(&job, "2026-08-29T12:00:00Z")
+        .unwrap();
+    let report = crate::library_ingest_runtime::run_batch(application, 64).unwrap();
+    assert_eq!(report.ingested, 1);
+}
+
+fn tombstoned(application: &LibraryApplication, index: u8) -> bool {
+    count(
+        application,
+        &format!(
+            "SELECT COUNT(*) FROM deletion_tombstone WHERE stable_key = '{}'",
+            key(index)
+        ),
+    ) == 1
 }
 
 fn cloud_original(cloud: &Path, application: &LibraryApplication, hash: &str) -> PathBuf {
@@ -271,14 +302,14 @@ async fn a_deletion_on_one_device_arrives_on_the_other_and_a_restore_comes_back(
     first.delete_tag(tag).unwrap();
     first.delete_folders(&[folder]).unwrap();
     snapshot::publish_library(&first, &provider).await.unwrap();
-    assert!(deletion_file(cloud.path(), &first, 1).is_file());
+    assert!(!tombstone_files(cloud.path(), &first).is_empty());
 
-    let received = receive_library(&second, &provider).await.unwrap();
+    assert!(receive_library(&second, &provider).await.unwrap() > 0);
 
-    assert_eq!(received.files, 1);
     assert_eq!(status(&second, 0), Some(Lifecycle::Trash));
     assert_eq!(status(&second, 1), None);
     assert_eq!(status(&second, 2), Some(Lifecycle::Active));
+    assert!(tombstoned(&second, 1));
     assert!(!second
         .library()
         .projections()
@@ -303,11 +334,65 @@ async fn a_deletion_on_one_device_arrives_on_the_other_and_a_restore_comes_back(
         .set_lifecycle(&target(&second, &[0]), Lifecycle::Active)
         .unwrap();
     snapshot::publish_library(&second, &provider).await.unwrap();
-    assert_eq!(receive_library(&first, &provider).await.unwrap().files, 1);
+    assert!(receive_library(&first, &provider).await.unwrap() > 0);
     assert_eq!(status(&first, 0), Some(Lifecycle::Active));
     assert_eq!(status(&first, 2), Some(Lifecycle::Active));
     assert_eq!(count(&first, "SELECT COUNT(*) FROM library_root"), 2);
     assert_eq!(count(&second, "SELECT COUNT(*) FROM library_root"), 2);
+
+    // Merging every file again, as after a restart, changes nothing.
+    let before = [rows(&first, &["cloud_state", "library_meta"]), rows(&second, &["cloud_state", "library_meta"])];
+    tombstones::forget_merged();
+    receive_library(&first, &provider).await.unwrap();
+    receive_library(&second, &provider).await.unwrap();
+    assert_eq!(rows(&first, &["cloud_state", "library_meta"]), before[0]);
+    assert_eq!(rows(&second, &["cloud_state", "library_meta"]), before[1]);
+}
+
+#[tokio::test]
+async fn an_item_that_is_imported_again_after_its_deletion_stays_and_its_tombstone_goes() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, folders) = two_devices(cloud.path()).await;
+    first
+        .set_lifecycle(&target(&first, &[1]), Lifecycle::Trash)
+        .unwrap();
+    first.delete_items(&target(&first, &[1]), false).unwrap();
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    snapshot::publish_library(&second, &provider).await.unwrap();
+    assert_eq!(status(&second, 1), None);
+    assert!(tombstoned(&first, 1) && tombstoned(&second, 1));
+
+    // The second device imports the item again and syncs.
+    import_later(&second, folders[1].path(), 1);
+    assert!(!tombstoned(&second, 1));
+    snapshot::publish_library(&second, &provider).await.unwrap();
+
+    // The first device's tombstone goes. Its own files still hold the
+    // deletion until its next sync, and they do not delete the item on the
+    // second device, however often they are merged.
+    receive_library(&first, &provider).await.unwrap();
+    assert!(!tombstoned(&first, 1));
+    tombstones::forget_merged();
+    receive_library(&second, &provider).await.unwrap();
+    assert_eq!(status(&second, 1), Some(Lifecycle::Inbox));
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    tombstones::forget_merged();
+    snapshot::publish_library(&second, &provider).await.unwrap();
+    assert_eq!(status(&second, 1), Some(Lifecycle::Inbox));
+    assert!(!tombstoned(&second, 1));
+
+    // The first device can import the item again as well. When it then
+    // deletes the item, the deletion is the later one and reaches the
+    // second device.
+    import_later(&first, folders[0].path(), 1);
+    first
+        .set_lifecycle(&target(&first, &[1]), Lifecycle::Trash)
+        .unwrap();
+    first.delete_items(&target(&first, &[1]), false).unwrap();
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    receive_library(&second, &provider).await.unwrap();
+    assert_eq!(status(&second, 1), None);
+    assert!(tombstoned(&first, 1) && tombstoned(&second, 1));
 }
 
 #[tokio::test]
@@ -384,21 +469,20 @@ async fn a_device_that_was_away_takes_the_deletions_over_and_keeps_what_it_added
 }
 
 #[tokio::test]
-async fn a_damaged_or_missing_deletion_file_deletes_nothing_and_is_reported() {
+async fn damaged_tombstone_files_delete_nothing_and_missing_ones_hold_nothing_back() {
     let cloud = tempfile::tempdir().unwrap();
     let (first, second, provider, _folders) = two_devices(cloud.path()).await;
     first
-        .set_lifecycle(&target(&first, &[0]), Lifecycle::Trash)
+        .set_lifecycle(&target(&first, &[0, 1]), Lifecycle::Trash)
         .unwrap();
-    snapshot::publish_library(&first, &provider).await.unwrap();
     first.delete_items(&target(&first, &[0]), false).unwrap();
-    first
-        .set_lifecycle(&target(&first, &[1]), Lifecycle::Trash)
-        .unwrap();
     snapshot::publish_library(&first, &provider).await.unwrap();
-    let file = deletion_file(cloud.path(), &first, 1);
-    let whole = std::fs::read(&file).unwrap();
-    assert!(deletion_file(cloud.path(), &first, 2).is_file());
+    let files = tombstone_files(cloud.path(), &first);
+    assert!(!files.is_empty());
+    let whole = files
+        .iter()
+        .map(|file| std::fs::read(file).unwrap())
+        .collect::<Vec<_>>();
     let unchanged = |application: &LibraryApplication| {
         assert_eq!(count(application, "SELECT COUNT(*) FROM library_root"), 3);
         for index in 0..3 {
@@ -406,35 +490,37 @@ async fn a_damaged_or_missing_deletion_file_deletes_nothing_and_is_reported() {
         }
     };
 
-    // The first file was written only in part. The second file is whole,
-    // and it is not applied either.
-    std::fs::write(&file, &whole[..whole.len() / 2]).unwrap();
+    // One file was written only in part. No file is merged.
+    std::fs::write(&files[0], &whole[0][..whole[0].len() / 2]).unwrap();
     let error = snapshot::publish_library(&second, &provider)
         .await
         .unwrap_err();
-    assert!(error.contains("0000000001.jsonl.zst"), "{error}");
+    let name = files[0].file_name().unwrap().to_string_lossy().into_owned();
+    assert!(error.contains(&name), "{error}");
     assert!(error.contains("Nothing was deleted on this device"), "{error}");
     let state = status_library(&second).unwrap();
     assert_eq!((state.state.as_str(), state.message), ("error", error));
     unchanged(&second);
 
-    // The first file is missing and the second is there.
-    std::fs::remove_file(&file).unwrap();
+    // No file of the first device is there. The sync runs and deletes
+    // nothing.
+    for file in &files {
+        std::fs::remove_file(file).unwrap();
+    }
     snapshot::publish_library(&second, &provider).await.unwrap();
     let state = status_library(&second).unwrap();
-    assert_eq!(
-        (state.state.as_str(), state.message.as_str()),
-        ("idle", WAITING_FOR_DELETIONS)
-    );
+    assert_eq!((state.state.as_str(), state.message.as_str()), ("idle", ""));
     unchanged(&second);
 
-    // The whole first file arrives. Both files are applied in order.
-    std::fs::write(&file, &whole).unwrap();
-    assert_eq!(receive_library(&second, &provider).await.unwrap().files, 2);
+    // The files arrive one at a time, the last one first. In the end the
+    // second device has made every deletion.
+    for (file, bytes) in files.iter().zip(&whole).rev() {
+        std::fs::write(file, bytes).unwrap();
+        receive_library(&second, &provider).await.unwrap();
+    }
     assert_eq!(status(&second, 0), None);
     assert_eq!(status(&second, 1), Some(Lifecycle::Trash));
     assert_eq!(status(&second, 2), Some(Lifecycle::Active));
-    assert_eq!(status_library(&second).unwrap().message, "");
 }
 
 #[tokio::test]
@@ -447,7 +533,7 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
     snapshot::publish_library(&first, &provider).await.unwrap();
     snapshot::publish_library(&second, &provider).await.unwrap();
     let data = cloud_data(cloud.path(), &first);
-    assert!(deletion_file(cloud.path(), &first, 1).is_file());
+    assert!(!tombstone_files(cloud.path(), &first).is_empty());
     // An upload that was interrupted left a file of the sync behind.
     std::fs::write(
         data.join("snapshots")
@@ -463,7 +549,7 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
         "snapshots/202611世T101500.12Z-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11.json",
         "snapshots/readme.md",
         "blobs/f/aa/bb/picture.txt",
-        "deletions/not-a-device/0000000001.jsonl.zst",
+        "tombstones/not-a-device/0a.0123456789abcdef.jsonl.zst",
         "extra/file.bin",
     ];
     for name in foreign {
@@ -495,11 +581,11 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
         kept,
         [
             "blobs/f/aa/bb/picture.txt",
-            "deletions/not-a-device",
             "extra",
             "notes.txt",
             "snapshots/202611世T101500.12Z-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11.json",
             "snapshots/readme.md",
+            "tombstones/not-a-device",
         ]
     );
     assert_eq!(removal.kept_entries, 6);
@@ -667,27 +753,21 @@ async fn sync_that_is_enabled_again_starts_from_new_cloud_data() {
         .set_lifecycle(&target(&application, &[0]), Lifecycle::Trash)
         .unwrap();
     snapshot::publish_library(&application, &provider).await.unwrap();
-    assert!(deletion_file(cloud.path(), &application, 1).is_file());
+    assert_eq!(tombstone_files(cloud.path(), &application).len(), 1);
     let data = cloud_data(cloud.path(), &application);
 
     delete_cloud_data_library(&application).await.unwrap();
     assert!(!data.exists());
-    // A deletion made while sync is off is not sent later.
     application
         .set_lifecycle(&target(&application, &[1]), Lifecycle::Trash)
         .unwrap();
 
+    // The library is connected again. It writes new cloud data, and all of
+    // its tombstones with it: the one that was in the removed cloud data,
+    // and the one that it made while sync was off.
     configure_library(&application, &input).unwrap();
     assert_eq!(status_library(&application).unwrap().last_sync_at, None);
     snapshot::publish_library(&application, &provider).await.unwrap();
     assert!(data.join("library.json").is_file());
-    assert!(!data.join("deletions").exists());
-
-    // The first deletion after that is the new cloud data's file 1.
-    application
-        .set_lifecycle(&target(&application, &[0]), Lifecycle::Active)
-        .unwrap();
-    snapshot::publish_library(&application, &provider).await.unwrap();
-    assert!(deletion_file(cloud.path(), &application, 1).is_file());
-    assert!(!deletion_file(cloud.path(), &application, 2).exists());
+    assert_eq!(tombstone_files(cloud.path(), &application).len(), 2);
 }

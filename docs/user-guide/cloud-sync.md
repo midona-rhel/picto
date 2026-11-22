@@ -14,7 +14,7 @@ Picto stores three things in the cloud folder, under `picto/<library id>/`:
 
 - **Recovery snapshots**, which are compressed and verified copies of the library's database.
 - **Originals**, which are all media files of the library.
-- **Deletions**, which are lists of what you deleted on each computer.
+- **Tombstones**, which record what you deleted on each computer.
 
 ## What reaches your other computers
 
@@ -29,57 +29,61 @@ take over everything that another computer has, restore one of its snapshots (se
 
 ## Deletions
 
-When you delete something on one computer, Picto deletes the same thing on every other computer
-that syncs the library. This covers:
+When you delete something, Picto writes a **tombstone** for it: a record that the thing was
+deleted, and when. A tombstone is also what stops a subscription from bringing back an item that
+you deleted. Cloud sync shares the tombstones. Each computer writes its tombstones into the cloud
+folder and takes in the tombstones of the others, so what is deleted on one computer is deleted on
+all of them. This covers:
 
-- moving an item or a collection to the Trash, and restoring it from the Trash;
 - deleting an item or a collection permanently, which includes **Empty Trash** and an Inbox item
   that is rejected with the setting **Rejected items: Delete permanently**;
+- moving an item or a collection to the Trash, and restoring it from the Trash;
 - deleting a tag, a folder or a smart folder.
 
-The computer that made the deletion sends it at its next sync. Another computer takes it over at
+The computer that made the deletion writes it at its next sync. Another computer takes it in at
 its own next sync, or within about 30 seconds while Picto is open with the library and the library
 is idle. Both computers must have the provider's desktop app running, because that app carries the
 files.
 
-A deletion that arrives from another computer is not in **Edit → Undo** on this computer. To get
-an item back from the Trash, restore it; the restore is then carried to the other computers too.
+A deletion that arrives from another computer is not in **Edit → Undo** on this computer.
 
-### Rules when two computers disagree
+### One rule: the later one wins
 
-- **Deleted permanently on one computer, edited on another.** The item stays deleted. The
-  deletion wins over every edit, whatever was done first.
+Every tombstone has a time. When two computers did different things to the same item, the thing
+that was done later wins on both. Picto does not rely on the computers' clocks alone for that: what
+you do on a computer after it has taken in a change is always later than that change.
+
+- **Deleted, then imported again.** When you import an item again after it was deleted, or a
+  subscription that you reset brings it again, the tombstone is removed, and that removal is shared
+  too. The item stays on the computer that has it, and no other computer deletes it because of the
+  older tombstone. The other computers do not get the item itself; they only stop refusing it.
+- **Imported again, then deleted.** A deletion that is made after the item was imported again is
+  the later one. The item ends deleted on every computer.
+- **Moved to the Trash on one computer, restored on another.** The later move wins on both.
+- **Deleted permanently on one computer, edited or moved on another.** A permanent deletion is not
+  undone by an edit or by a move into or out of the Trash. The item ends deleted on both.
 - **In the Trash on one computer, edited on another.** The item is in the Trash on both. The edit
   stays on the computer where it was made.
-- **Moved to the Trash on one computer, restored on another.** The move that was made last wins
-  on both computers. When the two moves were made before either computer had synced the other's,
-  the computers' clocks decide which one was last.
-- **A collection that holds other files on this computer.** A collection is moved to the Trash or
-  deleted here only when every file it holds here was also in the collection on the computer that
-  deleted it. If you added a file to it here, it stays as it is.
-- **A folder or a smart folder with subfolders.** A folder is deleted here only when every folder
-  inside it here was deleted too. If you made a subfolder here that the other computer never had,
-  the folder stays with that subfolder. The items of a deleted folder stay in the library.
-- **A tag, a folder or a smart folder with the same name.** Only the tag or folder that both
-  computers got from the same library is deleted. One that you made here with the same name
-  stays.
-- **Undo.** Undo works on the computer where you press it. If you undo a deletion before the next
-  sync, nothing is sent. If you undo a permanent deletion, or the deletion of a tag, a folder or a
-  smart folder, after it was synced, it comes back on this computer and stays deleted on the
-  others.
+- **Undo.** If you undo a deletion, the tombstone is removed like after an import, and the other
+  computers stop refusing the item. An item, a tag or a folder that another computer has already
+  deleted does not come back there.
 
-### What a deletion from another computer cannot do
+### What stays safe
 
-- It deletes only what the other computer deleted. An item is matched by its identity in the
-  library and by the content of its files. An item that you imported here is never deleted
-  because another computer deleted something else.
-- A computer that was switched off for a long time takes over the deletions it missed at its next
+- A tombstone deletes the one thing it names. An item that you imported here after the deletion
+  was made stays.
+- A folder or a smart folder is deleted here only when every folder inside it here was deleted
+  too. If you made a subfolder here that the other computer never had, the folder stays with that
+  subfolder. The items of a deleted folder stay in the library.
+- A tag, a folder or a smart folder that you made here with the same name as a deleted one stays.
+  Only the one that both computers got from the same library is deleted.
+- A computer that was switched off for a long time takes in the tombstones it missed at its next
   sync. It does not bring a deleted item back to the others, and what was added on it stays.
-- If a deletion file in the cloud folder is damaged, Picto deletes nothing. The sync state becomes
-  **Needs attention**, and the message names the file. Choose **Sync Now** to try again. If a
-  deletion file has not arrived yet, Picto waits and says so in the Cloud Sync card.
-- What you delete while sync is switched off for the library is not sent when you switch it on
-  again.
+- The order in which the files arrive does not matter, and a file that arrives twice changes
+  nothing.
+- If a tombstone file in the cloud folder is damaged, Picto takes in nothing and deletes nothing.
+  The sync state becomes **Needs attention**, and the message names the file. Choose **Sync Now**
+  to try again.
 
 ## Enable sync for a library
 
@@ -93,8 +97,8 @@ You can also click the **⋯** (Library actions) button of the library and choos
 Sync**.
 
 From then on Picto syncs by itself when the library has changes that are not synced and has been
-idle for about 30 seconds. A sync takes over the deletions of your other computers, sends this
-computer's deletions, copies the originals, and publishes a new snapshot. While the library syncs,
+idle for about 30 seconds. A sync takes in the tombstones of your other computers, writes this
+computer's tombstones, copies the originals, and publishes a new snapshot. While the library syncs,
 a bar along the bottom of the main window shows the progress. The Library Manager shows it too.
 
 ## Day-to-day controls
@@ -125,7 +129,7 @@ actions) menu has the same command.
 After you confirm:
 
 - The folder `picto/<library id>/` is removed from the cloud folder, with the snapshots, the
-  originals and the deletion lists in it. This cannot be undone.
+  originals and the tombstones in it. This cannot be undone.
 - The library on this computer is not changed. It keeps every item and every file.
 - Cloud sync is off for the library on this computer. You can enable it again later; Picto then
   writes new cloud data.
@@ -137,7 +141,7 @@ Picto removes only files that its sync wrote, by their names. If the library's f
 folder holds anything else, for example a file that you put there, Picto leaves that file and the
 folder, and the message in the Library Manager names what was left.
 
-A computer that still runs Picto 0.6.22 or older does not notice that the cloud data is gone. It
+A computer that still runs Picto 0.6.23 or older does not notice that the cloud data is gone. It
 writes a new snapshot at its next sync, and the folder appears again. Turn sync off on such a
 computer first.
 
@@ -161,9 +165,10 @@ their date and size. Click **Restore** next to a snapshot and confirm. Picto clo
 keeps the current database as an emergency copy inside the library folder, puts the snapshot's
 database in its place, and opens the library again.
 
-A restore can bring back items that were deleted after the snapshot was made. Those items stay on
-this computer: the deletions that were synced before the restore are not applied to the restored
-library again. The other computers do not get the items back.
+A restore does not bring back what was deleted and synced after the snapshot was made: the
+tombstones are in the cloud folder, and the next sync applies them to the restored library again.
+To get such an item back, import its file again after the restore. That removes the tombstone on
+every computer.
 
 ## Retention
 

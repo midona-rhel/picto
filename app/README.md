@@ -219,10 +219,10 @@ allows.
 ### Cloud
 
 Cloud sync signs in to nothing: a library publishes verified
-snapshots of its database, its originals and the deletions that the user made
-into the folder of a Google Drive or Dropbox desktop app on the device, which
-carries them on. Another device that syncs the library makes the same
-deletions. The core owns all of it (`core/src/cloud/`, commands `cloud.*`;
+snapshots of its database, its originals and the tombstones of what the user
+deleted into the folder of a Google Drive or Dropbox desktop app on the
+device, which carries them on. Another device that syncs the library merges
+the tombstones and makes the same deletions. The core owns all of it (`core/src/cloud/`, commands `cloud.*`;
 [`docs/architecture.md`](../docs/architecture.md), "Cloud sync"); the app sends
 those commands and keeps no tokens or secrets. The safety facts:
 

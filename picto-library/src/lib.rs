@@ -38,9 +38,9 @@ pub use database::LibraryDatabase;
 pub use error::{LibraryError, Result};
 pub use model::*;
 pub use mutation::{
-    AppliedDeletions, Library, MergeTaskInput, OutgoingCursor, OutgoingDeletions,
-    ReceivedDeletions, SharedFileMerge, SyncedDeletion, MERGE_BACKUP, MERGE_LIBRARY,
-    merged_notes, reset_synced_deletions, translate_view,
+    AppliedEntries, EntryClock, EntryKind, EntryState, Library, MergeTaskInput, SharedEntry,
+    SharedFileMerge, MERGE_BACKUP, MERGE_LIBRARY, merged_notes, remove_item_tombstones,
+    reset_published_entries, translate_view,
 };
 
 /// Returns the name that is kept when two items become one: `incoming` when
