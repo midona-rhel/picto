@@ -455,7 +455,7 @@ change the session through its methods; no view owns another's state.
 **Shared UI** (`ui/`). One implementation of each control. The pieces every view relies on: layers
 by name (`layer.rs`), floating panels (`popover.rs`), focus and tab scopes
 (`focus.rs`), the context menu (`menu.rs`, `menu/`; in pop-up windows of
-its own on every system, see "Per platform"), dialogs (`modal.rs` with its
+its own where the system blurs behind them, see "Per platform"), dialogs (`modal.rs` with its
 `Host`, which plays a dialog's exit and gives the keyboard back,
 `modal::backdrop` and `modal::dialog_panel`, the one backdrop and panel;
 `confirm.rs`, `form.rs`),
