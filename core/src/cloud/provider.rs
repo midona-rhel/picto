@@ -184,7 +184,9 @@ impl DirectoryProvider {
     /// afterwards.
     ///
     /// The folder is touched only when it is a real folder (not a link) and
-    /// its `library.json`, if it has one, names this library. A file is
+    /// its `library.json`, if it has one, names this library. When the file
+    /// cannot be read, names no library or names another library, nothing is
+    /// removed and the error says which of the three it was. A file is
     /// removed only when its name and its place are those of a file that
     /// the sync writes: `library.json`, a snapshot and its manifest in
     /// `snapshots/`, an original in `blobs/f/<aa>/<bb>/`, a tombstone file in
@@ -213,15 +215,30 @@ impl DirectoryProvider {
         let manifest = folder.join("library.json");
         match std::fs::symlink_metadata(&manifest) {
             Ok(metadata) if metadata.file_type().is_file() => {
-                let named = std::fs::read(&manifest)
+                let bytes = std::fs::read(&manifest).map_err(|error| {
+                    format!(
+                        "The file library.json in the library's cloud folder cannot be read \
+                         ({error}); nothing was removed"
+                    )
+                })?;
+                let named = serde_json::from_slice::<serde_json::Value>(&bytes)
                     .ok()
-                    .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
                     .and_then(|value| value.get("library_id")?.as_str().map(str::to_owned));
-                if named.as_deref() != Some(library_id) {
-                    return Err(
-                        "The cloud folder does not hold this library's data; nothing was removed"
-                            .to_string(),
-                    );
+                match named.as_deref() {
+                    Some(named) if named == library_id => {}
+                    Some(other) => {
+                        return Err(format!(
+                            "The library's cloud folder holds the data of another library \
+                             ({other}); nothing was removed"
+                        ));
+                    }
+                    None => {
+                        return Err(
+                            "The file library.json in the library's cloud folder does not name \
+                             a library; nothing was removed"
+                                .to_string(),
+                        );
+                    }
                 }
                 remove_file(&manifest, "library.json", &mut removal);
             }
