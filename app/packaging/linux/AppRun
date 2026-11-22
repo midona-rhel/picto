@@ -1,18 +1,44 @@
 #!/bin/sh
 # The AppImage runtime starts this script, and this script starts Picto. The
-# program, `ffmpeg`, `ffprobe` and the shared libraries that the program needs
+# program, `ffmpeg`, `ffprobe` and the shared libraries that the build made
 # are in `usr/bin` beside this script.
 set -e
 here="$(dirname "$(readlink -f "$0")")"
 
 # When Picto quits with a downloaded update waiting, the old version replaces
-# its AppImage with the new one and runs the new one once with this variable
-# set, and waits for it to end (`src/desktop/linux.rs`; the updater of Picto
-# 0.6.19 and earlier does the same). Replacing the file was the whole
-# installation, so
-# there is nothing left to do, and the app must not start.
+# its AppImage with the new one, runs the new one once with this variable set,
+# and waits for it to end (`src/desktop/linux.rs`; the updater of Picto 0.6.19
+# and earlier does the same). Replacing the file was the whole installation,
+# so there is nothing left to do, and the app must not start.
 if [ "${APPIMAGE_EXIT_AFTER_INSTALL:-}" = "true" ]; then
 	exit 0
+fi
+
+# The program is linked against libraries of the system that the AppImage
+# does not hold: GTK 3 and WebKitGTK 4.1, which the sign-in window uses, and
+# others that every desktop system has. A system with the KDE desktop often
+# has no WebKitGTK 4.1. Without one of these libraries the program cannot be
+# loaded at all, and a user who started Picto with a double-click would see
+# nothing. So the libraries are looked for first (`ldd` prints "not found"
+# for each missing one), and when one is missing a message names it and says
+# which package holds WebKitGTK 4.1. The message goes to the terminal and to
+# the first dialog program that the system has.
+missing="$(ldd "$here/usr/bin/picto" 2>/dev/null | awk '/not found/ { print $1 }' | sort -u | tr '\n' ' ')"
+if [ -n "$missing" ]; then
+	message="Picto cannot start, because these libraries are not installed on this system: ${missing}
+Install WebKitGTK 4.1 and GTK 3 with the system's package manager, then start Picto again.
+Ubuntu and Debian: sudo apt install libwebkit2gtk-4.1-0
+Fedora: sudo dnf install webkit2gtk4.1
+Arch: sudo pacman -S webkit2gtk-4.1"
+	printf '%s\n' "$message" >&2
+	if command -v kdialog >/dev/null 2>&1; then
+		kdialog --title Picto --error "$message" || true
+	elif command -v zenity >/dev/null 2>&1; then
+		zenity --error --title=Picto --text="$message" || true
+	elif command -v xmessage >/dev/null 2>&1; then
+		xmessage "$message" || true
+	fi
+	exit 1
 fi
 
 exec "$here/usr/bin/picto" "$@"

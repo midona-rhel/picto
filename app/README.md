@@ -403,7 +403,14 @@ xkbcommon. The AppImage of Picto 0.6.19 and earlier needed none of them. On an U
 24.04 that has only the packages `libwebkit2gtk-4.1-0 libgtk-3-0t64
 libasound2t64 libfontconfig1 libxkbcommon-x11-0 libwayland-client0
 libvulkan1` and what they depend on, the AppImage starts; the packaging
-workflow checks that.
+workflow checks that. A system with the KDE desktop usually has no
+WebKitGTK 4.1. Without one of these libraries the program cannot be loaded,
+so `packaging/linux/AppRun` looks for them with `ldd` before it starts the
+program. When one is missing, it prints a message that names the missing
+libraries and the package that holds WebKitGTK 4.1, shows the same message
+with `kdialog`, `zenity` or `xmessage` if the system has one of them, and
+ends with exit code 1. That path has been run only with stand-in programs
+on macOS, not on a Linux system that lacks the library.
 
 The debug bundle that `run.sh` makes, `target/Picto GPUI.app`, is not a
 package. It has its own `Info.plist` inside `run.sh`, with another name and

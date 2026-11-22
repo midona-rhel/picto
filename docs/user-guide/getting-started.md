@@ -15,9 +15,13 @@ Download the latest release from the [releases page](https://github.com/midona-r
 FFmpeg is included in every package. On Windows and macOS nothing else needs to be installed.
 
 On Linux, Picto uses these libraries of the system: GTK 3, WebKitGTK 4.1 with libsoup 3, ALSA,
-D-Bus, xcb and xkbcommon. Most desktop systems have them. On Ubuntu 24.04 the packages are
-`libwebkit2gtk-4.1-0`, `libgtk-3-0t64`, `libasound2t64`, `libfontconfig1`, `libxkbcommon-x11-0`,
-`libwayland-client0` and `libvulkan1`.
+D-Bus, xcb and xkbcommon. Ubuntu and Xubuntu have all of them after a normal installation. A
+system with the KDE desktop, such as Kubuntu, usually has no WebKitGTK 4.1. When a library is
+missing, Picto does not start and shows a message that names the missing library and the package
+to install: `libwebkit2gtk-4.1-0` on Ubuntu and Debian, `webkit2gtk4.1` on Fedora, and
+`webkit2gtk-4.1` on Arch. On Ubuntu 24.04 the full list of packages is `libwebkit2gtk-4.1-0`,
+`libgtk-3-0t64`, `libasound2t64`, `libfontconfig1`, `libxkbcommon-x11-0`, `libwayland-client0`
+and `libvulkan1`.
 
 Only one Picto runs at a time. A second Picto that you start while Picto is open ends at once.
 

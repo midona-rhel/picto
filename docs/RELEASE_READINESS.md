@@ -112,7 +112,10 @@ What a user sees when starting a package for the first time is written for users
   because it is not signed. The user chooses **More info** and then **Run anyway**. Where Smart
   App Control is on, Windows blocks the installer and offers no way to run it.
 - Linux: the AppImage is a file the user makes executable. Nothing warns. It needs GTK 3 and
-  WebKitGTK 4.1 on the system.
+  WebKitGTK 4.1 on the system. The desktop images of Ubuntu 24.04 and Xubuntu 24.04 hold both;
+  the one of Kubuntu 24.04 holds no WebKitGTK 4.1. When a library is missing, the AppImage's
+  start script (`app/packaging/linux/AppRun`) shows a message that names the library and the
+  package to install, and Picto does not start.
 
 What a user who upgrades from Picto 0.6.19 or earlier keeps and loses:
 
