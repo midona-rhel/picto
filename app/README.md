@@ -294,7 +294,7 @@ GPUI is `gpui-pre` and `gpui-pre-platform` `=0.3.12`, a crates.io snapshot of
 upstream GPUI pinned exactly (the `gpui` crate has not been published since
 0.2.2, and snapshots promise no API stability). Six of its crates are
 vendored under `vendor/` and patched in with `[patch.crates-io]`: a backdrop
-blur (Metal and wgpu; the DirectX renderer ignores it), CSS-like cut-out
+blur (in the Metal, wgpu and DirectX renderers), CSS-like cut-out
 shadows, nearest-neighbour sampling, a native file drag the app starts
 itself (`Window::start_platform_drag`, with an OLE source on Windows and an
 XDND source on X11, whose file-list encoders the app's Copy uses too), what
@@ -1101,7 +1101,7 @@ app.
 
 | | Windows | Linux X11 | Linux Wayland |
 | --- | --- | --- | --- |
-| Backdrop blur | none (DirectX); a more opaque glass | yes | yes |
+| Backdrop blur | yes (DirectX) | yes | yes |
 | Frosted material behind the sidebar and inspector | Acrylic, off by default | none | none |
 | Context menus | in the window | in the window | in the window |
 | Application menu | titlebar button | titlebar button | titlebar button |
@@ -1295,7 +1295,6 @@ Not done:
 - GPUI cannot scale an element's contents, clip a zoomed image to rounded
   corners, or draw radial gradients, masks or blend modes; where Picto 0.6.19
   draws with those, the drawing differs.
-- The DirectX renderer draws no blur.
 - On Linux the sidebar and the inspector are always solid.
 - Detail window always-on-top on Linux.
 - Logins: FANBOX keeps only the User-Agent as its headers; password fields
