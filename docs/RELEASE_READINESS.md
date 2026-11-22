@@ -123,9 +123,8 @@ What a user who upgrades from Picto 0.6.19 or earlier keeps and loses:
   application settings. The application data folder (`picto` in the per-user application data
   folder), with the downloaded AI models. The site logins, which are kept in the system keychain
   under the same names.
-- Listed again, opened by the user: the app copies the older version's list of libraries once,
-  on its first start. It does not open the library that was open last. The user picks a library
-  from the list, and the app asks once per library whether it may open that library directly.
+- The list of libraries: the app copies the older version's list of libraries once, on its
+  first start, and opens the library that was open last.
 - Not carried over: what the older version kept per machine in its window's storage, which is
   the window's place and size, the widths of the sidebar and the inspector, the saved filters,
   the recent tags and folders, the keyboard preset and the changed shortcuts, the language and
