@@ -340,6 +340,8 @@ impl Render for LibraryCover {
 #[cfg(test)]
 mod tests {
     use super::cover_frame;
+    #[cfg(unix)]
+    use crate::paths::Canonical as _;
     use crate::cover::Crop;
 
     /// The cover is written only into the library's folder. A cover file that
@@ -350,7 +352,7 @@ mod tests {
     fn the_cover_is_written_only_inside_the_library() {
         let library = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
-        let root = library.path().canonicalize().unwrap();
+        let root = library.path().canonical().unwrap();
         let thumbnail = root.join("blobs/t/ab/abcd.jpg");
         std::fs::create_dir_all(thumbnail.parent().unwrap()).unwrap();
         std::fs::write(&thumbnail, b"jpeg").unwrap();

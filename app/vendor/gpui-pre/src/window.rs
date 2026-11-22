@@ -3365,11 +3365,43 @@ impl Window {
     /// - macOS: `true` unless the user has turned on Reduce Transparency.
     /// - Windows: `true` on Windows 10 version 1809 (build 17763) and later,
     ///   in a window that is drawn through DirectComposition.
-    /// - Linux: always `false`. The Linux windows do not answer the question
-    ///   yet, although a Wayland compositor with a blur protocol does blur
-    ///   behind a `Blurred` window.
+    /// - Wayland: `true` when the compositor has the ext-background-effect
+    ///   protocol and has announced that it can blur, or has the kde-blur
+    ///   protocol.
+    /// - X11: `true` when a compositing manager is running and it has put
+    ///   the property `_KDE_NET_WM_BLUR_BEHIND_REGION` on the root window,
+    ///   which is how KWin says that its blur effect is loaded.
     pub fn is_background_blur_supported(&self) -> bool {
         self.platform_window.is_background_blur_supported()
+    }
+
+    /// Whether a window with a transparent background shows what is behind
+    /// it. It is `false` only on an X11 screen without a compositing manager,
+    /// where the transparent parts of a window are drawn black.
+    pub fn is_transparency_supported(&self) -> bool {
+        self.platform_window.is_transparency_supported()
+    }
+
+    /// Names the rounded rectangle of this window that holds its content:
+    /// `region` in the window's coordinates, with corners of `radius`. This
+    /// is for a transparent pop-up window that draws one panel and leaves
+    /// room around it for the panel's shadow. `None` takes the region away.
+    ///
+    /// - Wayland and X11 with a compositing manager: a window whose
+    ///   background appearance is [`WindowBackgroundAppearance::Blurred`]
+    ///   has only this region blurred. Without a region, the area inside the
+    ///   client inset is blurred. The window receives the pointer only in
+    ///   the region's rectangle, and the pointer reaches what is behind the
+    ///   rest of the window.
+    /// - X11 without a compositing manager: the window is cut to this
+    ///   region with the Shape extension, because the transparent room
+    ///   around the panel would be drawn black.
+    /// - macOS and Windows: nothing.
+    pub fn set_content_region(&self, region: Option<(Bounds<Pixels>, Pixels)>) {
+        let zoom = self.ui_zoom;
+        self.platform_window.set_content_region(
+            region.map(|(bounds, radius)| (zoomed_out_bounds(bounds, zoom), radius * zoom)),
+        );
     }
 
     /// Mark the window as dirty at the platform level.

@@ -200,6 +200,7 @@ pub fn write_thumbnail(root: &Path, jpeg: &Path, png: &[u8]) -> Result<(), Strin
 
 #[cfg(test)]
 mod tests {
+    use crate::paths::Canonical as _;
     use super::{Picture, rgba_from_biplanar, write_thumbnail};
 
     #[test]
@@ -218,7 +219,7 @@ mod tests {
     #[test]
     fn a_frame_becomes_the_png_thumbnail_and_the_jpg_goes() {
         let folder = tempfile::tempdir().unwrap();
-        let root = folder.path().canonicalize().unwrap();
+        let root = folder.path().canonical().unwrap();
         let jpeg = root.join("ab/cd/abcd.jpg");
         std::fs::create_dir_all(jpeg.parent().unwrap()).unwrap();
         std::fs::write(&jpeg, b"old").unwrap();
@@ -243,7 +244,7 @@ mod tests {
     fn a_thumbnail_is_written_only_inside_the_library() {
         let library = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
-        let root = library.path().canonicalize().unwrap();
+        let root = library.path().canonical().unwrap();
         std::fs::create_dir_all(root.join("blobs")).unwrap();
         std::os::unix::fs::symlink(elsewhere.path(), root.join("blobs/t")).unwrap();
         std::fs::write(elsewhere.path().join("abcd.jpg"), b"kept").unwrap();

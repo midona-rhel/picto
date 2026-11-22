@@ -154,7 +154,7 @@ pub fn join(
             });
             match result {
                 Ok(library_id) => {
-                    let root = target.canonicalize().unwrap_or(target);
+                    let root = target.canonical().unwrap_or(target);
                     let path = root.to_string_lossy().into_owned();
                     crate::state::update(cx, |state| {
                         history::add(&mut state.library_history, &mut state.last_library, &path);

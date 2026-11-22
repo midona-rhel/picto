@@ -1,5 +1,5 @@
 use std::{
-    cell::{RefCell, RefMut},
+    cell::{Cell, RefCell, RefMut},
     hash::Hash,
     os::{
         fd::{AsRawFd, BorrowedFd, FromRawFd as _, RawFd},
@@ -259,6 +259,9 @@ pub struct Globals {
     pub kde_blur_manager: Option<org_kde_kwin_blur_manager::OrgKdeKwinBlurManager>,
     pub background_effects_manager:
         Option<ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1>,
+    /// Whether the compositor has announced, with the `capabilities` event of
+    /// ext-background-effect, that it can blur.
+    pub background_blur_capability: Rc<Cell<bool>>,
     pub text_input_manager: Option<zwp_text_input_manager_v3::ZwpTextInputManagerV3>,
     pub gesture_manager: Option<zwp_pointer_gestures_v1::ZwpPointerGesturesV1>,
     pub dialog: Option<xdg_wm_dialog_v1::XdgWmDialogV1>,
@@ -310,6 +313,7 @@ impl Globals {
             layer_shell: globals.bind(&qh, 1..=5, ()).ok(),
             kde_blur_manager: globals.bind(&qh, 1..=1, ()).ok(),
             background_effects_manager: globals.bind(&qh, 1..=1, ()).ok(),
+            background_blur_capability: Rc::new(Cell::new(false)),
             text_input_manager: globals.bind(&qh, 1..=1, ()).ok(),
             gesture_manager: globals.bind(&qh, 1..=3, ()).ok(),
             dialog: globals.bind(&qh, dialog_v..=dialog_v, ()).ok(),
@@ -1680,7 +1684,6 @@ delegate_noop!(WaylandClientStatePtr: ignore zxdg_decoration_manager_v1::ZxdgDec
 delegate_noop!(WaylandClientStatePtr: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
 delegate_noop!(WaylandClientStatePtr: ignore xdg_positioner::XdgPositioner);
 delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur_manager::OrgKdeKwinBlurManager);
-delegate_noop!(WaylandClientStatePtr: ignore ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1);
 delegate_noop!(WaylandClientStatePtr: ignore ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1);
 delegate_noop!(WaylandClientStatePtr: ignore zwp_text_input_manager_v3::ZwpTextInputManagerV3);
 delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur::OrgKdeKwinBlur);
@@ -1930,6 +1933,33 @@ impl Dispatch<xdg_popup::XdgPopup, ObjectId> for WaylandClientStatePtr {
     }
 }
 
+impl Dispatch<ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1, ()>
+    for WaylandClientStatePtr
+{
+    fn event(
+        this: &mut Self,
+        _: &ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1,
+        event: <ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        // The compositor sends its capabilities when the global is bound and again
+        // whenever they change.
+        if let ext_background_effect_manager_v1::Event::Capabilities {
+            flags: WEnum::Value(flags),
+        } = event
+        {
+            let client = this.get_client();
+            let state = client.borrow();
+            state
+                .globals
+                .background_blur_capability
+                .set(flags.contains(ext_background_effect_manager_v1::Capability::Blur));
+        }
+    }
+}
+
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for WaylandClientStatePtr {
     fn event(
         _: &mut Self,
@@ -2107,6 +2137,16 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                 if let Some(window) = state.keyboard_focused_window.clone() {
                     drop(state);
                     window.set_focused(true);
+                    // A popup that grabs the keyboard takes it from the window it is
+                    // anchored to. That window counts as focused while the keyboard is in
+                    // one of its popups.
+                    let mut parent = window.popup_parent();
+                    while let Some(window) = parent {
+                        if !window.is_focused() {
+                            window.set_focused(true);
+                        }
+                        parent = window.popup_parent();
+                    }
                 }
             }
             wl_keyboard::Event::Leave { surface, .. } => {
@@ -2122,9 +2162,37 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                         compose.reset();
                     }
                     state.pre_edit_text.take();
+                    let executor = state.globals.executor.clone();
                     drop(state);
                     window.handle_ime(ImeInput::DeleteText);
-                    window.set_focused(false);
+                    if window.popup_parent().is_none() && !window.has_popup() {
+                        window.set_focused(false);
+                    } else {
+                        // The keyboard is moving between a window and one of its popups,
+                        // or away from both. The compositor says where it went with the
+                        // `enter` event that follows. The windows are therefore told that
+                        // they lost the keyboard only after that event has been handled,
+                        // and a window whose popup now has the keyboard is not told.
+                        let client = this.clone();
+                        executor
+                            .spawn(async move {
+                                let Some(client) = client.try_get_client() else {
+                                    return;
+                                };
+                                let focused = client.borrow().keyboard_focused_window.clone();
+                                let mut left = Some(window);
+                                while let Some(window) = left {
+                                    let keeps = focused.as_ref().is_some_and(|focused| {
+                                        focused.is_or_descends_from(&window)
+                                    });
+                                    if !keeps && window.is_focused() {
+                                        window.set_focused(false);
+                                    }
+                                    left = window.popup_parent();
+                                }
+                            })
+                            .detach();
+                    }
                 }
             }
             wl_keyboard::Event::Modifiers {

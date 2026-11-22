@@ -29,7 +29,7 @@ impl Manager {
             ))
     }
 
-    pub(super) fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
         let mut list = div().flex().flex_col().gap(px(2.));
         if self.rows.is_empty() {
@@ -131,13 +131,27 @@ impl Manager {
                     .text_color(theme.text_tertiary())
                     .child(t("On this device")),
             )
+            // The list scrolls when it holds more libraries than fit, and
+            // its scrollbar is drawn at its right edge.
             .child(
                 div()
-                    .id("library-rows")
+                    .relative()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .child(list),
+                    .child(
+                        div()
+                            .id("library-rows")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.list_scroll)
+                            .child(list),
+                    )
+                    .child(ui::scrollbar(
+                        "library-rows-scrollbar",
+                        &self.list_scroll,
+                        window,
+                        cx,
+                    )),
             )
     }
 

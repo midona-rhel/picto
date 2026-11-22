@@ -2,7 +2,10 @@
 //! as the column, one under the other. The media view, Quick Look and the
 //! detail window use this when the item they show is a collection.
 //!
-//! A member is first drawn from its thumbnail. After it has been visible
+//! A member is first drawn from its thumbnail. A video member is drawn from
+//! the picture of its first frame when the library has one
+//! ([`super::picture_while_loading`]), so the word thumbnail in this file
+//! means that picture for such a member. After a member has been visible
 //! for 200 ms, its full media is loaded. For an image, the original file is
 //! decoded and fades in over the thumbnail. For anything else (a PDF, a
 //! video and so on), a media surface is created under the thumbnail, and
@@ -533,6 +536,7 @@ impl GroupReader {
                 natural: member.media.natural,
                 path: member.media.path.clone(),
                 mime: member.media.mime.clone(),
+                make_first_frame: member.media.make_first_frame.clone(),
             };
             let surface = cx.new(|cx| {
                 let mut options = super::options(cx, false, true);

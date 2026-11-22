@@ -135,6 +135,16 @@ const CONTENT_BELOW: f32 = 6.;
 /// The margin in pixels below the whole header. It is used only when the list
 /// of tiles is collapsed and there is no "Content (n)" label.
 const CONTAINER_BELOW: f32 = 4.;
+/// Returns how many pixels the outer edge of a tile's selection ring is
+/// outside the tile's card, for tiles that are `gap` pixels apart. It is
+/// 5px: the ring's 2px and 3px between the ring and the card. Where the
+/// tiles are closer together than 12px, it is less, so that 2px stay free
+/// between the rings of two neighbouring tiles and the rings never touch.
+/// It is never less than the ring's own 2px.
+fn ring_reach(gap: f32) -> f32 {
+    (gap / 2. - 1.).clamp(2., 5.)
+}
+
 /// A tile's card. Its height is 75% of the tile's width plus 10px, and there
 /// are 12px between the card and the name below it.
 const CARD_EXTRA: f32 = 10.;
@@ -841,7 +851,7 @@ impl GridView {
                 (x, y, width, card_h),
                 cover,
                 renaming,
-                ringed,
+                ringed.then(|| ring_reach(geometry.gap)),
                 card,
                 window,
                 cx,
@@ -857,7 +867,7 @@ impl GridView {
         (x, y, width, card_h): (f32, f32, f32, f32),
         cover: Option<Cover>,
         renaming: Option<Entity<TextInput>>,
-        ringed: bool,
+        ring: Option<f32>,
         card: theme::FolderCard,
         window: &Window,
         cx: &mut Context<Self>,
@@ -1030,17 +1040,19 @@ impl GridView {
             .flex()
             .flex_col()
             .items_center();
-        if ringed {
+        if let Some(reach) = ring {
             // The ring drawn around a tile that is selected or is the drop
-            // target: a border 2px thick in the theme's primary colour, with
-            // 3px between it and the card.
+            // target: a border 2px thick in the theme's primary colour. Its
+            // outer edge is `reach` pixels outside the card on every side
+            // (`ring_reach`), which leaves 3px between the ring and the card
+            // where the tiles are far enough apart.
             tile = tile.child(
                 div()
                     .absolute()
-                    .left(px(-5.))
-                    .top(px(-5.))
-                    .w(px(width + 10.))
-                    .h(px(width * 0.75 + 16. + 4.))
+                    .left(px(-reach))
+                    .top(px(-reach))
+                    .w(px(width + 2. * reach))
+                    .h(px(card_h + 2. * reach))
                     .rounded(px(10.))
                     .border_2()
                     .border_color(theme.primary()),
