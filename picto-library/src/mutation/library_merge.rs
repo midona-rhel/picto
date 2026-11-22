@@ -5,8 +5,8 @@
 //! this library's tags and folders.
 //!
 //! The merge itself is a foreground task (`tasks.rs`). Its items are imported
-//! by `Library::ingest_batch_for_task` and
-//! `Library::ingest_collection_for_task`, its tags, folders and smart folders
+//! by `Library::ingest_merged_batch_for_task` and
+//! `Library::ingest_merged_collection_for_task`, its tags, folders and smart folders
 //! are created by `ensure_tag_definitions_for_task`,
 //! `create_folder_like_for_task` and `create_smart_folder_for_task`, and
 //! undoing the task takes all of it back.

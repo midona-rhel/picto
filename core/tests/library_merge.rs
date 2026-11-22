@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use picto_core::library_application::LibraryApplication;
 use picto_core::library_merge::{self, MergeRequest};
 use picto_library::predicate::{FilterClause, FilterExpr, SetMatchMode, ViewQuerySpec};
+use picto_library::selection::SelectionTarget;
 use picto_library::{
     FolderId, ImmutableMediaFacts, Lifecycle, PreparedCollectionImport, PreparedImport, Rating,
     RootId, RootKind, SmartFolderInput, TaskId, TaskState,
@@ -98,7 +99,7 @@ fn prepared(application: &LibraryApplication, file: &File<'_>) -> PreparedImport
         folders: file.folders.to_vec(),
         source_urls: file.urls.iter().map(|url| (*url).to_owned()).collect(),
         source_identity: None,
-        imported_at_ms: 1_700_000_000_000,
+        imported_at_ms: IMPORTED_AT,
         captured_at_ms: None,
     }
 }
@@ -118,11 +119,38 @@ const INBOX: [u8; 3] = [1, 2, 3];
 const TRASH: [u8; 3] = [4, 5, 6];
 const PAGE_ONE: [u8; 3] = [7, 8, 9];
 const PAGE_TWO: [u8; 3] = [10, 11, 12];
+const EDITED: [u8; 3] = [13, 14, 15];
+
+/// The time at which every file of the test libraries is imported.
+const IMPORTED_AT: i64 = 1_700_000_000_000;
+/// The time at which the other library's item "Edited later" was changed.
+const EDITED_AT: i64 = 1_750_000_000_000;
+/// The time at which the other library's collection was changed.
+const SET_CHANGED_AT: i64 = 1_760_000_000_000;
 
 /// Makes the library that is kept: two files that the other library holds
-/// too, and one that only this library holds.
+/// too, one that only this library holds, and a smart folder for the items
+/// that were changed after the middle of the time between the import and the
+/// first change in the other library.
 fn kept_library(folder: &Path) -> LibraryApplication {
     let application = LibraryApplication::create(folder.join("Kept.library")).unwrap();
+    application
+        .library()
+        .create_smart_folder(SmartFolderInput {
+            name: "Changed lately".into(),
+            parent_id: None,
+            icon: None,
+            color: None,
+            notes: None,
+            view: ViewQuerySpec {
+                filter: FilterExpr::All(vec![FilterExpr::Clause(FilterClause::ModifiedAt {
+                    minimum_ms: Some(((IMPORTED_AT + EDITED_AT) / 2) as u64),
+                    maximum_ms: None,
+                })]),
+                sort: Default::default(),
+            },
+        })
+        .unwrap();
     let (shared, _) = application.library().create_folder("Shared", None).unwrap();
     add(
         &application,
@@ -148,8 +176,10 @@ fn kept_library(folder: &Path) -> LibraryApplication {
 
 /// Makes the other library and closes it, as Picto closes a library. It
 /// holds the two shared files with other values, a file in the Inbox, a file
-/// in the Trash, a collection of two files, a folder with a colour that
-/// gives its items a tag, a smart folder and a tag that no item carries.
+/// in the Trash, a file that was changed after its import, a collection of
+/// two files, a folder with a colour that gives its items a tag, a smart
+/// folder and a tag that no item carries. Each file of the collection has a
+/// note, and the collection has a note of its own that was written later.
 fn other_library(folder: &Path) -> PathBuf {
     let root = folder.join("Other.library");
     let application = LibraryApplication::create(&root).unwrap();
@@ -164,7 +194,7 @@ fn other_library(folder: &Path) -> PathBuf {
         .ensure_tag_definitions(&["series:from-folder".into()])
         .unwrap();
     library
-        .set_folder_auto_tags(deep, auto_tags, 1_700_000_000_000)
+        .set_folder_auto_tags(deep, auto_tags, IMPORTED_AT)
         .unwrap();
     library
         .ensure_tag_definitions(&["unused-b".into()])
@@ -203,13 +233,25 @@ fn other_library(folder: &Path) -> PathBuf {
             ..File::new("In the trash", TRASH)
         },
     );
+    let edited = add(&application, File::new("Edited later", EDITED));
+    library
+        .set_notes(
+            &SelectionTarget::Explicit {
+                root_ids: vec![edited],
+            },
+            Some("a note written after the import".into()),
+            EDITED_AT,
+        )
+        .unwrap();
     let pages = [
         File {
+            notes: Some("the note of page one"),
             tags: &["b"],
             folders: &[only],
             ..File::new("Page one", PAGE_ONE)
         },
         File {
+            notes: Some("the note of page two"),
             tags: &["b"],
             folders: &[only],
             ..File::new("Page two", PAGE_TWO)
@@ -218,14 +260,23 @@ fn other_library(folder: &Path) -> PathBuf {
     .iter()
     .map(|file| prepared(&application, file))
     .collect();
-    library
+    let (set, _) = library
         .ingest_collection(&PreparedCollectionImport {
             members: pages,
             cover_index: 0,
             existing_root_id: None,
             name: Some("A set".into()),
-            modified_at_ms: 1_700_000_000_000,
+            modified_at_ms: IMPORTED_AT,
         })
+        .unwrap();
+    library
+        .set_notes(
+            &SelectionTarget::Explicit {
+                root_ids: vec![set],
+            },
+            Some("the set's own note".into()),
+            SET_CHANGED_AT,
+        )
         .unwrap();
     let b = library
         .tags()
@@ -264,6 +315,10 @@ struct Item {
     status: String,
     rating: String,
     notes: Option<String>,
+    /// The note of each file, in the order of `files`.
+    file_notes: Vec<Option<String>>,
+    /// The time of the item's last change.
+    changed_at: i64,
     urls: Vec<String>,
     tags: BTreeSet<String>,
     folders: BTreeSet<String>,
@@ -334,6 +389,12 @@ fn describe(application: &LibraryApplication) -> Described {
                 status: format!("{:?}", details.lifecycle),
                 rating: format!("{:?}", details.rating),
                 notes: details.root.notes.clone(),
+                file_notes: details
+                    .media
+                    .iter()
+                    .map(|media| media.media_notes.clone())
+                    .collect(),
+                changed_at: details.root.modified_at_ms,
                 urls: details.root.source_urls.clone(),
                 tags: details
                     .tag_ids
@@ -466,8 +527,8 @@ fn a_merge_puts_everything_of_both_libraries_into_the_kept_one() {
         .unwrap(),
         library_merge::MergeSummary {
             name: "Other".into(),
-            items: 5,
-            files: 6,
+            items: 6,
+            files: 7,
         }
     );
     let task = start(&kept, &other);
@@ -483,7 +544,7 @@ fn a_merge_puts_everything_of_both_libraries_into_the_kept_one() {
             .find(|item| item.name == name)
             .unwrap_or_else(|| panic!("no item named {name}: {:#?}", after.items))
     };
-    assert_eq!(after.items.len(), 6, "{:#?}", after.items);
+    assert_eq!(after.items.len(), 7, "{:#?}", after.items);
 
     // A file that both libraries hold is one item. It keeps the kept
     // library's name, rating and notes, and has the tags, the folders and
@@ -491,6 +552,7 @@ fn a_merge_puts_everything_of_both_libraries_into_the_kept_one() {
     let shared = item("Kept name");
     assert_eq!(shared.files, [hash_of(SHARED)]);
     assert_eq!(shared.rating, "Three");
+    assert_eq!(shared.changed_at, IMPORTED_AT);
     assert_eq!(shared.notes.as_deref(), Some("the kept library's note"));
     assert_eq!(
         shared.tags,
@@ -515,21 +577,50 @@ fn a_merge_puts_everything_of_both_libraries_into_the_kept_one() {
     assert_eq!(item("In the inbox").status, "Inbox");
     assert_eq!(item("In the inbox").tags, names(&["b"]));
     assert_eq!(item("In the trash").status, "Trash");
+
+    // An item that was changed after its import arrives with the time of
+    // that change, and not with the time of its import.
+    let edited = item("Edited later");
+    assert_eq!(edited.changed_at, EDITED_AT);
+    assert_eq!(
+        edited.notes.as_deref(),
+        Some("a note written after the import")
+    );
     assert_eq!(item("Only in kept").status, "Active");
 
     let set = item("A set");
     assert!(set.collection);
     assert_eq!(set.files, [hash_of(PAGE_ONE), hash_of(PAGE_TWO)]);
     assert_eq!(set.folders, names(&["Only B"]));
+    // The collection arrives with its own note, which differs from the note
+    // of its cover file, with the note of each of its files, and with the
+    // time of its last change.
+    assert_eq!(set.notes.as_deref(), Some("the set's own note"));
+    assert_eq!(
+        set.file_notes,
+        [
+            Some("the note of page one".to_owned()),
+            Some("the note of page two".to_owned())
+        ]
+    );
+    assert_eq!(set.changed_at, SET_CHANGED_AT);
 
     assert!(after
         .folders
         .contains(&("Only B".to_owned(), Some("#123456".to_owned()))));
     assert!(after.tags.contains("unused-b"));
-    // The smart folder's rule names the kept library's tag `b`, which the
-    // shared file, the Inbox file and the collection carry. A smart folder
-    // counts the active items only.
-    assert_eq!(after.smart_folders, [("Tagged b".to_owned(), 2)]);
+    // The kept library's smart folder for items that were changed lately
+    // holds the item that was changed after its import and the collection.
+    // The other library's smart folder names the kept library's tag `b`,
+    // which the shared file, the Inbox file and the collection carry. A
+    // smart folder counts the active items only.
+    assert_eq!(
+        after.smart_folders,
+        [
+            ("Changed lately".to_owned(), 2),
+            ("Tagged b".to_owned(), 2)
+        ]
+    );
 
     // The files and the thumbnails were copied.
     for color in [INBOX, TRASH, PAGE_ONE, PAGE_TWO] {

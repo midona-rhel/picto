@@ -13,28 +13,21 @@ impl Library {
         &self,
         inputs: &[PreparedImport],
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
-        self.ingest_batch_with(inputs, false, None, ingest::Held::Refresh)
+        self.ingest_batch_with(inputs, false, None, &|_| ingest::Held::Refresh)
     }
 
     /// Import items for a foreground task, which records the roots it
     /// creates and what it gives to existing ones, so that it can be undone.
-    /// For a task that merges another library, an item that the library
-    /// already holds gets what [`ingest::Held::Merge`] names, and the new
-    /// items are not queued for automatic tagging.
     pub fn ingest_batch_for_task(
         &self,
         inputs: &[PreparedImport],
         task: crate::TaskId,
         auto_tag: bool,
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
-        let options = self.task(task)?.and_then(|record| {
-            serde_json::from_str::<serde_json::Value>(&record.input_json).ok()
+        let grouped = self.task(task)?.is_some_and(|record| {
+            serde_json::from_str::<serde_json::Value>(&record.input_json)
+                .ok().and_then(|value| value["group_files"].as_bool()).unwrap_or(false)
         });
-        let grouped = options
-            .as_ref()
-            .and_then(|value| value["group_files"].as_bool())
-            .unwrap_or(false);
-        let held = held_for_task(options.as_ref());
         if grouped && !inputs.is_empty() {
             if inputs.len() > ingest::MAX_INGEST_BATCH {
                 return Err(LibraryError::InvalidInput("task ingest batch is too large".into()));
@@ -42,30 +35,47 @@ impl Library {
             let output = self.ingest_collection_with(&PreparedCollectionImport {
                 members: inputs.to_vec(), cover_index: 0, existing_root_id: None,
                 name: None, modified_at_ms: inputs[0].imported_at_ms,
-            }, auto_tag, Some(task))?;
+            }, auto_tag, Some(task), None)?;
             return Ok(vec![output; inputs.len()]);
         }
-        self.ingest_batch_with(
-            inputs,
-            auto_tag && held == ingest::Held::Refresh,
-            Some(task),
-            held,
-        )
+        self.ingest_batch_with(inputs, auto_tag, Some(task), &|_| ingest::Held::Refresh)
+    }
+
+    /// Imports items of another library for a task that merges that library.
+    /// An item that the library already holds gets what
+    /// [`ingest::Held::Merge`] names. A new item gets the time of its last
+    /// change from the other library, and it is not queued for automatic
+    /// tagging. The task records what it creates and gives, so that the merge
+    /// can be undone.
+    pub fn ingest_merged_batch_for_task(
+        &self,
+        inputs: &[crate::MergedImport],
+        task: crate::TaskId,
+    ) -> Result<Vec<(RootId, MutationReceipt)>> {
+        let items = inputs
+            .iter()
+            .map(|input| input.item.clone())
+            .collect::<Vec<_>>();
+        self.ingest_batch_with(&items, false, Some(task), &|index| ingest::Held::Merge {
+            modified_at_ms: inputs[index].modified_at_ms,
+        })
     }
 
     pub fn ingest_batch_with_auto_tags(
         &self,
         inputs: &[PreparedImport],
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
-        self.ingest_batch_with(inputs, true, None, ingest::Held::Refresh)
+        self.ingest_batch_with(inputs, true, None, &|_| ingest::Held::Refresh)
     }
 
+    /// Imports `inputs` in one publication. `held` says, for the input at an
+    /// index, what an item gets that the library already holds.
     fn ingest_batch_with(
         &self,
         inputs: &[PreparedImport],
         auto_tag: bool,
         task: Option<crate::TaskId>,
-        held: ingest::Held,
+        held: &dyn Fn(usize) -> ingest::Held,
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
         if inputs.is_empty() {
             return Ok(Vec::new());
@@ -89,8 +99,9 @@ impl Library {
             let mut affected = RoaringBitmap::new();
             let mut placed = Vec::new();
             let mut rated = Vec::new();
-            for input in inputs {
-                let output = ingest::insert_one(transaction, revision, next, input, task, held)?;
+            for (index, input) in inputs.iter().enumerate() {
+                let output =
+                    ingest::insert_one(transaction, revision, next, input, task, held(index))?;
                 next = output.snapshot;
                 root_ids.push(output.root_id);
                 placed.extend(output.placed);
@@ -187,7 +198,7 @@ impl Library {
         &self,
         input: &PreparedCollectionImport,
     ) -> Result<(RootId, MutationReceipt)> {
-        self.ingest_collection_with(input, false, None)
+        self.ingest_collection_with(input, false, None, None)
     }
 
     /// Imports a collection for a foreground task, as
@@ -198,25 +209,44 @@ impl Library {
         task: crate::TaskId,
         auto_tag: bool,
     ) -> Result<(RootId, MutationReceipt)> {
-        self.ingest_collection_with(input, auto_tag, Some(task))
+        self.ingest_collection_with(input, auto_tag, Some(task), None)
+    }
+
+    /// Imports a collection of another library for a task that merges that
+    /// library. A file that the library already holds gets what
+    /// [`ingest::Held::Merge`] names. A new collection gets the collection's
+    /// own note and the time of its last change from the other library, and
+    /// it is not queued for automatic tagging.
+    pub fn ingest_merged_collection_for_task(
+        &self,
+        input: &crate::MergedCollectionImport,
+        task: crate::TaskId,
+    ) -> Result<(RootId, MutationReceipt)> {
+        self.ingest_collection_with(&input.collection, false, Some(task), Some(&input.notes))
     }
 
     pub fn ingest_collection_with_auto_tags(
         &self,
         input: &PreparedCollectionImport,
     ) -> Result<(RootId, MutationReceipt)> {
-        self.ingest_collection_with(input, true, None)
+        self.ingest_collection_with(input, true, None, None)
     }
 
     /// Import a post's files as one collection. A file the library already
     /// holds is never copied: a loose item joins the new collection (as
     /// grouping would). Existing collections sharing any of its files combine
     /// with the post, keeping each original set complete without copying media.
+    ///
+    /// `merged_notes` is given for a collection of another library that a
+    /// merge imports. It is the collection's own note there, which a new
+    /// collection gets. Without it, a new collection gets the note of its
+    /// cover file.
     fn ingest_collection_with(
         &self,
         input: &PreparedCollectionImport,
         auto_tag: bool,
         task: Option<crate::TaskId>,
+        merged_notes: Option<&Option<String>>,
     ) -> Result<(RootId, MutationReceipt)> {
         if input.members.is_empty() {
             return Err(LibraryError::InvalidInput(
@@ -237,11 +267,13 @@ impl Library {
             // that the task has built so far, so that a later batch finds it,
             // also after a pause and after the library was opened again.
             let mut grouped = input.clone();
-            let mut held = ingest::Held::Refresh;
+            let held = match merged_notes {
+                Some(_) => ingest::Held::Merge { modified_at_ms: input.modified_at_ms },
+                None => ingest::Held::Refresh,
+            };
             let group_key = if let Some(task) = task {
                 let options: String = transaction.query_row("SELECT input_json FROM task WHERE task_id = ?1", [task.0], |row| row.get(0))?;
                 let options: serde_json::Value = serde_json::from_str(&options)?;
-                held = held_for_task(Some(&options));
                 if options["group_files"].as_bool() == Some(true) {
                     grouped.name = options["collection_name"].as_str().map(str::to_owned);
                     let key = format!("task:{}:collection", task.0);
@@ -377,7 +409,10 @@ impl Library {
                                 .is_none()
                                 .then(|| input.name.clone())
                                 .flatten(),
-                            notes: input.members[input.cover_index].notes.clone(),
+                            notes: match merged_notes {
+                                Some(notes) => notes.clone(),
+                                None => input.members[input.cover_index].notes.clone(),
+                            },
                             modified_at_ms: input.modified_at_ms,
                         },
                         true,
@@ -416,7 +451,7 @@ impl Library {
                 affected.iter().map(RootId),
             )?;
             crate::smart::settle_affected(transaction, &mut next, &affected)?;
-            if auto_tag && held == ingest::Held::Refresh && !created_root_ids.is_empty() {
+            if auto_tag && !created_root_ids.is_empty() {
                 ingest::enqueue_ai_tag_roots(
                     transaction,
                     std::iter::once(published_root),
@@ -469,17 +504,6 @@ impl Library {
             ))
         })?;
         Ok((collection_id, receipt))
-    }
-}
-
-/// Returns what a task's import gives an item that the library already
-/// holds. `options` is the task's stored input. A task that merges another
-/// library gives what [`ingest::Held::Merge`] names.
-fn held_for_task(options: Option<&serde_json::Value>) -> ingest::Held {
-    if options.is_some_and(|options| options.get(super::library_merge::MERGE_LIBRARY).is_some()) {
-        ingest::Held::Merge
-    } else {
-        ingest::Held::Refresh
     }
 }
 

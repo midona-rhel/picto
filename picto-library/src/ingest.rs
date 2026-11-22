@@ -47,7 +47,12 @@ pub(crate) enum Held {
     /// one. The item keeps its name, its dates and its status. It gets the
     /// import's tags, folders and source links, the import's notes when it
     /// has none, and the import's rating when it has none.
-    Merge,
+    ///
+    /// When the library does not hold the item yet, the new item gets
+    /// `modified_at_ms`, the time of the item's last change in the other
+    /// library, as the time of its last change. An ordinary import gives a
+    /// new item the time of its import.
+    Merge { modified_at_ms: i64 },
 }
 
 /// Import one file. One file is one media item: an import whose source item,
@@ -131,7 +136,7 @@ pub(crate) fn insert_one(
         let mut resources = vec!["roots".to_owned(), "tags".to_owned()];
         let mut placed = Vec::new();
         let mut rated = None;
-        if held == Held::Merge {
+        if matches!(held, Held::Merge { .. }) {
             let root_id = existing.root_id;
             let (folders, auto_tags) =
                 place_in_folders(transaction, &mut snapshot, root_id, &input.folders)?;
@@ -304,12 +309,16 @@ pub(crate) fn insert_one(
             input.imported_at_ms,
         )?;
     }
+    let modified_at_ms = match held {
+        Held::Merge { modified_at_ms } => modified_at_ms,
+        Held::Refresh => input.imported_at_ms,
+    };
     transaction
         .prepare_cached(
             "INSERT INTO library_root
              (root_id, name, notes, source_urls_json, cover_media_id, imported_at_ms,
               captured_at_ms, modified_at_ms, media_count, total_size_bytes)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?6, 1, ?8)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?9, 1, ?8)",
         )?
         .execute(params![
             root_id.0,
@@ -320,6 +329,7 @@ pub(crate) fn insert_one(
             input.imported_at_ms,
             input.captured_at_ms,
             sqlite_i64(input.facts.size_bytes, "root size")?,
+            modified_at_ms,
         ])?;
     if let Some(source) = &input.source_identity {
         transaction
@@ -418,7 +428,7 @@ pub(crate) fn insert_one(
     if let Some(value) = input.captured_at_ms {
         Arc::make_mut(&mut snapshot.captured_at).insert(root_id.0, value);
     }
-    Arc::make_mut(&mut snapshot.modified_at).insert(root_id.0, input.imported_at_ms.max(0) as u64);
+    Arc::make_mut(&mut snapshot.modified_at).insert(root_id.0, modified_at_ms.max(0) as u64);
     if let Some(value) = input.facts.width {
         Arc::make_mut(&mut snapshot.width).insert(root_id.0, value as u64);
     }
@@ -708,7 +718,7 @@ fn refresh_existing_file(
             fts::mark_one(transaction, owner, input.imported_at_ms)?;
         }
     }
-    if held == Held::Merge && !input.source_urls.is_empty() {
+    if matches!(held, Held::Merge { .. }) && !input.source_urls.is_empty() {
         let stored = transaction.query_row(
             "SELECT source_urls_json FROM library_root WHERE root_id = ?1",
             [owner.0],

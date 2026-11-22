@@ -26,7 +26,8 @@ use std::path::{Path, PathBuf};
 
 use picto_library::content::{self, ContentSmartFolder, Outline};
 use picto_library::{
-    FolderId, MergeTaskInput, PreparedCollectionImport, PreparedImport, PreparedIngestJob,
+    FolderId, MergeTaskInput, MergedCollectionImport, MergedImport, PreparedCollectionImport,
+    PreparedImport, PreparedIngestJob,
     PreparedIngestPayload, RootDetails, RootKind, SmartFolderId, SmartFolderInput, TagId, TaskId,
     TaskIngestJob, TaskRecord, TaskState,
 };
@@ -442,6 +443,10 @@ fn add_smart_folders(
 /// which the ingest worker copies it. Each file of a collection carries the
 /// collection's tags, folders, rating, status, dates and source links, as
 /// the import of a collection expects.
+///
+/// The job also carries what an ordinary import does not have: the time of
+/// the item's last change in the other library, and for a collection its
+/// own note, which can differ from the note of its cover file.
 fn job(
     task_id: TaskId,
     other: &Path,
@@ -506,19 +511,25 @@ fn job(
     // A collection of one file is imported as that file alone, because a
     // collection import needs two files.
     let payload = if members.len() == 1 {
-        PreparedIngestPayload::Item(members.remove(0))
+        PreparedIngestPayload::MergedItem(MergedImport {
+            item: members.remove(0),
+            modified_at_ms: root.modified_at_ms,
+        })
     } else {
         let cover_index = details
             .media
             .iter()
             .position(|media| media.media_id == root.cover_media_id)
             .unwrap_or(0);
-        PreparedIngestPayload::Collection(PreparedCollectionImport {
-            members,
-            cover_index,
-            existing_root_id: None,
-            name: Some(root.name.clone()),
-            modified_at_ms: root.modified_at_ms,
+        PreparedIngestPayload::MergedCollection(MergedCollectionImport {
+            collection: PreparedCollectionImport {
+                members,
+                cover_index,
+                existing_root_id: None,
+                name: Some(root.name.clone()),
+                modified_at_ms: root.modified_at_ms,
+            },
+            notes: root.notes.clone(),
         })
     };
     Ok(TaskIngestJob {

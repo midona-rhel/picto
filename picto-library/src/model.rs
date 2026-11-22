@@ -359,7 +359,8 @@ pub struct FolderWatchInput {
     pub folder_id: FolderId,
     pub path: String,
     pub include_subfolders: bool,
-    /// Status of files the watcher imports: Inbox (default) or Active.
+    /// The status that the watcher gives the files it imports: Inbox, which
+    /// is the default, or Active.
     #[serde(default = "Lifecycle::inbox")]
     pub lifecycle: Lifecycle,
 }
@@ -423,6 +424,29 @@ pub struct PreparedCollectionImport {
     pub modified_at_ms: i64,
 }
 
+/// A file that stands alone as an item in another library, as a merge of
+/// that library imports it. It carries what an ordinary import does not have.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MergedImport {
+    pub item: PreparedImport,
+    /// The time of the item's last change in the other library. A new item
+    /// gets this time, and not the time of its import, as the time of its
+    /// last change.
+    pub modified_at_ms: i64,
+}
+
+/// A collection of another library, as a merge of that library imports it.
+/// It carries what an ordinary import of a collection does not have. The
+/// time of the collection's last change is `collection.modified_at_ms`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MergedCollectionImport {
+    pub collection: PreparedCollectionImport,
+    /// The collection's own note in the other library. A new collection gets
+    /// this note. An ordinary import gives a new collection the note of its
+    /// cover file.
+    pub notes: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
@@ -433,8 +457,13 @@ pub enum PreparedIngestPayload {
     /// reads, hashes and probes it when it claims the job, so queueing a large
     /// folder is quick and every file is recorded before any is read.
     Pending(PendingImport),
-    /// Files a task imports as one collection, likewise not yet inspected.
+    /// Files that a task imports as one collection and that are not
+    /// inspected yet either.
     PendingCollection(PendingCollectionImport),
+    /// An item of another library that a merge imports.
+    MergedItem(MergedImport),
+    /// A collection of another library that a merge imports.
+    MergedCollection(MergedCollectionImport),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -444,17 +473,19 @@ pub struct PendingImport {
     pub lifecycle: Lifecycle,
     #[serde(default)]
     pub tags: Vec<String>,
-    /// The destination folder, or the parent of `folder_path`.
+    /// The folder that the file is imported into, or the parent of
+    /// `folder_path` when that is set.
     #[serde(default)]
     pub folders: Vec<FolderId>,
-    /// A folder path below that destination (kept source structure), created
-    /// once the file is read successfully.
+    /// The path of a folder below that folder, which keeps the structure of
+    /// the source. The folder is created once the file was read successfully.
     #[serde(default)]
     pub folder_path: Option<String>,
     #[serde(default)]
     pub source_urls: Vec<String>,
     pub imported_at_ms: i64,
-    /// A zip archive, imported as a collection of its files.
+    /// Whether the file is a zip archive, which is imported as a collection
+    /// of its files.
     #[serde(default)]
     pub archive: bool,
 }
@@ -483,7 +514,8 @@ pub struct ClaimedIngestJob {
     pub delete_after_ingest: bool,
     pub attempt_count: u32,
     pub payload: PreparedIngestPayload,
-    /// The foreground task that queued the job, if any.
+    /// The foreground task that queued the job, or `None` for a job without
+    /// a task.
     #[serde(default)]
     pub task_id: Option<TaskId>,
 }
@@ -777,7 +809,7 @@ pub enum TaskState {
     Finished,
     /// Stopped by the user; what it added stays.
     Stopped,
-    /// Stopped and undone.
+    /// The task was stopped, and what it added was removed.
     Reverted,
 }
 
@@ -818,14 +850,15 @@ pub struct TaskRecord {
     pub title: String,
     pub state: TaskState,
     pub scan_complete: bool,
-    /// Files found so far (final once the scan is complete).
+    /// The number of files found so far. It is final once the scan is
+    /// complete.
     pub total_units: u64,
-    /// Files that became new library items.
+    /// The number of files that became new library items.
     pub added_units: u64,
-    /// Files that were already in the library.
+    /// The number of files that were already in the library.
     pub existing_units: u64,
     pub failed_units: u64,
-    /// Files queued or being imported.
+    /// The number of files that are queued or are being imported.
     pub remaining_units: u64,
     pub revertible: bool,
     pub created_at_ms: i64,

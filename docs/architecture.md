@@ -242,10 +242,14 @@ the items in one pass in which the tag bitmaps and folder orders are turned roun
 folders per item. It creates the tags, folders (matched by name under the same parent) and smart
 folders that the open library lacks, and queues one prepared job per item whose file path is the
 file in the other library's blob store. The ingest worker copies each file, verifying its hash,
-and the thumbnail beside it, and imports the items through `ingest_batch_for_task` and
-`ingest_collection_for_task` like any import. An item is recognised as one the library holds only
+and the thumbnail beside it, and imports the items through `ingest_merged_batch_for_task` and
+`ingest_merged_collection_for_task`, which run the import of any other task. A job of a merge
+carries two things that an ordinary import does not have (`MergedImport`,
+`MergedCollectionImport`): the time of the item's last change in the other library, which a new
+item gets in place of the time of its import, and a collection's own note, which a new collection
+gets in place of the note of its cover file. An item is recognised as one the library holds only
 by the hash of its file, because the keys of two libraries are not comparable. For such an item a
-merge task gives `ingest::Held::Merge`: the item keeps its name, dates and lifecycle and gets the
+merge gives `ingest::Held::Merge`: the item keeps its name, dates and lifecycle and gets the
 tags, folder places and source links of the other item, and its notes and rating where it has
 none. The task records what it created and changed (`TaskUndo`): roots, added tags, folder
 places and ratings of existing roots, folders, smart folders, tags and tag namespaces. A merge

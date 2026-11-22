@@ -2,8 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use picto_library::{
-    ClaimedIngestJob, LibraryError, PreparedCollectionImport, PreparedImport,
-    PreparedIngestPayload, RootId,
+    ClaimedIngestJob, LibraryError, MergedCollectionImport, MergedImport,
+    PreparedCollectionImport, PreparedImport, PreparedIngestPayload, RootId,
 };
 
 use crate::library_application::LibraryApplication;
@@ -97,16 +97,28 @@ fn settle_claimed(
         match prepare_job(application, &mut job) {
             Ok(cleanup) => match job.payload {
                 PreparedIngestPayload::Item(input) => {
-                    // One publication holds one task's items, so each
-                    // task's created roots are recorded with its own counts.
-                    if pending.task != job.task_id {
-                        pending.flush(application, &now, auto_tag, report)?;
-                        pending.task = job.task_id;
-                    }
-                    pending.push(job.ingest_job_id, input, cleanup);
-                    if pending.should_flush() {
-                        pending.flush(application, &now, auto_tag, report)?;
-                    }
+                    pending.add(
+                        application,
+                        (job.task_id, job.ingest_job_id),
+                        input,
+                        None,
+                        cleanup,
+                        &now,
+                        auto_tag,
+                        report,
+                    )?;
+                }
+                PreparedIngestPayload::MergedItem(merged) => {
+                    pending.add(
+                        application,
+                        (job.task_id, job.ingest_job_id),
+                        merged.item,
+                        Some(merged.modified_at_ms),
+                        cleanup,
+                        &now,
+                        auto_tag,
+                        report,
+                    )?;
                 }
                 PreparedIngestPayload::Collection(input) => {
                     settle_collection(
@@ -114,6 +126,20 @@ fn settle_claimed(
                         job.ingest_job_id,
                         job.task_id,
                         input,
+                        None,
+                        cleanup,
+                        &now,
+                        auto_tag,
+                        report,
+                    )?;
+                }
+                PreparedIngestPayload::MergedCollection(merged) => {
+                    settle_collection(
+                        application,
+                        job.ingest_job_id,
+                        job.task_id,
+                        merged.collection,
+                        Some(merged.notes),
                         cleanup,
                         &now,
                         auto_tag,
@@ -172,15 +198,57 @@ struct PendingItems {
     task: Option<picto_library::TaskId>,
     jobs: Vec<i64>,
     inputs: Vec<PreparedImport>,
+    /// For each input, the time of the item's last change in another
+    /// library, when the item is one that a merge of that library imports.
+    modified: Vec<Option<i64>>,
     cleanup: Vec<Vec<PathBuf>>,
     since: Option<std::time::Instant>,
 }
 
 impl PendingItems {
-    fn push(&mut self, job_id: i64, input: PreparedImport, cleanup: Vec<PathBuf>) {
+    /// Adds the prepared item of a job to the group, and writes the group
+    /// when it is full or has waited long enough. `owner` is the job's task
+    /// and the job's id. One publication holds the items of one task, so
+    /// that the roots that each task created are recorded with that task's
+    /// own counts. So the group is written first when the item belongs to
+    /// another task than the group does.
+    #[allow(clippy::too_many_arguments)]
+    fn add(
+        &mut self,
+        application: &LibraryApplication,
+        owner: (Option<picto_library::TaskId>, i64),
+        input: PreparedImport,
+        modified_at_ms: Option<i64>,
+        cleanup: Vec<PathBuf>,
+        now: &str,
+        auto_tag: bool,
+        report: &mut CanonicalIngestRunReport,
+    ) -> Result<(), String> {
+        let (task, job_id) = owner;
+        if self.task != task {
+            self.flush(application, now, auto_tag, report)?;
+            self.task = task;
+        }
+        self.push(job_id, input, modified_at_ms, cleanup);
+        if self.should_flush() {
+            self.flush(application, now, auto_tag, report)?;
+        }
+        Ok(())
+    }
+
+    /// Puts the prepared item of a job into the group. `modified_at_ms` is
+    /// given for an item that a merge of another library imports.
+    fn push(
+        &mut self,
+        job_id: i64,
+        input: PreparedImport,
+        modified_at_ms: Option<i64>,
+        cleanup: Vec<PathBuf>,
+    ) {
         self.since.get_or_insert_with(std::time::Instant::now);
         self.jobs.push(job_id);
         self.inputs.push(input);
+        self.modified.push(modified_at_ms);
         self.cleanup.push(cleanup);
     }
 
@@ -200,6 +268,7 @@ impl PendingItems {
     ) -> Result<(), String> {
         let jobs = std::mem::take(&mut self.jobs);
         let inputs = std::mem::take(&mut self.inputs);
+        let modified = std::mem::take(&mut self.modified);
         let cleanup = std::mem::take(&mut self.cleanup);
         self.since = None;
         if jobs.is_empty() {
@@ -208,12 +277,24 @@ impl PendingItems {
         if release_inactive_task(application, self.task, &jobs, now)? {
             return Ok(());
         }
-        let ingested = ingest_items(application, &inputs, self.task, auto_tag);
+        let ingested = ingest_items(application, &inputs, &modified, self.task, auto_tag);
         let Ok(outputs) = ingested else {
             // One bad item fails the whole group; settle each on its own so
             // the rest still import and the bad one gets its own error.
-            for ((job_id, input), cleanup) in jobs.into_iter().zip(inputs).zip(cleanup) {
-                settle_item(application, job_id, self.task, input, cleanup, now, auto_tag, report)?;
+            for (((job_id, input), modified_at_ms), cleanup) in
+                jobs.into_iter().zip(inputs).zip(modified).zip(cleanup)
+            {
+                settle_item(
+                    application,
+                    job_id,
+                    self.task,
+                    input,
+                    modified_at_ms,
+                    cleanup,
+                    now,
+                    auto_tag,
+                    report,
+                )?;
             }
             return Ok(());
         };
@@ -236,12 +317,30 @@ impl PendingItems {
     }
 }
 
+/// Imports a group of prepared items of one task. `modified` holds, for each
+/// input, the time of the item's last change in another library when a merge
+/// of that library imports the item. The items of a merge are imported with
+/// what a merge gives (`Library::ingest_merged_batch_for_task`).
 fn ingest_items(
     application: &LibraryApplication,
     inputs: &[PreparedImport],
+    modified: &[Option<i64>],
     task: Option<picto_library::TaskId>,
     auto_tag: bool,
 ) -> picto_library::Result<Vec<(RootId, picto_library::MutationReceipt)>> {
+    if let (Some(task), true) = (task, modified.iter().any(Option::is_some)) {
+        let merged = inputs
+            .iter()
+            .zip(modified)
+            .map(|(item, modified_at_ms)| MergedImport {
+                item: item.clone(),
+                modified_at_ms: modified_at_ms.unwrap_or(item.imported_at_ms),
+            })
+            .collect::<Vec<_>>();
+        return application
+            .library()
+            .ingest_merged_batch_for_task(&merged, task);
+    }
     match (task, auto_tag) {
         (Some(task), _) => application.library().ingest_batch_for_task(inputs, task, auto_tag),
         (None, true) => application.library().ingest_batch_with_auto_tags(inputs),
@@ -255,6 +354,7 @@ fn settle_item(
     job_id: i64,
     task: Option<picto_library::TaskId>,
     input: PreparedImport,
+    modified_at_ms: Option<i64>,
     cleanup: Vec<PathBuf>,
     now: &str,
     auto_tag: bool,
@@ -263,8 +363,14 @@ fn settle_item(
     if release_inactive_task(application, task, &[job_id], now)? {
         return Ok(());
     }
-    let ingested = ingest_items(application, std::slice::from_ref(&input), task, auto_tag)
-        .map(|mut values| values.remove(0));
+    let ingested = ingest_items(
+        application,
+        std::slice::from_ref(&input),
+        &[modified_at_ms],
+        task,
+        auto_tag,
+    )
+    .map(|mut values| values.remove(0));
     match ingested {
         Ok((root_id, _)) => {
             reconcile_ingested_sources(application, &[(std::slice::from_ref(&input), root_id)], now)?;
@@ -310,6 +416,7 @@ fn settle_collection(
     job_id: i64,
     task: Option<picto_library::TaskId>,
     input: PreparedCollectionImport,
+    merged_notes: Option<Option<String>>,
     cleanup: Vec<PathBuf>,
     now: &str,
     auto_tag: bool,
@@ -318,7 +425,18 @@ fn settle_collection(
     if release_inactive_task(application, task, &[job_id], now)? {
         return Ok(());
     }
+    // `merged_notes` is given for a collection that a merge of another
+    // library imports. It is the collection's own note in that library.
     let ingested = match (task, auto_tag) {
+        (Some(task), _) if merged_notes.is_some() => {
+            application.library().ingest_merged_collection_for_task(
+                &MergedCollectionImport {
+                    collection: input.clone(),
+                    notes: merged_notes.flatten(),
+                },
+                task,
+            )
+        }
         (Some(task), _) => application
             .library()
             .ingest_collection_for_task(&input, task, auto_tag),
@@ -408,8 +526,14 @@ fn settle_deleted_import(
 
 fn payload_inputs(payload: &PreparedIngestPayload) -> &[PreparedImport] {
     match payload {
-        PreparedIngestPayload::Item(input) => std::slice::from_ref(input),
-        PreparedIngestPayload::Collection(input) => &input.members,
+        PreparedIngestPayload::Item(input)
+        | PreparedIngestPayload::MergedItem(MergedImport { item: input, .. }) => {
+            std::slice::from_ref(input)
+        }
+        PreparedIngestPayload::Collection(input)
+        | PreparedIngestPayload::MergedCollection(MergedCollectionImport {
+            collection: input, ..
+        }) => &input.members,
         PreparedIngestPayload::Pending(_) | PreparedIngestPayload::PendingCollection(_) => &[],
     }
 }
@@ -541,11 +665,15 @@ fn prepare_job(
 ) -> Result<Vec<PathBuf>, String> {
     let mut cleanup = Vec::new();
     match &mut job.payload {
-        PreparedIngestPayload::Item(input) => {
+        PreparedIngestPayload::Item(input)
+        | PreparedIngestPayload::MergedItem(MergedImport { item: input, .. }) => {
             prepare_import(application, input, job.delete_after_ingest, &mut cleanup)?;
             ensure_visible_thumbnail(application, input)?;
         }
-        PreparedIngestPayload::Collection(input) => {
+        PreparedIngestPayload::Collection(input)
+        | PreparedIngestPayload::MergedCollection(MergedCollectionImport {
+            collection: input, ..
+        }) => {
             for member in &mut input.members {
                 prepare_import(application, member, job.delete_after_ingest, &mut cleanup)?;
             }
@@ -796,7 +924,7 @@ mod tests {
             task: Some(task),
             ..Default::default()
         };
-        pending.push(claimed[0].ingest_job_id, input.clone(), vec![path.clone()]);
+        pending.push(claimed[0].ingest_job_id, input.clone(), None, vec![path.clone()]);
         library.set_task_paused(task, true).unwrap();
         let mut report = CanonicalIngestRunReport::default();
         pending
