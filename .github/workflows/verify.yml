@@ -546,6 +546,31 @@ jobs:
             ${{ runner.temp }}/login-check/*.png
           if-no-files-found: warn
 
+      # Starts the app on the copy and clicks the window's own minimise,
+      # maximise and close buttons with the real mouse
+      # (`ci/window-buttons.ps1`). Each click must do what its button is for,
+      # and the click on the close button must end the app.
+      - name: Window buttons (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          . ci/env.sh
+          out="$(unix "$RUNNER_TEMP")/window-buttons"
+          mkdir -p "$out/state" "$out/data"
+          export PICTO_GPUI_HOLD_RUNS=1 PICTO_GPUI_HOLD_DOWNLOADS=1 PICTO_GPUI_SILENT=1
+          export PICTO_GPUI_STATE="$(native "$out/state")" PICTO_GPUI_APP_DATA="$(native "$out/data")"
+          "$PICTO_APP" "$PICTO_CI_COPY" > "$out/app.log" 2>&1 &
+          # `$!` is the id that the shell knows the app by. PowerShell needs
+          # the id that Windows knows it by.
+          sleep 3
+          id="$(cat "/proc/$!/winpid")"
+          status=0
+          pwsh -NoProfile -File "$(native "$PWD/ci/window-buttons.ps1")" -ProcessId "$id" || status=$?
+          if [[ "$status" != 0 ]]; then
+            cat "$out/app.log" || true
+            taskkill //F //PID "$id" || true
+          fi
+          exit "$status"
+
       # Checks that the app compiles the way a release compiles it: without
       # the GPUI features that only the tests switch on. Everything above
       # was built with them. This step only type-checks and produces no
