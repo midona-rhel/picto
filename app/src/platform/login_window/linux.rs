@@ -40,11 +40,22 @@ fn start_gtk() -> Result<(), String> {
         started
             .borrow_mut()
             .get_or_insert_with(|| {
+                // GTK gives its windows the program's name as their
+                // application id on Wayland, and the program's name and
+                // class as their class on X11. Both are set to the app's id,
+                // so that a desktop groups the sign-in window with the app's
+                // other windows, which carry the same id
+                // (`ui::window_chrome::frameless`). The name is set before
+                // GTK starts. The class can be set only after GTK has
+                // started, and before the first window is made.
+                gtk::glib::set_prgname(Some(crate::desktop::APP_ID));
                 gtk::init().map_err(|error| {
                     format!(
                         "Signing in needs GTK and WebKitGTK 4.1, which could not start: {error}"
                     )
-                })
+                })?;
+                gtk::gdk::set_program_class(crate::desktop::APP_ID);
+                Ok(())
             })
             .clone()
     })

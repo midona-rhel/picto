@@ -653,6 +653,22 @@ fn start_with(
                             }
                         });
                     }
+                    // A release build gives the folder of a library the user
+                    // keeps its icon in the file manager, which only Windows
+                    // needs. It runs off the main thread, because it starts
+                    // the system's `attrib` program three times.
+                    if kind == Kind::Real && super::facts().release {
+                        let folder = root.clone();
+                        cx.background_spawn(async move {
+                            if let Err(error) = super::platform::mark_library_folder(&folder) {
+                                log::warn!(
+                                    "the icon of the library's folder {} was not set: {error}",
+                                    folder.display()
+                                );
+                            }
+                        })
+                        .detach();
+                    }
                     host.update(cx, |_, cx| cx.notify());
                     crate::set_app_menus(cx);
                     check_picto(cx);
