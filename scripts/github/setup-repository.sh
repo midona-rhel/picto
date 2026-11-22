@@ -74,7 +74,12 @@ upsert_ruleset() {
   fi
 }
 
-# The checks that a pull request into `dev` must pass. The ruleset for `main`
+# The checks that a pull request into `dev` must pass. They must have passed
+# on the pull request's own head; the branch does not have to hold the newest
+# commit of `dev`. Requiring that made every open pull request run all its
+# checks again, for about 25 minutes, each time another one was merged. The
+# checks also run on `dev` itself after every merge (`ci.yml`), which shows a
+# fault that only two changes together cause. The ruleset for `main`
 # requires the same checks. `main` is not used any more, and its ruleset only
 # keeps the branch from being changed. The names
 # are the ones GitHub shows for the jobs of `ci.yml`: `verify / ` and the name
@@ -103,7 +108,7 @@ branch_ruleset() { # name ref merge_method
         required_review_thread_resolution: true,
         allowed_merge_methods: ($method | split(","))}},
       {type: "required_status_checks", parameters: {
-        strict_required_status_checks_policy: true,
+        strict_required_status_checks_policy: false,
         required_status_checks: $checks}}
     ]}'
 }
