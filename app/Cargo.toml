@@ -214,9 +214,7 @@ webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 gpui_windows = { package = "gpui-pre-windows", version = "=0.3.12" }
 webview2-com = "0.39"
 windows = { version = "0.62", features = [
-    "Wdk_System_SystemServices",
     "Win32_Foundation",
-    "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_Storage_FileSystem",
@@ -226,9 +224,7 @@ windows = { version = "0.62", features = [
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_Pipes",
-    "Win32_System_SystemInformation",
     "Win32_System_Threading",
-    "Win32_UI_Controls",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }

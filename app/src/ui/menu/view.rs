@@ -131,25 +131,24 @@ impl Menu {
                 // cannot blur. Where the system can blur what is behind a
                 // window, its blur is placed under the panel, and the panel's
                 // fill gives that blur the brightness of the glass. Where the
-                // system cannot, the panel gets a more opaque fill. Where a
-                // window cannot be transparent at all, the fill is opaque.
+                // system cannot, the panel gets a more opaque fill.
                 let theme = theme::theme(cx);
-                crate::ui::window_chrome::place_panel(
-                    window,
-                    Bounds::new(
-                        point(px(at.0 + dx), px(at.1 + dy)),
-                        size(px(scaled_w), px(scaled_h)),
-                    ),
-                    theme::RADIUS_LG,
-                    opacity,
-                );
-                let glass = theme.menu_glass();
-                let fill = if !window.is_transparency_supported() {
-                    Rgba { a: 1., ..glass }
-                } else if crate::ui::window_chrome::system_blurs(window) {
-                    crate::ui::fill_over_system_blur(glass, theme.glass_blur().brightness)
+                let fill = if crate::ui::window_chrome::system_blurs() {
+                    crate::ui::window_chrome::place_system_blur(
+                        window,
+                        Bounds::new(
+                            point(px(at.0 + dx), px(at.1 + dy)),
+                            size(px(scaled_w), px(scaled_h)),
+                        ),
+                        theme::RADIUS_LG,
+                        opacity,
+                    );
+                    crate::ui::fill_over_system_blur(
+                        theme.menu_glass(),
+                        theme.glass_blur().brightness,
+                    )
                 } else {
-                    crate::ui::fill_without_blur(glass)
+                    crate::ui::fill_without_blur(theme.menu_glass())
                 };
                 panel.without_backdrop_blur().bg(fill)
             })
@@ -635,9 +634,8 @@ impl Menu {
                 if self.screen.is_some() {
                     self.shown.get_or_insert_with(Instant::now);
                 }
-                let rows = self.rows();
-                self.fit_root_window(&rows, window, cx);
                 if let Some(screen) = &self.screen {
+                    let rows = self.rows();
                     let rect = self.root_rect(&rows);
                     let at = (rect.x - screen.bounds.x, rect.y - screen.bounds.y);
                     root = root.child(self.root_panel(&rows, rect, at, window, cx));
