@@ -27,10 +27,12 @@ mod shader_compilation {
 
         println!("cargo:rerun-if-changed={}", shader_path.display());
 
-        // Check if fxc.exe is available
+        // The build stops here when `fxc.exe`, the shader compiler, cannot be
+        // found.
         let fxc_path = find_fxc_compiler();
 
-        // Define all modules
+        // For each name in this list, `shaders.hlsl` has a vertex shader
+        // `<name>_vertex` and a fragment shader `<name>_fragment`.
         let modules = [
             "quad",
             "shadow",
