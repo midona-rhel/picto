@@ -1,6 +1,8 @@
-//! What libraries need from the system, one leaf per platform: whether the
-//! Electron app is running (production's process, which holds no lock this
-//! app can see), and a database file's identity on disk.
+//! What the libraries code needs from the system, with one file per system.
+//! The first thing is whether another Picto is running: the Electron app,
+//! which holds no lock that this app can see, or a packaged release build of
+//! this app. The second thing is a text that identifies a database file on
+//! disk.
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -15,11 +17,12 @@ pub use macos::{file_identity, picto_process};
 #[cfg(windows)]
 pub use windows::{file_identity, picto_process};
 
-/// Device, inode and the time the file was made, which stay with the file
-/// while it is renamed or its folder moved on the same volume, and change
-/// when it is replaced. The time is what tells a replacement apart where
-/// the file system hands a freed inode to the next file made (ext4 does);
-/// where the system does not keep it, device and inode are all there is.
+/// Returns the file's device, its inode and the time it was created, as one
+/// text. All three stay the same while the file is renamed or its folder is
+/// moved on the same volume, and the text changes when the file is replaced.
+/// The creation time is needed because some file systems (ext4 is one) give
+/// the inode of a deleted file to the next file that is created. Where the
+/// system does not record a creation time, the text holds 0 in its place.
 #[cfg(unix)]
 fn unix_identity(path: &std::path::Path) -> std::io::Result<String> {
     use std::os::unix::fs::MetadataExt as _;

@@ -1,11 +1,11 @@
-//! Finds out, on macOS, whether the Electron app is running. It reads the
+//! Finds out, on macOS, whether another Picto is running. It reads the
 //! executable path of every process (`proc_listallpids`, `proc_pidpath`) and
-//! tests each path with [`is_picto`].
+//! tests each path with [`is_picto`]. This process itself is left out.
 use std::ffi::c_void;
 use std::path::Path;
 
-/// Returns the executable path of the first process found that belongs to the
-/// Electron app, or `None` if there is none. Returns an error if the list of
+/// Returns the executable path of the first other process found that is a
+/// Picto, or `None` if there is none. Returns an error if the list of
 /// processes could not be read.
 pub fn picto_process() -> Result<Option<String>, String> {
     // SAFETY: a null buffer asks for the number of processes.
@@ -44,16 +44,18 @@ pub fn picto_process() -> Result<Option<String>, String> {
     Ok(None)
 }
 
-/// Returns whether the executable at `path` belongs to the Electron app. It
-/// does when it is inside a bundle named `Picto.app` (the Electron app's
-/// `productName`), as its main process and its helpers are. It also does when
-/// its file name is `Picto` or starts with `Picto Helper`, which covers a
-/// bundle that the user renamed. This app's own bundle (`Picto GPUI.app`,
-/// executable `picto-gpui-spike`) does not.
+/// Returns whether the executable at `path` is a Picto: the Electron app, or
+/// a packaged release build of this app, which is the Electron app's next
+/// version and has its name. The file name decides. The main program of both
+/// is named `Picto`, and the Electron app's helper programs have names that
+/// start with `Picto Helper`.
+///
+/// The folder is not looked at, because the packaged app runs `ffmpeg` and
+/// `ffprobe` from inside its own `Picto.app`, and those are not a second
+/// Picto. A debug build is named `picto-gpui-spike`, or `PictoGPUI` in the
+/// bundle `Picto GPUI.app` that `run.sh` makes, and is not a Picto here, so
+/// several debug builds can run at once.
 pub fn is_picto(path: &str) -> bool {
-    if path.contains("/Picto.app/Contents/") {
-        return true;
-    }
     let name = Path::new(path)
         .file_name()
         .and_then(|name| name.to_str())
@@ -73,7 +75,7 @@ mod tests {
     use super::is_picto;
 
     #[test]
-    fn the_electron_app_is_known_by_its_bundle_and_executables() {
+    fn a_picto_is_known_by_the_name_of_its_program() {
         assert!(is_picto("/Applications/Picto.app/Contents/MacOS/Picto"));
         assert!(is_picto(
             "/Applications/Picto.app/Contents/Frameworks/Picto Helper (Renderer).app/Contents/MacOS/Picto Helper (Renderer)"
@@ -81,12 +83,19 @@ mod tests {
         assert!(is_picto(
             "/home/me/Downloads/Picto 2.app/Contents/MacOS/Picto"
         ));
+        // The packaged app's own `ffmpeg` runs from inside `Picto.app`.
+        assert!(!is_picto("/Applications/Picto.app/Contents/MacOS/ffmpeg"));
+        // Debug builds: run from Cargo's build folder, and from the bundle
+        // that `run.sh` makes.
         assert!(!is_picto(
-            "/home/me/Code/experiments/gpui/target/Picto GPUI.app/Contents/MacOS/picto-gpui-spike"
+            "/home/me/Code/experiments/gpui/target/debug/picto-gpui-spike"
+        ));
+        assert!(!is_picto(
+            "/home/me/Code/experiments/gpui/target/Picto GPUI.app/Contents/MacOS/PictoGPUI"
         ));
         assert!(!is_picto("/usr/bin/pictor"));
-        // The list of processes can be read. Whether the Electron app is
-        // running on this machine is not checked.
+        // The list of processes can be read. Whether a Picto is running on
+        // this machine is not checked.
         assert!(super::picto_process().is_ok());
     }
 }

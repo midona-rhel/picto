@@ -1,15 +1,19 @@
-//! The open library and the main window's content, as production's
-//! `libraryHostService.mjs` and `LibraryGate.tsx` share them: the gate
-//! (no library, or one opening) or the library's shell; opening, switching
-//! (`switchLibrary`) and closing; the user's consent; and the notice that
-//! blocks the window while the Electron app runs beside a library the user
-//! keeps.
+//! This module holds the open library and decides what the main window
+//! shows, as `libraryHostService.mjs` and `LibraryGate.tsx` do in the
+//! Electron app. The main window shows either the gate or the shell of the
+//! open library. The gate is what the window shows while no library is open
+//! and while one is opening. The module opens a library, switches to another
+//! library (`switchLibrary`) and closes the open one. It asks for the user's
+//! consent before it opens a library the user keeps. While another Picto is
+//! running and a library the user keeps is open, it shows a notice that
+//! blocks the window.
 //!
-//! A switch closes the detail, Settings and log windows (production leaves
-//! them open, where their commands would reach the library opened next),
-//! shows the gate's loading state, closes the library (`close_library`, on
-//! a thread of its own), and opens the next in a new shell, as production
-//! remounts its whole window under the new library's key.
+//! A switch does these things in this order. It closes the detail windows,
+//! the Settings window and the log window; the Electron app leaves them
+//! open, and their commands then reach the library that is opened next. It
+//! shows the gate's loading state. It closes the library (`close_library`)
+//! on a thread of its own. It opens the next library in a new shell, as the
+//! Electron app mounts its whole window again under the new library's key.
 use super::admission::{self, Decision, Origin, Probes, Refusal};
 use super::{Kind, history};
 use crate::application::Application;
@@ -31,24 +35,31 @@ pub use disk::{Denied, agree, consent_message, delete, move_library, permit, ren
 /// The library open in the main window.
 struct Open {
     application: Arc<Application>,
-    /// This app's one instance for the library (`opening::instance`).
+    /// The instance that this process holds for the library
+    /// (`opening::instance`), or `None` when the off-screen tool opened the
+    /// library.
     instance: Option<Arc<crate::opening::instance::Instance>>,
 }
 
-/// What the host holds for the whole app.
+/// The host's state: the main window, the open library, and what is needed
+/// to open another library. The app has one host ([`host`]).
 pub struct Host {
     main: Option<WindowHandle<Main>>,
     open: Option<Open>,
-    /// A library being opened or closed: nothing else starts meanwhile.
+    /// Whether a library is being opened or closed now. While it is, a
+    /// request to open a library is ignored.
     busy: bool,
     probes: Rc<dyn Probes>,
-    /// Where later launches' files go (`opening::Incoming`).
+    /// The channel that receives the files a later launch of the app was
+    /// started with (`opening::Incoming`).
     incoming: Option<futures::channel::mpsc::UnboundedSender<crate::opening::Incoming>>,
     working_directory: PathBuf,
-    /// The last refusal or failure, which the Library Manager shows.
+    /// The title and the message of the last refusal or failure to open a
+    /// library. The Library Manager shows them.
     pub failure: Option<(String, String)>,
-    /// A library this app just created, whose consent is kept once it
-    /// opened.
+    /// The root of a library that this app has just created and is opening.
+    /// When it has opened, the user's consent for it is saved without
+    /// asking.
     created: Option<PathBuf>,
 }
 
@@ -56,7 +67,7 @@ struct HostGlobal(Entity<Host>);
 
 impl Global for HostGlobal {}
 
-/// The host, made the first time it is needed.
+/// Returns the host. The first call makes it.
 pub fn host(cx: &mut App) -> Entity<Host> {
     if let Some(global) = cx.try_global::<HostGlobal>() {
         return global.0.clone();
@@ -75,11 +86,15 @@ pub fn host(cx: &mut App) -> Entity<Host> {
     entity
 }
 
-/// The system's probes; in a test build the Electron app is what
-/// `PICTO_GPUI_TEST_PICTO_RUNNING` says (unset: not running; `after-open`:
-/// not running for the first look, the open's, and running from then on,
-/// as when it starts while a library is open), so the off-screen tool
-/// never depends on what runs on the machine.
+/// Returns the object through which the host asks whether another Picto is
+/// running. A debug or release build asks the system. A test build takes the
+/// answer from the environment variable `PICTO_GPUI_TEST_PICTO_RUNNING`, so
+/// that the off-screen tool never depends on what runs on the machine. When
+/// the variable is not set, no other Picto is running. With the value
+/// `after-open`, no other Picto is running the first time the host asks,
+/// which is when it opens the library, and one is running every time after
+/// that, as when a Picto is started while a library is open. With any other
+/// value, another Picto is running.
 fn probes() -> Rc<dyn Probes> {
     #[cfg(test)]
     {
@@ -116,19 +131,20 @@ impl Probes for TestProbe {
 
 /// What a launch opens in the main window.
 pub enum Launch {
-    /// A disposable copy, with the instance this process holds for it (the
-    /// app's own launch) or none (the off-screen tool).
+    /// A disposable copy and the instance that this process holds for it.
+    /// The app passes the instance, and the off-screen tool passes `None`.
     Copy(PathBuf, Option<Arc<crate::opening::instance::Instance>>),
     /// A library named on the command line with `--allow-real-libraries`.
     Named(PathBuf),
-    /// No library named: the one this app had open last, if it may be
-    /// opened, else the gate.
+    /// No library was named. The app opens the library it had open last if
+    /// that library may be opened, and otherwise shows the gate.
     Last,
 }
 
-/// Starts the host in the main window at launch, as the app and the
-/// off-screen tool both do: the window known to the application menu and
-/// the host, the menus set, `launch` opened, and the launch noted.
+/// Starts the host in the main window when the app starts. The app and the
+/// off-screen tool both call it. It gives the main window to the application
+/// menu and to the host, sets the menus, opens what `launch` names, and
+/// records that the launch has asked for its library ([`launched`]).
 pub fn boot(
     main: WindowHandle<Main>,
     incoming: futures::channel::mpsc::UnboundedSender<crate::opening::Incoming>,
@@ -141,13 +157,15 @@ pub fn boot(
     match launch {
         Launch::Copy(root, instance) => start(root, Kind::Copy, instance, main, cx),
         Launch::Named(path) => request(&path, Origin::CommandLine { flag: true }, cx),
-        // Only a library this process may open is even looked at.
+        // `start_last` reads nothing about the library unless this process
+        // may open it.
         Launch::Last => start_last(cx),
     }
     launched(cx);
 }
 
-/// Hands the host the main window and where later launches' files go.
+/// Gives the host the main window and the channel that receives the files of
+/// later launches.
 fn attach(
     main: WindowHandle<Main>,
     incoming: futures::channel::mpsc::UnboundedSender<crate::opening::Incoming>,
@@ -157,11 +175,13 @@ fn attach(
         host.main = Some(main);
         host.incoming = Some(incoming);
     });
-    // The first run lists the Electron app's libraries; nothing opens.
+    // The first time this app runs, the libraries that the Electron app
+    // lists are copied into this app's list. No library is opened.
     super::seed::once(cx);
 }
 
-/// The open library's root and kind.
+/// Returns the root and the kind of the open library, or `None` when no
+/// library is open.
 pub fn current(cx: &App) -> Option<(PathBuf, Kind)> {
     let host = cx.try_global::<HostGlobal>()?.0.read(cx);
     let open = host.open.as_ref()?;
@@ -172,20 +192,21 @@ pub fn current(cx: &App) -> Option<(PathBuf, Kind)> {
 }
 
 impl Host {
-    /// A library is being opened or closed.
+    /// Returns whether a library is being opened or closed now.
     pub fn busy(&self) -> bool {
         self.busy
     }
 }
 
-/// The open library's application: its statistics, and the off-screen
-/// tool's `invoke`.
+/// Returns the application of the open library, or `None` when no library is
+/// open. The Library Manager reads the library's statistics through it, and
+/// the off-screen tool's `invoke` sends commands to it.
 pub fn application(cx: &App) -> Option<Arc<Application>> {
     let host = cx.try_global::<HostGlobal>()?.0.read(cx);
     host.open.as_ref().map(|open| open.application.clone())
 }
 
-/// The open library's shell.
+/// Returns the shell of the open library, or `None` when no library is open.
 pub fn shell(cx: &mut App) -> Option<Entity<Shell>> {
     let main = host(cx).read(cx).main?;
     main.read(cx).ok()?.shell.clone()
@@ -206,8 +227,10 @@ pub fn update_shell(
     });
 }
 
-/// Open Library… (`openLibraryDialog`): a `.library` chosen in the system's
-/// dialog, opened if the rules let it.
+/// Does Open Library… (`openLibraryDialog` in the Electron app). The user
+/// chooses a folder in the system's dialog. A folder whose name ends in
+/// `.library` is opened if the rules of `admission` allow it. For any other
+/// folder the "Invalid Library" error is shown.
 pub fn open_dialog(cx: &mut App) {
     let chosen = crate::prompt::file_or_folder(en("Select a .library folder"), cx);
     cx.spawn(async move |cx| {
@@ -237,9 +260,10 @@ pub fn open_dialog(cx: &mut App) {
     .detach();
 }
 
-/// A new library (`createLibrary`): its folder made where the user chose,
-/// and the core creating the library as it opens it. Made by the user here,
-/// it needs no further consent.
+/// Creates a library at `path`, which the user chose (`createLibrary` in the
+/// Electron app). This function makes the folder, and the application core
+/// creates the library in it when it opens it. The user is not asked for
+/// consent, because the user has just made this library in this app.
 pub fn create(path: PathBuf, cx: &mut App) {
     let probes = host(cx).read(cx).probes.clone();
     if let Err(refusal) = admission::admit_new(&path, &super::facts(), &*probes) {
@@ -257,10 +281,10 @@ pub fn create(path: PathBuf, cx: &mut App) {
     begin(root, Kind::Real, cx);
 }
 
-/// Notes this instance as the one most recently active, and looks again
-/// for the Electron app while a library the user keeps is open.
-/// The launch has asked for its library (or found none to ask for): from
-/// here a closed gate means what it says.
+/// Records that the launch has asked for its library, or has found that
+/// there is none to ask for. From then on, a main window that shows the gate
+/// with no library open may open the Library Manager by itself
+/// (`Main::launched`).
 pub fn launched(cx: &mut App) {
     let main = host(cx).read(cx).main;
     if let Some(main) = main {
@@ -271,6 +295,9 @@ pub fn launched(cx: &mut App) {
     }
 }
 
+/// Called when the main window becomes active. Notes this instance as the
+/// one most recently active, and looks again for another running Picto while
+/// a library the user keeps is open.
 pub fn activated(cx: &mut App) {
     let host = host(cx);
     if let Some(instance) = host
@@ -284,8 +311,10 @@ pub fn activated(cx: &mut App) {
     check_picto(cx);
 }
 
-/// Shows the blocking notice while the Electron app runs beside a library
-/// the user keeps, and takes it away once it has quit.
+/// Shows the notice that blocks the main window while another Picto is
+/// running and a library the user keeps is open. Removes the notice when no
+/// other Picto is running any more, and when the open library is not one the
+/// user keeps.
 pub fn check_picto(cx: &mut App) {
     let host = host(cx);
     let (main, real, probes) = {
@@ -303,7 +332,8 @@ pub fn check_picto(cx: &mut App) {
         match probes.picto_process() {
             Ok(None) => None,
             Ok(Some(process)) => Some(process),
-            // Not knowing is treated as running.
+            // When the list of processes cannot be read, the notice is shown
+            // with the error, as if another Picto were running.
             Err(error) => Some(error),
         }
     } else {
@@ -316,8 +346,10 @@ pub fn check_picto(cx: &mut App) {
             .is_some_and(|notice| notice.presence.closing());
         let shown = main.blocked.content().filter(|_| !leaving);
         if shown != blocked.as_ref() {
-            // The notice keeps its own time on screen while it stays, so
-            // its entrance plays once; it leaves as a dialog does.
+            // The notice is opened only when it is not shown yet or names
+            // another process, so that its opening animation does not start
+            // again at every check. It is removed with the closing animation
+            // of a dialog.
             match blocked {
                 Some(process) => {
                     main.blocked.open(process, ui::menu::Return::Opener, cx);
@@ -328,14 +360,16 @@ pub fn check_picto(cx: &mut App) {
     });
 }
 
-/// Opens `path` if the rules let it (`admission`), asking the user's
-/// consent first where it is needed.
+/// Opens the library at `path` if the rules of `admission` allow it. Where
+/// the rules need the user's consent, it shows the consent question first.
+/// It does nothing while another library is being opened or closed.
 pub fn request(path: &Path, origin: Origin, cx: &mut App) {
     let host = host(cx);
     if host.read(cx).busy {
         return;
     }
-    // The open library asked for again only comes forward.
+    // When `path` is the library that is already open, the main window is
+    // brought forward and nothing is opened.
     if let Ok(canonical) = path.canonicalize()
         && current(cx).is_some_and(|(root, _)| root == canonical)
     {
@@ -374,12 +408,13 @@ pub fn request(path: &Path, origin: Origin, cx: &mut App) {
     }
 }
 
-/// At start, with no library named: the library this app had open last,
-/// if this process may open it at all (`listed`); when it is no longer
-/// there, production's "Library Not Found" question (`handleMissingLibrary`)
-/// with Locate…, Remove from List and Cancel. Production first falls back
-/// to the first library of its history that is still there; this app opens
-/// at start only the library it had open last, and otherwise asks.
+/// Called at start when no library was named. Opens the library this app had
+/// open last, if this process may open it at all (`listed`). When that
+/// library is no longer at its path, it shows the Electron app's "Library
+/// Not Found" question (`handleMissingLibrary`), with the buttons Locate…,
+/// Remove from List and Cancel. The Electron app first opens the first
+/// library of its history that still exists. This app opens at start only
+/// the library it had open last, and asks when that library is missing.
 pub fn start_last(cx: &mut App) {
     let last = crate::state::get(cx).last_library.clone();
     let Some(last) = last.filter(|last| super::listed(last, &super::facts())) else {
@@ -398,16 +433,18 @@ pub fn start_last(cx: &mut App) {
     }
 }
 
-/// Locate… for a library that is missing (`handleMissingLibrary`,
-/// `relocateLibrary`): a folder chosen in the system's dialog, the library
-/// found there or inside it under the same name, the list made to name it
-/// there, and (`open`) the library opened through the same rules as any
-/// other the user chose. The user's consent does not follow it: a library
-/// found at a new place is asked about again.
+/// Does Locate… for a library that is missing (`handleMissingLibrary` and
+/// `relocateLibrary` in the Electron app). The user chooses a folder in the
+/// system's dialog. The library is looked for in that folder itself and
+/// inside it under the missing library's name (`located`). When it is found,
+/// the list of libraries is changed to name the new path. With `open` set,
+/// the library is then opened under the same rules as any other library the
+/// user chose. The consent that the user gave for the old path does not
+/// apply to the new path, so the user is asked again.
 pub fn locate(missing: PathBuf, open: bool, cx: &mut App) {
     let basename = missing.file_name().unwrap_or_default().to_owned();
-    // Production's dialog says this as its message; the system's dialog
-    // here shows it as its button's prompt.
+    // The Electron app's dialog shows this text as its message. The system's
+    // dialog here shows it as the prompt of its button.
     let chosen = crate::prompt::folder(
         &format!(
             "Select the folder containing {}",
@@ -423,8 +460,9 @@ pub fn locate(missing: PathBuf, open: bool, cx: &mut App) {
             let Some(found) = super::located(&folder, &basename) else {
                 return fail(
                     en("Library Not Found").to_owned(),
-                    // Production's main process writes it in English,
-                    // without a key.
+                    // The Electron app's main process writes this message in
+                    // English and has no translation key for it, so it is
+                    // not translated here.
                     format!(
                         "\"{}\" was not found in the selected folder.",
                         basename.to_string_lossy()
@@ -460,8 +498,9 @@ pub fn locate(missing: PathBuf, open: bool, cx: &mut App) {
     .detach();
 }
 
-/// Tells the user why a library was not opened: a notification in the main
-/// window, and the Library Manager's error box.
+/// Tells the user why a library was not opened. It shows an error
+/// notification in the main window, and it keeps the title and the message
+/// for the Library Manager's error box.
 fn refuse(refusal: &Refusal, cx: &mut App) {
     let (title, message) = refusal.words();
     fail(title, message, cx);
@@ -476,7 +515,8 @@ fn fail(title: String, message: String, cx: &mut App) {
     ui::notify::error(title, message, cx);
 }
 
-/// The user agreed: kept, and the library opened.
+/// Called when the user has agreed to the consent question. Saves the
+/// consent and opens the library.
 fn consented(asking: Asking, cx: &mut App) {
     let Asking {
         root,
@@ -493,8 +533,9 @@ fn begin(root: PathBuf, kind: Kind, cx: &mut App) {
     let Some(main) = host.read(cx).main else {
         return;
     };
-    // One instance of this app per library: another that has it open
-    // comes forward, and this one opens nothing.
+    // Only one instance of this app has a library open at a time. When
+    // another instance already has `root` open, that instance's window is
+    // brought forward and this one opens nothing.
     let request = crate::opening::instance::Request {
         cwd: host.read(cx).working_directory.clone(),
         args: Vec::new(),
@@ -526,9 +567,9 @@ fn begin(root: PathBuf, kind: Kind, cx: &mut App) {
     start(root, kind, Some(instance), main, cx);
 }
 
-/// Opens `root` in the main window, closing what was open first. Used by
-/// [`begin`], and by `main` for the copy on the command line, whose
-/// instance it already holds.
+/// Opens `root` in the main window, after it has closed the library that was
+/// open. [`begin`] calls it. [`boot`] also calls it for the copy named on
+/// the command line, for which the process already holds the instance.
 pub fn start(
     root: PathBuf,
     kind: Kind,
@@ -539,7 +580,8 @@ pub fn start(
     start_with(root, kind, instance, main, false, cx);
 }
 
-/// [`start`], keeping a copy's cloud folder after a restore (`keep_cloud`).
+/// Does the work of [`start`]. With `keep_cloud` set, a copy that is opened
+/// again after a restore keeps its cloud folder (`Application::keep_cloud`).
 fn start_with(
     root: PathBuf,
     kind: Kind,
@@ -621,8 +663,9 @@ fn start_with(
                     check_picto(cx);
                 }
                 Err(error) => {
-                    // `library-open-failed`: back to the gate, the Library
-                    // Manager showing why.
+                    // The library did not open (`library-open-failed` in the
+                    // Electron app). The main window shows the gate again,
+                    // and the Library Manager opens and shows the reason.
                     close(cx);
                     fail(en("Could not open Picto Library").to_owned(), error, cx);
                     super::manager::open(cx);
@@ -633,8 +676,9 @@ fn start_with(
     .detach();
 }
 
-/// Closes the open library, leaving the gate in the main window: Close
-/// Library on the blocking notice, a failed open, and quitting.
+/// Closes the open library and shows the gate in the main window. It is
+/// called for Close Library on the blocking notice and after a library has
+/// failed to open.
 pub fn close(cx: &mut App) {
     let host = host(cx);
     let Some(main) = host.read(cx).main else {
@@ -666,7 +710,8 @@ pub fn close_for_quit(cx: &mut App) {
     }
 }
 
-/// The open shell's session.
+/// Returns the session of the open library's shell, or `None` when no
+/// library is open.
 fn shell_session(cx: &mut App) -> Option<Entity<crate::session::Session>> {
     let main = host(cx).read(cx).main?;
     main.read(cx)
@@ -676,13 +721,14 @@ fn shell_session(cx: &mut App) -> Option<Entity<crate::session::Session>> {
         .map(|shell| shell.read(cx).session().clone())
 }
 
-/// Takes the open library's views away: the windows that show its items
-/// (detail windows, Settings, the log window, menus) close, its session
-/// stops reading, the main window shows `gate`. Hands back what is to be
-/// closed.
+/// Removes everything that shows the open library. It closes every window
+/// except the main window and the Library Manager (the detail windows,
+/// Settings, the log window and the menus), stops the session's reads, and
+/// shows `gate` in the main window. Returns the open library, which the
+/// caller then closes, or `None` when no library was open.
 fn close_views(main: WindowHandle<Main>, gate: Gate, cx: &mut App) -> Option<Open> {
-    // A login under way is for this library; it ends with it, its
-    // sign-in window or browser too.
+    // A login that is in progress belongs to this library, so it is ended
+    // here, whether it runs in the sign-in window or in the browser.
     crate::logins::Logins::library_closing(cx);
     let manager = super::manager::window(cx);
     let main_any: AnyWindowHandle = main.into();
@@ -699,8 +745,9 @@ fn close_views(main: WindowHandle<Main>, gate: Gate, cx: &mut App) -> Option<Ope
         main.shell = None;
         main.gate = gate;
         main.blocked.close(cx);
-        window.set_window_title(en("Picto GPUI"));
-        // The keyboard goes back to the window itself.
+        window.set_window_title(crate::desktop::APP_NAME);
+        // The shell that had the keyboard focus is gone, so the focus is
+        // given to the main window's own focus handle.
         window.focus(&main.focus, cx);
         cx.notify();
     });
@@ -709,8 +756,10 @@ fn close_views(main: WindowHandle<Main>, gate: Gate, cx: &mut App) -> Option<Ope
     open
 }
 
-/// `close_library` off the thread that draws, and the application dropped
-/// there too (its runtime cannot be dropped inside an asynchronous task).
+/// Closes the library (`close_library`) on a thread of its own, so that the
+/// thread that draws does not wait for it. The application is dropped on
+/// that thread too, because its runtime cannot be dropped inside an
+/// asynchronous task.
 async fn close_application(open: Open, cx: &mut AsyncApp) {
     let (done, closed) = futures::channel::oneshot::channel();
     std::thread::Builder::new()
@@ -725,17 +774,15 @@ async fn close_application(open: Open, cx: &mut AsyncApp) {
     let _ = cx.update(|_| ());
 }
 
-/// The main window's title: what the window menu and the system's window
-/// lists show. A copy says so.
+/// Returns the main window's title, which the Window menu and the system's
+/// lists of windows show. The title of a library the user keeps holds the
+/// library's name. The title of a copy holds the words "Library copy".
 pub fn title(root: &Path, kind: Kind) -> String {
+    let app = crate::desktop::APP_NAME;
     match kind {
-        // i18n: the window's title, as before for a copy
-        Kind::Copy => "Picto GPUI · Library copy".to_owned(),
-        Kind::Real => format!(
-            "{} · {}",
-            en("Picto GPUI"),
-            super::name(&root.to_string_lossy())
-        ),
+        // i18n: the window's title for a copy, which is not translated
+        Kind::Copy => format!("{app} · Library copy"),
+        Kind::Real => format!("{app} · {}", super::name(&root.to_string_lossy())),
     }
 }
 
@@ -744,11 +791,11 @@ pub fn title(root: &Path, kind: Kind) -> String {
 pub enum Gate {
     /// No library is open (`closed`).
     Closed,
-    /// One is opening (`loading`), named.
+    /// A library is opening (`loading`). The text is the library's name.
     Loading(String),
 }
 
-/// A library the user is asked about.
+/// A library that the consent question asks the user about.
 #[derive(Clone)]
 struct Asking {
     root: PathBuf,
@@ -756,22 +803,26 @@ struct Asking {
     origin: Origin,
 }
 
-/// The main window's root: the gate, or the open library's shell.
+/// The root view of the main window. It shows the gate or the shell of the
+/// open library.
 pub struct Main {
     shell: Option<Entity<Shell>>,
     gate: Gate,
     asking: ui::modal::Host<Asking>,
-    /// The library this app had open last, missing at start: the "Library
-    /// Not Found" question.
+    /// The "Library Not Found" question. Its content is the path of the
+    /// library this app had open last, when that library is missing at
+    /// start.
     missing: ui::modal::Host<PathBuf>,
-    /// The Electron app's process while it runs beside a library the user
-    /// keeps.
+    /// The notice that blocks the window. Its content names the process of
+    /// the other Picto that is running while a library the user keeps is
+    /// open.
     blocked: ui::modal::Host<String>,
     focus: FocusHandle,
     notifications: Entity<ui::notify::Host>,
     /// Whether the gate has opened the Library Manager by itself yet.
     offered: bool,
     /// Whether the launch has asked for its library yet. The window draws
-    /// once before it does, with nothing open: that frame is not the gate.
+    /// once before that with no library open, and the gate must not open the
+    /// Library Manager for that frame.
     launched: bool,
 }

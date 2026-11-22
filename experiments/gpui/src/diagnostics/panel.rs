@@ -1,12 +1,19 @@
-//! The log window (`DiagnosticsPanel.tsx`, `DiagnosticsPanel.module.css`):
-//! a panel along the bottom of the main window, over everything but the
-//! menus, dialogs and notifications, that View › Log Window (⌘L) opens and
-//! closes. It lists the kept log lines with their level and source filters
-//! and a text filter, follows new lines while scrolled to the end, copies
-//! the visible lines, saves a support report where the user chooses, clears
-//! the lines, and shows the application's workers, read every 750 ms. Its
-//! top edge resizes it. Closed, it keeps nothing: it opens with every
-//! filter on and at its default height, as production's unmounted panel.
+//! The log window, which the Electron app has in `DiagnosticsPanel.tsx` and
+//! `DiagnosticsPanel.module.css`. It is a panel along the bottom of the main
+//! window, drawn over everything except the menus, the dialogs and the
+//! notifications. View › Log Window (⌘L) opens and closes it.
+//!
+//! The panel lists the kept log lines. Its header has a button for each
+//! level and for each source, which filter the lines, and a text filter.
+//! While the list is scrolled to its end, it follows new lines. Three
+//! buttons copy the visible lines, save a support report to a file the user
+//! chooses, and clear the lines. To the right of the lines the panel shows
+//! the application's workers, which it reads every 750 ms. Dragging the
+//! panel's top edge changes its height.
+//!
+//! A panel that is closed keeps nothing. The next one opens with every
+//! filter on and at its default height, as in the Electron app, which
+//! unmounts its panel when it closes.
 use super::report::{self, Worker};
 use super::{Entry, Level, Source};
 use crate::i18n::t;
@@ -20,45 +27,59 @@ use gpui::*;
 use std::rc::Rc;
 use std::time::Duration;
 
-/// `.panel`: `height: min(44vh, 620px)`, `min-height: 260px`; a drag keeps
-/// it 80 px short of the window's top.
+/// The share of the window's height that the panel has by default. This
+/// constant and the next three hold the limits of the panel's height. By
+/// default the panel is 44% of the window's height, at most 620 px and at
+/// least 260 px, as `.panel` is in the Electron app's CSS
+/// (`height: min(44vh, 620px)`, `min-height: 260px`). A resized panel is at
+/// least 260 px high, and its top edge stays at least 80 px below the top of
+/// the window.
 const DEFAULT_SHARE: f32 = 0.44;
 const DEFAULT_MAX: f32 = 620.;
 const MIN_HEIGHT: f32 = 260.;
 const TOP_GAP: f32 = 80.;
-/// The arrow keys on the resize edge move it by this much.
+/// The number of pixels by which the up and down arrow keys move the panel's
+/// top edge while the edge has the keyboard focus.
 const KEY_STEP: f32 = 24.;
 const HEADER: f32 = 40.;
 const CONTROL: f32 = 26.;
 const ROW: f32 = 19.;
 const WORKERS_WIDTH: f32 = 290.;
-/// Within this much of the end, the list follows new lines.
+/// The list follows new lines while it is scrolled to within this many
+/// pixels of its end.
 const FOLLOW_SLACK: f32 = 32.;
-/// How often the workers are read again.
+/// The time between two reads of the workers.
 const WORKERS_EVERY: Duration = Duration::from_millis(750);
-/// How often the panel looks for new lines.
+/// The time between two checks for new log lines.
 const LINES_EVERY: Duration = Duration::from_millis(100);
-/// `.workerDot[data-state='working']`.
+/// The colour of the dot beside a worker that is working, as
+/// `.workerDot[data-state='working']` has it in the Electron app's CSS.
 const WORKING: u32 = 0x47c976;
-/// `var(--color-warning, #e8a838)`: production defines no `--color-warning`.
+/// The colour of a warning line and of the dot beside a worker that needs
+/// attention. The Electron app's CSS gives `var(--color-warning, #e8a838)`
+/// and defines no `--color-warning`, so the colour is always `#e8a838`.
 const WARNING: u32 = 0xe8a838;
 
-/// The panel asks to be closed (its close button, Escape).
+/// The event that the panel emits when its close button is clicked. The
+/// shell closes the panel when it receives the event.
 pub struct Closed;
 impl EventEmitter<Closed> for Panel {}
 
-/// One drawn line: an entry's first line carries its columns; a message
-/// over several lines continues on lines of its own, as `white-space: pre`
-/// lays it out.
+/// One line of the list. The first row of an entry holds the entry's columns
+/// and the first line of its message. Each further line of the message is a
+/// row of its own, which is how `white-space: pre` lays the message out in
+/// the Electron app.
 #[derive(Clone)]
 struct Row {
     text: SharedString,
     level: Level,
 }
 
-/// Whether `entry` passes the filters: a level shown, the source chosen
-/// (all when `None`), and the text filter found in its target and message,
-/// ignoring case.
+/// Returns whether `entry` passes the filters. Its level must be switched on
+/// in `levels`. Its source must be `source`; every source passes when
+/// `source` is `None`. Its target and message, joined by a space, must
+/// contain `query`, compared without regard to case; an empty `query` passes
+/// every entry.
 pub fn passes(entry: &Entry, levels: &[bool; 5], source: Option<Source>, query: &str) -> bool {
     let level = Level::ALL.iter().position(|level| *level == entry.level);
     let query = query.trim().to_lowercase();
@@ -70,8 +91,10 @@ pub fn passes(entry: &Entry, levels: &[bool; 5], source: Option<Source>, query: 
                 .contains(&query))
 }
 
-/// The panel's height: the dragged one within its limits, else the default
-/// share of the window.
+/// Returns the panel's height in a window that is `window_height` high. When
+/// the user has resized the panel, this is the height `dragged`, kept within
+/// the limits of [`clamp_height`]. Otherwise it is the default height: 44%
+/// of the window's height, at most 620 px and at least 260 px.
 pub fn height(dragged: Option<f32>, window_height: f32) -> f32 {
     match dragged {
         Some(height) => clamp_height(height, window_height),
@@ -81,12 +104,15 @@ pub fn height(dragged: Option<f32>, window_height: f32) -> f32 {
     }
 }
 
-/// `resizeTo`.
+/// Returns `height` limited to at most 80 px less than the window's height
+/// and to at least 260 px, as the Electron app's `resizeTo` limits it.
 pub fn clamp_height(height: f32, window_height: f32) -> f32 {
     height.min(window_height - TOP_GAP).max(MIN_HEIGHT)
 }
 
-/// `CSS text-transform: capitalize` on a filter's label.
+/// Returns `word` with its first letter in upper case. The Electron app's
+/// CSS does the same to the label of a filter button with
+/// `text-transform: capitalize`.
 fn capitalized(word: &str) -> String {
     let mut chars = word.chars();
     chars
@@ -101,9 +127,12 @@ pub struct Panel {
     source: Option<Source>,
     search: Entity<TextInput>,
     workers: Vec<Worker>,
-    /// The height dragged to, if it was.
+    /// The height that the user gave the panel by dragging its top edge or
+    /// with the arrow keys, or `None` while the panel has its default height.
     dragged: Option<f32>,
-    /// The press on the top edge: where it was and the height then.
+    /// Set while the top edge is being dragged: the pointer's vertical
+    /// position when the mouse button was pressed, and the panel's height at
+    /// that moment.
     resize: Option<(f32, f32)>,
     edge_hovered: bool,
     edge: FocusHandle,
@@ -112,9 +141,10 @@ pub struct Panel {
     /// Whether the list was at its end when the lines last changed.
     follow: bool,
     rows: Rc<Vec<Row>>,
-    /// The longest row, which sets the list's width.
+    /// The index of the row with the most characters. The list takes its
+    /// width from that row.
     widest: Option<usize>,
-    /// The visible entries, which Copy copies.
+    /// The entries that pass the filters. "Copy visible logs" copies these.
     visible: Vec<Entry>,
     revision: u64,
     _subscriptions: Vec<Subscription>,
@@ -123,7 +153,7 @@ pub struct Panel {
 
 impl Panel {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
-        // i18n: a placeholder; the field shows it in the language
+        // i18n: the text field translates its placeholder when it draws it
         let search = cx.new(|cx| TextInput::new(Kind::Compact, cx).placeholder("Filter logs"));
         let subscriptions = vec![cx.observe(&search, |this, _, cx| {
             this.refilter(cx);
@@ -151,7 +181,8 @@ impl Panel {
                 }) else {
                     return;
                 };
-                // A failed read is left to the log lines, as in production.
+                // When a read fails, the workers shown stay as they are and
+                // no error is shown. The Electron app's panel does the same.
                 if let Ok(Ok(snapshot)) = answer.await {
                     let workers = Worker::list(&snapshot);
                     if this
@@ -194,8 +225,9 @@ impl Panel {
         panel
     }
 
-    /// The lines again, from the store and the filters. The list follows
-    /// them when it was at its end.
+    /// Builds the rows again from the kept log lines and the filters. When
+    /// the list was scrolled to its end before, it is scrolled to the new
+    /// end.
     fn refilter(&mut self, cx: &mut Context<Self>) {
         self.revision = super::revision();
         let query = self.search.read(cx).value();
@@ -243,7 +275,9 @@ impl Panel {
         cx.notify();
     }
 
-    /// Copy visible logs: every field of each, tab-delimited.
+    /// Does "Copy visible logs": puts every entry that passes the filters on
+    /// the clipboard, one entry on each line, with the entry's fields
+    /// separated by tabs.
     fn copy(&mut self, cx: &mut Context<Self>) {
         let text = self
             .visible
@@ -254,8 +288,10 @@ impl Panel {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
-    /// Save support report: every kept line (not only the visible ones) and
-    /// the workers, scrubbed, written only where the user chooses.
+    /// Does "Save support report". The report holds every kept log line, not
+    /// only the visible ones, and the workers, with personal data removed
+    /// (`report::scrub`). It is written to the file that the user chooses in
+    /// the save dialog, and nowhere when the user cancels the dialog.
     fn save_report(&mut self, cx: &mut Context<Self>) {
         let created = super::now();
         let entries = super::snapshot();
@@ -281,8 +317,9 @@ impl Panel {
                 let Ok(Some(path)) = chosen.await else {
                     return;
                 };
-                // An unhandled failure in production reaches the log as a
-                // renderer error; here it is logged as one.
+                // The Electron app does not handle a failure to write the
+                // report, and its log then shows the failure as an error of
+                // the renderer. This adds the same line to the log.
                 if let Err(error) = report::write(&path, &text) {
                     super::add(super::Line {
                         level: Level::Error,
@@ -336,8 +373,11 @@ impl Panel {
             .on_click(cx.listener(move |this, _, _, cx| on_click(this, cx)))
     }
 
-    /// `.iconButton`: 26px, the tertiary glyph turning to the primary
-    /// colour over the hover surface.
+    /// Returns one of the header's icon buttons, styled as `.iconButton` is
+    /// in the Electron app's CSS. The button is 26 px square and its glyph
+    /// has the tertiary text colour. While the pointer is over the button,
+    /// the glyph has the primary text colour and the button has the hover
+    /// background.
     fn icon_button(
         &self,
         id: &'static str,
@@ -357,24 +397,28 @@ impl Panel {
     }
 }
 
-/// The line of text at `size` under Mantine's body `line-height`, which
-/// the panel's workers inherit.
+/// Returns the line height of text of the size `size` under Mantine's body
+/// `line-height`, which the text in the list of workers inherits in the
+/// Electron app.
 fn body_line(size: f32) -> Pixels {
     px(size * theme::LINE_HEIGHT_BODY)
 }
 
-/// What the report gives for the user agent: the app, its version and the
-/// system it runs on.
+/// Returns the text that the report gives as the user agent: the app's name,
+/// the app's version (the version in the repository's `package.json`) and
+/// the system the app runs on.
 fn runtime() -> String {
     format!(
-        "Picto GPUI/{} ({}; {})",
-        env!("CARGO_PKG_VERSION"),
+        "{}/{} ({}; {})",
+        crate::desktop::APP_NAME,
+        crate::updates::VERSION,
         std::env::consts::OS,
         std::env::consts::ARCH
     )
 }
 
-/// Picto's version, `app.getVersion()`: the repository's `package.json`.
+/// Returns Picto's version, which is the version in the repository's
+/// `package.json`. The Electron app's `app.getVersion()` returns the same.
 fn version() -> String {
     serde_json::from_str::<serde_json::Value>(include_str!("../../../../package.json"))
         .ok()
@@ -394,8 +438,8 @@ impl Render for Panel {
         let window_height = f32::from(window.viewport_size().height);
         let height = height(self.dragged, window_height);
 
-        // The top edge: a 9 px band over the panel's border, with a short
-        // pill in its middle.
+        // The top edge is a band 9 px high that lies over the panel's top
+        // border. A bar 38 px wide and 2 px high is drawn in its middle.
         let edge_lit = self.edge_hovered || self.resize.is_some() || self.edge.is_focused(window);
         let edge = div()
             .id("diagnostics-resize")
@@ -496,7 +540,7 @@ impl Render for Panel {
         let mut sources = div().flex().gap(px(2.));
         let choices = std::iter::once(None).chain(Source::ALL.into_iter().map(Some));
         for (index, source) in choices.enumerate() {
-            // i18n: production's value, shown as it is
+            // i18n: the Electron app shows this value without translating it
             let name = source.map_or("all", Source::name);
             sources = sources.child(self.filter_button(
                 ("diagnostics-source", index),
@@ -618,8 +662,8 @@ impl Render for Panel {
             .font_family(theme::FONT_MONO)
             .text(theme::TEXT_CAPTION)
             .line_height(px(ROW))
-            // The scrollbar's gutter stays reserved (`scrollbar-gutter:
-            // stable`).
+            // Room for the scrollbar is kept on the right whether or not the
+            // scrollbar is shown, as `scrollbar-gutter: stable` keeps it.
             .pr(px(ui::scrollbar::GUTTER))
             .on_scroll(cx.listener(|_, _, _, cx| cx.notify()))
             .child(list)
@@ -639,7 +683,8 @@ impl Render for Panel {
             .border_l_1()
             .border_color(theme.border_secondary())
             .p(px(10.))
-            // `scrollbar-gutter: stable` keeps the scrollbar's width.
+            // The right padding includes room for the scrollbar whether or
+            // not the scrollbar is shown, as `scrollbar-gutter: stable` does.
             .pr(px(10. + ui::scrollbar::GUTTER))
             .child(
                 div()
@@ -795,11 +840,13 @@ mod tests {
 
     #[test]
     fn height_follows_the_window_within_its_limits() {
-        // `min(44vh, 620px)`, at least 260.
+        // A panel that was not resized is 44% of the window's height, at
+        // most 620 and at least 260.
         assert_eq!(height(None, 865.), 865. * 0.44);
         assert_eq!(height(None, 2000.), 620.);
         assert_eq!(height(None, 500.), 260.);
-        // Dragged: at least 260, and 80 short of the window's top.
+        // A resized panel is at least 260 high and at most 80 less than the
+        // window's height.
         assert_eq!(height(Some(900.), 865.), 785.);
         assert_eq!(height(Some(100.), 865.), 260.);
         assert_eq!(capitalized("renderer"), "Renderer");

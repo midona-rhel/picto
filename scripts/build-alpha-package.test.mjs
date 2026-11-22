@@ -3,7 +3,8 @@ import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { packageArguments, prepareMacSigning, signingIdentity, supportsIconComposer } from './build-alpha-package.mjs';
+import { packageArguments, supportsIconComposer } from './build-alpha-package.mjs';
+import { prepareMacSigning, signingIdentity } from './mac-signing.mjs';
 import verifyMacPackage from './verify-mac-package.mjs';
 
 const state = vi.hoisted(() => ({ fingerprint: 'AB'.repeat(20) }));
