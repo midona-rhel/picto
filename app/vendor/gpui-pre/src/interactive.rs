@@ -622,6 +622,25 @@ impl Deref for PinchEvent {
     }
 }
 
+/// The distance that one line of a mouse wheel scrolls a scroll container on
+/// Windows and Linux. A wheel reports three lines for one notch there by
+/// default, so one notch scrolls 100 pixels, which is what Chromium scrolls
+/// for one notch on Windows. Without this, a line would be the height of a
+/// text line of the window, and an app with small text would scroll slowly.
+pub const WHEEL_LINE: Pixels = crate::px(100. / 3.);
+
+/// Returns the distance that one line of a mouse wheel scrolls a scroll
+/// container whose text lines are `text_line` high: [`WHEEL_LINE`] on Windows
+/// and Linux, and `text_line` on macOS, where the system has already scaled
+/// the wheel's lines by how fast the wheel turns.
+pub fn wheel_line(text_line: Pixels) -> Pixels {
+    if cfg!(target_os = "macos") {
+        text_line
+    } else {
+        WHEEL_LINE
+    }
+}
+
 impl ScrollDelta {
     /// Returns true if this is a precise scroll delta in pixels.
     pub fn precise(&self) -> bool {

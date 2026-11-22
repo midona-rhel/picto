@@ -279,6 +279,13 @@ made for the drop. In the lists below, a drag "enters with no paths" when
 the window receives `FileDropEvent::Entered` with an empty list of paths.
 
 `gpui-pre`
+- `src/interactive.rs`, `src/elements/div.rs`, `src/elements/list.rs`: On
+  Windows and Linux one line of a mouse wheel scrolls a scroll container
+  `WHEEL_LINE`, a third of 100 pixels, so that one notch of three lines
+  scrolls 100 pixels. The original code scrolled the height of one text line
+  of the window for each line. `wheel_line` returns the distance, and the
+  scroll listener of `div` and the one of `list` use it. On macOS nothing
+  changes. A trackpad, which reports pixels, is not affected on any system.
 - `src/interactive.rs`: This file has the types for the data of a drop and
   the functions that hand the data over.
   - `ExternalDropData` holds what a drop carries besides files on disk:
