@@ -247,6 +247,7 @@ features = [
     "xinput",
     "cursor",
     "resource_manager",
+    "shape",
     "sync",
     "dri3",
 ]

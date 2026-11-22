@@ -92,7 +92,18 @@ impl WindowsWindowInner {
             // whichever window was active before the click. If that handler consumes the
             // press, `DefWindowProc` never sees it, so the window is never activated at all.
             // So, let's eagerly activate the window.
-            WM_MOUSEACTIVATE => Some(MA_ACTIVATE as isize),
+            //
+            // A window that is never activated (`WS_EX_NOACTIVATE`, a pop-up window)
+            // answers `MA_NOACTIVATE`, so that a click in it does not activate it and
+            // the click is still delivered.
+            WM_MOUSEACTIVATE => {
+                let ex_style = WINDOW_EX_STYLE(unsafe { get_window_long(handle, GWL_EXSTYLE) } as _);
+                if ex_style.contains(WS_EX_NOACTIVATE) {
+                    Some(MA_NOACTIVATE as isize)
+                } else {
+                    Some(MA_ACTIVATE as isize)
+                }
+            }
             WM_ACTIVATE => self.handle_activate_msg(wparam),
             WM_CREATE => self.handle_create_msg(handle),
             WM_MOVE => self.handle_move_msg(handle, lparam),
