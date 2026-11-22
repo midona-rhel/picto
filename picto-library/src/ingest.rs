@@ -12,8 +12,10 @@ use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{color_cell, ProjectionSnapshot};
 use crate::{LibraryError, Result};
 
-// On the supported release host, 48 tag-rich roots stays below one frame while
-// retaining nearly all of the transaction amortization from a 64-item batch.
+// One batch imports at most 48 items. On the computer that releases are
+// measured on, a batch of 48 items with many tags is written in less time
+// than one frame takes, and it costs nearly as little for each item as a
+// batch of 64 does.
 pub const MAX_INGEST_BATCH: usize = 48;
 
 pub(crate) struct IngestResult {
@@ -201,9 +203,10 @@ pub(crate) fn insert_one(
             .execute([&input.stable_key])?;
     }
 
-    // A real ingestion after a deletion is a new add epoch. Retained cloud
-    // originals are content-addressed, so clearing the blob tombstone lets the
-    // cloud worker reuse the existing remote object instead of uploading it.
+    // The file is imported again after it was deleted. The cloud folder
+    // stores an original under its hash, so the record that the original was
+    // deleted there is removed. The cloud worker then uses the copy that is
+    // still in the cloud folder and does not upload the file again.
     transaction
         .prepare_cached(
             "DELETE FROM cloud_tombstone
@@ -761,9 +764,10 @@ struct ExistingImport {
     root_id: RootId,
 }
 
-/// The media item an import resolves to, if the library already has it: by
-/// stable key (or the alias a merged-away item left), by source item, or by
-/// file. Each file has at most one media item, so the file lookup is exact.
+/// Returns the media item that an import resolves to when the library
+/// already has it. The item is looked for by its stable key, or by the alias
+/// that a merged-away item left, then by its source item, and then by its
+/// file. Each file has at most one media item, so a file names exactly one.
 fn existing_import(
     transaction: &Transaction<'_>,
     snapshot: &ProjectionSnapshot,
@@ -1018,10 +1022,11 @@ mod weak_name_tests {
         }
     }
 
-    /// Every synthetic shape the engine's name generators can emit must be
-    /// classified weak, so a later source carrying a human title can upgrade
-    /// it. Generators include `{provider}_{post_id}`, source file stems
-    /// (ids/hashes), and the OnlyFans `{creator} - {date}` fallback.
+    /// Every form of name that the application generates must be classified
+    /// as weak, so that a later import of the same file with a title that a
+    /// person wrote replaces it. The generated forms include
+    /// `{provider}_{post_id}`, the stems of source files (ids and hashes),
+    /// and the OnlyFans form `{creator} - {date}`.
     #[test]
     fn every_generated_name_shape_is_upgradeable() {
         for generated in [
@@ -1041,8 +1046,8 @@ mod weak_name_tests {
                 "{generated} should be weak"
             );
         }
-        // OnlyFans post text used as a title is a human name and must never
-        // be downgraded.
+        // The text of an OnlyFans post that is used as a title was written by
+        // a person. It must never be classified as weak.
         assert_eq!(
             quality("custom latex catsuit..? don't mind if I"),
             NameQuality::Meaningful

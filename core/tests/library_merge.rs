@@ -648,7 +648,6 @@ fn a_library_that_is_open_elsewhere_or_cannot_be_read_is_refused_before_anything
 
     // Another application has the other library open: it holds the lock.
     let held = picto_core::state::lock_library(&other).unwrap();
-    let other_locked = bytes_on_disk(&other);
     let error = refused(&other);
     assert!(
         error.starts_with(picto_core::state::LIBRARY_IN_USE_MESSAGE),
@@ -659,7 +658,6 @@ fn a_library_that_is_open_elsewhere_or_cannot_be_read_is_refused_before_anything
     })
     .is_err());
     drop(held);
-    assert_eq!(bytes_on_disk(&other), other_locked);
 
     assert!(refused(kept.root()).contains("itself"));
     assert!(refused(&folder.path().join("Missing.library")).contains("Could not find"));

@@ -52,9 +52,10 @@ pub fn run_batch(
     let claimed_ids = claimed.iter().map(|job| job.ingest_job_id).collect::<Vec<_>>();
     let settled = settle_claimed(application, claimed, &now, &mut report);
     if let Err(error) = &settled {
-        // The worker owns every claim until it settles it. Whatever this batch
-        // left running goes back to the queue; replay is idempotent because
-        // ingest finds an already-imported item by its stable key.
+        // The worker owns every claim until it settles it. The jobs that
+        // this batch left running go back to the queue. Importing one of
+        // them a second time changes nothing, because the import finds the
+        // item that is already there by its stable key.
         let retry_at = (chrono::Utc::now() + RELEASED_JOB_RETRY_DELAY).to_rfc3339();
         if let Err(release) = application.library().release_ingest_jobs(
             &claimed_ids,
@@ -485,8 +486,9 @@ fn reconcile_ingested_sources(
         .auxiliary_write_if_changed(
             picto_library::database::WorkPriority::CanonicalIngest,
             ["subscriptions".to_owned(), "tasks".to_owned()],
-            // Source bookkeeping changes no library item; listing the root would
-            // invalidate SQL-derived query results for nothing.
+            // This write records which source an item came from and changes
+            // no library item. So it names no root, which would make the
+            // query results that were derived with SQL invalid for nothing.
             std::iter::empty(),
             |transaction, _| {
                 let mut changed = 0;
@@ -802,7 +804,8 @@ mod tests {
             .unwrap();
         assert_eq!(report.ingested, 0);
         assert!(path.exists());
-        // The serialized mutation itself also rejects a claim that lost a race.
+        // The write, which runs one at a time, also rejects a claim that
+        // another claim came before.
         assert!(matches!(
             library.ingest_batch_for_task(&[input], task, false),
             Err(LibraryError::TaskNotRunning)

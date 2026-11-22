@@ -1,4 +1,6 @@
-//! Folders: the tree, ordered membership, covers, watches and auto-tags.
+//! The mutations of folders: the folder tree, the ordered items of a folder,
+//! a folder's cover, the folder on disk that it watches, and the tags that it
+//! gives its items.
 
 use super::*;
 
@@ -117,7 +119,10 @@ impl Library {
             if let Some(task) = task {
                 super::tasks::require_running_task(transaction, task)?;
             }
-            // Scan and preparation share this writer; only the first creator owns rollback.
+            // A task's scan and its preparation of files can both ask for the
+            // same folder. The first of them creates the folder and records
+            // it for the task's undo. The second finds it here and records
+            // nothing.
             if task.is_some() {
                 use rusqlite::OptionalExtension;
                 if let Some(id) = transaction.query_row(
@@ -765,8 +770,10 @@ impl Library {
                     "folder item reorder must contain distinct existing members".into(),
                 ));
             }
-            // A grid window sends only its loaded members. Permute their
-            // canonical slots, leaving unloaded/filtered members in place.
+            // The grid sends only the members that it has loaded. These
+            // members take, in their new order, the positions that they held
+            // before. The members that the grid did not send keep their
+            // positions.
             let mut replacements = values.iter();
             let values = before
                 .iter()
@@ -1273,8 +1280,8 @@ impl Library {
                 .get(&folder_id)
                 .cloned()
                 .unwrap_or_else(|| Arc::new(Vec::new()));
-            // The resident membership bitmap answers what changes; the order
-            // is only rebuilt when something does.
+            // The membership bitmap in memory says which roots change. The
+            // order is rebuilt only when at least one root changes.
             let before_bitmap = next
                 .folders
                 .get(&folder_id)
@@ -1599,7 +1606,8 @@ pub(super) fn load_folder_clone_rows(
                 color: row.get(4)?,
                 notes: row.get(5)?,
                 auto_tag_ids: row.get(6)?,
-                // Clones have no memberships, so covers and watches are intentionally not copied.
+                // A duplicated folder has no items, so the cover and the
+                // watched folder of the original are not copied.
                 cover_root_id: None,
                 watch_path: None,
                 watch_enabled: false,

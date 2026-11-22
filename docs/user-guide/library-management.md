@@ -84,10 +84,63 @@ Select a library and click the **⋯** (Library actions) button.
 | Rename | It renames the `.library` folder on disk. If the library is open, Picto closes it and opens it again. |
 | Show in File Manager | It shows the library folder in the system's file manager. |
 | Move… | It asks for a folder and moves the library folder there. If the library is open, Picto opens it again from the new place. When the new place is on another disk, Picto copies the library, compares every copied file with its original, and only then removes the original. For a library that is marked **Missing on disk**, this row reads **Locate…**: pick the folder that now contains the library. |
+| Merge with Another Library… | It puts everything of two libraries into one of them. See [Merge two libraries](#merge-two-libraries). The row is disabled while the list has no other library whose folder exists. |
 | Remove from List | It removes the library from the list. The library folder stays on disk, and **Open Existing…** opens it again. The row is disabled for the open library. |
 | Delete… | After a question, it permanently deletes the library folder and everything in it. This cannot be undone. The row is disabled for the open library, so switch to another library first. Picto deletes only a `.library` folder that holds `library.sqlite` and that no program has open. |
 
 For the open library the menu also has the commands of cloud sync, which is experimental.
+
+## Merge two libraries
+
+A merge puts every item, tag, folder, smart folder and collection of two libraries into one of
+them. You choose which of the two is kept. The other library is only read: nothing in its folder
+is changed or deleted, and you can keep it or delete it yourself afterwards.
+
+1. Select one of the two libraries in the Library Manager, click **⋯** and choose **Merge with
+   Another Library…**.
+2. When the list has more than two libraries, choose the second library under **Merge "…" with**.
+3. Under **Library to keep**, choose the library that receives the content of the other one. Each
+   row shows the library's name, its folder and the number of its items.
+4. Click **Merge**. If the library that is kept is not open, Picto opens it first.
+
+The main window shows the merge as a task with the number of files that are done and the total.
+**Pause** holds it, and **Cancel…** undoes it. You can keep working while it runs.
+
+What the kept library holds afterwards:
+
+- A file is recognised by its content. A file that both libraries hold is one item. It keeps the
+  kept library's name, dates and status (active, Inbox or Trash). It has the tags, the folders and
+  the source links of both libraries. It gets the other library's notes when it had none, and the
+  other library's rating when it had none.
+- An item that only the other library holds arrives with its name, tags, folders, rating, notes,
+  dates and status. An item of the other library's Inbox arrives in the Inbox, and an item of its
+  Trash arrives in the Trash. The file and its thumbnail are copied, not moved.
+- Tags are matched by namespace and name. Folders are matched by their names from the top level
+  down, so `Travel/2024` of both libraries is one folder. A new folder keeps its icon, colour,
+  notes and automatic tags. A folder that both libraries have keeps the kept library's.
+- Collections are added. A file that is alone in one library and in a collection in the other
+  ends up in the collection, and two collections that share a file become one.
+- Smart folders are added. A smart folder with the same name and the same rules as one of the
+  kept library is not added again. One with the same name and other rules is added with the other
+  library's name in brackets.
+- Subscriptions, cloud sync settings, watched folders, application settings, view settings,
+  Recently Viewed and duplicate decisions of the other library are not carried over.
+
+A merge brings everything or changes nothing. When you cancel it, when a file of the other
+library cannot be copied, or when the other library can no longer be read, Picto removes what the
+merge added, and the kept library holds what it held before. A finished merge cannot be undone
+with **Undo**.
+
+Before the merge changes anything, Picto writes a backup of the kept library's database into the
+library folder, named `library.sqlite.pre-merge-<time>.backup`. Picto deletes the backup when the
+merge has finished or has been undone. If the undo itself fails, the backup stays.
+
+Picto does not merge a library in these cases:
+
+- The other library is open in another Picto.
+- The other library's database has an older format, or Picto was ended while that library was
+  open. Open the library in Picto once and close it, then merge again.
+- An import is running in the library that is kept.
 
 ## Appearance
 

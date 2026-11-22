@@ -1,8 +1,9 @@
-//! Thin JSON command boundary for the replacement backend.
+//! The commands of the core: each has a name and takes its arguments as
+//! JSON.
 //!
-//! This module owns no product behavior. It deserializes one command payload,
-//! calls one replacement operation, and publishes that operation's committed
-//! mutation receipt.
+//! This module decides nothing about the product's behavior. For one
+//! command it reads the arguments, calls the one function that does the
+//! work, and returns that function's answer as JSON.
 
 use chrono::Utc;
 use rusqlite::OptionalExtension;
@@ -24,9 +25,10 @@ fn gallery_start_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-/// Greenfield command path. Commands return `None` until their complete
-/// product behavior has moved to `LibraryApplication`; production state only
-/// switches after this dispatcher covers the entire command surface.
+/// Answers the commands that need no waiting. [`dispatch_library_async`]
+/// answers the commands that wait for work and passes every other command
+/// to this function. This function returns `None` for a command that it
+/// does not know.
 pub fn dispatch_library(
     application: &crate::library_application::LibraryApplication,
     command: &str,

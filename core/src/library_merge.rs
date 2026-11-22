@@ -574,11 +574,9 @@ pub fn settle(application: &LibraryApplication) -> Result<(), String> {
                     .undo_incomplete_merge(task_id, None, now_ms())
                     .map_err(|error| error.to_string())?;
             }
-            TaskState::Finished | TaskState::Reverted => {
-                if input.backup.is_file() {
-                    if let Err(error) = fs::remove_file(&input.backup) {
-                        tracing::warn!(%error, backup = %input.backup.display(), "Could not remove the backup of a merge");
-                    }
+            TaskState::Finished | TaskState::Reverted if input.backup.is_file() => {
+                if let Err(error) = fs::remove_file(&input.backup) {
+                    tracing::warn!(%error, backup = %input.backup.display(), "Could not remove the backup of a merge");
                 }
             }
             _ => {}

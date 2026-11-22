@@ -1,8 +1,8 @@
-//! Greenfield media-library kernel.
+//! The media library: its database, its queries and its writes.
 //!
-//! This crate owns media roots, canonical memberships, queries, mutations,
-//! publication, and session history. It deliberately has no dependency on the
-//! application shell or the backend it replaces.
+//! This crate owns the media roots, their memberships in tags and folders,
+//! the queries, the mutations, the publication of committed changes, and the
+//! session's undo history. It does not depend on the application shell.
 
 pub mod bitmap;
 mod browsing;
@@ -42,8 +42,9 @@ pub use mutation::{
     MERGE_LIBRARY,
 };
 
-/// The name a duplicate merge keeps of two: `incoming` only when it is a
-/// more descriptive kind of name than `existing`.
+/// Returns the name that is kept when two items become one: `incoming` when
+/// it is a more descriptive kind of name than `existing`, and `existing`
+/// otherwise.
 pub fn preferred_name<'a>(existing: &'a str, incoming: &'a str) -> &'a str {
     name_quality::preferred(existing, incoming)
 }

@@ -12,6 +12,8 @@
 //! not open a library the user keeps reads nothing about one. Listing reads
 //! the folder and the cover of each listed library and nothing else. The
 //! statistics are read for the open library only, through its application.
+//! The merge dialog (`merge.rs`) also reads the number of items of a library
+//! that is not open, when the user chooses that library in it.
 use super::admission::Origin;
 use super::{Kind, history, host};
 use crate::i18n::{en, t};
@@ -112,8 +114,8 @@ pub fn rows(
     rows
 }
 
-/// An action of the actions menu that changes or reveals a library on disk.
-/// Each runs only after `host::permit` has allowed it. For a library that
+/// An action of the actions menu that changes, reveals or reads a library on
+/// disk. Each runs only after `host::permit` has allowed it. For a library that
 /// the user has not yet agreed to, the user is asked for consent first, as
 /// when the library is opened.
 #[derive(Clone, Copy, Debug, PartialEq)]

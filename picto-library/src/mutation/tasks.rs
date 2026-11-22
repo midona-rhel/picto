@@ -4,9 +4,16 @@
 //! A task owns the ingest jobs it queues (`ingest_job.task_id`). Pausing holds
 //! them at claim time, stopping drops the ones not yet imported, and undo
 //! removes the roots the task created (`task_created_root`) and the tags it
-//! added to roots that already existed (`task_added_tag`). Everything here is
-//! durable, so a paused task stays paused and an interrupted one resumes.
-//! Collection and folder changes use the same replay owners as session undo.
+//! added to roots that already existed (`task_added_tag`), and takes back the
+//! other changes that the task recorded (`task_undo`, [`TaskUndo`]).
+//! Everything here is stored in the database, so a paused task stays paused
+//! and an interrupted one resumes. A change to a collection or a folder is
+//! taken back by the code that the session's undo uses for it.
+//!
+//! A merge of another library is such a task (`library_merge.rs`). Besides
+//! roots and tags it records the folders, smart folders, tags and tag
+//! namespaces that it created, and the folder places and ratings that it
+//! gave to roots that already existed.
 
 use super::*;
 use crate::model::{
@@ -435,7 +442,8 @@ impl Library {
         })
     }
 
-    /// The task's state alone; cheap enough to check between jobs.
+    /// Returns the task's state and nothing else. The read is cheap enough
+    /// to be made between two jobs.
     pub fn task_state(&self, task: TaskId) -> Result<Option<TaskState>> {
         self.database.read(WorkPriority::CanonicalIngest, |connection| {
             let state: Option<String> = connection
@@ -464,7 +472,8 @@ impl Library {
         Ok(())
     }
 
-    /// Files of a task that could not be imported, with the reason.
+    /// Returns the files of a task that could not be imported, each with
+    /// the reason.
     pub fn task_failures(&self, task: TaskId, limit: usize) -> Result<Vec<(String, String)>> {
         self.database.read(WorkPriority::VisibleRead, |connection| {
             let mut statement = connection.prepare_cached(
@@ -479,7 +488,8 @@ impl Library {
         })
     }
 
-    /// Open tasks whose scan did not finish (the app quit during it).
+    /// Returns the open tasks whose scan did not finish, because the app
+    /// quit during it.
     pub fn tasks_needing_scan(&self) -> Result<Vec<TaskRecord>> {
         Ok(self
             .tasks(true)?
@@ -626,7 +636,8 @@ impl Library {
         Ok(())
     }
 
-    /// Queued task files not yet read, of running tasks only, oldest first.
+    /// Returns the queued files of running tasks that are not read yet, the
+    /// oldest first.
     pub fn unprepared_task_jobs(&self, limit: usize) -> Result<Vec<ClaimedIngestJob>> {
         self.database.read(WorkPriority::CanonicalIngest, |connection| {
             let mut statement = connection.prepare_cached(
@@ -665,7 +676,8 @@ impl Library {
         })
     }
 
-    /// How many read files of running tasks wait to be imported.
+    /// Returns how many files of running tasks are read and wait to be
+    /// imported.
     pub fn prepared_task_backlog(&self) -> Result<usize> {
         self.database.read(WorkPriority::CanonicalIngest, |connection| {
             Ok(connection.query_row(
@@ -729,10 +741,13 @@ impl Library {
         Ok(stored)
     }
 
-    /// Undo a task: remove the roots it created that still exist and the tags
-    /// it added to roots that already existed, then mark it reverted. Called
-    /// by the ingest worker, so no batch of the task is in flight. Returns the
-    /// files that can be deleted now.
+    /// Undo a task: take back the changes it recorded to collections and
+    /// texts, remove the roots it created that still exist and the tags it
+    /// added to roots that already existed, take back the other changes it
+    /// recorded (folders, and for a merge also folder places, ratings, smart
+    /// folders and tags), then mark it reverted. The ingest worker calls
+    /// this, so no batch of the task is being imported meanwhile. Returns
+    /// the files that can be deleted now.
     pub fn revert_task(&self, task: TaskId, now_ms: i64) -> Result<Vec<PendingBlobCleanup>> {
         let protected_cleanup_files = self.history.protected_cleanup_files();
         let cleanup = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {

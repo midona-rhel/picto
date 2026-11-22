@@ -1,4 +1,5 @@
-//! Tags and tag namespaces: assignment, definitions, renames and merges.
+//! The mutations of tags and tag namespaces: giving tags to items, the
+//! definitions, renames and merges.
 
 use super::*;
 
@@ -64,11 +65,12 @@ impl Library {
         )
     }
 
-    /// One page of tags, filtered by namespace and search text. Without a
-    /// search, tags are sorted by subname, then namespace, then id
-    /// (case-insensitive). With one, matches are ranked by [`match_rank`]
-    /// (exact, prefix, word start, substring), keeping that order within a
-    /// rank; `namespace:subname` text also matches the namespace. Counts are
+    /// Returns one page of tags, filtered by namespace and search text.
+    /// Without a search text, the tags are sorted by subname, then by
+    /// namespace, then by id, without regard to case. With a search text,
+    /// the matches are ranked by [`match_rank`] (exact, prefix, word start,
+    /// substring) and keep that order within a rank. A text of the form
+    /// `namespace:subname` also matches the namespace. The counts are
     /// computed only for the returned page, not for every tag in the library.
     pub fn tag_page(
         &self,
@@ -102,7 +104,8 @@ impl Library {
         )
     }
 
-    /// The requested tags with counts; unknown ids are skipped.
+    /// Returns the requested tags with their counts. An id that the library
+    /// does not have is left out.
     pub fn tags_by_id(&self, tag_ids: &[crate::TagId]) -> Result<Vec<TagRecord>> {
         if tag_ids.is_empty() {
             return Ok(Vec::new());
@@ -119,7 +122,8 @@ impl Library {
         )
     }
 
-    /// Tags assigned to no root, active or not.
+    /// Returns the number of tags that no root carries, whatever the
+    /// lifecycle of the roots.
     pub fn unused_tag_count(&self) -> Result<u64> {
         self.database.read_consistent(
             WorkPriority::VisibleRead,
@@ -143,10 +147,11 @@ impl Library {
         self.apply_tags(target, &[name.to_owned()], true)
     }
 
-    /// Apply independently predicted tag sets to visible roots in one exact
-    /// publication. Collections are one root, so callers union all member
-    /// predictions into one assignment before entering the library kernel.
-    /// Tags the user asked for (manual AI tagging); undoable.
+    /// Gives each root the set of tags that was predicted for it, in one
+    /// publication. A collection is one root, so the caller joins the
+    /// predictions for all its members into one set first. These are tags
+    /// that the user asked for with manual AI tagging, so the change can be
+    /// undone.
     pub fn add_tag_assignments(
         &self,
         assignments: &[RootTagAssignment],
@@ -154,9 +159,10 @@ impl Library {
         self.assign_tags(assignments, true)
     }
 
-    /// Tags written by background work (auto-tag on import). They never enter
-    /// the undo stack, so Undo keeps meaning "undo my last edit", and roots
-    /// deleted while inference ran are skipped instead of failing the batch.
+    /// Gives roots the tags that background work predicted (automatic
+    /// tagging on import). These changes never enter the undo history, so
+    /// Undo keeps meaning "undo my last edit". A root that was deleted while
+    /// the prediction ran is skipped, and the batch does not fail for it.
     pub fn add_automatic_tag_assignments(
         &self,
         assignments: &[RootTagAssignment],
@@ -1557,7 +1563,8 @@ fn tag_page_entries<'a>(
     offset: usize,
     limit: usize,
 ) -> (Vec<&'a SortedTag>, Option<usize>) {
-    // Collect only the requested page and inspect one lookahead.
+    // Only the requested page is collected. One more entry is looked at, to
+    // know whether another page follows.
     let mut matching = entries.skip(offset);
     let page = matching.by_ref().take(limit).collect();
     let next = matching.next().map(|_| offset.saturating_add(limit));
@@ -1657,10 +1664,10 @@ fn tag_rank_ranges(
 }
 
 impl SortedTag {
-    /// How well `search` (lowercased) matches this tag, best first. Text with
-    /// a colon also matches `namespace:subname`, so `character:twok` finds
-    /// `character:twokinds` while a subname containing a colon still matches
-    /// literally.
+    /// Returns how well `search`, which is in lowercase, matches this tag. A
+    /// lower rank is a better match. A text with a colon also matches
+    /// `namespace:subname`, so `character:twok` finds `character:twokinds`,
+    /// and a subname that contains a colon still matches as it is written.
     fn search_rank(&self, search: &str) -> Option<u8> {
         #[cfg(test)]
         tests::SEARCH_RANK_CALLS.with(|calls| calls.set(calls.get() + 1));
@@ -1677,10 +1684,11 @@ impl SortedTag {
     }
 }
 
-/// Rank of `needle` in `text`, both lowercased: 0 exact, 1 prefix, 2 at the
-/// start of a word (after a character that is not a letter or digit), 3 any
-/// other substring, `None` when absent. The renderer's `rankMatches` uses the
-/// same rule.
+/// Returns the rank of `needle` in `text`, both in lowercase: 0 when they
+/// are equal, 1 when `text` starts with `needle`, 2 when `needle` is at the
+/// start of a word (after a character that is not a letter or digit), 3 for
+/// any other place in `text`, and `None` when `text` does not contain
+/// `needle`. The renderer's `rankMatches` uses the same rule.
 pub(crate) fn match_rank(text: &str, needle: &str) -> Option<u8> {
     if text == needle {
         return Some(0);
@@ -1752,7 +1760,8 @@ impl TagDefinitionRow {
     }
 }
 
-/// Tag definitions without counts; `only` restricts to the given ids.
+/// Returns the tag definitions without counts. With `only`, it returns just
+/// the tags with the given ids.
 pub(super) fn tag_definition_rows(
     connection: &rusqlite::Connection,
     only: Option<&[crate::TagId]>,

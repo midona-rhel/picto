@@ -1,6 +1,6 @@
-//! A foreground task (an import) as the application reports it with the
-//! command `tasks.list`, and the texts, colours and states that the task
-//! dialog and the task bar show for it.
+//! A foreground task (an import, or a merge of another library) as the
+//! application reports it with the command `tasks.list`, and the texts,
+//! colours and states that the task dialog and the task bar show for it.
 use crate::i18n::en;
 use crate::i18n::format::grouped;
 use serde_json::Value;

@@ -1,4 +1,4 @@
-//! Smart folder definitions and their tree.
+//! The mutations of smart folders: their definitions and their tree.
 
 use super::*;
 

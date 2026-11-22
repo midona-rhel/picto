@@ -1,18 +1,22 @@
-//! Loose content-addressed blob storage.
+//! The blob store of a library: the folder `blobs/`, which holds each
+//! imported file and its thumbnail under the SHA-256 hash of the file.
 //!
-//! Files are stored as plain files in a hash-addressed directory tree:
+//! The files are plain files in a tree of folders that are named after the
+//! hash:
 //! ```text
 //! blobs/
 //! ├── f/<ab>/<cd>/<fullhash>.<ext>   # originals (e.g. abc123.jpg)
 //! └── t/<ab>/<cd>/<fullhash>.jpg     # thumbnails (always JPEG)
 //! ```
 //!
-//! - Two-level hex sharding: `hash[0..2]` / `hash[2..4]`
-//! - File extensions derived from MIME type; MIME derived from extension on read
-//! - Idempotent writes — if the file already exists, skip
-//! - Writes are atomic: staged in `blobs/tmp/`, then renamed onto the final
-//!   path. A file at a content-addressed path is therefore always complete —
-//!   which is what makes the existence-skip and hash-as-filename safe.
+//! - The two folder levels are the first two and the next two characters of
+//!   the hash.
+//! - A file's extension is derived from its MIME type when it is written,
+//!   and the MIME type is derived from the extension when it is read.
+//! - A write does nothing when the file already exists.
+//! - A file is first written into `blobs/tmp/` and then renamed to its final
+//!   path. So a file at a final path is always complete. That is why a write
+//!   may skip a file that exists, and why the hash can be the file's name.
 
 use std::collections::HashSet;
 use std::fs;
@@ -106,12 +110,13 @@ pub fn extension_to_mime(ext: &str) -> &'static str {
     }
 }
 
-/// Manages reading and writing content-addressed blobs.
+/// The blob store of one library. It reads and writes the originals and the
+/// thumbnails.
 pub struct BlobStore {
     root: PathBuf,
-    /// This instance's staging directory, `blobs/tmp/<pid>-<nonce>/`.
-    /// Unique per open, so a re-open never disturbs an in-flight writer
-    /// still holding the previous instance.
+    /// The staging folder of this instance, `blobs/tmp/<pid>-<nonce>/`. Each
+    /// open gets a folder of its own, so opening the library again does not
+    /// disturb a write that still uses the earlier instance.
     staging: PathBuf,
 }
 
@@ -157,14 +162,16 @@ impl BlobStore {
         Ok(Self { root, staging })
     }
 
-    /// Write an original file with extension. Skips if already exists (idempotent).
+    /// Writes an original with its extension. It does nothing when the file
+    /// already exists.
     pub fn write_original(&self, hex_hash: &str, data: &[u8], ext: Option<&str>) -> BlobResult<()> {
-        // Check new path (with extension) first
+        // A file that is already stored is not written again.
         let path = self.original_path_with_ext(hex_hash, ext)?;
         if path.exists() {
             return Ok(());
         }
-        // Originals are irreplaceable — fsync before rename.
+        // An original cannot be made again, so the file is synced to disk
+        // before it is renamed into place.
         self.write_atomic(&path, data, true, true)
     }
 
@@ -300,7 +307,7 @@ impl BlobStore {
         Ok(())
     }
 
-    /// Enumerate stored originals as `(hash, extension)` pairs.
+    /// Returns the stored originals as pairs of hash and extension.
     pub fn list_originals(&self) -> Vec<(String, String)> {
         let mut out = Vec::new();
         let f_root = self.root.join("f");
@@ -402,7 +409,8 @@ impl BlobStore {
             return Ok(());
         }
         let path = self.thumbnail_path_with_ext(hex_hash, ext)?;
-        // Thumbnails are regenerable — atomic rename without fsync.
+        // A thumbnail can be made again, so it is renamed into place without
+        // a sync to disk.
         self.write_atomic(&path, data, false, true)
     }
 
@@ -450,9 +458,10 @@ impl BlobStore {
         Ok(())
     }
 
-    /// Enumerate unreferenced, old blob hashes without deleting anything.
-    /// Physical deletion is owned by the database-backed cleanup contract so
-    /// the reference check cannot become stale between enumeration and delete.
+    /// Returns the hashes of the stored files that `referenced` does not
+    /// name and that are at least `min_age` old. It deletes nothing. The
+    /// files are deleted by the cleanup that reads the database, so that a
+    /// hash cannot come into use between this listing and the deletion.
     pub fn orphan_candidates(
         &self,
         referenced: &std::collections::HashSet<String>,
@@ -546,7 +555,8 @@ impl BlobStore {
         Ok(())
     }
 
-    /// Path to original with extension: `blobs/f/<ab>/<cd>/<hash>.<ext>`
+    /// Returns the path of the original with this hash and extension:
+    /// `blobs/f/<ab>/<cd>/<hash>.<ext>`.
     pub fn original_path_with_ext(&self, hex_hash: &str, ext: Option<&str>) -> BlobResult<PathBuf> {
         let (ab, cd) = shard_prefix(hex_hash)?;
         let e = match ext {
@@ -557,7 +567,8 @@ impl BlobStore {
         Ok(self.root.join("f").join(ab).join(cd).join(filename))
     }
 
-    /// Path to a thumbnail with a specific extension: `blobs/t/<ab>/<cd>/<hash>.<ext>`
+    /// Returns the path of the thumbnail with this hash and extension:
+    /// `blobs/t/<ab>/<cd>/<hash>.<ext>`.
     pub fn thumbnail_path_with_ext(&self, hex_hash: &str, ext: &str) -> BlobResult<PathBuf> {
         let (ab, cd) = shard_prefix(hex_hash)?;
         Ok(self
@@ -711,7 +722,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = BlobStore::open(dir.path()).unwrap();
         let hash = |n: u8| format!("ab{:02x}{}", n, "0".repeat(60));
-        // Originals: two in place, one in a shard reached through a link.
+        // There are three originals: two in their folders, and one in a
+        // folder that is reached through a link.
         store.write_original(&hash(1), b"one", Some("png")).unwrap();
         store.write_original(&hash(2), b"two", Some("jpg")).unwrap();
         let elsewhere = dir.path().join("elsewhere");
@@ -728,8 +740,9 @@ mod tests {
                 (hash(3), "gif".to_string()),
             ]
         );
-        // Thumbnails: a .jpg, a .png, one in the wrong shard, one that is a
-        // link to nothing, and one that is a link to a file.
+        // There are five thumbnails: a .jpg, a .png, one in the wrong
+        // folder, one that is a link to nothing, and one that is a link to a
+        // file.
         store.write_thumbnail(&hash(1), b"t", "jpg").unwrap();
         store.write_thumbnail(&hash(2), b"t", "png").unwrap();
         let wrong = store.root.join("t/ab/01");
@@ -842,11 +855,12 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let tmp = dir.path().join("blobs").join("tmp");
         fs::create_dir_all(&tmp).unwrap();
-        // Crash leftover from another (dead) process.
+        // This folder was left behind by another process that has ended.
         let dead = tmp.join("999999999-deadbeef");
         fs::create_dir_all(&dead).unwrap();
         fs::write(dead.join("partial.png"), b"partial").unwrap();
-        // In-flight staging dir from a still-live store in this process.
+        // This staging folder belongs to a store that is still open in this
+        // process.
         let live = tmp.join(format!("{}-cafebabe", std::process::id()));
         fs::create_dir_all(&live).unwrap();
         fs::write(live.join("inflight.png"), b"inflight").unwrap();

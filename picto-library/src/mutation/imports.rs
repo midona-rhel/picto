@@ -1,4 +1,4 @@
-//! Importing prepared media and collections.
+//! The mutations that import prepared files and collections.
 
 use super::*;
 use rusqlite::{params, OptionalExtension};
@@ -190,7 +190,8 @@ impl Library {
         self.ingest_collection_with(input, false, None)
     }
 
-    /// Import a collection for a foreground task; see [`Self::ingest_batch_for_task`].
+    /// Imports a collection for a foreground task, as
+    /// [`Self::ingest_batch_for_task`] imports items.
     pub fn ingest_collection_for_task(
         &self,
         input: &PreparedCollectionImport,
@@ -231,8 +232,10 @@ impl Library {
             if let Some(task) = task {
                 super::tasks::require_running_task(transaction, task)?;
             }
-            // Each grouped task streams ordinary jobs. Its durable alias resolves
-            // the accumulated collection across batches, pauses and reopen.
+            // A task that groups its files queues an ordinary job for each
+            // file. The alias `task:<id>:collection` names the collection
+            // that the task has built so far, so that a later batch finds it,
+            // also after a pause and after the library was opened again.
             let mut grouped = input.clone();
             let mut held = ingest::Held::Refresh;
             let group_key = if let Some(task) = task {
@@ -286,8 +289,9 @@ impl Library {
                         &output.placed,
                         &output.rated.into_iter().collect::<Vec<_>>(),
                     )?;
-                    // Partial collections are ungrouped during rollback, exposing
-                    // these created media roots for deletion.
+                    // When the task is undone, a collection that it built in
+                    // part is ungrouped first. The media roots that it created
+                    // are then roots again and can be deleted.
                     crate::mutation::tasks::record_task_ingest(
                         transaction,
                         task,
@@ -352,7 +356,9 @@ impl Library {
                     resources.extend(merge.resources);
                     (winner, merge.affected)
                 } else if ordered_roots.len() >= 2 {
-                    // Capture before lifecycle promotion so rollback restores each input's state.
+                    // The lifecycles are changed after the structure was
+                    // captured above, so that undoing the task restores the
+                    // lifecycle of each root.
                     settle_lifecycles(&mut next, &ordered_roots, &mut bitmap_keys);
                     let output = crate::group::organize(
                         transaction,
@@ -364,8 +370,9 @@ impl Library {
                             },
                             cover_root_id: requested_cover.unwrap_or(ordered_roots[0]),
                             winning_collection_id,
-                            // Existing collection titles are collection-owned. A later
-                            // member refresh must not replace one with a member/source name.
+                            // A collection that already exists keeps its name.
+                            // An import of one of its members must not replace
+                            // it with the name of a member or of a source.
                             name: winning_collection_id
                                 .is_none()
                                 .then(|| input.name.clone())

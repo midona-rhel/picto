@@ -3,7 +3,8 @@
 //! application's import queue (the command `imports.enqueue`). Each import
 //! is a foreground task. This module shows the task in a dialog with its
 //! progress and its Pause and Stop buttons, and in the task bar when the
-//! user minimizes the dialog.
+//! user minimizes the dialog. A merge of another library, which the Library
+//! Manager starts, is a foreground task too and is shown in the same way.
 //!
 //! The window has one `Imports` view. The shell draws it over everything
 //! else, and other code reaches it through [`get`].
