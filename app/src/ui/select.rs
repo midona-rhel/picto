@@ -678,6 +678,12 @@ fn close_list(list: AnyWindowHandle, cx: &mut App) {
 /// pop-up window of its own, at the button and on the same display. That
 /// window closes when the menu closes. A press anywhere else in the menu's
 /// window closes the list.
+///
+/// On macOS, Windows and X11 the list's window is given its place on the
+/// display (`pop_up_list`). On Wayland it is a pop-up that the compositor
+/// places beside the button: 4px below it, or 4px above it where there is
+/// no room below, and moved sideways as far as it needs to stay on the
+/// display.
 fn pop_up(
     button: Stateful<Div>,
     listed: Listed,
@@ -708,22 +714,63 @@ fn pop_up(
         let origin = crate::zoom::content_origin_in_ui(window);
         let bounds = measured.get();
         let area = crate::zoom::screen_to_ui(display.visible_bounds(), window.ui_zoom());
-        let (list_rect, window_rect) = pop_up_list(
-            [
-                origin.0 + f32::from(bounds.origin.x),
-                origin.1 + f32::from(bounds.origin.y),
-                f32::from(bounds.size.width),
-                f32::from(bounds.size.height),
-            ],
-            listed.choices.len(),
-            [
-                f32::from(area.origin.x),
-                f32::from(area.origin.y),
-                f32::from(area.size.width),
-                f32::from(area.size.height),
-            ],
-        );
         let owner = window.window_handle();
+        let zoom = window.ui_zoom();
+        let (list_rect, window_rect, kind) = if super::menu::compositor_places_pop_ups(cx) {
+            // The compositor places the window. The window is the list with
+            // room for its shadow on every side, and the compositor places
+            // the list's own rectangle (`geometry_inset`). The anchor
+            // rectangle is the button with the gap between button and list
+            // added above and below, so that the list keeps that gap on
+            // whichever side the compositor puts it.
+            let width = f32::from(bounds.size.width);
+            let height = list_height(listed.choices.len());
+            let gap = px(LIST_OFFSET);
+            let kind = WindowKind::AnchoredPopup(popup::PopupOptions {
+                parent: owner,
+                anchor_rect: Bounds::new(
+                    point(bounds.origin.x * zoom, (bounds.origin.y - gap) * zoom),
+                    size(
+                        bounds.size.width * zoom,
+                        (bounds.size.height + gap + gap) * zoom,
+                    ),
+                ),
+                anchor: popup::PopupAnchor::BottomLeft,
+                gravity: popup::PopupGravity::BottomRight,
+                constraint_adjustment: popup::PopupConstraintAdjustment::FLIP_Y
+                    | popup::PopupConstraintAdjustment::SLIDE_X,
+                offset: Point::default(),
+                geometry_inset: px(SHADOW_ROOM * zoom),
+                grab: false,
+            });
+            (
+                [0., 0., width, height],
+                [
+                    -SHADOW_ROOM,
+                    -SHADOW_ROOM,
+                    width + 2. * SHADOW_ROOM,
+                    height + 2. * SHADOW_ROOM,
+                ],
+                kind,
+            )
+        } else {
+            let (list_rect, window_rect) = pop_up_list(
+                [
+                    origin.0 + f32::from(bounds.origin.x),
+                    origin.1 + f32::from(bounds.origin.y),
+                    f32::from(bounds.size.width),
+                    f32::from(bounds.size.height),
+                ],
+                listed.choices.len(),
+                [
+                    f32::from(area.origin.x),
+                    f32::from(area.origin.y),
+                    f32::from(area.size.width),
+                    f32::from(area.size.height),
+                ],
+            );
+            (list_rect, window_rect, WindowKind::PopUp)
+        };
         let display = display.id();
         cx.defer(move |cx| {
             if !listed.state.read(cx).open {
@@ -731,6 +778,8 @@ fn pop_up(
                 return;
             }
             let options = WindowOptions {
+                // For a pop-up that the compositor places, only the size of
+                // these bounds is used.
                 window_bounds: Some(WindowBounds::Windowed(crate::zoom::ui_to_screen(
                     Bounds::new(
                         point(px(window_rect[0]), px(window_rect[1])),
@@ -742,7 +791,7 @@ fn pop_up(
                 titlebar: None,
                 focus: false,
                 show: true,
-                kind: WindowKind::PopUp,
+                kind,
                 is_movable: false,
                 is_resizable: false,
                 is_minimizable: false,
@@ -755,11 +804,11 @@ fn pop_up(
             };
             let state = listed.state.clone();
             let at = (list_rect[0] - window_rect[0], list_rect[1] - window_rect[1]);
-            let width = list_rect[2];
+            let (width, height) = (list_rect[2], list_rect[3]);
             let opened = cx
                 .open_window(options, move |window, cx| {
-                    super::menu::without_system_shadow(window);
-                    cx.new(|cx| PopUpList::new(listed, at, width, cx))
+                    super::window_chrome::without_system_frame(window);
+                    cx.new(|cx| PopUpList::new(listed, at, (width, height), cx))
                 })
                 .ok()
                 .map(AnyWindowHandle::from);
@@ -804,21 +853,23 @@ fn pop_up(
 
 /// The root view of the pop-up window of a select's list. It draws the list
 /// at its place in the transparent window, and draws it again whenever the
-/// select's state changes, for example when the highlight moves.
+/// select's state changes, for example when the highlight moves. `at` is the
+/// list's top-left corner in the window and `size` is the list's width and
+/// height.
 struct PopUpList {
     listed: Listed,
     at: (f32, f32),
-    width: f32,
+    size: (f32, f32),
     _observe: Subscription,
 }
 
 impl PopUpList {
-    fn new(listed: Listed, at: (f32, f32), width: f32, cx: &mut Context<Self>) -> Self {
+    fn new(listed: Listed, at: (f32, f32), size: (f32, f32), cx: &mut Context<Self>) -> Self {
         let observe = cx.observe(&listed.state, |_, _, cx| cx.notify());
         Self {
             listed,
             at,
-            width,
+            size,
             _observe: observe,
         }
     }
@@ -827,6 +878,17 @@ impl PopUpList {
 impl Render for PopUpList {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let highlighted = self.listed.state.read(cx).highlighted;
+        // The system is told which part of the window the list covers. The
+        // rest of the window holds only the list's shadow.
+        super::window_chrome::place_panel(
+            window,
+            Bounds::new(
+                point(px(self.at.0), px(self.at.1)),
+                size(px(self.size.0), px(self.size.1)),
+            ),
+            theme::RADIUS_MD,
+            1.,
+        );
         div().size_full().child(
             div()
                 .absolute()
@@ -835,7 +897,7 @@ impl Render for PopUpList {
                 .child(list(
                     &self.listed,
                     highlighted,
-                    px(self.width),
+                    px(self.size.0),
                     "select-pop-up-list".into(),
                     window,
                     cx,
