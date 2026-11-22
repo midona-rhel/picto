@@ -158,12 +158,14 @@ Places
 Merge with Another Library…
 Merge Libraries
 Merge
-Library to keep
+Primary library
+Merge Libraries…
+The primary library is kept and receives the other library's content. Where the two disagree, the primary library's version is used.
 The second library
 1 item
 Cancel…
 Every item, tag, folder, smart folder and collection of both libraries is put into one library. A file that both libraries hold is kept once. Nothing is deleted from the other library.
-The library that is kept receives the content of the other one. Subscriptions, cloud sync settings, watched folders and application settings of the other library are not carried over. A merge cannot be undone with Undo.
+Subscriptions, cloud sync settings, watched folders and application settings of the other library are not carried over. A merge cannot be undone with Undo.
 A library operation is already in progress.
 The library was closed before the merge started.
 Reading the other library…

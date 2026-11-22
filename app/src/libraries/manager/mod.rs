@@ -125,7 +125,7 @@ enum Act {
     Move,
     Delete,
     /// Opens the merge dialog. The merge reads the library, or writes to it
-    /// when it is the library that is kept.
+    /// when it is the primary library.
     Merge,
 }
 
@@ -221,8 +221,10 @@ pub struct Manager {
     /// the library's identity, its folder, and the action that runs when
     /// the user agrees.
     asking: ui::modal::Host<(super::Identity, PathBuf, Act)>,
-    /// The Merge with Another Library… dialog.
+    /// The dialog that merges two libraries.
     merging: ui::modal::Host<merge::Merge>,
+    /// The scroll position of the dialog's list of second libraries.
+    merge_scroll: ScrollHandle,
     /// The icon picker. It is `Some` while the user has it open with
     /// Change….
     icons: Option<Entity<ui::icon_picker::IconPicker>>,
@@ -317,6 +319,7 @@ impl Manager {
             deleting: Default::default(),
             asking: Default::default(),
             merging: Default::default(),
+            merge_scroll: ScrollHandle::new(),
             icons: None,
             menu: menu::Host::deferred(ui::layer::MENU, menu::Return::Opener),
             busy: false,

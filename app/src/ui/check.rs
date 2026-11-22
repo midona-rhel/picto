@@ -131,10 +131,12 @@ impl RenderOnce for CheckBox {
 /// indicator. A disabled row is drawn at half strength and does not react to
 /// clicks.
 ///
-/// A row can have two more texts. The trailing text is drawn at the right end
-/// of the label's line. The detail is drawn under the label in small text.
-/// Both are drawn in the secondary text colour. The label and the detail are
-/// cut off with an ellipsis where the row is too narrow for them.
+/// A row can have two more texts on the label's line. The detail is drawn
+/// after the label in small text, and the trailing text is drawn at the right
+/// end of the row. Both are drawn in the secondary text colour. Such a row
+/// takes the whole width that it is given. The label takes at most half of
+/// it, and the label and the detail are cut off with an ellipsis where the
+/// row is too narrow for them.
 #[derive(IntoElement)]
 pub struct Check {
     id: ElementId,
@@ -172,7 +174,7 @@ impl Check {
         self.trailing = Some(trailing.into());
         self
     }
-    /// Sets the text under the label, for example a path.
+    /// Sets the text after the label, for example a path.
     pub fn detail(mut self, detail: impl Into<SharedString>) -> Self {
         self.detail = Some(detail.into());
         self
@@ -225,42 +227,45 @@ impl RenderOnce for Check {
                 )
                 .round(self.radio),
             );
-        // A row with a trailing text or a detail lays its texts out in a
-        // column that takes the rest of the row's width. A row with only a
+        // A row with a detail or a trailing text lays its texts out in a
+        // line that takes the rest of the row's width. A row with only a
         // label is as wide as the label.
-        let two_lines = self.detail.is_some();
         let texts = if self.trailing.is_none() && self.detail.is_none() {
             div().relative().min_w_0().child(self.label.clone())
         } else {
+            let detail = match self.detail {
+                Some(detail) => div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text(theme::TEXT_SM)
+                    .text_color(theme.text_secondary())
+                    .child(detail),
+                // Without a detail, an empty element takes the room, so that
+                // the trailing text is at the right end.
+                None => div().flex_1(),
+            };
             div()
                 .relative()
                 .flex_1()
                 .min_w_0()
                 .flex()
-                .flex_col()
-                .gap(px(2.))
+                .items_center()
+                .gap(px(8.))
                 .child(
                     div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .child(div().flex_1().min_w_0().truncate().child(self.label.clone()))
-                        .children(self.trailing.map(|trailing| {
-                            div()
-                                .flex_none()
-                                .text_color(theme.text_secondary())
-                                .font_features(theme::tabular_figures())
-                                .child(trailing)
-                        })),
-                )
-                .children(self.detail.map(|detail| {
-                    div()
-                        .min_w_0()
+                        .flex_none()
+                        .max_w(relative(0.5))
                         .truncate()
-                        .text(theme::TEXT_SM)
-                        .line_height(px(14.))
+                        .child(self.label.clone()),
+                )
+                .child(detail)
+                .children(self.trailing.map(|trailing| {
+                    div()
+                        .flex_none()
                         .text_color(theme.text_secondary())
-                        .child(detail)
+                        .font_features(theme::tabular_figures())
+                        .child(trailing)
                 }))
         };
         let mut row = div()
@@ -281,9 +286,6 @@ impl RenderOnce for Check {
             .mr(px(6.))
             .pl(px(6.))
             .pr(px(8.))
-            // A row with a detail has two lines of text, with 5px above and
-            // below them.
-            .py(px(if two_lines { 5. } else { 0. }))
             .flex()
             .items_center()
             .rounded(px(theme::RADIUS_MD))
