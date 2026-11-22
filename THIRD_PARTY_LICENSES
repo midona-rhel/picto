@@ -7,8 +7,12 @@ This file identifies the programs that a Picto package holds beside the app, the
 that are compiled into the app, and the assets that it bundles. The app is built from the Rust
 crates that `app/Cargo.lock` pins, and each of those crates declares its own license.
 
-TODO: the packages hold neither this file nor the license texts of the crates the app is built
-from. A package has to hold them before it is published.
+Every package holds this file, Picto's own license and the license texts named below, in a folder
+`licenses` (`Contents/Resources/licenses` in the macOS app, `licenses` in the Windows installation
+folder, `usr/share/licenses/picto` in the AppImage).
+
+TODO: the packages do not hold the license texts of the other Rust crates the app is built from.
+Generate them from `app/Cargo.lock` and put them into the same folder.
 
 
 FFmpeg / FFprobe

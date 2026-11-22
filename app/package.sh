@@ -79,6 +79,15 @@ say "building the release program (version $version)"
 cargo build --locked --release "$@"
 [[ -f "$program" ]] || fail "the build did not make $program"
 
+# Copies the license of Picto, the notices of the third-party software and
+# the license texts that the notices name into the folder `$1`, which it
+# creates. Every package holds this folder.
+copy_licenses() {
+	mkdir -p "$1"
+	cp "$repository/LICENSE" "$repository/THIRD_PARTY_LICENSES" \
+		"$here/LICENSE-gpui" "$here"/assets/LICENSE-* "$1/"
+}
+
 # Prints the SHA-512 of a file in base64, as the update feeds give it.
 sha512() {
 	openssl dgst -sha512 -binary "$1" | openssl base64 -A
@@ -175,6 +184,7 @@ package_mac() {
 	printf 'APPL????' >"$app/Contents/PkgInfo"
 	# The icons of the two file types that Info.plist names.
 	cp "$repository/build/library.icns" "$repository/build/picto-pack.icns" "$app/Contents/Resources/"
+	copy_licenses "$app/Contents/Resources/licenses"
 	mac_icon "$app/Contents/Resources"
 
 	if [[ -n "${MAC_CSC_LINK:-}" ]]; then
@@ -225,6 +235,7 @@ package_windows() {
 	done
 	cp "${ffmpeg[@]}" "$stage/"
 	cp "$repository/build/picto-pack.ico" "$stage/resources/picto-pack.ico"
+	copy_licenses "$stage/licenses"
 
 	# The Microsoft C++ runtime libraries. The program loads the runtime from
 	# DLLs (`vcruntime140.dll` and others) that are not a part of Windows, so
@@ -330,6 +341,7 @@ package_linux() {
 		say "library shipped beside the program: $(basename "$library")"
 	done < <(ldd "$here/$program" | awk '$3 ~ /^\// { print $3 }' | grep -F "$here/target/release/" || true)
 	cp "${ffmpeg[@]}" "$appdir/usr/bin/"
+	copy_licenses "$appdir/usr/share/licenses/picto"
 
 	cp packaging/linux/AppRun "$appdir/AppRun"
 	chmod 755 "$appdir/AppRun" "$appdir/usr/bin/picto" "$appdir/usr/bin/ffmpeg" "$appdir/usr/bin/ffprobe"

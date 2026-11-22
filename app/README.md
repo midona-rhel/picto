@@ -345,9 +345,9 @@ had, and they upgrade an installed Picto 0.6.19 or earlier.
 
 | System | Files | What is in the package |
 | --- | --- | --- |
-| macOS, arm64 | `Picto-<version>-arm64.dmg`, `Picto-<version>-arm64-mac.zip`, `latest-mac.yml` | `Picto.app` with the program, `ffmpeg` and `ffprobe` in `Contents/MacOS`, `packaging/macos/Info.plist`, and the icons in `Contents/Resources`. The disk image also holds a link to the Applications folder. |
-| Windows, x64 | `Picto-Setup-<version>.exe`, `latest.yml` | An NSIS installer (`packaging/windows/installer.nsi`) with `Picto.exe`, the DLLs the build put beside it (`DirectML.dll`, which the application core's ONNX Runtime uses), the Microsoft C++ runtime DLLs that these import (such as `vcruntime140.dll`), `ffmpeg.exe`, `ffprobe.exe` and the icon of pack files. Needs NSIS 3 (`makensis`), Git Bash and Visual Studio or its Build Tools with the C++ tools for x64. |
-| Linux, x64 | `Picto-<version>.AppImage`, `latest-linux.yml` | An AppImage with `usr/bin/picto`, `libwebgpu_dawn.so`, `ffmpeg` and `ffprobe` beside it, `packaging/linux/AppRun`, the desktop file and the icon. Needs `appimagetool`, on the `PATH` or named by `APPIMAGETOOL`. |
+| macOS, arm64 | `Picto-<version>-arm64.dmg`, `Picto-<version>-arm64-mac.zip`, `latest-mac.yml` | `Picto.app` with the program, `ffmpeg` and `ffprobe` in `Contents/MacOS`, `packaging/macos/Info.plist`, and the icons and the folder `licenses` in `Contents/Resources`. The disk image also holds a link to the Applications folder. |
+| Windows, x64 | `Picto-Setup-<version>.exe`, `latest.yml` | An NSIS installer (`packaging/windows/installer.nsi`) with `Picto.exe`, the DLLs the build put beside it (`DirectML.dll`, which the application core's ONNX Runtime uses), the Microsoft C++ runtime DLLs that these import (such as `vcruntime140.dll`), `ffmpeg.exe`, `ffprobe.exe`, the icon of pack files and the folder `licenses`. Needs NSIS 3 (`makensis`), Git Bash and Visual Studio or its Build Tools with the C++ tools for x64. |
+| Linux, x64 | `Picto-<version>.AppImage`, `latest-linux.yml` | An AppImage with `usr/bin/picto`, `libwebgpu_dawn.so`, `ffmpeg` and `ffprobe` beside it, `packaging/linux/AppRun`, the desktop file, the icon and `usr/share/licenses/picto`. Needs `appimagetool`, on the `PATH` or named by `APPIMAGETOOL`. |
 
 The version is the one in the repository's `package.json`. The `.yml` files
 are update feeds in the format electron-builder writes: the version, each
