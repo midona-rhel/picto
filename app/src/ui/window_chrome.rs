@@ -8,7 +8,7 @@
 //!   draws the minimise, maximise and close buttons ([`caption_buttons`]),
 //!   and on Linux also the edges that resize the window ([`resize_edges`]).
 //! - The system's blur of what is behind a window is asked for here: for a
-//!   pop-up menu ([`system_blur_behind`]) and for the main window's sidebar
+//!   pop-up menu ([`prepare_panel_window`]) and for the main window's sidebar
 //!   and inspector ([`show_rail_material`]).
 //!
 //! The functions that call a system directly do so through
@@ -340,34 +340,97 @@ pub fn order_out(window: &Window) {
     let _ = window;
 }
 
-/// Returns whether [`system_blur_behind`] blurs what is behind a pop-up
-/// window. It does so on macOS only. macOS is the one system on which the
-/// app's menus are pop-up windows (`ui::menu::presentation`), and the blur
-/// there comes from an `NSVisualEffectView` under the menu's panel. On
-/// Windows and Linux a menu is drawn inside the window that opened it.
-/// There the menu's panel blurs what the window has drawn behind it.
-pub const fn system_blurs() -> bool {
-    cfg!(target_os = "macos")
+/// Returns whether the system blurs what is behind the panel of a menu's
+/// pop-up window ([`prepare_panel_window`]). `window` is any window of the
+/// app; the answer is the same for all of them.
+///
+/// - macOS: always. The blur is an `NSVisualEffectView` under the panel.
+/// - Windows: on Windows 11 version 22H2 and later, where the blur is the
+///   system's Acrylic backdrop of the whole window. Earlier versions can
+///   blur only behind a whole window whose corners are not rounded.
+/// - Wayland: when the compositor has the ext-background-effect protocol
+///   and has announced that it blurs, or has the kde-blur protocol.
+/// - X11: when a compositing manager is running that blurs behind the
+///   region a window names in `_KDE_NET_WM_BLUR_BEHIND_REGION`, which KWin
+///   does.
+///
+/// Where the answer is `false`, the panel has a more opaque fill instead
+/// (`ui::fill_without_blur`).
+pub fn system_blurs(window: &Window) -> bool {
+    if cfg!(target_os = "macos") {
+        return true;
+    }
+    #[cfg(target_os = "windows")]
+    if !crate::platform::windows::has_system_backdrop() {
+        return false;
+    }
+    window.is_background_blur_supported()
 }
 
-/// Makes the system blur what is behind a transparent pop-up window. The
-/// blur is shown only under the panel that [`place_system_blur`] names. The
-/// caller calls this function when the window opens. Nothing is blurred
-/// until a panel has been placed. It does nothing where
-/// [`system_blurs`] is false.
-pub fn system_blur_behind(window: &Window) {
-    if !system_blurs() {
+/// Prepares the pop-up window of a menu's panel, when the window opens.
+///
+/// Where the system blurs ([`system_blurs`]), the window gets the background
+/// appearance `Blurred`. On macOS, Wayland and X11 the blur is shown only
+/// under the panel that [`place_panel`] names, and nothing is blurred until
+/// a panel has been placed. On Windows the blur is the backdrop of the whole
+/// window (`platform::windows::show_backdrop`).
+///
+/// Where the system does not blur, the window stays transparent, and what
+/// the system draws around a window is taken away
+/// ([`without_system_frame`]).
+pub fn prepare_panel_window(window: &Window) {
+    if !system_blurs(window) {
+        without_system_frame(window);
         return;
     }
     window.set_background_appearance(WindowBackgroundAppearance::Blurred);
     #[cfg(target_os = "macos")]
-    macos::with_ns_window(window, macos::backdrop::hide);
+    {
+        without_system_frame(window);
+        macos::with_ns_window(window, macos::backdrop::hide);
+    }
+    #[cfg(target_os = "windows")]
+    crate::platform::windows::show_backdrop(window);
 }
 
-/// Limits the blur of [`system_blur_behind`] to the rectangle `panel` of
-/// the window, with rounded corners of `radius` pixels, and sets the blur's
-/// opacity to `alpha`. It does nothing on Windows and Linux.
-pub fn place_system_blur(window: &Window, panel: Bounds<Pixels>, radius: f32, alpha: f32) {
+/// Takes away what the system draws around a transparent pop-up window. The
+/// panel in such a window draws its own shadow and edge.
+///
+/// - macOS draws a shadow and an edge highlight around whatever a
+///   transparent window draws, which around a panel look like a second
+///   border. AppKit turns them off (`setHasShadow:`).
+/// - Windows draws a shadow, a border and rounded corners around the
+///   window's rectangle (`platform::windows::without_frame`).
+/// - On Linux a pop-up window gets nothing from the system, so there is
+///   nothing to take away.
+pub fn without_system_frame(window: &Window) {
+    #[cfg(target_os = "macos")]
+    macos::with_ns_window(window, macos::without_shadow);
+    #[cfg(target_os = "windows")]
+    crate::platform::windows::without_frame(window);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = window;
+}
+
+/// Tells the system which rectangle of a pop-up window its panel covers:
+/// `panel`, with rounded corners of `radius` pixels. The panel is drawn at
+/// the opacity `alpha`.
+///
+/// - macOS: the blur of [`prepare_panel_window`] is limited to this
+///   rectangle and gets the opacity `alpha`.
+/// - Wayland and X11: the rectangle becomes the window's content region
+///   (`Window::set_content_region`). Where the system blurs, it blurs only
+///   behind this rectangle. The pointer reaches what is behind the rest of
+///   the window. On an X11 screen without a compositing manager, where a
+///   window cannot be transparent, the window is cut to this rectangle.
+/// - Windows: nothing. A window that shows the backdrop has exactly the
+///   panel's rectangle ([`set_panel_window_frame`]).
+pub fn place_panel(window: &Window, panel: Bounds<Pixels>, radius: f32, alpha: f32) {
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    {
+        let _ = alpha;
+        window.set_content_region(Some((panel, px(radius))));
+    }
     #[cfg(target_os = "macos")]
     {
         // AppKit measures in the window's screen points. `panel` is in the
@@ -386,8 +449,39 @@ pub fn place_system_blur(window: &Window, panel: Bounds<Pixels>, radius: f32, al
             macos::backdrop::place(ns_window, rect, height, radius, alpha)
         });
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
     let _ = (window, panel, radius, alpha);
+}
+
+/// Moves and resizes the pop-up window of a menu's panel to `frame`, which
+/// is given on the display in the points the app's windows are laid out in.
+/// Only Windows needs this, for a window that shows the system's backdrop
+/// and so must keep exactly its panel's rectangle while the panel changes
+/// its height. The window is moved by a task, after the current update of
+/// the app has ended (`platform::windows::set_frame`). It does nothing on
+/// macOS and Linux.
+pub fn set_panel_window_frame(window: &Window, frame: Bounds<Pixels>, cx: &App) {
+    #[cfg(target_os = "windows")]
+    {
+        let Some(hwnd) = crate::platform::windows::hwnd(window) else {
+            return;
+        };
+        // Windows measures in device pixels. `frame` is in the points the
+        // window is laid out in, and the window's scale factor is the
+        // number of device pixels in one such point.
+        let scale = window.scale_factor();
+        let device = |length: Pixels| (f32::from(length) * scale).round() as i32;
+        let frame = (
+            device(frame.origin.x),
+            device(frame.origin.y),
+            device(frame.size.width),
+            device(frame.size.height),
+        );
+        cx.spawn(async move |_| crate::platform::windows::set_frame(hwnd, frame))
+            .detach();
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = (window, frame, cx);
 }
 
 /// Holds whether the main window shows the system's frosted material behind
@@ -485,7 +579,9 @@ pub fn rail_fill(cx: &App) -> Rgba {
 /// opaque and the sidebar and inspector keep their solid colour.
 pub fn show_rail_material(window: &mut Window, cx: &mut App) {
     let material = cx.try_global::<RailMaterial>().copied().unwrap_or_default();
-    let supported = window.is_background_blur_supported();
+    // The material is offered on macOS and Windows only.
+    let supported = cfg!(any(target_os = "macos", target_os = "windows"))
+        && window.is_background_blur_supported();
     let shown = material.wanted && supported;
     if shown == material.shown && supported == material.supported {
         return;
