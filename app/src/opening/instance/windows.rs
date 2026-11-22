@@ -4,6 +4,7 @@
 //! the pipe with `FILE_FLAG_FIRST_PIPE_INSTANCE`, so when another process
 //! has already made a pipe of that name, the listener fails and does not
 //! join that pipe.
+use crate::paths::Canonical as _;
 use super::Request;
 use std::fs::File;
 use std::os::windows::ffi::OsStrExt as _;
@@ -34,7 +35,7 @@ pub fn folder() -> std::io::Result<PathBuf> {
 /// Returns the copy's canonical path in lower case, as bytes. The path is
 /// put in lower case because NTFS ignores case in names.
 pub fn identity(copy: &Path) -> std::io::Result<Vec<u8>> {
-    let canonical = copy.canonicalize()?;
+    let canonical = copy.canonical()?;
     Ok(canonical.to_string_lossy().to_lowercase().into_bytes())
 }
 

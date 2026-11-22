@@ -25,6 +25,7 @@
 //! consent for that library. The Library Manager (`manager`) has also had the
 //! user confirm a Delete…, choose the folder for a Move…, or type the new name
 //! for a Rename….
+use crate::paths::Canonical as _;
 use picto_core::state::{LIBRARY_LOCK_FILE, LibraryLock};
 use std::path::{Path, PathBuf};
 
@@ -39,7 +40,7 @@ pub fn owned(path: &Path) -> Result<PathBuf, String> {
     if !meta.is_dir() || meta.file_type().is_symlink() {
         return Err(refuse());
     }
-    let root = path.canonicalize().map_err(|_| refuse())?;
+    let root = path.canonical().map_err(|_| refuse())?;
     let named = root
         .file_name()
         .and_then(|name| name.to_str())
@@ -57,7 +58,7 @@ pub fn owned(path: &Path) -> Result<PathBuf, String> {
 /// returns it. While the caller keeps the returned lock, no other instance
 /// can open the library.
 fn hold(root: &Path, open: Option<&Path>) -> Result<LibraryLock, String> {
-    if open.is_some_and(|open| open.canonicalize().is_ok_and(|open| open == root)) {
+    if open.is_some_and(|open| open.canonical().is_ok_and(|open| open == root)) {
         return Err(
             "Cannot delete the currently open library. Switch to a different library first."
                 .to_owned(),
@@ -171,14 +172,14 @@ pub fn destination(path: &Path, folder: &Path) -> Result<Moved, String> {
         return Err(refuse_inside());
     }
     let folder = folder
-        .canonicalize()
+        .canonical()
         .map_err(|error| format!("{}: {error}", folder.display()))?;
     if inside_library(&folder) {
         return Err(refuse_inside());
     }
     let name = path.file_name().ok_or_else(|| path.display().to_string())?;
     let target = folder.join(name);
-    if path.canonicalize().is_ok_and(|path| path == target) {
+    if path.canonical().is_ok_and(|path| path == target) {
         return Ok(Moved::Unchanged);
     }
     if target.symlink_metadata().is_ok() {
@@ -409,7 +410,7 @@ mod tests {
         let kept = real_library(folder.path(), "Kept");
         let into = folder.path().join("Archive");
         std::fs::create_dir(&into).unwrap();
-        let into = into.canonicalize().unwrap();
+        let into = into.canonical().unwrap();
         assert_eq!(destination(&kept, folder.path()).unwrap(), Moved::Unchanged);
         assert!(destination(&kept, &kept.join("blobs")).is_err());
         let Moved::To(target) = destination(&kept, &into).unwrap() else {

@@ -409,13 +409,22 @@ impl State {
         if let Some(zoom) = get("zoomFactor").and_then(Value::as_f64) {
             state.zoom_factor = crate::zoom::clamp(zoom);
         }
+        // Every stored path of a library is read in its ordinary form
+        // (`paths::ordinary`). An earlier version of this app stored a
+        // library's path on Windows in the form that starts with `\\?\`,
+        // beside the ordinary form that Picto 0.6.19 stored, so the same
+        // library could be in a list twice. A path that is in a list twice
+        // after this is kept once, at its first place.
         let paths = |key: &str| {
             get(key).and_then(Value::as_array).map(|paths| {
-                paths
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>()
+                let mut read: Vec<String> = Vec::new();
+                for path in paths.iter().filter_map(Value::as_str) {
+                    let path = crate::paths::ordinary(path);
+                    if !read.contains(&path) {
+                        read.push(path);
+                    }
+                }
+                read
             })
         };
         if let Some(history) = paths("libraryHistory") {
@@ -424,24 +433,31 @@ impl State {
         if let Some(pinned) = paths("pinnedLibraries") {
             state.pinned_libraries = pinned;
         }
-        state.last_library = text("lastLibrary");
+        state.last_library = text("lastLibrary").map(|path| crate::paths::ordinary(&path));
         if let Some(consents) = get("libraryConsents").and_then(Value::as_array) {
             state.library_consents = consents
                 .iter()
                 .filter_map(|consent| {
                     Some((
-                        consent.get("path")?.as_str()?.to_owned(),
+                        crate::paths::ordinary(consent.get("path")?.as_str()?),
                         consent.get("database")?.as_str()?.to_owned(),
                     ))
                 })
                 .collect();
         }
         if let Some(meta) = get("libraryMeta").and_then(Value::as_object) {
-            state.library_meta = meta
-                .iter()
-                .map(|(path, look)| (path.clone(), LibraryLook::from_value(look)))
-                .filter(|(_, look)| !look.is_default())
-                .collect();
+            // When a library has a look under both forms of its path, the
+            // look that was stored under the ordinary form is kept.
+            let mut looks = BTreeMap::new();
+            for (path, look) in meta {
+                let ordinary = crate::paths::ordinary(path);
+                let look = LibraryLook::from_value(look);
+                if look.is_default() || (looks.contains_key(&ordinary) && ordinary != *path) {
+                    continue;
+                }
+                looks.insert(ordinary, look);
+            }
+            state.library_meta = looks;
         }
         if let Some(locations) = get("cloudLocations").and_then(Value::as_object) {
             state.cloud_locations = locations
@@ -1036,5 +1052,27 @@ mod tests {
         assert_eq!((small.width, small.height), (1000., 600.));
         // No display is known, so the window is centred.
         assert_eq!(place(10., 10., 900., 600.).on_displays(&[]).x, None::<f32>);
+    }
+    /// On Windows a library whose path was stored in both forms is listed
+    /// once, under the ordinary form.
+    #[cfg(windows)]
+    #[test]
+    fn a_library_stored_under_both_forms_of_its_path_is_read_once() {
+        let (state, _) = State::from_value(&json!({
+            "libraryHistory": [r"\\?\E:\Main.library", r"E:\Main.library", r"E:\Test.library"],
+            "pinnedLibraries": [r"\\?\E:\Main.library"],
+            "lastLibrary": r"\\?\E:\Main.library",
+            "libraryConsents": [{ "path": r"\\?\E:\Main.library", "database": "1" }],
+            "libraryMeta": {
+                r"\\?\E:\Main.library": { "color": "#40C057" },
+                r"E:\Main.library": { "color": "#FA5252" }
+            }
+        }));
+        assert_eq!(state.library_history, [r"E:\Main.library", r"E:\Test.library"]);
+        assert_eq!(state.pinned_libraries, [r"E:\Main.library"]);
+        assert_eq!(state.last_library.as_deref(), Some(r"E:\Main.library"));
+        assert_eq!(state.library_consents[0].0, r"E:\Main.library");
+        assert_eq!(state.library_meta.len(), 1);
+        assert!(state.library_meta.contains_key(r"E:\Main.library"));
     }
 }

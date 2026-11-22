@@ -58,6 +58,10 @@ name = "avfoundation_frames"
 harness = false
 
 [dependencies]
+# Resolves a path as `canonicalize` does and returns its ordinary form on
+# Windows (`src/paths.rs`). The lock file already held this crate, because
+# other dependencies use it.
+dunce = "1.0.5"
 # `gpui-pre` and `gpui-pre-platform` are weekly snapshots of upstream GPUI
 # (zed-industries/zed) on crates.io. The official `gpui` crate has not been
 # published since 0.2.2 (October 2025). The version is pinned exactly,

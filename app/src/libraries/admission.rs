@@ -26,6 +26,7 @@
 //!
 //! Nothing in this module writes. The checks read the folder, the system's
 //! list of processes, and the database with SQLite's `immutable` flag.
+use crate::paths::Canonical as _;
 use std::path::{Path, PathBuf};
 
 /// The command-line flag that lets a debug or test build open libraries
@@ -258,7 +259,7 @@ pub fn admit(
     consents: &[Identity],
     probes: &dyn Probes,
 ) -> Decision {
-    let Ok(root) = path.canonicalize() else {
+    let Ok(root) = path.canonical() else {
         return Decision::Refused(Refusal::Missing(path.to_path_buf()));
     };
     // A folder that the guard accepts is a disposable copy. The numbered
@@ -340,7 +341,7 @@ pub fn admit_new(path: &Path, facts: &Facts, probes: &dyn Probes) -> Result<(), 
     }
     let parent = path
         .parent()
-        .and_then(|parent| parent.canonicalize().ok())
+        .and_then(|parent| parent.canonical().ok())
         .ok_or_else(|| Refusal::Missing(path.to_path_buf()))?;
     let name = path.file_name().unwrap_or_default();
     facts.permits_library(&parent.join(name))?;
@@ -418,7 +419,7 @@ pub(crate) mod tests {
             .unwrap();
         picto_library::schema::create(&mut database).unwrap();
         drop(database);
-        root.canonicalize().unwrap()
+        root.canonical().unwrap()
     }
 
     /// Returns every file and folder under `root` with its length and its
@@ -760,7 +761,7 @@ pub(crate) mod tests {
                 &[],
                 &running
             ),
-            Decision::Copy(copy.canonicalize().unwrap())
+            Decision::Copy(copy.canonical().unwrap())
         );
         // A folder that has the marker file and that the guard refuses is
         // never admitted as a library the user keeps.
@@ -813,7 +814,7 @@ pub(crate) mod tests {
             release: false,
             flag: false,
             seam: Some("a test build"),
-            test_folder: Some(folder.path().canonicalize().unwrap()),
+            test_folder: Some(folder.path().canonical().unwrap()),
         };
         assert!(matches!(
             admit(

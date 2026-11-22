@@ -2,6 +2,7 @@
 //! folder is a copy that this app may open. [`make_copy`] makes a copy.
 //! [`detach`] stops a copy from continuing the cloud sync, watched folders,
 //! subscription runs and import jobs of the library it was copied from.
+use crate::paths::Canonical as _;
 use std::path::{Path, PathBuf};
 
 /// The name of the file that `run.sh` writes into a copy. The file's text is
@@ -22,7 +23,7 @@ const CLOUD_IDENTITY: &str = ".gpui-cloud-identity";
 /// writes, imports and deletes files, so it opens nothing else.
 pub fn guard(root: &Path) -> Result<PathBuf, String> {
     let root = root
-        .canonicalize()
+        .canonical()
         .map_err(|error| format!("{}: {error}", root.display()))?;
     let marker = std::fs::read_to_string(root.join(MARKER)).map_err(|_| {
         format!(
@@ -34,7 +35,7 @@ pub fn guard(root: &Path) -> Result<PathBuf, String> {
     if source.as_os_str().is_empty() {
         return Err(format!("{MARKER} in {} names no library", root.display()));
     }
-    let source = source.canonicalize().unwrap_or(source);
+    let source = source.canonical().unwrap_or(source);
     if root.starts_with(&source) || source.starts_with(&root) {
         return Err(format!(
             "{} is, or is inside, the library it copies ({}); it is not opened",
@@ -87,7 +88,7 @@ fn scratch_folders() -> Vec<PathBuf> {
     }
     folders
         .into_iter()
-        .filter_map(|folder| folder.canonicalize().ok())
+        .filter_map(|folder| folder.canonical().ok())
         .collect()
 }
 
@@ -125,7 +126,7 @@ fn in_scratch(root: &Path) -> bool {
 /// source is only read. On any failure the new folder is removed.
 pub fn make_copy(source: &Path) -> Result<PathBuf, String> {
     let source = source
-        .canonicalize()
+        .canonical()
         .map_err(|error| format!("{}: {error}", source.display()))?;
     if !source.join("library.sqlite").is_file() {
         return Err(format!("{} has no library.sqlite", source.display()));
@@ -361,6 +362,7 @@ pub fn detach(root: &Path, keep_cloud: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::paths::Canonical as _;
     use super::{MARKER, detach, guard};
     use std::path::{Path, PathBuf};
 
@@ -430,7 +432,7 @@ mod tests {
         // A folder whose marker names its source is opened.
         std::fs::write(copy.join(MARKER), format!("{}\n", source.display())).unwrap();
         std::fs::write(copy.join("library.sqlite"), b"copy").unwrap();
-        assert_eq!(guard(&copy).unwrap(), copy.canonicalize().unwrap());
+        assert_eq!(guard(&copy).unwrap(), copy.canonical().unwrap());
         // A marker in the real library, or in a folder inside it, does not
         // make that folder a copy.
         std::fs::write(source.join(MARKER), format!("{}\n", source.display())).unwrap();
