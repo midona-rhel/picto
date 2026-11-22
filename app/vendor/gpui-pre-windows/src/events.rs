@@ -1061,6 +1061,20 @@ impl WindowsWindowInner {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> Option<isize> {
+        // A left press on the minimise, maximise or close button is recorded
+        // before the app sees the press. The release carries the button out
+        // (`handle_nc_mouse_up_msg`). It is recorded first because an app's
+        // button may stop the press from propagating, and the press then
+        // counts as handled below.
+        let caption_button = match wparam.0 as u32 {
+            pressed @ (HTMINBUTTON | HTMAXBUTTON | HTCLOSE) if button == MouseButton::Left => {
+                Some(pressed)
+            }
+            _ => None,
+        };
+        if caption_button.is_some() {
+            self.state.nc_button_pressed.set(caption_button);
+        }
         if let Some(mut func) = self.state.callbacks.input.take() {
             let scale_factor = self.state.scale_factor.get();
             let mut cursor_point = POINT {
@@ -1087,18 +1101,9 @@ impl WindowsWindowInner {
         } else {
         };
 
-        // Since these are handled in handle_nc_mouse_up_msg we must prevent the default window proc
-        if button == MouseButton::Left {
-            match wparam.0 as u32 {
-                HTMINBUTTON => self.state.nc_button_pressed.set(Some(HTMINBUTTON)),
-                HTMAXBUTTON => self.state.nc_button_pressed.set(Some(HTMAXBUTTON)),
-                HTCLOSE => self.state.nc_button_pressed.set(Some(HTCLOSE)),
-                _ => return None,
-            };
-            Some(0)
-        } else {
-            None
-        }
+        // The release carries a caption button out, so the default window
+        // procedure must not handle the press of one.
+        caption_button.map(|_| 0)
     }
 
     fn handle_nc_mouse_up_msg(
@@ -1108,6 +1113,11 @@ impl WindowsWindowInner {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> Option<isize> {
+        // The caption button that the press was on is taken before the app
+        // sees the release, and the button is carried out below whether or
+        // not the app also handled the release.
+        let last_pressed = self.state.nc_button_pressed.take();
+        let mut handled_by_app = false;
         if let Some(mut func) = self.state.callbacks.input.take() {
             let scale_factor = self.state.scale_factor.get();
 
@@ -1122,16 +1132,10 @@ impl WindowsWindowInner {
                 modifiers: current_modifiers(),
                 click_count: 1,
             });
-            let handled = !func(input).propagate;
+            handled_by_app = !func(input).propagate;
             self.state.callbacks.input.set(Some(func));
-
-            if handled {
-                return Some(0);
-            }
-        } else {
         }
 
-        let last_pressed = self.state.nc_button_pressed.take();
         if button == MouseButton::Left
             && let Some(last_pressed) = last_pressed
         {
@@ -1164,7 +1168,7 @@ impl WindowsWindowInner {
             }
         }
 
-        None
+        handled_by_app.then_some(0)
     }
 
     fn handle_cursor_changed(&self, lparam: LPARAM) -> Option<isize> {
