@@ -2,13 +2,17 @@
 # and the icon `picto.png` into the AppImage. The file is named after the
 # app's id, `com.picto.desktop`, because the app addresses its launcher entry
 # by that name when it sets the Inbox count on the launcher icon
-# (`launcher_uri` in `src/desktop/mod.rs`).
+# (`launcher_uri` in `src/desktop/mod.rs`). The app's windows carry the same
+# id (`frameless` in `src/ui/window_chrome.rs`), which is how a desktop knows
+# that they belong to this entry. `StartupWMClass` names the id for desktops
+# on X11 that match by the window's class.
 [Desktop Entry]
 Type=Application
 Name=Picto
 Comment=Media library manager
 Exec=picto %F
 Icon=picto
+StartupWMClass=com.picto.desktop
 Terminal=false
 Categories=Graphics;
 MimeType=application/vnd.picto.pack+zip;
