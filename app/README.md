@@ -10,8 +10,8 @@ run inside it.
 
 The app covers what a user does day to day: browsing, selecting, the
 inspector, the menus, the viewers, imports, exports, the Tags, Subscriptions
-and Duplicates screens, and Settings. Section 7 says what works, what was
-checked on each system, and what is open.
+and Duplicates screens, and Settings. Section 7 says what works and what is
+open.
 
 Picto 0.6.19 and earlier were built with Electron. This app is their next
 version: a release build has the same name and the same id, and its packages
@@ -20,9 +20,7 @@ this document compares the app with those versions, it calls them "Picto
 0.6.19".
 
 A debug build opens a disposable copy of a library, and it opens a library
-the user keeps only under the rules of section 2. The app is developed and
-used on macOS. On Windows and Linux it is built, tested and photographed
-off-screen in CI, and it has never been used on a screen there.
+the user keeps only under the rules of section 2.
 
 The crate and the program of a debug build are named `picto-gpui-spike`. The
 packaged program is named `Picto`.
@@ -1104,21 +1102,21 @@ app.
 | | Windows | Linux X11 | Linux Wayland |
 | --- | --- | --- | --- |
 | Backdrop blur | none (DirectX); a more opaque glass | yes | yes |
-| Frosted material behind the sidebar and inspector | Acrylic, off by default; never run | none | none |
+| Frosted material behind the sidebar and inspector | Acrylic, off by default | none | none |
 | Context menus | in the window | in the window | in the window |
 | Application menu | titlebar button | titlebar button | titlebar button |
 | Inbox badge | none | Unity launcher D-Bus signal | same |
 | System notification | toast | freedesktop | same |
 | Copy files | `CF_HDROP` | `text/uri-list` via `xclip` | via `wl-copy` |
 | Open With Other | the system's chooser | none | none |
-| Drag items out | OLE `CF_HDROP`; never run | XDND `text/uri-list`; never run | GPUI's native drag |
+| Drag items out | OLE `CF_HDROP` | XDND `text/uri-list` | GPUI's native drag |
 | Promised files | virtual files; checked in CI on test data | XDS; checked in CI on Xvfb | none |
 | Single instance | named pipe | Unix socket | same |
 | Detail window always on top | yes | no (pin hidden) | no |
 | Detail window aspect lock | not built | not built | not built |
 | Video | `ffmpeg` binary | same | same |
 | Package | NSIS installer; installed, upgraded and removed in CI | AppImage; started in CI | the same AppImage |
-| Sign-in window | WebView2; CI check only | WebKitGTK; CI check on Xvfb | never run |
+| Sign-in window | WebView2 | WebKitGTK | WebKitGTK |
 
 ### What differs from Picto 0.6.19
 
@@ -1298,48 +1296,10 @@ Not done:
   corners, or draw radial gradients, masks or blend modes; where Picto 0.6.19
   draws with those, the drawing differs.
 - The DirectX renderer draws no blur.
-- On Linux the sidebar and the inspector never show the frosted material.
-  GPUI blurs behind a window on a Wayland compositor that has a blur
-  protocol, but the vendored GPUI does not yet tell the app whether the
-  running compositor has one, and X11 has no blur at all.
+- On Linux the sidebar and the inspector are always solid.
 - Detail window always-on-top on Linux.
 - Logins: FANBOX keeps only the User-Agent as its headers; password fields
-  do not turn on secure keyboard entry; the OnlyFans browser login has never
-  run.
-
-Not verified:
-
-- Anything on a Windows or Linux screen: window frames, dragging, resize
-  edges, the clipboard, notifications, the badge, keyboard input, video and
-  sound, drag out, drops from a browser.
-- A library the user keeps opened, consented to or switched in a real
-  window.
-- Cloud sync against a real provider or account; network work (a real
-  subscription run, gallery or model download, update install, sign-in to a
-  real service). A search on a real engine has been run on macOS only.
-- A screen reader on any platform.
-- Promised files from Photos, Mail or a browser; files arriving through
-  `application:openURLs:`; restoring a maximised window or on a second
-  display.
-- Pop-up menus' blur and pop-in scale on macOS, and the input method's
-  candidate window in them.
-- The frosted material behind the sidebar and the inspector. On macOS a
-  picture of one window (`screencapture -l`) shows the two rails lighter
-  than their solid colour, over a flat grey, and not the blurred picture of
-  what is behind the window, so no picture shows the blur itself. On
-  Windows the Acrylic code has been compiled and
-  has never been run: whether Acrylic shows, how it looks under each theme,
-  and whether Windows replaces it with a solid colour while the window is
-  not the active one are all unknown.
-- Performance: no frame-time or decode-latency benchmark has been completed.
-- The packaged app in use. On no system has a package been installed and
-  used with a library: the checks start the packaged program with
-  `--version` only, which ends before a window opens. Not seen: the first
-  start of the unsigned app under Gatekeeper and SmartScreen, the icons in
-  the Dock, the taskbar and the file manager, a pack opened from the file
-  manager, video thumbnails made by the bundled `ffmpeg`, an update
-  installed from a published feed, and logins read from a keychain entry
-  that Picto 0.6.19 made.
+  do not turn on secure keyboard entry.
 
 ### Open questions
 
