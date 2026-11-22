@@ -5,6 +5,12 @@
 //! `cubic-bezier()` timing function those curves are written in, and
 //! [`Fade`], which moves a value between 0 and 1 the way a CSS transition
 //! does.
+//!
+//! One animation is not in this file: the movement of a scroll container
+//! after a turn of the mouse wheel on Windows and Linux. Its duration and its
+//! curve are Chromium's, and they are in the vendored GPUI, in
+//! `vendor/gpui-pre/src/wheel_scroll.rs`. The module `wheel_scroll_tests` at
+//! the end of this file tests it.
 use std::time::Duration;
 
 /// The easing curve most transitions in the app follow. [`Fade::value`]
@@ -865,5 +871,237 @@ mod loop_tests {
         cx.executor().advance_clock(LOOP_FRAME * 10);
         cx.run_until_parked();
         assert_eq!(count.get(), 11);
+    }
+}
+
+#[cfg(test)]
+mod wheel_scroll_tests {
+    use gpui::{
+        AnyWindowHandle, AppContext as _, Context, InteractiveElement as _, IntoElement,
+        ParentElement as _, Pixels, PlatformInput, Point, Render, ScrollDelta, ScrollEvent,
+        ScrollHandle, StatefulInteractiveElement as _, Styled as _, TestAppContext, WheelScroll,
+        Window, div, point, px,
+    };
+    use std::time::{Duration, Instant};
+
+    /// The distance one notch of a wheel asks for: 100 pixels down. A scroll
+    /// offset becomes more negative as the content is scrolled down.
+    fn notch() -> Point<Pixels> {
+        point(px(0.), px(-100.))
+    }
+
+    /// The state of a scroll container whose content is 1000 pixels taller
+    /// than the container.
+    fn wheel() -> WheelScroll {
+        let mut wheel = WheelScroll::default();
+        wheel.set_max(point(px(0.), px(1000.)));
+        wheel
+    }
+
+    fn at(start: Instant, milliseconds: u64) -> Instant {
+        start + Duration::from_millis(milliseconds)
+    }
+
+    #[track_caller]
+    fn assert_near(offset: Point<Pixels>, y: f32) {
+        assert!((f32::from(offset.y) - y).abs() < 0.01, "{offset:?} {y}");
+    }
+
+    #[test]
+    fn one_notch_moves_the_content_100_pixels_in_200_ms() {
+        let start = Instant::now();
+        let mut wheel = wheel();
+        let mut offset = point(px(0.), px(0.));
+        assert!(wheel.scroll_by(&mut offset, notch(), 1., start));
+        // The wheel event does not move the content. The frames after it do.
+        assert_eq!(offset.y, px(0.));
+        // The curve is CSS `ease-in-out`: 12.9% of the distance after a
+        // quarter of the time, half after half, 87.1% after three quarters.
+        assert!(wheel.advance(&mut offset, at(start, 50)));
+        assert_near(offset, -12.916);
+        assert!(wheel.advance(&mut offset, at(start, 100)));
+        assert_near(offset, -50.);
+        assert!(wheel.advance(&mut offset, at(start, 150)));
+        assert_near(offset, -87.084);
+        assert!(!wheel.advance(&mut offset, at(start, 200)));
+        assert_eq!(offset.y, px(-100.));
+        // The animation has ended, so a later frame changes nothing.
+        assert!(!wheel.advance(&mut offset, at(start, 300)));
+        assert_eq!(offset.y, px(-100.));
+    }
+
+    #[test]
+    fn a_notch_during_the_animation_moves_the_end_and_keeps_the_speed() {
+        let start = Instant::now();
+        let mut wheel = wheel();
+        let mut offset = point(px(0.), px(0.));
+        wheel.scroll_by(&mut offset, notch(), 1., start);
+        wheel.advance(&mut offset, at(start, 100));
+        assert_near(offset, -50.);
+        // Halfway through, the content moves at 862 pixels a second. The
+        // second notch leaves 150 pixels to go.
+        assert!(wheel.scroll_by(&mut offset, notch(), 1., at(start, 100)));
+        assert_near(offset, -50.);
+        // One millisecond later the content has moved 0.865 pixels, so it
+        // still moves at 862 pixels a second. An animation that started from
+        // rest would have moved less than a hundredth of a pixel.
+        wheel.advance(&mut offset, at(start, 101));
+        assert_near(offset, -50.865);
+        wheel.advance(&mut offset, at(start, 200));
+        assert_near(offset, -155.277);
+        // 150 pixels take 191.7 ms, so the animation ends 291.7 ms after the
+        // first notch, 200 pixels from where it started.
+        assert!(wheel.advance(&mut offset, at(start, 291)));
+        assert!(!wheel.advance(&mut offset, at(start, 292)));
+        assert_eq!(offset.y, px(-200.));
+    }
+
+    #[test]
+    fn a_longer_distance_in_device_pixels_takes_less_time() {
+        // Five notches before the first frame ask for 500 pixels, which take
+        // the shortest time, 100 ms.
+        let start = Instant::now();
+        let mut wheel = wheel();
+        let mut offset = point(px(0.), px(0.));
+        for _ in 0..5 {
+            wheel.scroll_by(&mut offset, notch(), 1., start);
+        }
+        assert!(wheel.advance(&mut offset, at(start, 50)));
+        assert_near(offset, -250.);
+        assert!(!wheel.advance(&mut offset, at(start, 100)));
+        assert_eq!(offset.y, px(-500.));
+        // On a display with two device pixels to a pixel, one notch is 200
+        // device pixels, which take 177.8 ms and not 200 ms.
+        let mut offset = point(px(0.), px(0.));
+        wheel.scroll_by(&mut offset, notch(), 2., start);
+        assert!(wheel.advance(&mut offset, at(start, 177)));
+        assert!(!wheel.advance(&mut offset, at(start, 178)));
+        assert_eq!(offset.y, px(-100.));
+    }
+
+    #[test]
+    fn the_animation_ends_when_something_else_moves_the_content() {
+        let start = Instant::now();
+        let mut wheel = wheel();
+        let mut offset = point(px(0.), px(0.));
+        wheel.scroll_by(&mut offset, notch(), 1., start);
+        wheel.advance(&mut offset, at(start, 50));
+        // The application sets the offset, as the grid does when it zooms.
+        offset = point(px(0.), px(-400.));
+        assert!(!wheel.advance(&mut offset, at(start, 100)));
+        assert_eq!(offset.y, px(-400.));
+        // The next notch starts a new animation from that offset.
+        assert!(wheel.scroll_by(&mut offset, notch(), 1., at(start, 110)));
+        assert!(!wheel.advance(&mut offset, at(start, 310)));
+        assert_eq!(offset.y, px(-500.));
+    }
+
+    #[test]
+    fn the_animation_ends_at_the_end_of_the_content() {
+        let start = Instant::now();
+        let mut wheel = wheel();
+        // The content can be scrolled 30 pixels further.
+        let mut offset = point(px(0.), px(-970.));
+        assert!(wheel.scroll_by(&mut offset, notch(), 1., start));
+        assert!(!wheel.advance(&mut offset, at(start, 200)));
+        assert_eq!(offset.y, px(-1000.));
+        // At the end of the content a notch in the same direction starts no
+        // animation.
+        assert!(!wheel.scroll_by(&mut offset, notch(), 1., at(start, 300)));
+        assert_eq!(offset.y, px(-1000.));
+    }
+
+    /// A view that fills its window with a scroll container whose content is
+    /// 5000 pixels high.
+    struct Scroller(ScrollHandle);
+
+    impl Render for Scroller {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .id("scroller")
+                .size_full()
+                .overflow_y_scroll()
+                .track_scroll(&self.0)
+                .child(div().w_full().h(px(5000.)))
+        }
+    }
+
+    /// This test sends scroll events to a window, so it runs the scroll
+    /// listener of GPUI's `div` and the calls that move the offset in each
+    /// frame.
+    #[test]
+    fn a_wheel_scrolls_a_container_in_an_animation_except_on_macos() {
+        let mut cx = TestAppContext::single();
+        let scroll = ScrollHandle::new();
+        let window = cx.add_window({
+            let scroll = scroll.clone();
+            move |_, _| Scroller(scroll)
+        });
+        let handle: AnyWindowHandle = window.into();
+        // Runs what the window has scheduled for its next frame and draws
+        // the window. Returns how many calls were scheduled.
+        let frame = |cx: &mut TestAppContext| {
+            cx.update_window(handle, |_, window, cx| {
+                let scheduled = window.simulate_next_frame(cx);
+                window.draw(cx).clear(cx);
+                scheduled
+            })
+            .unwrap()
+        };
+        let scrolled = |cx: &mut TestAppContext, delta: ScrollDelta| {
+            cx.update_window(handle, |_, window, cx| {
+                window.dispatch_platform_input(
+                    PlatformInput::Scroll(ScrollEvent {
+                        position: point(px(100.), px(100.)),
+                        delta,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+            })
+            .unwrap()
+        };
+        frame(&mut cx);
+
+        // A distance in pixels, which a trackpad reports, moves the content
+        // at once on every system.
+        scrolled(&mut cx, ScrollDelta::Pixels(point(px(0.), px(-30.))));
+        assert_eq!(scroll.offset().y, px(-30.));
+        scroll.set_offset(point(px(0.), px(0.)));
+        frame(&mut cx);
+
+        // One notch of a wheel: three lines down.
+        scrolled(&mut cx, ScrollDelta::Lines(point(0., -3.)));
+        if cfg!(target_os = "macos") {
+            // On macOS the content moves at once, and no frame is asked for.
+            assert!(scroll.offset().y < px(0.));
+            assert_eq!(frame(&mut cx), 0);
+            return;
+        }
+        assert_eq!(scroll.offset().y, px(0.));
+        // After 50 ms the content has moved part of the 100 pixels. After
+        // 200 ms, which is the longest an animation lasts, it has moved all
+        // of them. The tests above check the positions in between.
+        cx.executor().advance_clock(Duration::from_millis(50));
+        assert_eq!(frame(&mut cx), 1);
+        let part_way = scroll.offset().y;
+        assert!(part_way < px(0.) && part_way > px(-100.), "{part_way:?}");
+        cx.executor().advance_clock(Duration::from_millis(150));
+        assert_eq!(frame(&mut cx), 1);
+        assert_near(scroll.offset(), -100.);
+        // The animation has ended, so no further frame is asked for.
+        assert_eq!(frame(&mut cx), 0);
+
+        // The application sets the offset during an animation. The animation
+        // ends without moving the content again.
+        scrolled(&mut cx, ScrollDelta::Lines(point(0., -3.)));
+        cx.executor().advance_clock(Duration::from_millis(50));
+        frame(&mut cx);
+        assert!(scroll.offset().y < px(-100.) && scroll.offset().y > px(-200.));
+        scroll.set_offset(point(px(0.), px(-400.)));
+        cx.executor().advance_clock(Duration::from_millis(50));
+        assert_eq!(frame(&mut cx), 1);
+        assert_eq!(scroll.offset().y, px(-400.));
+        assert_eq!(frame(&mut cx), 0);
     }
 }
