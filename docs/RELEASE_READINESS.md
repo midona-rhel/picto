@@ -173,9 +173,9 @@ Leave unrelated work alone, and stage only the files of the release: no generate
 benchmark output and no files of a local investigation.
 
 Implementation reaches `dev` through reviewed pull requests ([CONTRIBUTING](../CONTRIBUTING.md)).
-`main` holds released code only. A release is prepared on `release/<version>`, which is cut from
-the accepted commit of `dev`, or from `main` for a hotfix. Published history is never rewritten
-to prepare a release.
+A release is prepared on `release/<version>`, which is cut from the accepted commit of `dev`,
+and it is merged into `dev` again. The branch `main` is not used. Published history is never
+rewritten to prepare a release.
 
 The version is written in these places. Change all of them to the new version, and change no
 other dependency:
@@ -214,28 +214,25 @@ checks that are still open, and whether anything was pushed.
    versions and the release notes on that branch. Issue references belong in commits, not in the
    release notes. Every push to the branch runs the Alpha Gate: the `verify` workflow and the
    `Package` workflow for macOS, Windows and Linux. Every job must pass on the final head.
-2. When the gate has passed on the final head, open a pull request from `release/<version>` into
-   `main` and merge it with a **merge commit**. Squash merges are switched off for `main`, so
-   that the commit that passed the gate stays in `main`'s ancestry. The required check
-   `branch-policy` looks for that commit's successful gate and its three package artifacts
-   before the merge. If the pull request was opened before the gate finished, run its CI again
-   after the gate has passed.
+2. Open a pull request from `release/<version>` into `dev`. Its checks run while the gate runs.
+   The required check `branch-policy` looks for the successful gate of the head commit and its
+   three package artifacts, so it passes only after the gate has passed. If it ran before the
+   gate finished, run it again. Merge the pull request with a **merge commit**, not a squash, so
+   that the commit that passed the gate is in `dev`'s ancestry.
 3. Tag the head of the release branch, not the merge commit, as `v<version>` and push the tag.
    The publication job checks that the tag is the head of its release branch, that the commit is
-   in `main`, that the gate of that commit passed, and that its three package artifacts exist
+   in `dev`, that the gate of that commit passed, and that its three package artifacts exist
    (`scripts/ci/find-release-gate.mjs`). It downloads those artifacts by their ids, compares
    their digests, and creates the release with the files and the release notes.
-4. Open a pull request from `main` into `dev` and merge it with a merge commit, so that the
-   fixes made on the release branch and the new version reach `dev`. Release branches are kept.
 
-A hotfix follows the same steps, with `release/<version>` cut from `main`.
+Release branches are kept.
 
 No test, lint, audit, signing requirement or package check is skipped to make the gate shorter.
 The packages are built while the verification runs, so a candidate that fails verification has
 used runner time for packages that are thrown away. The packages are built once, before the tag.
 
-If a gate fails, fix it on the release branch through a pull request, and carry the fix to `dev`
-in step 4. Then wait for the new gate. Run a failed job again only when the failure came from
+If a gate fails, fix it on the release branch through a pull request into that branch. The fix
+reaches `dev` when the release branch is merged. Then wait for the new gate. Run a failed job again only when the failure came from
 the runner and not from the code. If the publication fails, run only the publication job of the
 tag again. Do not move a published tag and do not build other files under it. If the artifacts
 of the gate have expired, run the gate of the release branch again at the same commit before
@@ -244,7 +241,7 @@ publishing.
 Look at the exact run of the Alpha Gate on GitHub. A run started by hand helps to find a fault,
 but it is not the run that `scripts/ci/find-release-gate.mjs` requires, which is the run for the
 push of the release branch. The tag must match the version in `package.json`, the release branch
-must point to the same commit, and the commit must be in `main`. The three package artifacts
+must point to the same commit, and the commit must be in `dev`. The three package artifacts
 must exist and must not have expired. Do not create a release by hand from files that were built
 locally, and do not use notes that GitHub generates in place of the release notes file.
 

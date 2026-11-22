@@ -21,14 +21,14 @@ function gate({ completed = true, missingArtifact = false } = {}) {
   };
 }
 describe('protected branch policy', () => {
-  it.each(['bug/123-fix', 'main', 'dependabot/npm/x'])('accepts development branch %s', head => {
+  it.each(['bug/123-fix', 'dependabot/npm/x'])('accepts development branch %s', head => {
     expect(() => checkBranchPolicy(pr('dev', head), repository, noApi)).not.toThrow();
   });
-  it.each(['feature/no-ticket', 'random', 'release/1.0.0-alpha'])('rejects an untracked work branch %s', head => {
+  it.each(['feature/no-ticket', 'random', 'main'])('rejects an untracked work branch %s', head => {
     expect(() => checkBranchPolicy(pr('dev', head), repository, noApi)).toThrow('issue number');
   });
-  it.each(['main', 'dependabot/npm/x'])('rejects a fork borrowing the maintenance name %s', head => {
-    const pull = pr('dev', head);
+  it('rejects a fork borrowing the maintenance name', () => {
+    const pull = pr('dev', 'dependabot/npm/x');
     pull.head.repo.full_name = 'fork/picto';
     expect(() => checkBranchPolicy(pull, repository, noApi)).toThrow('issue number');
   });
@@ -37,21 +37,24 @@ describe('protected branch policy', () => {
     pull.head.repo.full_name = 'fork/picto';
     expect(() => checkBranchPolicy(pull, repository, noApi)).not.toThrow();
   });
-  it('permits the existing workflow PR during bootstrap but rejects it after retargeting to main', () => {
-    const pull = pr('dev', 'chore/contribution-workflow', 55);
-    expect(() => checkBranchPolicy(pull, repository, noApi)).not.toThrow();
-    pull.base.ref = 'main';
-    expect(() => checkBranchPolicy(pull, repository, noApi)).toThrow('Main accepts only');
+  it('permits the pull requests that are older than the rule about names', () => {
+    expect(() => checkBranchPolicy(pr('dev', 'chore/contribution-workflow', 55), repository, noApi)).not.toThrow();
+  });
+  it.each(['release/1.0.0-alpha', 'bug/123-fix'])('rejects every pull request into main (%s)', head => {
+    expect(() => checkBranchPolicy(pr('main', head), repository, noApi)).toThrow('Main is not used');
   });
   it('rejects a release name from a fork', () => {
-    const pull = pr('main', 'release/1.0.0-alpha');
+    const pull = pr('dev', 'release/1.0.0-alpha');
     pull.head.repo.full_name = 'fork/picto';
     expect(() => checkBranchPolicy(pull, repository, noApi)).toThrow('this repository');
   });
-  it('allows a fully gated release before it has landed on main', () => {
-    expect(() => checkBranchPolicy(pr('main', 'release/1.0.0-alpha'), repository, gate())).not.toThrow();
+  it('allows a fully gated release into dev before it is merged', () => {
+    expect(() => checkBranchPolicy(pr('dev', 'release/1.0.0-alpha'), repository, gate())).not.toThrow();
+  });
+  it('rejects a release branch whose package version is another version', () => {
+    expect(() => checkBranchPolicy(pr('dev', 'release/1.0.1-alpha'), repository, gate())).toThrow('must match');
   });
   it.each([{ completed: false }, { missingArtifact: true }])('blocks an ungated release: %j', state => {
-    expect(() => checkBranchPolicy(pr('main', 'release/1.0.0-alpha'), repository, gate(state))).toThrow();
+    expect(() => checkBranchPolicy(pr('dev', 'release/1.0.0-alpha'), repository, gate(state))).toThrow();
   });
 });
