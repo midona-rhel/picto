@@ -54,6 +54,67 @@ pub fn is_picto(name: &str) -> bool {
     name.eq_ignore_ascii_case("Picto.exe")
 }
 
+/// The icon that a library's folder shows in Explorer.
+const LIBRARY_ICON: &[u8] = include_bytes!("../../../../build/library.ico");
+
+/// The name of the copy of the icon inside a library's folder. Picto 0.6.19
+/// and earlier used the same name.
+const LIBRARY_ICON_NAME: &str = ".picto-library.ico";
+/// The contents of the `desktop.ini` in a library's folder, which tells
+/// Explorer to show the icon above for the folder. Picto 0.6.19 and earlier
+/// wrote the same contents.
+const DESKTOP_INI: &[u8] = b"[.ShellClassInfo]\r\nIconResource=.picto-library.ico,0\r\n";
+
+/// Gives the folder of the library at `root` Picto's library icon in
+/// Explorer. It writes the icon and a `desktop.ini` that names it into the
+/// folder, marks both files hidden and system, and marks the folder
+/// read-only. Explorer reads a folder's `desktop.ini` only when the folder
+/// has the read-only or the system attribute; the attribute does not stop
+/// anything from writing into the folder.
+pub fn mark_library_folder(root: &Path) -> std::io::Result<()> {
+    write_shell_file(&root.join(LIBRARY_ICON_NAME), LIBRARY_ICON)?;
+    write_shell_file(&root.join("desktop.ini"), DESKTOP_INI)?;
+    attrib(&["+r"], root)
+}
+
+/// Writes `contents` to the file at `path` unless the file already holds
+/// them, and marks the file hidden and system. Windows refuses to overwrite
+/// a hidden file, so the two attributes are removed before a file that
+/// exists is written again.
+fn write_shell_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let previous = std::fs::read(path).ok();
+    if previous.as_deref() != Some(contents) {
+        if previous.is_some() {
+            attrib(&["-h", "-s"], path)?;
+        }
+        std::fs::write(path, contents)?;
+    }
+    attrib(&["+h", "+s"], path)
+}
+
+/// Runs the system's `attrib` program with `flags` on `path`, as Picto
+/// 0.6.19 and earlier did. The program is started without a console window.
+fn attrib(flags: &[&str], path: &Path) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt as _;
+    // `CREATE_NO_WINDOW`: a console program that an app without a console
+    // starts would otherwise open a console window for a moment.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let status = std::process::Command::new("attrib")
+        .args(flags)
+        .arg(path)
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "attrib {} {} ended with {status}",
+            flags.join(" "),
+            path.display()
+        )))
+    }
+}
+
 /// Returns a text that identifies the database file at `path`: the time the
 /// file was created. A copy, a restore or a replacement of the file changes
 /// that time. The file's volume and file index would identify it better, but

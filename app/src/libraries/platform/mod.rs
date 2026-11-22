@@ -2,7 +2,9 @@
 //! The first thing is whether another Picto is running: a packaged release
 //! build of this app, or an Electron-based Picto (version 0.6.19 or
 //! earlier), which holds no lock that this app can see. The second thing is
-//! a text that identifies a database file on disk.
+//! a text that identifies a database file on disk. The third thing is the
+//! icon that a library's folder shows in the file manager, which only
+//! Windows needs set by the app.
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -15,7 +17,17 @@ pub use linux::{file_identity, picto_process};
 #[cfg(target_os = "macos")]
 pub use macos::{file_identity, picto_process};
 #[cfg(windows)]
-pub use windows::{file_identity, picto_process};
+pub use windows::{file_identity, mark_library_folder, picto_process};
+
+/// Gives the folder of the library at `root` Picto's library icon in the
+/// file manager. Only Windows needs this. On macOS the Finder shows a
+/// `.library` folder with the icon that the app's `Info.plist` declares, and
+/// the Linux file managers have no icon for a single folder that an app
+/// could set in the same way. So this does nothing on those two systems.
+#[cfg(not(windows))]
+pub fn mark_library_folder(_root: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
+}
 
 /// Returns the file's device, its inode and the time it was created, as one
 /// text. All three stay the same while the file is renamed or its folder is

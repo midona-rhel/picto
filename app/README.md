@@ -1289,9 +1289,7 @@ Not done:
   0.6.19, and a packaged build of this app that checks for updates would
   download and start that installer. The packages hold no license texts. No
   `*.blockmap` files are made. The installer's texts are in English
-  only. The AppImage needs libraries of the system. The windows of the app
-  carry no application id on Linux, so a desktop cannot match a window to
-  the app's launcher entry. `.library` folders get no icon on Windows.
+  only. The AppImage needs libraries of the system.
 - Document viewers: PDF and page text selection, WOFF2 fonts, RTF character
   formatting, Markdown images and raw HTML, an EPUB chapter's stylesheet.
 - Detail windows: per-image zoom memory, a loading placeholder, a menu on a
