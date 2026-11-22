@@ -186,7 +186,10 @@ impl DirectoryProvider {
     /// The folder is touched only when it is a real folder (not a link) and
     /// its `library.json`, if it has one, names this library. When the file
     /// cannot be read, names no library or names another library, nothing is
-    /// removed and the error says which of the three it was. A file is
+    /// removed and the error says which of the three it was. A file that
+    /// the provider keeps only in the cloud cannot be read while the
+    /// provider's desktop app is not running: the read ends with a timeout.
+    /// A file is
     /// removed only when its name and its place are those of a file that
     /// the sync writes: `library.json`, a snapshot and its manifest in
     /// `snapshots/`, an original in `blobs/f/<aa>/<bb>/`, a tombstone file in
@@ -218,7 +221,8 @@ impl DirectoryProvider {
                 let bytes = std::fs::read(&manifest).map_err(|error| {
                     format!(
                         "The file library.json in the library's cloud folder cannot be read \
-                         ({error}); nothing was removed"
+                         ({error}); nothing was removed. Check that the desktop app of the \
+                         cloud provider is running."
                     )
                 })?;
                 let named = serde_json::from_slice::<serde_json::Value>(&bytes)
