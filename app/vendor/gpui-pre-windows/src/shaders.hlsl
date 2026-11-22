@@ -1280,3 +1280,149 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
     color.a *= sprite.opacity * saturate(0.5 - distance);
     return color;
 }
+
+/*
+**
+**              Backdrop blur
+**
+*/
+
+// A backdrop blur shows what the frame holds so far, blurred, inside a
+// rounded rectangle. The renderer draws it in four passes. The downsample
+// pass shrinks the part of the frame around the rectangle into a scratch
+// texture: each reduced texel is the average of a box of `downsample` by
+// `downsample` frame pixels. The gaussian pass runs twice over the reduced
+// picture, once across and once down. The composite pass draws the result
+// over the frame inside the rounded rectangle, with the saturation and the
+// brightness applied. Every pass reads its texture from `t_sprite` through
+// `s_sprite`, to which the renderer binds a sampler that clamps to the edge.
+
+#define BACKDROP_BLUR_MAX_TAPS 12
+
+// This buffer mirrors `BackdropBlurParams` in directx_renderer.rs.
+cbuffer BackdropBlurParams: register(b2) {
+    // The frame pixels that the composite pass covers: x, y, width, height.
+    float4 blur_target;
+    // xy is the frame pixel at the corner of the first reduced texel, z is
+    // the downsample factor, and w is the number of taps that are used.
+    float4 blur_source_downsample_taps;
+    // xy is the size of the reduced picture, and zw is the size of the
+    // scratch textures, which can be larger.
+    float4 blur_reduced_texture;
+    // xy is the size of the frame, and zw is the direction of the gaussian
+    // pass: (1, 0) across and (0, 1) down.
+    float4 blur_viewport_direction;
+    // The rounded rectangle: x, y, width, height.
+    float4 blur_bounds;
+    // Its corner radii: top left, top right, bottom right, bottom left.
+    float4 blur_corner_radii;
+    // The clip rectangle: x, y, width, height.
+    float4 blur_clip;
+    // x is the saturation, y is the brightness, and z is the opacity.
+    float4 blur_filter;
+    // Each element is one tap of the gaussian: x is its distance from the
+    // centre in reduced texels, and y is its weight.
+    float4 blur_taps[BACKDROP_BLUR_MAX_TAPS];
+};
+
+struct BackdropBlurVertexOutput {
+    float4 position: SV_Position;
+};
+
+// Returns a vertex of a rectangle that covers the whole viewport. The
+// renderer sets the viewport to the reduced picture for the downsample pass
+// and the gaussian passes.
+BackdropBlurVertexOutput backdrop_blur_pass_vertex(uint vertex_id) {
+    float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
+    BackdropBlurVertexOutput output;
+    output.position = float4(unit_vertex * float2(2., -2.) + float2(-1., 1.), 0., 1.);
+    return output;
+}
+
+BackdropBlurVertexOutput backdrop_blur_downsample_vertex(uint vertex_id: SV_VertexID) {
+    return backdrop_blur_pass_vertex(vertex_id);
+}
+
+// Returns one reduced texel: the average of its box of frame pixels. The box
+// is read two pixels by two pixels, with one linear sample at the point
+// where four pixels meet.
+float4 backdrop_blur_downsample_fragment(BackdropBlurVertexOutput input): SV_Target {
+    float2 viewport = blur_viewport_direction.xy;
+    float downsample = blur_source_downsample_taps.z;
+    float2 box_origin = blur_source_downsample_taps.xy + floor(input.position.xy) * downsample;
+    float4 sum = float4(0., 0., 0., 0.);
+    if (downsample <= 1.) {
+        sum = t_sprite.SampleLevel(s_sprite, (box_origin + 0.5) / viewport, 0.);
+    } else {
+        int pairs = int(downsample / 2.);
+        for (int y = 0; y < pairs; y++) {
+            for (int x = 0; x < pairs; x++) {
+                float2 pt = box_origin + float2(float(2 * x + 1), float(2 * y + 1));
+                sum += t_sprite.SampleLevel(s_sprite, pt / viewport, 0.);
+            }
+        }
+        sum /= float(pairs * pairs);
+    }
+    return sum;
+}
+
+BackdropBlurVertexOutput backdrop_blur_gaussian_vertex(uint vertex_id: SV_VertexID) {
+    return backdrop_blur_pass_vertex(vertex_id);
+}
+
+// Blurs the reduced picture in one direction. Every read is kept inside the
+// reduced picture, because the rest of the scratch texture holds texels of
+// earlier blurs.
+float4 backdrop_blur_gaussian_fragment(BackdropBlurVertexOutput input): SV_Target {
+    float2 texture_size = blur_reduced_texture.zw;
+    float2 low = float2(0.5, 0.5);
+    float2 high = blur_reduced_texture.xy - 0.5;
+    float2 direction = blur_viewport_direction.zw;
+    float2 center = input.position.xy;
+    float4 sum = t_sprite.SampleLevel(s_sprite, center / texture_size, 0.) * blur_taps[0].y;
+    int taps = int(blur_source_downsample_taps.w);
+    for (int i = 1; i < taps; i++) {
+        float2 tap_offset = direction * blur_taps[i].x;
+        float tap_weight = blur_taps[i].y;
+        sum += t_sprite.SampleLevel(s_sprite, clamp(center + tap_offset, low, high) / texture_size, 0.) * tap_weight;
+        sum += t_sprite.SampleLevel(s_sprite, clamp(center - tap_offset, low, high) / texture_size, 0.) * tap_weight;
+    }
+    return sum;
+}
+
+// Returns a vertex of the rectangle of frame pixels that the blur covers.
+BackdropBlurVertexOutput backdrop_blur_composite_vertex(uint vertex_id: SV_VertexID) {
+    float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
+    float2 position = blur_target.xy + unit_vertex * blur_target.zw;
+    BackdropBlurVertexOutput output;
+    output.position = float4(position / blur_viewport_direction.xy * float2(2., -2.) + float2(-1., 1.), 0., 1.);
+    return output;
+}
+
+// Returns the blurred backdrop for one frame pixel, saturated and brightened
+// as CSS `saturate()` and `brightness()` do. The colour is premultiplied, and
+// it is scaled by the coverage of the rounded rectangle and by the opacity.
+// A pixel outside the clip rectangle or outside the rounded rectangle gets a
+// transparent colour, which leaves the frame as it is.
+float4 backdrop_blur_composite_fragment(BackdropBlurVertexOutput input): SV_Target {
+    float2 pt = input.position.xy;
+    float2 clip_end = blur_clip.xy + blur_clip.zw;
+    float inside_clip = (all(pt >= blur_clip.xy) && all(pt < clip_end)) ? 1. : 0.;
+    Bounds bounds;
+    bounds.origin = blur_bounds.xy;
+    bounds.size = blur_bounds.zw;
+    Corners corner_radii;
+    corner_radii.top_left = blur_corner_radii.x;
+    corner_radii.top_right = blur_corner_radii.y;
+    corner_radii.bottom_right = blur_corner_radii.z;
+    corner_radii.bottom_left = blur_corner_radii.w;
+    float coverage = saturate(0.5 - quad_sdf(pt, bounds, corner_radii)) * blur_filter.z * inside_clip;
+
+    float2 texel = (pt - blur_source_downsample_taps.xy) / blur_source_downsample_taps.z;
+    texel = clamp(texel, float2(0.5, 0.5), blur_reduced_texture.xy - 0.5);
+    float4 color = t_sprite.SampleLevel(s_sprite, texel / blur_reduced_texture.zw, 0.);
+    float luma = dot(color.rgb, float3(0.213, 0.715, 0.072));
+    float3 rgb = lerp(float3(luma, luma, luma), color.rgb, blur_filter.x) * blur_filter.y;
+    color.rgb = clamp(rgb, float3(0., 0., 0.), color.aaa);
+    return color * coverage;
+}

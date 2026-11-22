@@ -345,9 +345,7 @@ pub fn order_out(window: &Window) {
 /// app's menus are pop-up windows (`ui::menu::presentation`), and the blur
 /// there comes from an `NSVisualEffectView` under the menu's panel. On
 /// Windows and Linux a menu is drawn inside the window that opened it.
-/// There the menu's panel blurs what the window has drawn behind it, except
-/// on Windows, where GPUI draws no such blur and the panel has a more
-/// opaque fill instead.
+/// There the menu's panel blurs what the window has drawn behind it.
 pub const fn system_blurs() -> bool {
     cfg!(target_os = "macos")
 }
