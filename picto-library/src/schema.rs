@@ -33,12 +33,15 @@ const SCHEMA: &str = include_str!("schema_v1.sql");
 const TASK_SCHEMA: &str = include_str!("task_schema.sql");
 const ACCELERATOR_INDEXES: &str = include_str!("accelerator_indexes.sql");
 const ALIAS_SCHEMA: &str = include_str!("alias_schema.sql");
-/// One file is one media item. Created with a new library; an existing one
-/// gets it once its shared files are merged (`Library::merge_shared_files`).
+/// The index that allows one media item for each file. A new library is
+/// created with it. An existing library gets it once the items that share a
+/// file are merged (`Library::merge_shared_files`).
 pub(crate) const ONE_ITEM_PER_FILE: &str =
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_media_item_one_per_file ON media_item(file_id)";
 
-/// Create any missing accelerator index. Idempotent; runs at create and open.
+/// Creates every accelerator index that is missing. It changes nothing when
+/// all of them exist. It runs when a library is created and when a library
+/// is opened.
 pub fn ensure_accelerator_indexes(connection: &Connection) -> Result<()> {
     connection.execute_batch(ACCELERATOR_INDEXES)?;
     Ok(())
@@ -91,9 +94,10 @@ pub fn validate(connection: &Connection) -> Result<u64> {
     Ok(revision)
 }
 
-/// Interrupts the migration's statements once its open is cancelled. Scoped
-/// to the migration: the writer connection lives on as the library's writer
-/// and must not carry the handler into ordinary writes.
+/// Interrupts the migration's statements once its open is cancelled. The
+/// handler is removed when the migration ends, because the connection goes
+/// on to be the library's writer, and ordinary writes must not be
+/// interrupted by it.
 struct MigrationInterrupt<'a>(&'a Connection);
 
 impl<'a> MigrationInterrupt<'a> {
@@ -155,12 +159,12 @@ pub fn migrate_for_open(
         return Err(LibraryError::OpenCancelled);
     }
     progress(OpenStage::Migrating);
-    let backup_path = migration_backup_path(database_path);
+    let backup_path = backup_path(database_path, "pre-migration");
     let created_backup = !backup_path.exists();
     let result = {
         let _interrupt = MigrationInterrupt::install(connection, cancellation.flag())?;
         (|| {
-            connection.execute("VACUUM INTO ?1", [backup_path.to_string_lossy().as_ref()])?;
+            backup(connection, &backup_path)?;
             if cancellation.is_cancelled() {
                 return Err(LibraryError::OpenCancelled);
             }
@@ -254,11 +258,13 @@ pub fn migrate_for_open(
                  ON folder_definition(parent_id, display_order, folder_id);",
                 )?;
             }
-            // Every predecessor persisted some browsing state: drawing pages,
-            // text chunks or alphabetical name nodes, each with its own journal
-            // and repair lifecycle. The resident model rebuilds all of it from
-            // canonical rows at open, so only the dirty-root journal and its
-            // triggers remain, redefined here once for every predecessor.
+            // Every earlier schema stored some state for browsing: drawing
+            // pages, text chunks or the nodes of the alphabetical name tree,
+            // each with a journal and repair code of its own. That state is
+            // now rebuilt in memory from the canonical rows when the library
+            // is opened. So those tables are dropped here, and only the
+            // journal of changed roots and its triggers are kept, defined
+            // once for every earlier schema.
             if ![
                 COMBINED_IMPORT_PREDECESSOR,
                 TASK_ROLLBACK_PREDECESSOR,
@@ -351,26 +357,31 @@ pub fn migrate_for_open(
                 "source_attempt_root",
                 &["attempt_id", "root_id", "root_stable_key"],
             )?;
-            // Older attempts do not prove grid-root creation; never infer it
-            // from retained files or backfill speculative notification counts.
+            // An attempt from before this column does not say whether it
+            // created a root. The column is 0 for it. It is not guessed from
+            // the files that were kept, and no counts for notifications are
+            // filled in from a guess.
             if !has_column(connection, "source_attempt_root", "created_root")? {
                 connection.execute_batch(
                     "ALTER TABLE source_attempt_root ADD COLUMN created_root INTEGER NOT NULL DEFAULT 0 CHECK (created_root IN (0, 1));"
                 )?;
             }
-            // Watched folders kept importing into the Inbox; that stays the default.
+            // Watched folders imported into the Inbox before this column
+            // existed, so the Inbox is the column's default.
             if !has_column(connection, "folder_definition", "watch_lifecycle")? {
                 connection.execute_batch(
                     "ALTER TABLE folder_definition ADD COLUMN watch_lifecycle INTEGER NOT NULL DEFAULT 2 CHECK (watch_lifecycle IN (1, 2));"
                 )?;
             }
             require_columns(connection, "source_attempt_root", &["created_root"])?;
-            // Orders move from one blob per owner to fixed-size chunks; the
-            // ids and their order are unchanged, so checkpoints stay valid.
+            // Each order was stored as one blob for its owner and is now
+            // stored in chunks of a fixed size. The ids and their order are
+            // unchanged, so the checkpoints stay valid.
             if !has_table(connection, "ordered_membership_chunk")? {
                 crate::ordering::migrate_single_blob_orders(connection)?;
             }
-            // Foreground tasks: imports record their task on each queued job.
+            // The tables of the foreground tasks are created, and each
+            // queued job gets the columns that name its task.
             connection.execute_batch(TASK_SCHEMA)?;
             if !has_column(connection, "ingest_job", "task_id")? {
                 connection.execute_batch(
@@ -445,7 +456,11 @@ fn metadata(connection: &Connection) -> Result<(u32, String, u64)> {
     row.map_err(|_| LibraryError::Incompatible("missing schema-generation-1 metadata".into()))
 }
 
-fn migration_backup_path(database_path: &Path) -> PathBuf {
+/// Returns the path of a backup of the database at `database_path`, made
+/// now: the database's file name followed by `.<label>-<milliseconds since
+/// 1970>.backup`, in the database's folder. The migration uses the label
+/// `pre-migration` and a merge of another library uses `pre-merge`.
+pub fn backup_path(database_path: &Path, label: &str) -> PathBuf {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -454,7 +469,15 @@ fn migration_backup_path(database_path: &Path) -> PathBuf {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("library.sqlite");
-    database_path.with_file_name(format!("{file_name}.pre-migration-{timestamp}.backup"))
+    database_path.with_file_name(format!("{file_name}.{label}-{timestamp}.backup"))
+}
+
+/// Writes a copy of the whole database, as it is committed at this moment,
+/// to the new file `backup_path` (`VACUUM INTO`). The connection must not be
+/// inside a transaction. SQLite refuses to write over an existing file.
+pub fn backup(connection: &Connection, backup_path: &Path) -> Result<()> {
+    connection.execute("VACUUM INTO ?1", [backup_path.to_string_lossy().as_ref()])?;
+    Ok(())
 }
 
 fn has_table(connection: &Connection, table: &str) -> Result<bool> {
@@ -532,7 +555,8 @@ mod tests {
             );
             assert_eq!(super::validate(&connection).unwrap(), 1);
         }
-        // Accelerator-only changes neither rewrite canonical state nor migrate it.
+        // A change that only adds accelerator indexes does not rewrite the
+        // canonical tables and is not a migration.
         assert_eq!(fingerprint_of(&path), SCHEMA_FINGERPRINT);
         assert_eq!(backups_in(directory.path()), 0);
     }
@@ -551,8 +575,9 @@ mod tests {
             .unwrap();
     }
 
-    /// The persisted browsing state every predecessor left behind, with the
-    /// shapes the migration must drop; contents never matter to it.
+    /// Adds the tables for browsing that the earlier schemas stored, in the
+    /// forms that the migration must drop. The migration does not read what
+    /// is in them.
     fn add_obsolete_browsing_schema(connection: &Connection) {
         connection.execute_batch(
             "CREATE TABLE browsing_domain(domain TEXT PRIMARY KEY, format_version INTEGER, generation INTEGER, chunk_count INTEGER);
@@ -857,7 +882,8 @@ mod tests {
             INSERT INTO media_item VALUES(7,'猫',NULL,7);
             INSERT INTO library_root(root_id,name,cover_media_id,imported_at_ms,modified_at_ms,media_count,total_size_bytes)
                 VALUES(7,'猫',7,-10,0,1,123);").unwrap();
-        // A stale journal row and a checkpoint stamped with the predecessor.
+        // The database holds a journal row that was left behind and a
+        // checkpoint that names the earlier schema.
         assert_eq!(
             count(&connection, "SELECT COUNT(*) FROM browsing_dirty_root"),
             1
@@ -1107,7 +1133,8 @@ mod tests {
                 .unwrap(),
             SCHEMA_FINGERPRINT,
         );
-        // A job queued before the upgrade stays claimable: no task, read already.
+        // A job that was queued before the migration can still be claimed.
+        // It has no task, and it counts as read already.
         assert_eq!(
             migrated
                 .query_row(

@@ -262,7 +262,11 @@ impl Imports {
             foot = foot.child(
                 foot_button("task-stop", ButtonLook::Standard)
                     .icon("task-player-stop", 14.)
-                    .label(crate::i18n::t("Stop…"))
+                    .label(if task.merges() {
+                        crate::i18n::en("Cancel…")
+                    } else {
+                        crate::i18n::t("Stop…")
+                    })
                     .on_click(on_click(this, |imports, cx| imports.ask_to_stop(cx))),
             );
         }
@@ -331,7 +335,13 @@ impl Imports {
             .gap(px(10.))
             .min_w_0()
             .child(titles(
-                crate::tf!("Stop importing “{value0}”?", task.title),
+                if task.merges() {
+                    // The locale files have no key for the texts of a
+                    // merge, so they are shown in English in every language.
+                    format!("Cancel the merge of “{}”?", task.title)
+                } else {
+                    crate::tf!("Stop importing “{value0}”?", task.title)
+                },
                 crate::tf!(
                     "{value0} of {value1} files are done so far",
                     crate::i18n::format::grouped(task.done),
@@ -446,11 +456,16 @@ impl Imports {
             );
         }
         let remove = chosen == StopChoice::Remove;
+        let merges = task.merges();
         let foot = foot(&theme)
             .child(div().flex_1())
             .child(
                 foot_button("stop-cancel", ButtonLook::Standard)
-                    .label(crate::i18n::t("Keep importing"))
+                    .label(if merges {
+                        crate::i18n::en("Keep merging")
+                    } else {
+                        crate::i18n::t("Keep importing")
+                    })
                     .on_click(on_click(this, |imports, cx| imports.keep_importing(cx))),
             )
             .child(
@@ -462,7 +477,9 @@ impl Imports {
                         ButtonLook::Primary
                     },
                 )
-                .label(if remove {
+                .label(if merges {
+                    crate::i18n::en("Cancel merge")
+                } else if remove {
                     crate::i18n::t("Stop and remove")
                 } else {
                     crate::i18n::t("Stop import")

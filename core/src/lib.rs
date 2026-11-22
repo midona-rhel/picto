@@ -1,4 +1,5 @@
-//! Picto backend: one application path over the current SQLite schema.
+//! The application core of Picto: the commands, the background workers and
+//! the media processing, over the library crate `picto_library`.
 
 pub mod ai_models;
 pub mod ai_runtime;
@@ -18,6 +19,7 @@ pub mod library_application;
 pub mod library_import;
 pub mod library_ingest_runtime;
 pub mod library_media_runtime;
+pub mod library_merge;
 pub mod library_runtime;
 pub mod library_subscription_state;
 pub mod media_capabilities;

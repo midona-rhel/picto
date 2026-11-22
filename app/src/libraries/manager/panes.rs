@@ -4,6 +4,9 @@
 //! footer.
 use super::*;
 
+/// The padding at the left and at the right of each button in the footer.
+const FOOTER_BUTTON_PADDING: f32 = 14.;
+
 impl Manager {
     pub(super) fn header(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
@@ -605,13 +608,35 @@ impl Manager {
             .px(px(14.))
             .flex()
             .items_center()
-            .justify_end()
             .gap(px(8.))
             .border_t_1()
             .border_color(theme.border_secondary())
             .bg(theme.footer_surface())
+            // "Merge Libraries…" is at the left end of the footer, and the
+            // other three buttons are at its right end. The button is
+            // disabled while the list holds fewer than two libraries whose
+            // folders exist. The locale files have no key for its label.
+            // Each of the four buttons has 14px of padding at its sides, so
+            // that all four fit the window's width of 700 points.
+            .child(
+                ui::action_button::action_button(
+                    "library-merge",
+                    ui::action_button::Look::Standard,
+                )
+                .padding(FOOTER_BUTTON_PADDING)
+                .icon("menu-git-merge", 14.)
+                .label(en("Merge Libraries…"))
+                .disabled(self.busy || self.merge_start().is_none())
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if let Some(first) = this.merge_start() {
+                        this.guarded(first, Act::Merge, window, cx);
+                    }
+                })),
+            )
+            .child(div().flex_1())
             .child(
                 ui::action_button::action_button("library-new", ui::action_button::Look::Standard)
+                    .padding(FOOTER_BUTTON_PADDING)
                     .icon("plus", 14.)
                     .label(t("New Library…"))
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -626,6 +651,7 @@ impl Manager {
                     "library-open-existing",
                     ui::action_button::Look::Standard,
                 )
+                .padding(FOOTER_BUTTON_PADDING)
                 .icon("library-folder-open", 14.)
                 .label(t("Open Existing…"))
                 .on_click(|_, _, cx| cx.defer(host::open_dialog)),
@@ -635,6 +661,7 @@ impl Manager {
                     "library-open-cloud",
                     ui::action_button::Look::Standard,
                 )
+                .padding(FOOTER_BUTTON_PADDING)
                 .icon("IconCloud", 14.)
                 .label(t("Open from Cloud…"))
                 .disabled(self.busy || self.working.is_some())

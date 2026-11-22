@@ -1,4 +1,6 @@
-//! Folders: the tree, ordered membership, covers, watches and auto-tags.
+//! The mutations of folders: the folder tree, the ordered items of a folder,
+//! a folder's cover, the folder on disk that it watches, and the tags that it
+//! gives its items.
 
 use super::*;
 
@@ -68,18 +70,40 @@ impl Library {
         parent_id: Option<FolderId>,
         stable_key: String,
     ) -> Result<(FolderId, MutationReceipt)> {
-        self.create_folder_owned(name, parent_id, stable_key, None)
+        self.create_folder_owned(name, parent_id, stable_key, None, None)
     }
 
     pub fn create_folder_for_task(
         &self, name: &str, parent_id: Option<FolderId>, task: crate::TaskId,
     ) -> Result<(FolderId, MutationReceipt)> {
-        self.create_folder_owned(name, parent_id, uuid::Uuid::new_v4().to_string(), Some(task))
+        self.create_folder_owned(name, parent_id, uuid::Uuid::new_v4().to_string(), Some(task), None)
+    }
+
+    /// Creates a folder for a task that merges another library. The folder
+    /// gets the name, the icon, the colour and the notes of that library's
+    /// folder `like`, and it gives its items the tags `auto_tag_ids`, which
+    /// are tags of this library. When `parent_id` already has a folder of
+    /// that name, that folder is returned and nothing about it is changed.
+    pub fn create_folder_like_for_task(
+        &self,
+        like: &crate::content::ContentFolder,
+        parent_id: Option<FolderId>,
+        auto_tag_ids: &[crate::TagId],
+        task: crate::TaskId,
+    ) -> Result<(FolderId, MutationReceipt)> {
+        self.create_folder_owned(
+            &like.name,
+            parent_id,
+            uuid::Uuid::new_v4().to_string(),
+            Some(task),
+            Some((like, auto_tag_ids)),
+        )
     }
 
     fn create_folder_owned(
         &self, name: &str, parent_id: Option<FolderId>, stable_key: String,
         task: Option<crate::TaskId>,
+        like: Option<(&crate::content::ContentFolder, &[crate::TagId])>,
     ) -> Result<(FolderId, MutationReceipt)> {
         if name.trim().is_empty() {
             return Err(LibraryError::InvalidInput("folder name is empty".into()));
@@ -95,7 +119,10 @@ impl Library {
             if let Some(task) = task {
                 super::tasks::require_running_task(transaction, task)?;
             }
-            // Scan and preparation share this writer; only the first creator owns rollback.
+            // A task's scan and its preparation of files can both ask for the
+            // same folder. The first of them creates the folder and records
+            // it for the task's undo. The second finds it here and records
+            // nothing.
             if task.is_some() {
                 use rusqlite::OptionalExtension;
                 if let Some(id) = transaction.query_row(
@@ -118,16 +145,27 @@ impl Library {
                 [parent_id.map(|id| id.0)],
                 |row| row.get::<_, i64>(0),
             )?;
+            let auto_tags = like
+                .map(|(_, tag_ids)| tag_ids.iter().map(|tag_id| tag_id.0).collect::<RoaringBitmap>())
+                .filter(|tag_ids| !tag_ids.is_empty())
+                .map(|tag_ids| ingest::encode_folder_auto_tags(&tag_ids))
+                .transpose()?
+                .unwrap_or_default();
             transaction.execute(
                 "INSERT INTO folder_definition
-                     (folder_id, stable_key, parent_id, name, display_order)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                     (folder_id, stable_key, parent_id, name, display_order, icon, color, notes,
+                      auto_tag_ids)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 rusqlite::params![
                     folder_id.0,
                     stable_key,
                     parent_id.map(|id| id.0),
                     name,
-                    display_order
+                    display_order,
+                    like.and_then(|(folder, _)| normalized_optional(folder.icon.as_deref())),
+                    like.and_then(|(folder, _)| normalized_optional(folder.color.as_deref())),
+                    like.and_then(|(folder, _)| normalized_optional(folder.notes.as_deref())),
+                    auto_tags
                 ],
             )?;
             insert_cloud_journal(
@@ -732,8 +770,10 @@ impl Library {
                     "folder item reorder must contain distinct existing members".into(),
                 ));
             }
-            // A grid window sends only its loaded members. Permute their
-            // canonical slots, leaving unloaded/filtered members in place.
+            // The grid sends only the members that it has loaded. These
+            // members take, in their new order, the positions that they held
+            // before. The members that the grid did not send keep their
+            // positions.
             let mut replacements = values.iter();
             let values = before
                 .iter()
@@ -1147,8 +1187,8 @@ impl Library {
                 .get(&folder_id)
                 .cloned()
                 .unwrap_or_else(|| Arc::new(Vec::new()));
-            // The resident membership bitmap answers what changes; the order
-            // is only rebuilt when something does.
+            // The membership bitmap in memory says which roots change. The
+            // order is rebuilt only when at least one root changes.
             let before_bitmap = next
                 .folders
                 .get(&folder_id)
@@ -1604,7 +1644,8 @@ pub(super) fn load_folder_clone_rows(
                 color: row.get(4)?,
                 notes: row.get(5)?,
                 auto_tag_ids: row.get(6)?,
-                // Clones have no memberships, so covers and watches are intentionally not copied.
+                // A duplicated folder has no items, so the cover and the
+                // watched folder of the original are not copied.
                 cover_root_id: None,
                 watch_path: None,
                 watch_enabled: false,

@@ -1,4 +1,5 @@
-//! Tags and tag namespaces: assignment, definitions, renames and merges.
+//! The mutations of tags and tag namespaces: giving tags to items, the
+//! definitions, renames and merges.
 
 use super::*;
 
@@ -64,11 +65,12 @@ impl Library {
         )
     }
 
-    /// One page of tags, filtered by namespace and search text. Without a
-    /// search, tags are sorted by subname, then namespace, then id
-    /// (case-insensitive). With one, matches are ranked by [`match_rank`]
-    /// (exact, prefix, word start, substring), keeping that order within a
-    /// rank; `namespace:subname` text also matches the namespace. Counts are
+    /// Returns one page of tags, filtered by namespace and search text.
+    /// Without a search text, the tags are sorted by subname, then by
+    /// namespace, then by id, without regard to case. With a search text,
+    /// the matches are ranked by [`match_rank`] (exact, prefix, word start,
+    /// substring) and keep that order within a rank. A text of the form
+    /// `namespace:subname` also matches the namespace. The counts are
     /// computed only for the returned page, not for every tag in the library.
     pub fn tag_page(
         &self,
@@ -102,7 +104,8 @@ impl Library {
         )
     }
 
-    /// The requested tags with counts; unknown ids are skipped.
+    /// Returns the requested tags with their counts. An id that the library
+    /// does not have is left out.
     pub fn tags_by_id(&self, tag_ids: &[crate::TagId]) -> Result<Vec<TagRecord>> {
         if tag_ids.is_empty() {
             return Ok(Vec::new());
@@ -119,7 +122,8 @@ impl Library {
         )
     }
 
-    /// Tags assigned to no root, active or not.
+    /// Returns the number of tags that no root carries, whatever the
+    /// lifecycle of the roots.
     pub fn unused_tag_count(&self) -> Result<u64> {
         self.database.read_consistent(
             WorkPriority::VisibleRead,
@@ -143,10 +147,11 @@ impl Library {
         self.apply_tags(target, &[name.to_owned()], true)
     }
 
-    /// Apply independently predicted tag sets to visible roots in one exact
-    /// publication. Collections are one root, so callers union all member
-    /// predictions into one assignment before entering the library kernel.
-    /// Tags the user asked for (manual AI tagging); undoable.
+    /// Gives each root the set of tags that was predicted for it, in one
+    /// publication. A collection is one root, so the caller joins the
+    /// predictions for all its members into one set first. These are tags
+    /// that the user asked for with manual AI tagging, so the change can be
+    /// undone.
     pub fn add_tag_assignments(
         &self,
         assignments: &[RootTagAssignment],
@@ -154,9 +159,10 @@ impl Library {
         self.assign_tags(assignments, true)
     }
 
-    /// Tags written by background work (auto-tag on import). They never enter
-    /// the undo stack, so Undo keeps meaning "undo my last edit", and roots
-    /// deleted while inference ran are skipped instead of failing the batch.
+    /// Gives roots the tags that background work predicted (automatic
+    /// tagging on import). These changes never enter the undo history, so
+    /// Undo keeps meaning "undo my last edit". A root that was deleted while
+    /// the prediction ran is skipped, and the batch does not fail for it.
     pub fn add_automatic_tag_assignments(
         &self,
         assignments: &[RootTagAssignment],
@@ -496,11 +502,32 @@ impl Library {
         Ok(receipt)
     }
 
-    /// Ensure portable metadata can reference tag definitions without adding
-    /// synthetic assignments to a library item.
+    /// Creates the tags of `names` that the library does not have yet,
+    /// without giving them to any item, and returns the ids of all of them in
+    /// the alphabetical order of their names. A Picto Pack uses this for the
+    /// tags that its folders give to their items.
     pub fn ensure_tag_definitions(
         &self,
         names: &[String],
+    ) -> Result<(Vec<crate::TagId>, MutationReceipt)> {
+        self.ensure_tag_definitions_owned(names, None)
+    }
+
+    /// Does what [`Self::ensure_tag_definitions`] does for a foreground
+    /// task, and records the tags and the tag namespaces that it creates, so
+    /// that undoing the task removes those that no item carries then.
+    pub fn ensure_tag_definitions_for_task(
+        &self,
+        names: &[String],
+        task: crate::TaskId,
+    ) -> Result<(Vec<crate::TagId>, MutationReceipt)> {
+        self.ensure_tag_definitions_owned(names, Some(task))
+    }
+
+    fn ensure_tag_definitions_owned(
+        &self,
+        names: &[String],
+        task: Option<crate::TaskId>,
     ) -> Result<(Vec<crate::TagId>, MutationReceipt)> {
         let names = names
             .iter()
@@ -512,9 +539,17 @@ impl Library {
             ));
         }
         let (tag_ids, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let namespaces_before = match task {
+                Some(task) => {
+                    super::tasks::require_running_task(transaction, task)?;
+                    Some(namespace_ids(transaction)?)
+                }
+                None => None,
+            };
             let mut next = (*snapshot).clone();
             let mut tag_ids = Vec::with_capacity(names.len());
             let mut created = Vec::new();
+            let mut created_ids = Vec::new();
             for name in &names {
                 let tag_id = if let Some(tag_id) = next.tag_ids_by_name.get(name).copied() {
                     tag_id
@@ -525,9 +560,20 @@ impl Library {
                         .entry(tag_id)
                         .or_insert_with(|| RoaringBitmap::new().into());
                     created.push(name.clone());
+                    created_ids.push(tag_id.0);
                     tag_id
                 };
                 tag_ids.push(tag_id);
+            }
+            if let (Some(task), Some(before)) = (task, namespaces_before) {
+                let namespace_ids = (namespace_ids(transaction)? - before).into_iter().collect::<Vec<_>>();
+                if !created_ids.is_empty() || !namespace_ids.is_empty() {
+                    super::tasks::record_task_undo(
+                        transaction,
+                        task,
+                        super::tasks::TaskUndo::Tags { tag_ids: created_ids, namespace_ids },
+                    )?;
+                }
             }
             if !created.is_empty() {
                 insert_cloud_journal(
@@ -1262,6 +1308,64 @@ pub(super) fn remove_tag_in_transaction(
     Ok((source_members, history_changes))
 }
 
+/// Returns the ids of all tag namespaces.
+fn namespace_ids(transaction: &rusqlite::Transaction<'_>) -> Result<RoaringBitmap> {
+    let ids = transaction
+        .prepare("SELECT namespace_id FROM tag_namespace")?
+        .query_map([], |row| row.get::<_, u32>(0))?
+        .collect::<rusqlite::Result<RoaringBitmap>>()?;
+    Ok(ids)
+}
+
+/// Removes those of the tags `tag_ids` that nothing uses: no item carries
+/// the tag, no folder gives it to its items, and no smart folder's rules
+/// name it. Returns how many tags were removed. Undoing a merge of another
+/// library removes the tags that the merge created in this way. The folders
+/// and the smart folders are read once for all the tags.
+pub(super) fn remove_unreferenced_tags(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    snapshot: &mut ProjectionSnapshot,
+    tag_ids: &[crate::TagId],
+) -> Result<usize> {
+    let mut referenced = RoaringBitmap::new();
+    let mut statement = transaction
+        .prepare("SELECT auto_tag_ids FROM folder_definition WHERE length(auto_tag_ids) > 0")?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let payload = row.get_ref(0)?.as_blob().map_err(rusqlite::Error::from)?;
+        referenced |= RoaringBitmap::deserialize_from(&mut std::io::Cursor::new(payload))?;
+    }
+    for query in snapshot.smart_queries.values() {
+        super::library_merge::tag_references(&query.filter, &mut referenced);
+    }
+    let mut removed = 0;
+    for tag_id in tag_ids {
+        if referenced.contains(tag_id.0)
+            || snapshot.tags.get(tag_id).is_some_and(|roots| !roots.is_empty())
+        {
+            continue;
+        }
+        let Some(state) = load_tag_definition(transaction, *tag_id)? else {
+            continue;
+        };
+        bitmap::replace(
+            transaction,
+            revision,
+            BitmapKey {
+                domain: BitmapDomain::Tag,
+                key_id: tag_id.0,
+            },
+            &RoaringBitmap::new(),
+        )?;
+        transaction.execute("DELETE FROM tag_definition WHERE tag_id = ?1", [tag_id.0])?;
+        Arc::make_mut(&mut snapshot.tags).remove(tag_id);
+        Arc::make_mut(&mut snapshot.tag_ids_by_name).remove(&state.full_name);
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 /// Returns the stable key of the tag that `remove_tag_in_transaction`
 /// removed, read from the changes it returned.
 pub(super) fn removed_tag_key(changes: &[SemanticChange]) -> Option<String> {
@@ -1483,7 +1587,8 @@ fn tag_page_entries<'a>(
     offset: usize,
     limit: usize,
 ) -> (Vec<&'a SortedTag>, Option<usize>) {
-    // Collect only the requested page and inspect one lookahead.
+    // Only the requested page is collected. One more entry is looked at, to
+    // know whether another page follows.
     let mut matching = entries.skip(offset);
     let page = matching.by_ref().take(limit).collect();
     let next = matching.next().map(|_| offset.saturating_add(limit));
@@ -1583,10 +1688,10 @@ fn tag_rank_ranges(
 }
 
 impl SortedTag {
-    /// How well `search` (lowercased) matches this tag, best first. Text with
-    /// a colon also matches `namespace:subname`, so `character:twok` finds
-    /// `character:twokinds` while a subname containing a colon still matches
-    /// literally.
+    /// Returns how well `search`, which is in lowercase, matches this tag. A
+    /// lower rank is a better match. A text with a colon also matches
+    /// `namespace:subname`, so `character:twok` finds `character:twokinds`,
+    /// and a subname that contains a colon still matches as it is written.
     fn search_rank(&self, search: &str) -> Option<u8> {
         #[cfg(test)]
         tests::SEARCH_RANK_CALLS.with(|calls| calls.set(calls.get() + 1));
@@ -1603,10 +1708,11 @@ impl SortedTag {
     }
 }
 
-/// Rank of `needle` in `text`, both lowercased: 0 exact, 1 prefix, 2 at the
-/// start of a word (after a character that is not a letter or digit), 3 any
-/// other substring, `None` when absent. The renderer's `rankMatches` uses the
-/// same rule.
+/// Returns the rank of `needle` in `text`, both in lowercase: 0 when they
+/// are equal, 1 when `text` starts with `needle`, 2 when `needle` is at the
+/// start of a word (after a character that is not a letter or digit), 3 for
+/// any other place in `text`, and `None` when `text` does not contain
+/// `needle`. The renderer's `rankMatches` uses the same rule.
 pub(crate) fn match_rank(text: &str, needle: &str) -> Option<u8> {
     if text == needle {
         return Some(0);
@@ -1678,7 +1784,8 @@ impl TagDefinitionRow {
     }
 }
 
-/// Tag definitions without counts; `only` restricts to the given ids.
+/// Returns the tag definitions without counts. With `only`, it returns just
+/// the tags with the given ids.
 pub(super) fn tag_definition_rows(
     connection: &rusqlite::Connection,
     only: Option<&[crate::TagId]>,

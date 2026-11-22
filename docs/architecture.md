@@ -231,6 +231,33 @@ its files into the library cannot be undone. `tasks.list` reports each task with
 estimate measured over the last 20 s, and the app shows it in the foreground task dialog or,
 once the task was sent to the background, in the task bar.
 
+A merge of another library into the open one is such a task (`core/src/library_merge.rs`). Its
+stored input names the other library's folder, and `tasks.list` reports it with the kind `merge`.
+`library.merge.start` checks the other library, writes a backup of the open library's database
+(`VACUUM INTO library.sqlite.pre-merge-<milliseconds>.backup`, the migration's
+`schema::backup`) and only then records the task. The scan opens the other library's database
+read-only with SQLite's `immutable` flag, holding that library's lock file while the database is
+open, and reads it with `picto_library::content`: the tags, folders and smart folders once, and
+the items in one pass in which the tag bitmaps and folder orders are turned round to tags and
+folders per item. It creates the tags, folders (matched by name under the same parent) and smart
+folders that the open library lacks, and queues one prepared job per item whose file path is the
+file in the other library's blob store. The ingest worker copies each file, verifying its hash,
+and the thumbnail beside it, and imports the items through `ingest_merged_batch_for_task` and
+`ingest_merged_collection_for_task`, which run the import of any other task. A job of a merge
+carries two things that an ordinary import does not have (`MergedImport`,
+`MergedCollectionImport`): the time of the item's last change in the other library, which a new
+item gets in place of the time of its import, and a collection's own note, which a new collection
+gets in place of the note of its cover file. An item is recognised as one the library holds only
+by the hash of its file, because the keys of two libraries are not comparable. For such an item a
+merge gives `ingest::Held::Merge`: the item keeps its name, dates and lifecycle and gets the
+tags, folder places and source links of the other item, and its notes and rating where it has
+none. The task records what it created and changed (`TaskUndo`): roots, added tags, folder
+places and ratings of existing roots, folders, smart folders, tags and tag namespaces. A merge
+either brings everything or is undone: `library_merge::settle`, which the ingest worker calls,
+marks a stopped merge and a merge with a failed file for undo, and removes the backup once the
+merge has finished or has been undone. The other library's subscriptions, cloud state, watched
+folders, settings, recent views and duplicate decisions are not read.
+
 `picto-library/examples/library_ops_benchmark.rs` measures these operations on a synthetic library
 (`-- [roots] [runs] [smart_folders]`, default 1M roots and 100 smart folders). Its output is local and
 never committed.

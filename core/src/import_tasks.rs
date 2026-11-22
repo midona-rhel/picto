@@ -1,4 +1,5 @@
-//! Manual imports as foreground tasks.
+//! Manual imports, which run as foreground tasks. A merge of another library
+//! is such a task too. Its scan is in `library_merge.rs`.
 //!
 //! Starting an import only records a task; nothing is read on the caller's
 //! thread. The scan worker walks the task's paths and queues one job per file
@@ -25,9 +26,10 @@ use crate::library_application::LibraryApplication;
 use crate::library_import::{self as import, ImportFields, ManualImportInput};
 
 pub const IMPORT_TASK_KIND: &str = "import";
-/// Files queued per transaction while scanning.
+/// How many files the scan queues in one transaction.
 const SCAN_CHUNK: usize = 256;
-/// Files read ahead of the ingest batches, and how many at once.
+/// How many files are read ahead of the ingest batches, and how many of
+/// them are read at the same time.
 const PREPARE_AHEAD: usize = 48;
 const PREPARE_CONCURRENCY: usize = 4;
 /// How often a paused scan checks whether it may continue.
@@ -79,7 +81,8 @@ pub fn start_manual_import(
         resolved.push(path);
     }
     let _start = crate::tasks::lock_import_start(application)?;
-    // Seeding (a background import) is not the user's; it never waits.
+    // A background import seeds the tutorial library. The user did not
+    // start it, so it never waits for another import.
     if !input.background {
         crate::tasks::ensure_can_start(application, crate::tasks::IMPORT_ACTION)?;
     }
@@ -92,7 +95,9 @@ pub fn start_manual_import(
             IMPORT_TASK_KIND,
             &import_title(&resolved),
             &input_json,
-            // Moved files exist only in the library; undo would delete them.
+            // An import that moves its files cannot be undone, because the
+            // files then exist only in the library and undo would delete
+            // them.
             !input.delete_after_ingest,
             input.background,
             now_ms(),
@@ -124,6 +129,11 @@ pub fn scan_import_task(
     task: &TaskRecord,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<(), String> {
+    // A task that merges another library reads that library instead of
+    // walking folders.
+    if let Some(merge) = picto_library::MergeTaskInput::from_json(&task.input_json) {
+        return crate::library_merge::scan(application, task, &merge, cancelled);
+    }
     let library = application.library();
     let task_id = task.task_id;
     let input: ManualImportInput =
@@ -233,7 +243,7 @@ pub fn scan_import_task(
 
 /// Queue a chunk of scanned files. While the task is paused the scan waits
 /// here; returns false when the scan should end (stopped, or closing).
-fn queue(
+pub(crate) fn queue(
     application: &LibraryApplication,
     task: TaskId,
     chunk: &mut Vec<TaskIngestJob>,
@@ -252,7 +262,9 @@ fn queue(
     Ok(true)
 }
 
-fn scan_checkpoint(
+/// Returns whether a scan may go on. While the task is paused this waits. It
+/// returns `false` when the library is closing or the task is stopped.
+pub(crate) fn scan_checkpoint(
     application: &LibraryApplication,
     task: TaskId,
     cancelled: &dyn Fn() -> bool,
@@ -347,8 +359,8 @@ fn cleanup_staging(application: &LibraryApplication, members: &[PreparedImport])
     }
 }
 
-/// The importable form of a pending payload; other payloads are returned as
-/// they are.
+/// Returns the form of a pending payload that can be imported. Any other
+/// payload is returned as it is.
 pub async fn prepare_pending(
     application: &LibraryApplication,
     payload: &PreparedIngestPayload,
@@ -408,7 +420,8 @@ async fn prepare_member(
             .await?,
         ]
     };
-    // Kept source folders are created only for files that could be read.
+    // A folder that keeps the structure of the source is created only for
+    // a file that could be read.
     let parent = pending.folders.first().copied();
     let folder = match &pending.folder_path {
         Some(relative) => {
@@ -457,11 +470,19 @@ fn file_stem(path: &str) -> Option<String> {
 /// Undo the tasks marked for it. Runs on the ingest worker, between batches,
 /// so none of a task's jobs is being imported meanwhile.
 pub fn settle_reverts(application: &LibraryApplication) -> Result<(), String> {
+    // A merge of another library that was stopped, or that could not import
+    // a file, is marked for undo here, so that the loop below undoes it.
+    crate::library_merge::settle(application)?;
     let library = application.library();
-    for task in library.tasks_to_revert().map_err(|error| error.to_string())? {
+    let tasks = library.tasks_to_revert().map_err(|error| error.to_string())?;
+    for task in &tasks {
         library
-            .revert_task(task, now_ms())
+            .revert_task(*task, now_ms())
             .map_err(|error| error.to_string())?;
+    }
+    if !tasks.is_empty() {
+        // The backup of a merge that has just been undone is removed.
+        crate::library_merge::settle(application)?;
     }
     Ok(())
 }
@@ -527,7 +548,8 @@ mod tests {
         input
     }
 
-    /// Run the import workers until nothing is left to do; the roots made.
+    /// Runs the import workers until nothing is left to do, and returns the
+    /// roots that were made.
     async fn drive(application: &LibraryApplication) -> Vec<RootId> {
         let mut roots = Vec::new();
         for _ in 0..50 {

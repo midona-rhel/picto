@@ -4,9 +4,16 @@
 //! A task owns the ingest jobs it queues (`ingest_job.task_id`). Pausing holds
 //! them at claim time, stopping drops the ones not yet imported, and undo
 //! removes the roots the task created (`task_created_root`) and the tags it
-//! added to roots that already existed (`task_added_tag`). Everything here is
-//! durable, so a paused task stays paused and an interrupted one resumes.
-//! Collection and folder changes use the same replay owners as session undo.
+//! added to roots that already existed (`task_added_tag`), and takes back the
+//! other changes that the task recorded (`task_undo`, [`TaskUndo`]).
+//! Everything here is stored in the database, so a paused task stays paused
+//! and an interrupted one resumes. A change to a collection or a folder is
+//! taken back by the code that the session's undo uses for it.
+//!
+//! A merge of another library is such a task (`library_merge.rs`). Besides
+//! roots and tags it records the folders, smart folders, tags and tag
+//! namespaces that it created, and the folder places and ratings that it
+//! gave to roots that already existed.
 
 use super::*;
 use crate::model::{
@@ -72,6 +79,9 @@ pub(super) fn require_running_task(
     Ok(())
 }
 
+/// One change of a task, as it is stored so that undoing the task can take
+/// it back. A new variant is added at the end, because a stored change names
+/// its variant by its position in this list.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) enum TaskUndo {
     Structure {
@@ -87,33 +97,146 @@ pub(crate) enum TaskUndo {
     Relink(Arc<crate::history::RelinkState>),
     RootText { before: Arc<Vec<crate::history::RootTextState>>, after: Arc<Vec<crate::history::RootTextState>> },
     MediaText { media_id: MediaId, before: (String, Option<String>), after: (String, Option<String>) },
+    /// A merge of another library put these roots, which the library already
+    /// held, into this folder.
+    FolderPlaces { folder_id: FolderId, roots: Vec<u32> },
+    /// A merge of another library gave this root, which had no rating, the
+    /// rating `after`.
+    Rating { root_id: RootId, after: Rating },
+    /// A merge of another library created this smart folder.
+    SmartFolder { smart_folder_id: SmartFolderId },
+    /// A merge of another library created these tags and tag namespaces.
+    Tags { tag_ids: Vec<u32>, namespace_ids: Vec<u32> },
 }
 
 impl TaskUndo {
-    fn into_change(self) -> SemanticChange {
-        match self {
-            Self::RootText { before, after } => SemanticChange::RootText { before, after },
-            Self::MediaText { media_id, before, after } => SemanticChange::MediaText { media_id, before, after },
-            Self::Relink(state) => SemanticChange::Relink(state),
+    /// Takes this change back inside the transaction of the undo. A change
+    /// of a merge is taken back only as far as it still holds: a root that
+    /// has left the folder since, a rating that was changed since, a smart
+    /// folder that was deleted since and a tag that an item carries are left
+    /// as they are.
+    fn undo(
+        self,
+        transaction: &rusqlite::Transaction<'_>,
+        revision: u64,
+        snapshot: &mut ProjectionSnapshot,
+        affected: &mut RoaringBitmap,
+        resources: &mut BTreeSet<String>,
+    ) -> Result<()> {
+        let changes = match self {
+            Self::RootText { before, after } => vec![SemanticChange::RootText { before, after }],
+            Self::MediaText { media_id, before, after } => {
+                vec![SemanticChange::MediaText { media_id, before, after }]
+            }
+            Self::Relink(state) => vec![SemanticChange::Relink(state)],
             Self::Structure {
                 affected,
                 before,
                 after,
-            } => SemanticChange::Structure {
+            } => vec![SemanticChange::Structure {
                 affected,
                 before: *before,
                 after: *after,
-            },
+            }],
             Self::Folder {
                 folder_id,
                 before,
                 after,
-            } => SemanticChange::FolderDefinition {
+            } => vec![SemanticChange::FolderDefinition {
                 folder_id,
                 before,
                 after,
-            },
+            }],
+            Self::FolderPlaces { folder_id, roots } => {
+                let Some(order) = snapshot.folder_orders.get(&folder_id) else {
+                    return Ok(());
+                };
+                let placed = roots.into_iter().collect::<RoaringBitmap>();
+                let after = order.iter().map(|root| root.0).collect::<Vec<_>>();
+                let before = after
+                    .iter()
+                    .copied()
+                    .filter(|root| !placed.contains(*root))
+                    .collect::<Vec<_>>();
+                if before.len() == after.len() {
+                    return Ok(());
+                }
+                vec![SemanticChange::Order {
+                    owner_kind: OrderOwnerKind::Folder,
+                    owner_id: folder_id.0,
+                    before: Arc::new(before),
+                    after: Arc::new(after),
+                }]
+            }
+            Self::Rating { root_id, after } => {
+                if !snapshot.rating(after).contains(root_id.0) {
+                    return Ok(());
+                }
+                let only_root = || Arc::new(RoaringBitmap::from_iter([root_id.0]));
+                let nothing = || Arc::new(RoaringBitmap::new());
+                [
+                    (Rating::Unrated, only_root(), nothing()),
+                    (after, nothing(), only_root()),
+                ]
+                .into_iter()
+                .map(|(rating, before, after)| SemanticChange::Bitmap {
+                    key: BitmapKey {
+                        domain: BitmapDomain::Rating,
+                        key_id: rating.bitmap_key(),
+                    },
+                    before,
+                    after,
+                })
+                .collect()
+            }
+            Self::SmartFolder { smart_folder_id } => {
+                let Some(current) = load_smart_folder_definition(transaction, smart_folder_id)?
+                else {
+                    return Ok(());
+                };
+                vec![SemanticChange::SmartFolderDefinition {
+                    smart_folder_id,
+                    before: None,
+                    after: Some(Box::new(current)),
+                }]
+            }
+            Self::Tags { tag_ids, namespace_ids } => {
+                let tag_ids = tag_ids.into_iter().map(TagId).collect::<Vec<_>>();
+                if remove_unreferenced_tags(transaction, revision, snapshot, &tag_ids)? > 0 {
+                    resources.extend(["tags".to_owned(), "navigation".to_owned()]);
+                }
+                let mut changes = Vec::new();
+                for namespace_id in namespace_ids.into_iter().map(TagNamespaceId) {
+                    let used = transaction.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM tag_definition WHERE namespace_id = ?1)",
+                        [namespace_id.0],
+                        |row| row.get::<_, bool>(0),
+                    )?;
+                    if used {
+                        continue;
+                    }
+                    if let Some(current) = load_namespace_definition(transaction, namespace_id)? {
+                        changes.push(SemanticChange::TagNamespaceDefinition {
+                            before: None,
+                            after: Some(current),
+                        });
+                    }
+                }
+                changes
+            }
+        };
+        for change in &changes {
+            super::undo::apply_semantic_change(
+                transaction,
+                revision,
+                snapshot,
+                change,
+                false,
+                affected,
+                resources,
+            )?;
         }
+        Ok(())
     }
 }
 
@@ -122,9 +245,19 @@ pub(crate) fn record_task_undo(
     task: TaskId,
     change: TaskUndo,
 ) -> Result<()> {
+    // The kind is the pass of the undo that takes the change back. The
+    // changes of the kind "structure" are taken back first. Then the roots
+    // that the task created are deleted and the tags that it added are
+    // removed. The changes of the kind "folder" are taken back last, because
+    // a folder, a smart folder or a tag that the task created can be removed
+    // only when nothing of the task uses it any more.
     let kind = match &change {
         TaskUndo::Structure { .. } | TaskUndo::Relink(_) | TaskUndo::RootText { .. } | TaskUndo::MediaText { .. } => "structure",
-        TaskUndo::Folder { .. } => "folder",
+        TaskUndo::Folder { .. }
+        | TaskUndo::FolderPlaces { .. }
+        | TaskUndo::Rating { .. }
+        | TaskUndo::SmartFolder { .. }
+        | TaskUndo::Tags { .. } => "folder",
     };
     let payload = bincode::serialize(&change)
         .map_err(|error| LibraryError::InvalidState(error.to_string()))?;
@@ -153,15 +286,29 @@ fn replay_task_undo(
         let bytes: Vec<u8> = row.get(0)?;
         let change: TaskUndo = bincode::deserialize(&bytes)
             .map_err(|error| LibraryError::InvalidState(error.to_string()))?;
-        super::undo::apply_semantic_change(
-            transaction,
-            revision,
-            snapshot,
-            &change.into_change(),
-            false,
-            affected,
-            resources,
-        )?;
+        change.undo(transaction, revision, snapshot, affected, resources)?;
+    }
+    Ok(())
+}
+
+/// What a merge of another library gave the roots that the library already
+/// held, in one batch of the merge: their new places in folders and their
+/// new ratings. Undoing the merge takes them back.
+pub(crate) fn record_task_merge(
+    transaction: &rusqlite::Transaction<'_>,
+    task: TaskId,
+    placed: &[(RootId, FolderId)],
+    rated: &[(RootId, Rating)],
+) -> Result<()> {
+    let mut by_folder = std::collections::BTreeMap::<FolderId, Vec<u32>>::new();
+    for (root_id, folder_id) in placed {
+        by_folder.entry(*folder_id).or_default().push(root_id.0);
+    }
+    for (folder_id, roots) in by_folder {
+        record_task_undo(transaction, task, TaskUndo::FolderPlaces { folder_id, roots })?;
+    }
+    for (root_id, after) in rated {
+        record_task_undo(transaction, task, TaskUndo::Rating { root_id: *root_id, after: *after })?;
     }
     Ok(())
 }
@@ -295,7 +442,8 @@ impl Library {
         })
     }
 
-    /// The task's state alone; cheap enough to check between jobs.
+    /// Returns the task's state and nothing else. The read is cheap enough
+    /// to be made between two jobs.
     pub fn task_state(&self, task: TaskId) -> Result<Option<TaskState>> {
         self.database.read(WorkPriority::CanonicalIngest, |connection| {
             let state: Option<String> = connection
@@ -324,7 +472,8 @@ impl Library {
         Ok(())
     }
 
-    /// Files of a task that could not be imported, with the reason.
+    /// Returns the files of a task that could not be imported, each with
+    /// the reason.
     pub fn task_failures(&self, task: TaskId, limit: usize) -> Result<Vec<(String, String)>> {
         self.database.read(WorkPriority::VisibleRead, |connection| {
             let mut statement = connection.prepare_cached(
@@ -339,7 +488,8 @@ impl Library {
         })
     }
 
-    /// Open tasks whose scan did not finish (the app quit during it).
+    /// Returns the open tasks whose scan did not finish, because the app
+    /// quit during it.
     pub fn tasks_needing_scan(&self) -> Result<Vec<TaskRecord>> {
         Ok(self
             .tasks(true)?
@@ -486,7 +636,8 @@ impl Library {
         Ok(())
     }
 
-    /// Queued task files not yet read, of running tasks only, oldest first.
+    /// Returns the queued files of running tasks that are not read yet, the
+    /// oldest first.
     pub fn unprepared_task_jobs(&self, limit: usize) -> Result<Vec<ClaimedIngestJob>> {
         self.database.read(WorkPriority::CanonicalIngest, |connection| {
             let mut statement = connection.prepare_cached(
@@ -525,7 +676,8 @@ impl Library {
         })
     }
 
-    /// How many read files of running tasks wait to be imported.
+    /// Returns how many files of running tasks are read and wait to be
+    /// imported.
     pub fn prepared_task_backlog(&self) -> Result<usize> {
         self.database.read(WorkPriority::CanonicalIngest, |connection| {
             Ok(connection.query_row(
@@ -589,10 +741,13 @@ impl Library {
         Ok(stored)
     }
 
-    /// Undo a task: remove the roots it created that still exist and the tags
-    /// it added to roots that already existed, then mark it reverted. Called
-    /// by the ingest worker, so no batch of the task is in flight. Returns the
-    /// files that can be deleted now.
+    /// Undo a task: take back the changes it recorded to collections and
+    /// texts, remove the roots it created that still exist and the tags it
+    /// added to roots that already existed, take back the other changes it
+    /// recorded (folders, and for a merge also folder places, ratings, smart
+    /// folders and tags), then mark it reverted. The ingest worker calls
+    /// this, so no batch of the task is being imported meanwhile. Returns
+    /// the files that can be deleted now.
     pub fn revert_task(&self, task: TaskId, now_ms: i64) -> Result<Vec<PendingBlobCleanup>> {
         let protected_cleanup_files = self.history.protected_cleanup_files();
         let cleanup = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {

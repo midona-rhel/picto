@@ -324,6 +324,9 @@ pub fn dispatch_library(
             application,
             &parse::<crate::picto_pack::PictoPackExportRequest>(args_json)?,
         )?),
+        "library.merge.inspect" => read(crate::library_merge::inspect(&parse::<
+            crate::library_merge::MergeRequest,
+        >(args_json)?)?),
         "sources.list" => read(crate::auth::sources()),
         "auth.credentials.list" => read(crate::auth::list_library_credentials(application)?),
         "auth.health.list" => read(crate::auth::list_library_health(application)?),
@@ -832,6 +835,19 @@ pub async fn dispatch_library_async(
         "picto_pack.import" => {
             let input: crate::picto_pack::PictoPackImportRequest = parse(args_json)?;
             read(run_picto_pack_import(Arc::clone(application), input).await?)
+        }
+        "library.merge.start" => {
+            let input: crate::library_merge::MergeRequest = parse(args_json)?;
+            let application = Arc::clone(application);
+            // The start writes a backup of the whole database, so it runs
+            // on a thread that may block.
+            read(
+                tokio::task::spawn_blocking(move || {
+                    crate::library_merge::start(&application, &input)
+                })
+                .await
+                .map_err(|error| format!("The merge could not be started: {error}"))??,
+            )
         }
         "subscriptions.reset" => {
             let input: SubscriptionInput = parse(args_json)?;
