@@ -19,9 +19,9 @@
 //!   draws nothing until its first frame has arrived, and until then the
 //!   surface draws the picture whose path the host gave it. That is the
 //!   picture of the video's first frame, which the library keeps beside
-//!   the thumbnail, so the picture does not change when the player takes
-//!   over. For a video that has no such picture yet it is the thumbnail,
-//!   which is a frame from later in the video
+//!   the thumbnail, so the picture on screen does not change when the
+//!   player draws its first frame. For a video that has no such picture
+//!   yet it is the thumbnail, which is a frame from later in the video
 //!   (`viewer::picture_while_loading`).
 //! - A document, a font, and a file of a type that cannot be shown get a
 //!   [`Document`].

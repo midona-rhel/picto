@@ -276,8 +276,8 @@ video is a file whose MIME type starts with `video/`.
 - The viewers draw it while a video loads: the media view, Quick Look, the detail window, the
   Inbox review, and a collection's reader for a video member (`viewer::picture_while_loading` in
   the app). Playback starts at the first frame, so the picture on screen does not change when the
-  video's player takes over. With the thumbnail it would change from the frame at 35% to the
-  first frame.
+  video's player draws its first frame. With the thumbnail it would change from the frame at 35%
+  to the first frame.
 - It is always the first frame, also when that frame is black. No other frame is tried.
 - It is made whenever the video's thumbnail is made, and it then replaces an earlier one. Import
   and Regenerate Thumbnail therefore make both pictures.

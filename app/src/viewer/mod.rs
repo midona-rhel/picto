@@ -295,7 +295,7 @@ impl Media {
 ///   exists. A video's thumbnail is a frame from 35% of the way into the
 ///   video, and playback starts at the first frame. With the thumbnail, the
 ///   picture on screen would change from the later frame to the first frame
-///   when the video's player takes over.
+///   when the video's player draws its first frame.
 /// - For a video that has no first-frame picture, and for every other file,
 ///   the picture is the thumbnail: the `.jpg` when it exists, otherwise the
 ///   `.png`.
@@ -1035,7 +1035,7 @@ mod tests {
     /// frame, and its thumbnail only when the library has no such picture
     /// yet. For every other file it draws the thumbnail.
     #[test]
-    fn a_video_loads_behind_its_first_frame_and_other_files_behind_their_thumbnail() {
+    fn a_loading_video_is_drawn_as_its_first_frame_and_other_files_as_their_thumbnail() {
         let folder = tempfile::tempdir().unwrap();
         let file = |name: &str| {
             let path = folder.path().join(name);

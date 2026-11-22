@@ -681,12 +681,12 @@ Rule: every decoded picture leaves GPUI's sprite atlas through
 
 **Viewer** (`viewer/`). The media surface (`surface.rs`) shows one item:
 an image, an animation, a Flash movie (Ruffle), a video or an audio file,
-or a document (`document/`). Video and audio play in `video/`, behind
-`video/backend.rs`: video with AVFoundation on macOS and with the `ffmpeg`
-program elsewhere, and sound with Symphonia and CPAL. Three views have a
-media surface: the media view, Quick Look and a detail window. A collection
-opens in the reader or in the editor. Rule: decoding never runs on the
-thread that draws.
+or a document (`document/`). Video and audio play in `video/`, through the
+interface in `video/backend.rs`: video with AVFoundation on macOS and with
+the `ffmpeg` program elsewhere, and sound with Symphonia and CPAL. Three
+views have a media surface: the media view, Quick Look and a detail window.
+A collection opens in the reader or in the editor. Rule: decoding never runs
+on the thread that draws.
 
 Until an item's own picture is ready, the surface draws a small picture that
 the library keeps for the item's file (`viewer::picture_while_loading`).
