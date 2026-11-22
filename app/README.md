@@ -1106,7 +1106,7 @@ app.
 | --- | --- | --- | --- |
 | Backdrop blur | yes (DirectX) | yes | yes |
 | Frosted material behind the sidebar and inspector | Acrylic, off by default | none | none |
-| Context menus | pop-up windows that are never activated | pop-up windows (override-redirect) with a pointer grab | pop-ups that the compositor places (`xdg_popup`) with a grab |
+| Context menus | on Windows 11 version 22H2 and later: pop-up windows that are never activated, over the system's blurred backdrop; on earlier versions: in the window | with KWin: pop-up windows (override-redirect) with a pointer grab, blurred by KWin; otherwise: in the window | with a compositor that has a blur protocol: pop-ups that the compositor places (`xdg_popup`) with a grab; otherwise: in the window |
 | Blur behind a menu | Acrylic on Windows 11 22H2 and later; a more opaque glass before | with KWin; a more opaque glass elsewhere; opaque without a compositing manager | where the compositor has ext-background-effect or kde-blur; a more opaque glass elsewhere |
 | A menu's shadow and corners | the system's on Windows 11 22H2 and later; the app's before | the app's; none without a compositing manager | the app's |
 | A menu's opening | fades in (macOS scales it in) | fades in | fades in |
