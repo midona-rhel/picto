@@ -557,7 +557,7 @@ used only an undocumented call.
   on top of one another. The session's formation is also set to
   `NSDraggingFormationPile`, so the four pictures are drawn as a small pile,
   as Finder draws several files. AppKit adds its own badge with the number
-  of files. This has not been tried with a real drag of thousands of files.
+  of files.
 
 `gpui-pre-windows`
 - `src/window.rs`, `set_background_appearance`: on Windows 11 version 22H2
