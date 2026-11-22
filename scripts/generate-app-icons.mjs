@@ -1,7 +1,17 @@
 #!/usr/bin/env node
 
+// Draws the icons in `build/` from the SVG files in `build/icons/`: the
+// app's icon for Windows and Linux (`icon.ico`, `icon-flat.png`), the icons
+// of `.library` folders and `.picto-pack` files (`.ico`, `.png` and, on
+// macOS, `.icns`), and the Icon Composer file `Picto.icon` with the picture
+// of its one layer. `build/icons/README.md` describes the artwork.
+//
+// The package script calls this on macOS before it compiles `Picto.icon`,
+// because the layer's picture is not tracked.
+
 import { execFile } from 'node:child_process';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -14,11 +24,14 @@ const iconComposer = path.join(build, 'Picto.icon');
 const iconComposerAssets = path.join(iconComposer, 'Assets');
 const execFileAsync = promisify(execFile);
 
+// Returns the SVG file `source` drawn as a PNG that is `size` pixels wide.
 async function render(source, size) {
   const svg = await readFile(source, 'utf8');
   return new Resvg(svg, { fitTo: { mode: 'width', value: size } }).render().asPng();
 }
 
+// Returns the bytes of an `.ico` file that holds the given PNG pictures,
+// each with its width in pixels.
 function createIco(images) {
   const header = Buffer.alloc(6 + images.length * 16);
   header.writeUInt16LE(0, 0);
@@ -40,15 +53,33 @@ function createIco(images) {
   return Buffer.concat([header, ...images.map(({ png }) => png)]);
 }
 
-// The whole book is one layer, so Icon Composer lights and shades it as one
-// mark set into the face instead of separate floating strokes.
+// Writes the `.icns` file `output` from the SVG file `source` with macOS's
+// `iconutil`. The file holds the picture at 16, 32, 128, 256 and 512 points,
+// each at one and at two pixels per point.
+async function writeIcns(source, output) {
+  const work = await mkdtemp(path.join(tmpdir(), 'picto-icns-'));
+  try {
+    const iconset = path.join(work, 'icon.iconset');
+    await mkdir(iconset);
+    for (const points of [16, 32, 128, 256, 512]) {
+      await writeFile(path.join(iconset, `icon_${points}x${points}.png`), await render(source, points));
+      await writeFile(path.join(iconset, `icon_${points}x${points}@2x.png`), await render(source, points * 2));
+    }
+    await execFileAsync('iconutil', ['--convert', 'icns', '--output', output, iconset]);
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+}
+
+// The whole book is one layer, so that Icon Composer lights and shades all
+// of its strokes together, as one shape.
 const composerLayers = [
   ['01-book', 'picto-macos-book.svg'],
 ];
 
-// Icon Composer's tile fills the 1024 canvas, while the flat master draws its
-// tile 64 px inside it (896 wide). Scaling the book by 1024/896 keeps it the
-// same size relative to the tile on every platform.
+// Icon Composer's tile fills the canvas of 1024 px, while `picto-flat.svg`
+// draws its tile 64 px inside the canvas (896 px wide). Scaling the book by
+// 1024/896 keeps it the same size relative to the tile on every system.
 const BOOK_SCALE = 1024 / 896;
 
 function composerGroup(name) {
@@ -65,7 +96,8 @@ function composerGroup(name) {
       },
     }],
     lighting: 'combined',
-    // No drop shadow: the book reads as set into the face, not raised above it.
+    // The book has no drop shadow, so that it does not look raised above
+    // the tile.
     shadow: { kind: 'none', opacity: 0 },
     specular: true,
     translucency: { enabled: false, value: 0 },
@@ -98,21 +130,8 @@ async function main() {
   await writeFile(path.join(build, 'picto-pack.ico'), createIco(packIcoImages));
 
   if (process.platform === 'darwin') {
-    const appBuilderArch = process.arch === 'arm64' ? 'arm64' : 'amd64';
-    const appBuilder = path.join(root, 'node_modules', 'app-builder-bin', 'mac', `app-builder_${appBuilderArch}`);
-    const output = path.join(build, 'library-icns-output');
-    await rm(output, { recursive: true, force: true });
-    await mkdir(output, { recursive: true });
-    await execFileAsync(appBuilder, ['icon', '--format=icns', `--out=${output}`, `--input=${libraryPng}`, `--root=${root}`]);
-    await rename(path.join(output, 'icon.icns'), path.join(build, 'library.icns'));
-    await rm(output, { recursive: true, force: true });
-
-    const packOutput = path.join(build, 'picto-pack-icns-output');
-    await rm(packOutput, { recursive: true, force: true });
-    await mkdir(packOutput, { recursive: true });
-    await execFileAsync(appBuilder, ['icon', '--format=icns', `--out=${packOutput}`, `--input=${packPng}`, `--root=${root}`]);
-    await rename(path.join(packOutput, 'icon.icns'), path.join(build, 'picto-pack.icns'));
-    await rm(packOutput, { recursive: true, force: true });
+    await writeIcns(librarySource, path.join(build, 'library.icns'));
+    await writeIcns(packSource, path.join(build, 'picto-pack.icns'));
   }
 
   await Promise.all(composerLayers.map(async ([name, source]) => {

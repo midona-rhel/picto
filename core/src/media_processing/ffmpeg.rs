@@ -1,7 +1,7 @@
-//! FFmpeg integration via CLI subprocess calls.
-//!
-//! Calls bundled `ffmpeg` and `ffprobe` binaries instead of linking to libav* directly.
-//! Binary paths are resolved by `ffmpeg_path.rs`.
+//! Reads facts about video and audio files, and makes pictures of them, by
+//! running the `ffmpeg` and `ffprobe` programs as separate processes. The
+//! FFmpeg libraries are not linked into the app. `ffmpeg_path.rs` finds the
+//! two programs.
 
 use std::path::Path;
 use std::time::Duration;
@@ -37,8 +37,9 @@ pub type FfmpegResult<T> = Result<T, FfmpegError>;
 
 // --- Internal helpers — run ffprobe/ffmpeg ---
 
-/// Run ffprobe and return parsed JSON output.
-/// Uses `kill_on_drop(true)` so the process is killed if the future is dropped.
+/// Runs ffprobe on `path` and returns what it prints, parsed as JSON. The
+/// process is killed if the caller stops waiting for it
+/// (`kill_on_drop(true)`).
 async fn run_ffprobe(path: &Path) -> FfmpegResult<serde_json::Value> {
     let bin = super::ffmpeg_path::ffprobe_path().map_err(FfmpegError::Process)?;
 
@@ -75,8 +76,11 @@ async fn run_ffprobe(path: &Path) -> FfmpegResult<serde_json::Value> {
         .map_err(|e| FfmpegError::Process(format!("failed to parse ffprobe JSON: {e}")))
 }
 
-/// Run ffmpeg to extract a single frame as JPEG bytes.
-/// Uses `kill_on_drop(true)` so the process is killed if the future is dropped.
+/// Runs ffmpeg to read one frame of `path`, `seek_secs` seconds in, and
+/// returns it as a JPEG no larger than `target_w` × `target_h`. The process is
+/// killed if the caller stops waiting for it (`kill_on_drop(true)`). ffmpeg
+/// prints only its error messages (`-v error`), and a failure's message
+/// includes them.
 async fn run_ffmpeg_frame(
     path: &Path,
     seek_secs: f64,
@@ -95,7 +99,7 @@ async fn run_ffmpeg_frame(
     {
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    cmd.args(["-v", "quiet"]);
+    cmd.args(["-v", "error"]);
     if seek_secs > 0.01 {
         cmd.args(["-ss", &format!("{seek_secs:.3}")]);
     }
@@ -130,7 +134,9 @@ async fn run_ffmpeg_frame(
     Ok(output.stdout)
 }
 
-/// Render a normalized mono waveform on a transparent canvas as PNG bytes.
+/// Draws the waveform of the audio in `path` as a PNG with a transparent
+/// background. All channels are mixed into one, and the waveform is scaled so
+/// that its highest peak reaches the full height.
 pub async fn render_audio_waveform(
     path: &Path,
     target_resolution: (u32, u32),
@@ -176,7 +182,7 @@ pub async fn render_audio_waveform(
 
 // --- ffprobe JSON helpers ---
 
-/// Find the first stream of a given codec_type in ffprobe JSON.
+/// The first stream with the given `codec_type` in ffprobe's JSON.
 fn find_stream<'a>(
     probe: &'a serde_json::Value,
     codec_type: &str,
@@ -187,7 +193,8 @@ fn find_stream<'a>(
         .find(|s| s["codec_type"].as_str() == Some(codec_type))
 }
 
-/// Parse a duration string (seconds as decimal) to milliseconds.
+/// Converts a duration that ffprobe gives as decimal seconds in a string to
+/// milliseconds.
 fn parse_duration_ms(val: &serde_json::Value) -> Option<u64> {
     val.as_str()
         .and_then(|s| s.parse::<f64>().ok())
@@ -233,7 +240,7 @@ pub(crate) async fn probe_media_info(path: &Path) -> FfmpegResult<ProbedMediaInf
     })
 }
 
-/// Extract video properties from a file.
+/// The size, duration, frame rate and frame count of the video in a file.
 pub async fn get_video_properties(path: &Path) -> FfmpegResult<VideoProperties> {
     probe_media_info(path)
         .await?
@@ -245,12 +252,14 @@ fn video_properties(probe: &serde_json::Value, video: &serde_json::Value) -> Vid
     let width = video["width"].as_u64().unwrap_or(0) as u32;
     let height = video["height"].as_u64().unwrap_or(0) as u32;
 
-    // Duration: try stream, then format
+    // The duration is taken from the video stream, or else from the file as
+    // a whole.
     let duration_ms = parse_duration_ms(&video["duration"])
         .or_else(|| parse_duration_ms(&probe["format"]["duration"]))
         .unwrap_or(0);
 
-    // Frame count: try nb_frames, then estimate from duration * fps
+    // The frame count is ffprobe's `nb_frames`, or else an estimate: the
+    // duration multiplied by the frame rate.
     let num_frames = video["nb_frames"]
         .as_str()
         .and_then(|s| s.parse::<u64>().ok())
@@ -259,10 +268,12 @@ fn video_properties(probe: &serde_json::Value, video: &serde_json::Value) -> Vid
 
     let has_audio = find_stream(probe, "audio").is_some();
 
-    // Handle SAR (Sample Aspect Ratio)
+    // The width is corrected for pixels that are not square (the sample
+    // aspect ratio).
     let (adj_w, adj_h) = apply_sar(video, width, height);
 
-    // Handle rotation
+    // Width and height are swapped for a video that is stored rotated by a
+    // quarter turn.
     let (final_w, final_h) = apply_rotation(video, adj_w, adj_h);
 
     VideoProperties {
@@ -274,7 +285,8 @@ fn video_properties(probe: &serde_json::Value, video: &serde_json::Value) -> Vid
     }
 }
 
-/// Estimate frame count from duration and frame rate.
+/// An estimate of the frame count: the duration multiplied by the frame
+/// rate.
 fn estimate_frame_count(video: &serde_json::Value, duration_ms: u64) -> u64 {
     if duration_ms == 0 {
         return 1;
@@ -286,7 +298,8 @@ fn estimate_frame_count(video: &serde_json::Value, duration_ms: u64) -> u64 {
     (secs * fps).round().max(1.0) as u64
 }
 
-/// Parse a fractional frame rate string like "30000/1001" or "24/1".
+/// Reads a frame rate that ffprobe gives as a fraction, such as
+/// "30000/1001" or "24/1".
 fn parse_fps(val: &serde_json::Value) -> Option<f64> {
     let s = val.as_str()?;
     if let Some((num_s, den_s)) = s.split_once('/') {
@@ -299,7 +312,8 @@ fn parse_fps(val: &serde_json::Value) -> Option<f64> {
     s.parse::<f64>().ok().filter(|&v| v > 0.0)
 }
 
-/// Adjust width by Sample Aspect Ratio if present.
+/// Corrects the width for pixels that are not square, when the stream gives
+/// a sample aspect ratio.
 fn apply_sar(video: &serde_json::Value, width: u32, height: u32) -> (u32, u32) {
     if let Some(sar_str) = video["sample_aspect_ratio"].as_str() {
         if let Some((num_s, den_s)) = sar_str.split_once(':') {
@@ -314,9 +328,10 @@ fn apply_sar(video: &serde_json::Value, width: u32, height: u32) -> (u32, u32) {
     (width, height)
 }
 
-/// Swap width/height if rotation metadata indicates ±90°.
+/// Swaps width and height when the stream says the video is rotated by a
+/// quarter turn in either direction.
 fn apply_rotation(video: &serde_json::Value, width: u32, height: u32) -> (u32, u32) {
-    // Check side_data_list for rotation, or tags.rotate
+    // The rotation is in `side_data_list`, or else in `tags.rotate`.
     let rotation = video["tags"]["rotate"]
         .as_str()
         .and_then(|s| s.parse::<f64>().ok())
@@ -344,7 +359,7 @@ fn apply_rotation(video: &serde_json::Value, width: u32, height: u32) -> (u32, u
 
 // --- Audio properties ---
 
-/// Get audio duration in milliseconds.
+/// The duration of the audio in a file, in milliseconds.
 pub async fn get_audio_duration_ms(path: &Path) -> FfmpegResult<u64> {
     probe_media_info(path)
         .await?
@@ -356,12 +371,12 @@ pub async fn get_audio_duration_ms(path: &Path) -> FfmpegResult<u64> {
 
 // --- MIME detection ---
 
-/// Determine MIME type using ffprobe's format probing.
+/// The type of a file, from the container format that ffprobe detects.
 pub async fn get_mime(path: &Path) -> FfmpegResult<MimeType> {
     probe_media_info(path).await.map(|info| info.mime)
 }
 
-/// Map ffmpeg format name to MimeType.
+/// The `MimeType` for one of ffmpeg's format names.
 fn map_ffmpeg_format_to_mime(format_name: &str, has_video: bool, has_audio: bool) -> MimeType {
     let formats: Vec<&str> = format_name.split(',').collect();
     let primary = formats[0].trim();
@@ -442,7 +457,7 @@ fn map_ffmpeg_format_to_mime(format_name: &str, has_video: bool, has_audio: bool
 
 // --- Animation detection ---
 
-/// Check if a file is animated (has more than 1 frame).
+/// Whether a file is animated, which means it has more than one frame.
 pub async fn file_is_animated(path: &Path) -> bool {
     match get_video_properties(path).await {
         Ok(props) => props.num_frames > 1,
@@ -452,10 +467,11 @@ pub async fn file_is_animated(path: &Path) -> bool {
 
 // --- Video thumbnail generation ---
 
-/// Render a specific frame from a video file as JPEG bytes.
+/// Returns one frame of a video file as a JPEG.
 ///
-/// `percentage_in` is 0-100, indicating where in the video to grab the frame.
-/// `target_resolution` is the bounding box to resize into.
+/// `percentage_in` (0 to 100) says how far into the video the frame is
+/// taken. Without a known duration the first frame is taken. The picture is
+/// made to fit inside `target_resolution` (width, height).
 pub async fn render_video_thumbnail(
     path: &Path,
     target_resolution: (u32, u32),

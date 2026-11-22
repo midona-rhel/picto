@@ -1,6 +1,15 @@
 #!/usr/bin/env node
 
+// Checks that the repository, or a built package, is fit for a release.
+//
+//   node scripts/release-audit.mjs              checks the tracked sources
+//   node scripts/release-audit.mjs --artifacts  checks the package that
+//                                               `package.sh` made on this system
+//
+// Every failed check is printed, and the script then ends with status 1.
+
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,232 +19,217 @@ const checkArtifacts = process.argv.includes('--artifacts');
 const failures = [];
 const assert = (condition, message) => { if (!condition) failures.push(message); };
 const read = (relative) => readFileSync(path.join(root, relative), 'utf8');
-const tracked = execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' })
-  .trim()
-  .split('\n')
-  .filter((file) => file && existsSync(path.join(root, file)));
-
-const removedSubscriptionRuntimePaths = [
-  'core/src/gallery_dl_source.rs',
-  'core/src/onlyfans_source.rs',
-  'core/src/sidecar_process.rs',
-  'core/src/subscriptions/gallery_dl_runner.rs',
-  'scripts/gallery_dl_bridge.py',
-  'scripts/onlyfans_bridge.py',
-];
-for (const file of removedSubscriptionRuntimePaths) {
-  assert(!existsSync(path.join(root, file)), `removed subscription runtime returned: ${file}`);
-}
-
-for (const file of tracked) {
-  assert(!file.startsWith('output/'), `tracked audit output must be removed: ${file}`);
-  assert(!file.startsWith('.vite/'), `tracked Vite cache must be removed: ${file}`);
-  assert(!file.startsWith('.tmp/'), `tracked temporary file must be removed: ${file}`);
-  assert(file !== '.claude/settings.local.json', 'tracked local Claude settings must be removed');
-  assert(file !== 'context-menu.js', 'copied reference context-menu source must not ship in Picto');
-  assert(!file.endsWith('/.DS_Store') && file !== '.DS_Store', `tracked OS metadata must be removed: ${file}`);
-}
-
-const textExtensions = new Set(['.c', '.css', '.html', '.js', '.json', '.md', '.mjs', '.py', '.rs', '.sh', '.toml', '.ts', '.tsx', '.txt', '.yml', '.yaml']);
-const referenceProductName = String.fromCharCode(69, 97, 103, 108, 101);
-const trackedMediaExtensions = new Set([
-  '.avif', '.bmp', '.gif', '.heic', '.icns', '.ico', '.jpeg', '.jpg', '.jxl', '.png', '.tif', '.tiff', '.webp',
-  '.aac', '.flac', '.m4a', '.mp3', '.ogg', '.wav', '.m4v', '.mkv', '.mov', '.mp4', '.webm',
-]);
-const approvedReleaseIcons = new Set([
-  'build/icon-flat.png',
-  'build/icon.ico',
-  'build/library-folder.png',
-  'build/library.icns',
-  'build/library.ico',
-  'build/picto-pack.png',
-  'build/picto-pack.icns',
-  'build/picto-pack.ico',
-]);
-const macHomePrefix = `/${'Users'}/`;
-const windowsHomePattern = new RegExp(`[A-Z]:\\\\${'Users'}\\\\`, 'i');
-const privateKeyPattern = new RegExp(`-----BEGIN (RSA |EC |OPENSSH |DSA )?${'PRIVATE KEY'}-----`);
-for (const file of tracked) {
-  const extension = path.extname(file).toLowerCase();
-  if (trackedMediaExtensions.has(extension)) {
-    const approvedAsset = file.startsWith('src/shared/assets/')
-      || file.startsWith('resources/tutorial/')
-      || file.startsWith('tests/fixtures/')
-      || file.startsWith('core/tests/fixtures/')
-      || approvedReleaseIcons.has(file);
-    assert(approvedAsset, `tracked media must be an approved product asset or test fixture: ${file}`);
-  }
-  if (!textExtensions.has(path.extname(file).toLowerCase())) continue;
-  const contents = read(file);
-  assert(!contents.includes(macHomePrefix), `tracked source contains a personal absolute path: ${file}`);
-  assert(!windowsHomePattern.test(contents), `tracked source contains a personal Windows path: ${file}`);
-  assert(!privateKeyPattern.test(contents), `tracked source contains a private key marker: ${file}`);
-  assert(!contents.toLowerCase().includes(referenceProductName.toLowerCase()), `tracked source contains a reference-specific name: ${file}`);
-}
-
 const packageManifest = JSON.parse(read('package.json'));
-assert(packageManifest.license === 'MIT', 'package.json must declare the project MIT license');
-assert(packageManifest.build.mac.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'arm64'), 'macOS packages must target Apple Silicon only');
-assert(packageManifest.build.mac.icon === 'build/Picto.icon', 'macOS packages must use the native Icon Composer asset');
-const libraryAssociation = packageManifest.build.fileAssociations?.find((association) => association.ext === 'library');
-assert(libraryAssociation?.name === 'Picto Library', 'macOS packages must identify Picto library packages');
-assert(libraryAssociation?.icon === 'library', 'Picto library packages must use platform-specific custom icons');
-assert(libraryAssociation?.isPackage === true && libraryAssociation?.rank === 'Owner', 'Picto libraries must register as owned macOS document packages');
-assert(libraryAssociation?.mimeType === 'application/vnd.picto.library', 'Linux packages must register Picto library packages');
-const packAssociation = packageManifest.build.fileAssociations?.find((association) => association.ext === 'picto-pack');
-assert(packAssociation?.name === 'Picto Pack', 'packages must identify Picto Pack documents');
-assert(packAssociation?.icon === 'picto-pack', 'Picto Packs must use platform-specific custom icons');
-assert(packAssociation?.rank === 'Owner' && packAssociation?.mimeType === 'application/vnd.picto.pack+zip', 'Picto Packs must register as owned documents on every packaged platform');
-const windowsLibraryIcon = packageManifest.build.extraResources.find((resource) => resource.to === 'library-icons/library.ico');
-assert(windowsLibraryIcon?.from === 'build/library.ico', 'Windows packages must include the custom library folder icon');
-const macLibraryIcon = packageManifest.build.extraResources.find((resource) => resource.to === 'library-icons/library.icns');
-assert(macLibraryIcon?.from === 'build/library.icns', 'macOS packages must include the custom library package icon');
-assert(packageManifest.build.win.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'x64'), 'Windows packages must target x64 only');
-assert(packageManifest.build.nsis?.artifactName === 'Picto-Setup-${version}.${ext}', 'Windows update manifests and installer assets must use the same URL-safe name');
-assert(packageManifest.build.linux.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'x64'), 'Linux packages must target x64 only');
-assert(packageManifest.build.files.includes('dist/licenses/**/*'), 'packaged files must include generated license notices');
-assert(packageManifest.build.files.includes('dist/vendor/**/*'), 'packaged files must include viewer runtime assets');
-assert(packageManifest.build.files.includes('docs/*-release-notes.md'), 'packaged files must include offline release notes');
-const releaseNotesPath = `docs/${packageManifest.version}-release-notes.md`;
-assert(existsSync(path.join(root, releaseNotesPath)) && read(releaseNotesPath).trim().length > 0, 'current version must have bundled release notes');
-assert(
-  !(packageManifest.build.extraResources ?? []).some((resource) =>
-    /gallery[-_]?dl|onlyfans|of[-_]?scraper|python/i.test(`${resource.from ?? ''} ${resource.to ?? ''}`)),
-  'release package must not contain a Python subscription runtime',
-);
 
-const iconComposer = JSON.parse(read('build/Picto.icon/icon.json'));
-const expectedMacIconLayers = ['01-book.png'];
-assert(packageManifest.scripts['predist:electron'] === 'npm run generate:app-icons', 'direct packaging must regenerate icon assets');
-assert(iconComposer.groups?.length === expectedMacIconLayers.length, 'native macOS icon must contain the book as one material group');
-for (const [index, imageName] of expectedMacIconLayers.entries()) {
-  const group = iconComposer.groups?.[index];
-  assert(group?.layers?.length === 1 && group.layers[0]?.['image-name'] === imageName, `native macOS icon layer order is invalid: ${imageName}`);
-  assert(group?.layers?.[0]?.glass === true && group?.specular === true, `native macOS icon material is invalid: ${imageName}`);
-}
-const packageLock = JSON.parse(read('package-lock.json'));
-for (const [location, dependency] of Object.entries(packageLock.packages ?? {})) {
-  if (!location.startsWith('node_modules/')) continue;
-  assert(Boolean(dependency.license), `NPM lock entry has no declared license: ${location}@${dependency.version ?? 'unknown'}`);
-}
-
-const cargoMetadata = JSON.parse(execFileSync('cargo', [
-  'metadata', '--manifest-path', path.join(root, 'core/Cargo.toml'), '--locked', '--offline', '--format-version', '1',
-], { cwd: root, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }));
-for (const crate of cargoMetadata.packages) {
-  assert(Boolean(crate.license), `Cargo package has no declared license: ${crate.name}@${crate.version}`);
-}
-
-const modelCatalog = JSON.parse(read('scripts/ai/model-catalog.json'));
-const modelRuntime = read('core/src/ai_tagger/models.rs');
-const coremlArtifacts = JSON.parse(read('scripts/ai/coreml-artifacts.json')).assets ?? {};
-for (const model of modelCatalog.models ?? []) {
-  const label = `${model.slug ?? 'unnamed model'}`;
-  const released = model.release_distribution === true;
-  const registered = modelRuntime.includes(`slug: "${model.slug}".into()`);
-  assert(/^[a-f0-9]{40}$/.test(model.revision ?? ''), `AI model revision must be a full commit SHA: ${label}`);
-  assert(/^https:\/\//.test(model.license_url ?? ''), `AI model must identify its authoritative license page: ${label}`);
-  assert(typeof model.release_distribution === 'boolean', `AI model must declare release_distribution: ${label}`);
-  assert(registered === released, `AI model release registry disagrees with model catalog: ${label}`);
-  if (!released) {
-    assert(!(model.slug in coremlArtifacts), `excluded AI model has a Picto-hosted Core ML artifact: ${label}`);
-    continue;
+// Checks the package in `app/target/package`. A release
+// publishes these files under these names, and an installed Picto finds its
+// update through the feed. The folder must therefore hold exactly these
+// files, and the feed must give this version and each package's real size
+// and SHA-512.
+function auditPackage() {
+  const version = packageManifest.version;
+  const expected = {
+    darwin: { feed: 'latest-mac.yml', packages: [`Picto-${version}-arm64-mac.zip`, `Picto-${version}-arm64.dmg`] },
+    win32: { feed: 'latest.yml', packages: [`Picto-Setup-${version}.exe`] },
+    linux: { feed: 'latest-linux.yml', packages: [`Picto-${version}.AppImage`] },
+  }[process.platform];
+  if (!expected) {
+    failures.push(`there is no package for the system ${process.platform}`);
+    return;
   }
-  assert(
-    modelRuntime.includes(`/resolve/${model.revision}/`),
-    `released AI model runtime URL is not pinned to its catalog revision: ${label}`,
-  );
-  if (model.license === 'NOASSERTION') {
-    assert(model.delivery === 'upstream-download', `AI model without explicit terms must be upstream-download only: ${label}`);
-    assert(!(model.slug in coremlArtifacts), `AI model without explicit terms cannot have a Picto-hosted Core ML artifact: ${label}`);
-  } else {
-    assert(Boolean(model.license), `released AI model has no declared license: ${label}`);
+  const folder = path.join(root, 'app/target/package');
+  if (!existsSync(folder)) {
+    failures.push('app/target/package does not exist; run package.sh first');
+    return;
+  }
+  const found = readdirSync(folder, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .sort();
+  const wanted = [...expected.packages, expected.feed].sort();
+  assert(JSON.stringify(found) === JSON.stringify(wanted),
+    `the package folder must hold exactly ${wanted.join(', ')}; it holds ${found.join(', ') || 'no files'}`);
+  if (!found.includes(expected.feed)) return;
+
+  // The feed is the text that `write_feed` in `package.sh` writes: a line
+  // `version:`, then for each package the lines `- url:`, `sha512:` and
+  // `size:`, then `path:` with the name of the first package.
+  const feed = readFileSync(path.join(folder, expected.feed), 'utf8');
+  const value = (pattern) => feed.match(pattern)?.[1]?.trim();
+  assert(value(/^version: (.+)$/m) === version, `${expected.feed} must give the version ${version}`);
+  assert(value(/^path: (.+)$/m) === expected.packages[0], `${expected.feed} must name ${expected.packages[0]} as its path`);
+  const entries = [...feed.matchAll(/^  - url: (.+)\r?\n    sha512: (.+)\r?\n    size: (\d+)\r?$/gm)]
+    .map(([, url, sha512, size]) => ({ url: url.trim(), sha512: sha512.trim(), size: Number(size) }));
+  assert(JSON.stringify(entries.map((entry) => entry.url)) === JSON.stringify(expected.packages),
+    `${expected.feed} must list ${expected.packages.join(', ')}`);
+  for (const entry of entries) {
+    const file = path.join(folder, entry.url);
+    if (!existsSync(file)) continue;
+    assert(statSync(file).size > 0 && statSync(file).size === entry.size, `${expected.feed} gives the wrong size for ${entry.url}`);
+    assert(createHash('sha512').update(readFileSync(file)).digest('base64') === entry.sha512,
+      `${expected.feed} gives the wrong SHA-512 for ${entry.url}`);
   }
 }
-for (const slug of Object.keys(coremlArtifacts)) {
-  const model = modelCatalog.models?.find((candidate) => candidate.slug === slug);
-  assert(model?.release_distribution === true, `Core ML artifact is not backed by a released model: ${slug}`);
-  assert(model?.license && model.license !== 'NOASSERTION', `Core ML artifact lacks explicit redistribution terms: ${slug}`);
-}
 
-assert(!existsSync(path.join(root, '.github/workflows/build.yml')), 'duplicate build workflow must be removed');
-const readiness = read('docs/RELEASE_READINESS.md');
-assert(readiness.includes('Apple Silicon (`arm64`)'), 'release readiness must identify Apple Silicon as the only macOS target');
-assert(!readiness.includes('macOS on Intel'), 'release readiness must not advertise Intel macOS support');
+// Checks the tracked sources: no file that must not be published, no
+// personal path, private key or name of the reference product in a text
+// file, a license for every dependency, and the facts that a release
+// depends on.
+function auditSource() {
+  const tracked = execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' })
+    .trim()
+    .split('\n')
+    .filter((file) => file && existsSync(path.join(root, file)));
 
-const ffmpegDownload = read('scripts/download-ffmpeg.sh');
-assert(ffmpegDownload.includes('verify_sha256'), 'FFmpeg downloads must verify pinned SHA-256 digests');
+  // The subscription sources are implemented in Rust. The Python programs
+  // that ran them before must not come back.
+  const removedSubscriptionRuntimePaths = [
+    'core/src/gallery_dl_source.rs',
+    'core/src/onlyfans_source.rs',
+    'core/src/sidecar_process.rs',
+    'core/src/subscriptions/gallery_dl_runner.rs',
+    'scripts/gallery_dl_bridge.py',
+    'scripts/onlyfans_bridge.py',
+  ];
+  for (const file of removedSubscriptionRuntimePaths) {
+    assert(!existsSync(path.join(root, file)), `removed subscription runtime returned: ${file}`);
+  }
 
-if (checkArtifacts) {
-  for (const file of [
-    'build/Picto.icon/icon.json',
-    'build/Picto.icon/Assets/01-book.png',
+  // Output of tools, local settings and files of the operating system are
+  // not tracked.
+  for (const file of tracked) {
+    assert(!file.startsWith('output/'), `tracked audit output must be removed: ${file}`);
+    assert(!file.startsWith('.tmp/'), `tracked temporary file must be removed: ${file}`);
+    assert(file !== '.claude/settings.local.json', 'tracked local Claude settings must be removed');
+    assert(file !== 'context-menu.js', 'copied reference context-menu source must not ship in Picto');
+    assert(!file.endsWith('/.DS_Store') && file !== '.DS_Store', `tracked OS metadata must be removed: ${file}`);
+  }
+
+  // A tracked picture, sound or video must be one of the app's icons or lie
+  // in a folder of product assets or test fixtures. A tracked text file must
+  // hold no home-folder path, no private key and not the name of the
+  // reference product. The words that are searched for are put together
+  // here from parts, so that this file does not hold them itself.
+  const textExtensions = new Set(['.c', '.css', '.html', '.js', '.json', '.md', '.mjs', '.py', '.rs', '.sh', '.toml', '.ts', '.tsx', '.txt', '.yml', '.yaml']);
+  const referenceProductName = String.fromCharCode(69, 97, 103, 108, 101);
+  const trackedMediaExtensions = new Set([
+    '.avif', '.bmp', '.gif', '.heic', '.icns', '.ico', '.jpeg', '.jpg', '.jxl', '.png', '.tif', '.tiff', '.webp',
+    '.aac', '.flac', '.m4a', '.mp3', '.ogg', '.wav', '.m4v', '.mkv', '.mov', '.mp4', '.webm',
+  ]);
+  const approvedReleaseIcons = new Set([
+    'build/icon-flat.png',
+    'build/icon.ico',
     'build/library-folder.png',
     'build/library.icns',
     'build/library.ico',
     'build/picto-pack.png',
     'build/picto-pack.icns',
     'build/picto-pack.ico',
-    'dist/licenses/NPM_THIRD_PARTY_NOTICES.txt',
-    'dist/licenses/RUST_THIRD_PARTY_NOTICES.txt',
-  ]) assert(existsSync(path.join(root, file)), `release artifact is missing: ${file}`);
+  ]);
+  const macHomePrefix = `/${'Users'}/`;
+  const windowsHomePattern = new RegExp(`[A-Z]:\\\\${'Users'}\\\\`, 'i');
+  const privateKeyPattern = new RegExp(`-----BEGIN (RSA |EC |OPENSSH |DSA )?${'PRIVATE KEY'}-----`);
+  for (const file of tracked) {
+    const extension = path.extname(file).toLowerCase();
+    if (trackedMediaExtensions.has(extension)) {
+      const approvedAsset = file.startsWith('resources/tutorial/')
+        || file.startsWith('core/tests/fixtures/')
+        || file.startsWith('app/assets/fixtures/')
+        || approvedReleaseIcons.has(file);
+      assert(approvedAsset, `tracked media must be an approved product asset or test fixture: ${file}`);
+    }
+    if (!textExtensions.has(extension)) continue;
+    const contents = read(file);
+    assert(!contents.includes(macHomePrefix), `tracked source contains a personal absolute path: ${file}`);
+    assert(!windowsHomePattern.test(contents), `tracked source contains a personal Windows path: ${file}`);
+    assert(!privateKeyPattern.test(contents), `tracked source contains a private key marker: ${file}`);
+    assert(!contents.toLowerCase().includes(referenceProductName.toLowerCase()), `tracked source contains a reference-specific name: ${file}`);
+  }
 
-  const ruffleDirectory = path.join(root, 'dist/vendor/ruffle');
-  const ruffleRuntimeManifest = path.join(ruffleDirectory, 'picto-runtime.json');
-  for (const file of ['ruffle.js', 'picto-runtime.json', 'LICENSE_APACHE', 'LICENSE_MIT']) {
-    const artifact = path.join(ruffleDirectory, file);
-    assert(existsSync(artifact) && statSync(artifact).size > 0, `Flash runtime asset is missing or empty: dist/vendor/ruffle/${file}`);
-  }
-  if (existsSync(ruffleDirectory)) {
-    const ruffleAssets = readdirSync(ruffleDirectory);
-    assert(ruffleAssets.some((file) => file.endsWith('.wasm')), 'Flash runtime has no packaged WebAssembly module');
-    assert(ruffleAssets.some((file) => file.startsWith('core.ruffle.') && file.endsWith('.js')), 'Flash runtime has no packaged core JavaScript chunk');
-  }
-  if (existsSync(ruffleRuntimeManifest)) {
-    const runtime = JSON.parse(readFileSync(ruffleRuntimeManifest, 'utf8'));
-    assert(runtime.package === '@ruffle-rs/ruffle', 'packaged Flash runtime identifies the wrong package');
-    assert(runtime.version === packageManifest.dependencies?.['@ruffle-rs/ruffle'], 'packaged Flash runtime version does not match package.json');
+  // The app shows the release notes of its own version, and a release uses
+  // them as its text. The build reads them from this file.
+  assert(packageManifest.license === 'MIT', 'package.json must declare the project MIT license');
+  const releaseNotesPath = `docs/${packageManifest.version}-release-notes.md`;
+  assert(existsSync(path.join(root, releaseNotesPath)) && read(releaseNotesPath).trim().length > 0, 'current version must have bundled release notes');
+
+  // The macOS icon is one Icon Composer group that holds the book as one
+  // glass layer.
+  const iconComposer = JSON.parse(read('build/Picto.icon/icon.json'));
+  const expectedMacIconLayers = ['01-book.png'];
+  assert(iconComposer.groups?.length === expectedMacIconLayers.length, 'native macOS icon must contain the book as one material group');
+  for (const [index, imageName] of expectedMacIconLayers.entries()) {
+    const group = iconComposer.groups?.[index];
+    assert(group?.layers?.length === 1 && group.layers[0]?.['image-name'] === imageName, `native macOS icon layer order is invalid: ${imageName}`);
+    assert(group?.layers?.[0]?.glass === true && group?.specular === true, `native macOS icon material is invalid: ${imageName}`);
   }
 
-  const executableSuffix = process.platform === 'win32' ? '.exe' : '';
-  for (const file of [
-    `vendor/ffmpeg/ffmpeg${executableSuffix}`,
-    `vendor/ffmpeg/ffprobe${executableSuffix}`,
-  ]) {
-    const artifact = path.join(root, file);
-    const exists = existsSync(artifact);
-    assert(exists, `release runtime is missing: ${file}`);
-    if (!exists) continue;
-    const stat = statSync(artifact);
-    assert(stat.isFile() && stat.size > 0, `release runtime is not a non-empty file: ${file}`);
-    if (process.platform !== 'win32') {
-      assert((stat.mode & 0o111) !== 0, `release runtime is not executable: ${file}`);
+  // Every npm package of the build scripts and every crate of the root
+  // Cargo workspace declares a license.
+  const packageLock = JSON.parse(read('package-lock.json'));
+  for (const [location, dependency] of Object.entries(packageLock.packages ?? {})) {
+    if (!location.startsWith('node_modules/')) continue;
+    assert(Boolean(dependency.license), `NPM lock entry has no declared license: ${location}@${dependency.version ?? 'unknown'}`);
+  }
+  const cargoMetadata = JSON.parse(execFileSync('cargo', [
+    'metadata', '--manifest-path', path.join(root, 'core/Cargo.toml'), '--locked', '--offline', '--format-version', '1',
+  ], { cwd: root, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }));
+  for (const crate of cargoMetadata.packages) {
+    assert(Boolean(crate.license), `Cargo package has no declared license: ${crate.name}@${crate.version}`);
+  }
+
+  // The AI models that the app offers for download are the ones the model
+  // catalog marks as released, each pinned to one revision and with its
+  // license named. A model whose terms are not stated is downloaded from
+  // its publisher only and is not hosted by Picto as a Core ML file.
+  const modelCatalog = JSON.parse(read('scripts/ai/model-catalog.json'));
+  const modelRuntime = read('core/src/ai_tagger/models.rs');
+  const coremlArtifacts = JSON.parse(read('scripts/ai/coreml-artifacts.json')).assets ?? {};
+  for (const model of modelCatalog.models ?? []) {
+    const label = `${model.slug ?? 'unnamed model'}`;
+    const released = model.release_distribution === true;
+    const registered = modelRuntime.includes(`slug: "${model.slug}".into()`);
+    assert(/^[a-f0-9]{40}$/.test(model.revision ?? ''), `AI model revision must be a full commit SHA: ${label}`);
+    assert(/^https:\/\//.test(model.license_url ?? ''), `AI model must identify its authoritative license page: ${label}`);
+    assert(typeof model.release_distribution === 'boolean', `AI model must declare release_distribution: ${label}`);
+    assert(registered === released, `AI model release registry disagrees with model catalog: ${label}`);
+    if (!released) {
+      assert(!(model.slug in coremlArtifacts), `excluded AI model has a Picto-hosted Core ML artifact: ${label}`);
+      continue;
+    }
+    assert(
+      modelRuntime.includes(`/resolve/${model.revision}/`),
+      `released AI model runtime URL is not pinned to its catalog revision: ${label}`,
+    );
+    if (model.license === 'NOASSERTION') {
+      assert(model.delivery === 'upstream-download', `AI model without explicit terms must be upstream-download only: ${label}`);
+      assert(!(model.slug in coremlArtifacts), `AI model without explicit terms cannot have a Picto-hosted Core ML artifact: ${label}`);
+    } else {
+      assert(Boolean(model.license), `released AI model has no declared license: ${label}`);
     }
   }
-
-  if (process.platform === 'darwin') {
-    const addon = path.join(root, 'native/picto-node/index.node');
-    assert(existsSync(addon), 'release native addon is missing');
-    if (existsSync(addon)) {
-      const links = execFileSync('otool', ['-L', addon], { encoding: 'utf8' });
-      assert(!links.includes('/opt/homebrew/') && !links.includes('/usr/local/'), 'native addon links to a build-host package-manager path');
-    }
+  for (const slug of Object.keys(coremlArtifacts)) {
+    const model = modelCatalog.models?.find((candidate) => candidate.slug === slug);
+    assert(model?.release_distribution === true, `Core ML artifact is not backed by a released model: ${slug}`);
+    assert(model?.license && model.license !== 'NOASSERTION', `Core ML artifact lacks explicit redistribution terms: ${slug}`);
   }
 
-  if (process.platform === 'linux') {
-    const addon = path.join(root, 'native/picto-node/index.node');
-    const webGpuRuntime = path.join(root, 'native/picto-node/libwebgpu_dawn.so');
-    assert(existsSync(webGpuRuntime), 'release WebGPU runtime is missing beside the native addon');
-    if (existsSync(addon)) {
-      const links = execFileSync('ldd', [addon], { encoding: 'utf8' });
-      assert(!links.includes('not found'), 'release native addon has unresolved runtime libraries');
-    }
-  }
+  // One workflow builds the packages (`package.yml`). Picto is released for
+  // Apple Silicon only on macOS, and the `ffmpeg` that a package holds is
+  // downloaded with a checked SHA-256.
+  assert(!existsSync(path.join(root, '.github/workflows/build.yml')), 'duplicate build workflow must be removed');
+  const readiness = read('docs/RELEASE_READINESS.md');
+  assert(readiness.includes('Apple Silicon (`arm64`)'), 'release readiness must identify Apple Silicon as the only macOS target');
+  assert(!readiness.includes('macOS on Intel'), 'release readiness must not advertise Intel macOS support');
+  const ffmpegDownload = read('scripts/download-ffmpeg.sh');
+  assert(ffmpegDownload.includes('verify_sha256'), 'FFmpeg downloads must verify pinned SHA-256 digests');
 }
+
+if (checkArtifacts) auditPackage();
+else auditSource();
 
 if (failures.length > 0) {
   console.error(`Release audit failed (${failures.length}):`);
   for (const failure of failures) console.error(`- ${failure}`);
   process.exit(1);
 }
-console.log(`Release audit passed${checkArtifacts ? ' (source + artifacts)' : ' (source)'}.`);
+console.log(`Release audit passed${checkArtifacts ? ' (package)' : ' (source)'}.`);

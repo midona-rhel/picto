@@ -1,8 +1,9 @@
-//! Streaming subscription execution for the replacement backend.
+//! Runs subscriptions.
 //!
-//! A source runner owns source-specific I/O. This module owns the durable
-//! boundary: every downloaded item is recorded and queued before the source
-//! query can be marked successful.
+//! A source runner does the work that is specific to one site: it reads the
+//! site's posts and downloads their files, and reports each as an event. This
+//! module records every downloaded file in the library's database and queues
+//! it for import. A source's run is marked as succeeded only after that.
 
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -38,12 +39,15 @@ pub type RunnerFuture<'a> =
 pub struct RunnerSuccess {
     pub resume_cursor: Option<String>,
     pub cleanup_paths: Vec<PathBuf>,
-    /// Stop this run at the committed cursor even if its settled-post target was
-    /// not reached (for example after the bounded no-media/duplicate scan).
+    /// Stops this run at the position that was last saved, even if the run has
+    /// not yet handled as many posts as it was asked to. A source sets this,
+    /// for example, after it has looked through the limited number of posts
+    /// that have no media or are already in the library.
     pub stop_after_current_execution: bool,
 }
 
-/// A source-normalized item that is ready for durable ingest.
+/// One downloaded file, in the form in which every source reports it, ready
+/// to be recorded and imported.
 #[derive(Debug, Clone)]
 pub struct DownloadedItem {
     pub post: NormalizedPost,
@@ -76,7 +80,7 @@ pub enum SourceEvent {
     },
 }
 
-/// Failure returned by a source runner.
+/// The failure that a source runner returns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunnerFailure {
     pub kind: RunnerFailureKind,
@@ -144,7 +148,8 @@ impl Display for RunnerFailureKind {
     }
 }
 
-/// Runs one claimed query and streams completed downloads into `output`.
+/// Runs one query that the worker has claimed. It sends what it finds and
+/// each completed download to `output` as events.
 pub trait SourceRunner: Send + Sync {
     fn run<'a>(
         &'a self,
@@ -154,7 +159,10 @@ pub trait SourceRunner: Send + Sync {
     ) -> RunnerFuture<'a>;
 }
 
-/// Durable subscription worker with process-local domain scheduling.
+/// The worker that runs subscription queries. Which queries wait, run and
+/// have finished is recorded in the library's database. `schedule`, which
+/// decides when a query for one site's domain may be claimed, is kept only
+/// in this process.
 pub struct SubscriptionWorker<'a, R> {
     application: &'a LibraryApplication,
     runner: R,
@@ -221,7 +229,7 @@ impl<'a, R: SourceRunner> SubscriptionWorker<'a, R> {
     }
 }
 
-/// Claims and runs at most one query.
+/// Claims the next query that may run, if there is one, and runs it.
 pub async fn tick<R: SourceRunner>(
     application: &LibraryApplication,
     schedule: &mut DomainSchedule,
@@ -901,6 +909,10 @@ fn source_post_root(
     Ok(Some((picto_library::RootId(root_id), lifecycle)))
 }
 
+/// Makes the thumbnail of each downloaded file that has none yet and whose
+/// thumbnail is made by ffmpeg or another separate program, so that the file
+/// appears in the grid with its thumbnail. Pictures whose thumbnails the
+/// import makes itself are left to the import.
 async fn ensure_subscription_thumbnails(
     application: &LibraryApplication,
     items: &[DownloadedItem],
@@ -929,15 +941,24 @@ async fn ensure_subscription_thumbnails(
         {
             continue;
         }
-        let (bytes, extension) = source
+        // A thumbnail that cannot be made does not stop the run: the file
+        // downloaded correctly and is imported without one. The library's
+        // background media work tries to make the thumbnail again later, as
+        // it does for a file imported by hand.
+        let (bytes, extension) = match source
             .render_thumbnail_bytes(crate::media_processing::DEFAULT_THUMBNAIL_DIMENSIONS, 35)
             .await
-            .map_err(|error| {
-                format!(
-                    "Subscription thumbnail generation failed for `{}`: {error}",
-                    item.input.media_name
-                )
-            })?;
+        {
+            Ok(thumbnail) => thumbnail,
+            Err(error) => {
+                tracing::warn!(
+                    media = %item.input.media_name,
+                    %error,
+                    "A subscription file is imported without a thumbnail"
+                );
+                continue;
+            }
+        };
         application
             .blobs()
             .write_thumbnail(&item.input.facts.content_hash, &bytes, &extension)
@@ -1931,8 +1952,9 @@ mod tests {
         .new_library_item_keys
         .is_empty());
 
-        // A later run adds one media member to the same collection: an added
-        // source post, but no newly created grid item to notify about.
+        // A later run adds one more file to the same collection. The run
+        // counts one added post, but it creates no new item in the grid, so
+        // there is nothing to notify about.
         std::fs::create_dir_all(&downloads).unwrap();
         let third_path = downloads.join("page-3.png");
         image::RgbaImage::from_pixel(1, 1, image::Rgba([64, 8, 4, 255]))
@@ -2046,8 +2068,9 @@ mod tests {
             application
                 .request_subscription_run_library(subscription_id, requested_at)
                 .unwrap();
-            // Known-post discovery can skip fetching the attachment listing.
-            // Count its persisted media even when this run has no file attempts.
+            // A source that finds a post it already knows may skip reading the
+            // post's list of files. The files recorded for the post earlier
+            // are counted even though this run downloads none of them.
             let mut known = post.clone();
             known.items.clear();
             tick(

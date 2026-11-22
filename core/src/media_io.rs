@@ -1,4 +1,6 @@
-//! Physical media I/O over the canonical library backend.
+//! Work on the media files of a library on disk: finding the files of
+//! items, making a thumbnail on request, and exporting items to a folder or
+//! to a zip archive.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,7 +9,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::blob_store::mime_to_extension;
+use crate::blob_store::{extension_to_mime, mime_to_extension};
 use crate::dto::FileHash;
 use crate::library_application::LibraryApplication;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -166,6 +168,8 @@ pub enum ExportFormat {
     Jpeg,
     Webp,
     Avif,
+    /// The original files, in one zip archive.
+    Zip,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -202,6 +206,10 @@ pub fn export_library(
         skipped: 0,
         errors: Vec::new(),
     };
+    if request.format == ExportFormat::Zip {
+        export_zip(&request.output_dir, &media, &mut result)?;
+        return Ok(result);
+    }
     for (index, media) in media.iter().enumerate() {
         match export_one(
             &request.output_dir,
@@ -282,6 +290,84 @@ fn ordered_media_library(
         .map_err(|error| error.to_string())
 }
 
+/// Returns the name a file is exported under, without its extension. It is
+/// the item's name, without a trailing extension when that is the media's
+/// own file extension. An item without a name is exported under the first
+/// twelve characters of its hash and its position.
+fn export_stem(media: &ExportMedia, index: usize) -> String {
+    sanitize_stem(
+        media.name.as_deref().unwrap_or_default(),
+        mime_to_extension(&media.mime_type),
+        &format!(
+            "{}-{}",
+            &media.file_hash.0[..12],
+            media.position.max(index as i64)
+        ),
+    )
+}
+
+/// Writes every original file into one zip archive in `output_dir`. The
+/// files are stored without compression, because media files are compressed
+/// already and compressing them again takes time and saves nothing. A file
+/// that cannot be read is skipped and reported. When no file could be
+/// written, the empty archive is deleted.
+fn export_zip(
+    output_dir: &Path,
+    media: &[ExportMedia],
+    result: &mut ExportResult,
+) -> Result<(), String> {
+    use std::io::Write as _;
+    let path = unique_path(output_dir, "Picto Export", "zip");
+    let failed = |error: &dyn std::fmt::Display| {
+        format!("Failed to write {}: {error}", path.display())
+    };
+    let file = fs::File::create(&path).map_err(|error| failed(&error))?;
+    let mut archive = zip::ZipWriter::new(std::io::BufWriter::new(file));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+        .large_file(true);
+    let mut used = std::collections::HashSet::<String>::new();
+    for (index, media) in media.iter().enumerate() {
+        let mut source = match fs::File::open(&media.file_path) {
+            Ok(source) => source,
+            Err(error) => {
+                result.skipped += 1;
+                result.errors.push(format!(
+                    "Failed to read {} at {}: {error}",
+                    media.file_hash.0,
+                    media.file_path.display()
+                ));
+                continue;
+            }
+        };
+        let (stem, extension) = (export_stem(media, index), mime_to_extension(&media.mime_type));
+        let mut name = format!("{stem}.{extension}");
+        let mut suffix = 2;
+        // Two names that differ only in upper and lower case count as the
+        // same name, because Windows and macOS would unpack them onto one
+        // file.
+        while !used.insert(name.to_lowercase()) {
+            name = format!("{stem} ({suffix}).{extension}");
+            suffix += 1;
+        }
+        archive
+            .start_file(name, options)
+            .map_err(|error| failed(&error))?;
+        // When reading a file fails after part of it has been written, the
+        // archive cannot be used, so the export stops with the error.
+        std::io::copy(&mut source, &mut archive).map_err(|error| failed(&error))?;
+        result.exported += 1;
+    }
+    archive
+        .finish()
+        .and_then(|mut file| Ok(file.flush()?))
+        .map_err(|error| failed(&error))?;
+    if result.exported == 0 {
+        let _ = fs::remove_file(&path);
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn export_one(
     output_dir: &Path,
@@ -301,14 +387,7 @@ fn export_one(
             media.file_path.display()
         )
     })?;
-    let stem = sanitize_stem(
-        media.name.as_deref().unwrap_or_default(),
-        &format!(
-            "{}-{}",
-            &media.file_hash.0[..12],
-            media.position.max(index as i64)
-        ),
-    );
+    let stem = export_stem(media, index);
     let output_extension = output_extension(format, extension);
     let output_path = unique_path(output_dir, &stem, output_extension);
     let output = match format {
@@ -332,7 +411,7 @@ fn export_one(
 
 fn output_extension(format: ExportFormat, original: &str) -> &str {
     match format {
-        ExportFormat::Original => original,
+        ExportFormat::Original | ExportFormat::Zip => original,
         ExportFormat::Png => "png",
         ExportFormat::Jpeg => "jpg",
         ExportFormat::Webp => "webp",
@@ -371,7 +450,7 @@ fn encode(
 ) -> Result<Vec<u8>, String> {
     let mut output = Vec::new();
     match format {
-        ExportFormat::Original => unreachable!(),
+        ExportFormat::Original | ExportFormat::Zip => unreachable!(),
         ExportFormat::Png => {
             use image::ImageEncoder;
             let rgba = image.to_rgba8();
@@ -408,16 +487,17 @@ fn encode(
     Ok(output)
 }
 
-fn sanitize_stem(name: &str, fallback: &str) -> String {
+/// Builds the exported file name, without its extension, from an item's
+/// name. `extension` is the media's own file extension. It is the only
+/// ending that is removed from the name. Characters that a file name cannot
+/// hold are replaced by `_`. An empty result is replaced by `fallback`.
+fn sanitize_stem(name: &str, extension: &str, fallback: &str) -> String {
     let raw = if name.trim().is_empty() {
         fallback
     } else {
         name.trim()
     };
-    let stem = Path::new(raw)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or(raw);
+    let stem = strip_media_extension(raw, extension);
     let sanitized = stem
         .chars()
         .map(|character| match character {
@@ -434,6 +514,25 @@ fn sanitize_stem(name: &str, fallback: &str) -> String {
     } else {
         sanitized
     }
+}
+
+/// Returns `name` without its last dot and what follows it, when what
+/// follows is this media's file extension or another spelling of it (`jpeg`
+/// for `jpg`). An item's name is a title, not a file name, so any other dot
+/// belongs to the name.
+fn strip_media_extension<'a>(name: &'a str, extension: &str) -> &'a str {
+    match name.rsplit_once('.') {
+        Some((stem, suffix)) if is_media_extension(suffix, extension) => stem,
+        _ => name,
+    }
+}
+
+fn is_media_extension(suffix: &str, extension: &str) -> bool {
+    if suffix.eq_ignore_ascii_case(extension) {
+        return true;
+    }
+    let mime = extension_to_mime(&suffix.to_ascii_lowercase());
+    mime != "application/octet-stream" && mime_to_extension(mime) == extension
 }
 
 fn unique_path(directory: &Path, stem: &str, extension: &str) -> PathBuf {
@@ -462,4 +561,22 @@ fn reject_library_path(library_root: &Path, output: &Path) -> Result<(), String>
         return Err("Cannot export into the library directory".to_string());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn export_stem_keeps_dotted_names_and_drops_only_the_media_extension() {
+        let png = mime_to_extension("image/png");
+        let jpeg = mime_to_extension("image/jpeg");
+        let dotted = "1785371971.honestradish_thelucariowriter_hammond_comicfinal4";
+
+        assert_eq!(sanitize_stem(dotted, png, "fallback"), dotted);
+        assert_eq!(sanitize_stem("photo.PNG", png, "fallback"), "photo");
+        assert_eq!(sanitize_stem("photo.jpeg", jpeg, "fallback"), "photo");
+        assert_eq!(sanitize_stem("photo.jpeg", png, "fallback"), "photo.jpeg");
+        assert_eq!(sanitize_stem(".png", png, "fallback"), "fallback");
+    }
 }

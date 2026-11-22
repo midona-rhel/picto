@@ -50,7 +50,7 @@ registry. Provider fixture tests and live certification use that production path
 | Creator APIs | Pixiv search, Pixiv user, FANBOX | JSON pagination, multi-media post mapping, creator/general tags |
 | Paid creator feeds | Patreon, SubscribeStar, OnlyFans | Opaque cursors, access warnings, multi-media posts; OnlyFans adds purchases/messages/feed partitions and DRM media resolution |
 | Social/account feeds | DeviantArt, Twitter/X, Newgrounds, Fur Affinity, Hentai Foundry | Account/query normalization, HTML or JSON discovery, post-detail mapping |
-| Gallery/archive feeds | E-Hentai/ExHentai, Pawchive | Paged gallery/archive discovery, atomic collection assembly, bounded media downloads |
+| Gallery/archive feeds | E-Hentai/ExHentai, Pawchive, OnlyHaven | Paged gallery/archive discovery, atomic collection assembly, bounded media downloads |
 
 Family fixtures prove shared composition; every provider also owns focused parser and cursor tests.
 

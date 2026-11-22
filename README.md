@@ -1,7 +1,7 @@
 # Picto
 
 A desktop application for downloading, organizing, and browsing large image and video libraries.
-SQLite stores library truth and Roaring bitmap projections keep common queries fast.
+A library's data is stored in a SQLite database, and Roaring bitmaps keep the common queries fast.
 
 ## What Picto Does
 
@@ -9,8 +9,9 @@ SQLite stores library truth and Roaring bitmap projections keep common queries f
   posts on a schedule or on demand.
 - **Organize** — folders, smart folders, tags (with namespaces), star ratings, and color-based
   search. Drag and drop between folders, bulk-tag selections, and auto-tag with local AI models.
-- **Browse** — waterfall, justified, and grid layouts. Full-screen media view with zoom/pan. Comic
-  archives open in a paged viewer. Duplicate detection with a side-by-side comparison view and
+- **Browse** — waterfall, justified, and grid layouts, and a Quick Search panel that finds
+  commands, folders, tags and items. A media view with zoom and pan. PDF, DjVu, EPUB and comic
+  archives open in a document viewer. Duplicate detection with a side-by-side comparison view and
   Smart Merge.
 - **Import** — drag files or folders into the app, point Picto at a directory to watch for new
   content, or import and export Picto Packs.
@@ -24,68 +25,81 @@ SQLite stores library truth and Roaring bitmap projections keep common queries f
 |---|---|
 | Boorus and tag search | Danbooru, e621, Gelbooru, Rule34.xxx, Safebooru, Yande.re |
 | Artists and accounts | DeviantArt, Fur Affinity, Hentai Foundry, Newgrounds, Pixiv (search and users), Twitter / X |
-| Creator platforms | OnlyFans, Patreon, pixivFANBOX, SubscribeStar |
+| Creator platforms | OnlyFans, OnlyHaven, Patreon, pixivFANBOX, SubscribeStar |
 | Galleries and archives | E-Hentai / ExHentai galleries (via **Add Gallery**), Pawchive |
 
 ## Documentation
 
-Current product and release documentation lives in `docs/`:
+- [`docs/user-guide/`](./docs/user-guide/) is the user guide.
+- [`CONTRIBUTING.md`](./CONTRIBUTING.md) says how issues, branches, pull requests and releases
+  work.
+- [`docs/architecture.md`](./docs/architecture.md) describes how the shipped system works.
+- [`app/README.md`](./app/README.md) describes the app's code: how it is built, run and checked,
+  how it is put together, and what is not done yet.
+- [`docs/RELEASE_READINESS.md`](./docs/RELEASE_READINESS.md) is the release procedure and its
+  gates.
 
-- [`CONTRIBUTING.md`](./CONTRIBUTING.md) — issues, branches, pull requests and releases
-- [`docs/architecture.md`](./docs/architecture.md) — how the shipped system works
-- [`docs/user-guide/`](./docs/user-guide/) — user guide
+Work is tracked in [GitHub issues](https://github.com/midona-rhel/picto/issues). `main` holds
+released code. Development happens on `dev`.
 
-Work is tracked in [GitHub issues](https://github.com/midona-rhel/picto/issues). `main` holds released
-code; development happens on `dev`.
+## What the repository holds
+
+Picto is one program, written in Rust. It runs on macOS (Apple Silicon), Windows (x86-64) and
+Linux (x86-64).
+
+| Folder | What it is |
+|---|---|
+| `app/` | The app: the windows, the views and everything a user sees. It is written on GPUI, the user interface framework of the Zed editor. It is a Cargo workspace of its own, with its own `Cargo.lock`. |
+| `core/` | The application core: the commands, the background workers, the import and media processing, the subscriptions' runs, cloud sync and the AI tagger. |
+| `picto-library/` | The library: the SQLite database, its schema, its queries and the Roaring bitmap projections. |
+| `picto-sources/` | The subscription sources: one provider for each site. |
+| `scripts/` | The scripts of the build and the release, and the tools that measure the library crates. |
+| `build/` | The icons of the app, of `.library` folders and of `.picto-pack` files. |
+| `docs/` | The documents listed above, and the release notes of each version. |
+
+`core`, `picto-library` and `picto-sources` are the members of the Cargo workspace at the
+repository's root. The app uses `core` and `picto-library` as path dependencies and runs them in
+its own process.
+
+The version of Picto is written in one place, the `version` field of `package.json` at the
+repository's root. The app's build reads it from there. `package.json` also names the npm packages
+that the scripts in `scripts/` use; the app itself needs no Node.js.
 
 ## Development
 
-Picto is built with Electron + React + a Rust core (via napi-rs). The Rust backend handles SQLite, image processing, and all heavy lifting. The frontend is a React app with canvas-based rendering for the grid.
+The Rust toolchain is the one that `rust-toolchain.toml` names.
 
-### Prerequisites
+```bash
+cd app
+cargo build --locked
+cargo test --locked
+```
 
-- Node.js 20+
-- Rust toolchain (stable)
-- npm
+[`app/README.md`](./app/README.md) has the rest:
 
-### Setup
+- Section 2 says how the app is run safely. A debug build opens a throwaway copy of a library,
+  and it opens a library the user keeps only under the rules written there.
+- Section 3 lists what a Linux or Windows machine needs to build the app, where the app looks for
+  `ffmpeg`, and how the packages are made (`app/package.sh`).
+- Section 6 says how a change is checked, including the tool that plays a script in an
+  off-screen window and saves pictures.
+- Section 7 says what works, what was checked on each system, and what is open.
+
+The crates of the root workspace are checked from the repository's root:
+
+```bash
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --lib --tests --locked
+```
+
+The scripts have tests of their own, and the source audit checks what must not be committed:
 
 ```bash
 npm ci
-cd native/picto-node && npm ci && cd ../..
+npm test
+node scripts/release-audit.mjs
 ```
 
-### Run in development
-
-```bash
-npm run dev:electron
-```
-
-### Build the native addon
-
-```bash
-cd native/picto-node && ./node_modules/.bin/napi build
-```
-
-## Quality Gates
-
-Alpha blocking gate:
-```bash
-npm run gate:alpha
-```
-
-## Packaging
-
-Local package:
-```bash
-npm run alpha:package
-```
-
-Packaged smoke (requires the unpacked product created by the package command):
-```bash
-npm run alpha:smoke -- --report artifacts/alpha-smoke/local.json
-```
-
-The smoke launches the unpacked product with isolated app data and library storage. It passes only
-when native library initialization succeeds, the main window loads without process/load/preload
-failures during a short settle period, native shutdown succeeds, and the app exits with code `0`.
+CI runs all of this for every pull request, and it builds and tests the app on Linux and Windows
+(the `verify` workflow). CI has no macOS job, so the app is built and tested on macOS before a
+pull request is opened.

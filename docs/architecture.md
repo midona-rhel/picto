@@ -1,16 +1,22 @@
 # Picto Architecture
 
-Picto is one Electron application. React renders the interface, Electron owns operating-system
-integration, and the Rust NAPI module owns library behavior and persistence.
+Picto is one program, written in Rust. It has three layers, and the app runs all of them in its
+own process:
 
-The production path is direct:
+- The app (`app/`) draws the windows with GPUI and owns everything that reaches the rest of the
+  desktop.
+- The application core (`core/`) owns the commands and the background work.
+- The library crate (`picto-library/`) owns the database, the queries and the writes. The crate
+  `picto-sources/` holds the subscription sources that the core runs.
 
-`IPC command -> application operation -> SQLite transaction -> projection update -> invalidation`
+Every change to a library takes this path:
 
-SQLite is authoritative. Roaring bitmaps accelerate root-item scopes and can be rebuilt. Every
-committed mutation settles its projections, increments the library revision, and emits affected
-resource categories. Frontend consumers re-query those resources instead of predicting backend
-state or patching counts locally.
+`command -> library write -> SQLite transaction -> projection update -> change event`
+
+SQLite is authoritative. Roaring bitmaps make the scopes of root items fast to read, and they can
+be rebuilt from SQLite. Every committed write settles its projections, increments the library's
+revision, and announces the categories of what it changed. The app reads those categories again.
+It does not predict the library's state, and it does not adjust counts itself.
 
 A visible root is standalone image/video media or an ordered collection. Physical files, logical
 media occurrences, and visible roots have separate identities. Attached collection members inherit
@@ -33,14 +39,21 @@ Manual imports, watched folders, subscriptions, and retries enter one durable in
 
 ## Application boundaries
 
-- React owns presentation and transient interaction state. It does not open SQLite or infer whether
-  a native operation committed.
-- Electron owns windows, menus, protocols, updater delivery, credentials, and packaged native tools.
-  The preload exposes a narrow typed IPC surface; renderer code has no Node integration.
-- Rust owns library sessions, queries, mutations, background work, and invalidation. A generation
-  change closes the old library before a new session can answer commands.
-- Long-running work is durable and queryable. UI progress is a projection of persisted work rather
-  than an independent queue.
+- The app owns the windows, the menus, the views, and the state of an interaction that is not
+  stored, such as the selection, the scroll position and an open dialog. It also owns what reaches
+  the rest of the desktop: opened files, the clipboard, drags, notifications, the sign-in window
+  for site logins, the updater and the packages. The app never writes SQLite itself. Every edit
+  is a call to the library or a command to the core, and the app learns that a change was
+  committed from the answer and from the change event.
+  [`app/README.md`](../app/README.md), section 4, describes the app's parts.
+- The core answers commands by name with JSON arguments (`core/src/ipc.rs`). The app sends them
+  through `Application::dispatch` (`app/src/application/`). The app reads the grid's items from
+  the library with the query functions of `picto-library`, on one library thread
+  (`app/src/backend.rs`). The library is never read on the thread that draws.
+- The core and the library own the library sessions, the queries, the writes, the background work
+  and the change events. A library is closed before another library can answer commands.
+- Work that runs for a long time is stored in the library and can be queried. The progress that
+  the app shows is read from that stored work. The app keeps no queue of its own.
 
 ## Prepared library views
 
@@ -49,13 +62,6 @@ snapshot and never opens a SQLite read for it: matching, ordering, aggregates, s
 previews all come from the resident library model described below. The result owns the window,
 its resolved start, the first four query results, exact counts and one revision. Sequential consumers retain
 `items.query` cursors; grid navigation and refreshes do not fetch a separate preview page.
-
-The grid controller separates pending navigation from the displayed session. Outgoing scroll
-events and background refreshes cannot supersede a pending destination. Navigation preparation
-runs during the existing 170 ms fade-out. The destination is revealed after valid geometry and
-primary colors paint, without waiting for thumbnails. Refreshes keep the displayed grid while
-preparing one replacement, then coalesce newer invalidations rather than retrying until the
-database stops changing. The 10-second request deadline also covers preference loading.
 
 Window cancellation has one scoped backend execution context: Rust text/tree/numeric ordering,
 resident summary hydration and JSON serialization observe it. Parallel text workers explicitly
@@ -90,16 +96,13 @@ cached complete order, and name, rating, random and folder-order cursors keep th
 The derived checkpoint implementation version distinguishes signed date keys from older
 clamped keys; incompatible derived checkpoints rebuild from canonical SQLite data.
 
-The renderer holds only a ~1,500-tile window, so a selection is never expanded from loaded tiles
-when it reaches beyond them. Select-all is a `query` target with exclusions. A shift-click whose
-anchor has left the window is a `range` target: spans between two roots with their view
-positions, plus roots added outside them and roots toggled off inside them. The backend reads a
-span straight from the resident order and trusts its positions only while both ends still hold
-the span's roots, otherwise it locates the two roots in the complete order. Adding a span
-(Cmd/Ctrl+Shift) first asks the backend (`items.positions`) where the earlier selection sits, and
-after every refresh the renderer moves the spans, additions and exclusions to their current
-positions, so highlights and the count match what an operation changes; a span whose end left the
-view is dropped with a notice. A shift-click inside the loaded window stays an explicit list.
+The app's grid holds at most 1,500 items of a view at a time (`app/src/grid/window.rs`), so a
+selection that reaches beyond the loaded items is never built from the loaded items. Select All
+is a `query` target with exclusions. A Shift-click range is a `range` target: spans between two
+roots with their positions in the view, plus the roots added outside the spans and the roots
+toggled off inside them (`app/src/grid/selection.rs`). The library reads a span from the resident
+order. It trusts the span's positions only while both ends still hold the span's roots.
+Otherwise it finds the two roots in the complete order.
 
 ### The resident library model
 
@@ -119,8 +122,8 @@ database revision or rebuilds that too. The open runs under a scoped cancellatio
 deadline: a later open, a close or process shutdown cancels it, the migration's statements are
 interrupted through SQLite's progress handler, and the resident scans stop at their existing
 check points. A cancelled open commits nothing, removes the backup its migration attempt took,
-and reports `library open cancelled`; the shell exposes the stage in flight (migrating, loading,
-starting) through `library.open_status` so the loading screen can say what is happening. Nothing else is persisted as derived state: there are no
+and reports `library open cancelled`; the core reports the stage that is running (migrating,
+loading, starting) through `library.open_status`, so that a loading screen can name it. Nothing else is persisted as derived state: there are no
 drawing pages, text chunks or name nodes on disk, no per-domain format versions, generations or
 repair passes, and no helper reader connections. The supported predecessor migration backs up
 the database, drops those tables and redefines the one journal; a first open after migration or
@@ -189,12 +192,14 @@ collection members; zero disables delete undo. Its history entry
 keeps the deleted roots' structure and every row that pointed at them, and its files stay on disk
 while the entry is in history: `protected_cleanup_files` keeps them out of the blob cleanup, which
 removes them once the entry leaves history, at the latest when the app closes. A larger delete
-records no entry and frees its files at once; the renderer confirms nonundoable rejects using
-the backend-resolved selection, not the loaded grid window. History protection is registered
+records no entry and frees its files at once; the app asks the user to confirm a reject that
+cannot be undone, and it counts the items with the selection that the library resolved, not with
+the items the grid has loaded. History protection is registered
 before releasing the writer, and cleanup reads it after acquiring the same writer. Undo restores
 recent views and cascaded queue jobs, assigning new queue IDs and requeuing interrupted running jobs.
-When the renderer promises undo, it sends `require_undoable`; the serialized writer checks the
-resolved selection against the limit and refuses the delete if it no longer fits. Only a fresh
+When the app has told the user that a delete can be undone, it passes `require_undoable`; the
+serialized writer checks the resolved selection against the limit and refuses the delete if it
+no longer fits. Only a fresh
 nonundoable confirmation permits a retry without that constraint. Delete requests await both
 confirmation and persistence, returning success only after the mutation commits; cancellation
 or failure never advances Inbox review.
@@ -202,7 +207,7 @@ or failure never advances Inbox review.
 Receipts stay precise. Item ids qualify only `library`; bookkeeping receipts (tasks,
 subscriptions, settings) never widen a frame to a broad change. `smart_folders` is announced only
 when a folder's result or rule actually changed. Derivative facts publish narrowly: a perceptual
-hash announces nothing and a palette refreshes only the colour index. The IPC response cache for
+hash announces nothing and a palette refreshes only the colour index. The core's response cache for
 `items.query` and `items.mime_facets` is keyed on the query epoch, which bookkeeping does not move.
 
 Background workers (ingest, FTS, derivatives, AI tagging, subscriptions) sleep until the library
@@ -223,27 +228,21 @@ running. Pause holds a task's jobs in the queue across restarts; Stop drops the 
 imported. Stop-and-undo removes the roots the task created (`task_created_root`) and the tags it
 added to roots that already existed (`task_added_tag`); roots it reused stay. An import that moves
 its files into the library cannot be undone. `tasks.list` reports each task with a rate and an
-estimate measured over the last 20 s, and the renderer shows it in the foreground task dialog or,
-once sent to the background, the task bar.
+estimate measured over the last 20 s, and the app shows it in the foreground task dialog or,
+once the task was sent to the background, in the task bar.
 
 `picto-library/examples/library_ops_benchmark.rs` measures these operations on a synthetic library
 (`-- [roots] [runs] [smart_folders]`, default 1M roots and 100 smart folders). Its output is local and
 never committed.
 
-Committed grid invalidations coalesce in the grid controller with one active refresh and one
-pending successor. Fast refreshes use a 40 ms delay. During sustained expensive refresh work,
-the cooldown is three times the previous refresh duration (capped at one second), allowing
-background work to progress without imposing a fixed two-second stale-view interval on edits.
-The displayed grid remains intact during refresh, and navigation retains its existing fades.
-
 ## Subscriptions
 
-Subscriptions persist definitions, runs, source posts, source items, retries, and progress in
-SQLite. Direct site sessions are captured in a Picto-owned browser and secrets remain in the
-operating-system credential store.
+Subscriptions store their definitions, runs, source posts, source items, retries and progress in
+SQLite. A user signs in to a site in a sign-in window that the app opens on the system's web view
+(`app/src/logins/`). The login that results is kept in the operating system's credential store.
 
-Every source uses one native Rust path; there is no Python runtime, gallery-dl, OF-Scraper, or
-sidecar in production or packaging:
+Every source uses one path, written in Rust. Neither the app nor a package holds a Python
+runtime, gallery-dl, OF-Scraper or any other helper program for sources:
 
 `query -> provider adapter -> shared HTTP runtime -> one exposed post -> current-post downloads ->
 canonical ingest -> settlement acknowledgement -> next post`

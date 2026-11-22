@@ -1,0 +1,221 @@
+# CI plays this script with the off-screen tool (src/offscreen.rs) and
+# uploads the pictures it takes. The library is a generated one with 2,000
+# items, which the example million_grid_demo makes.
+#
+# Pictures 01 to 08 are taken at 100% interface zoom:
+#   01 the grid.
+#   02 the grid with the pointer over a tile.
+#   03 the grid scrolled down.
+#   04 the viewer with an item open.
+#   05 the context menu of an item.
+#   06 the window's close button with the pointer over it. The app draws
+#      this button only on Windows and Linux.
+#   07 the application menu. The app draws this menu in the window only on
+#      Windows and Linux.
+#   08 the Settings window.
+#
+# Pictures 09 and 10 are taken at 150% interface zoom: the grid, and the
+# context menu of an item. The menu is opened by a press at a position in
+# window points, which checks that the press reaches the tile that is drawn
+# at that position.
+#
+# Pictures 11 and 12 are taken at 80% interface zoom: the grid, and the
+# Settings window, which is still open and takes the same zoom.
+#
+# Pictures 13 to 16 show the Subscriptions screen with one subscription that
+# the script creates. The subscription has one source. The script never runs
+# it: nothing presses Run, and the pointer is only moved, never pressed, on
+# the source's row.
+# They show that the screen's buttons in the titlebar do not overlap the
+# window's own buttons:
+#   13 the list of subscriptions.
+#   14 the page of the subscription, with its rail. The pointer is on the
+#      Edit button of the source's row. The picture shows that the row's
+#      buttons stay visible while the pointer is on one of them, and that
+#      they are drawn at full strength.
+#   15 the same page with the rail hidden.
+#   16 the same page at 150% interface zoom, where the titlebar buttons show
+#      only their icons.
+#
+# Pictures 17 and 18 show the Duplicates screen after a scan, at 100% and at
+# 125% interface zoom. The generated library has no two images that match,
+# so the scan finds no pairs and both pictures show the screen's empty
+# state ("No duplicate pairs"). The screen with a pair on it is therefore
+# not photographed in CI.
+#
+# Pictures 19 to 21 show the Quick Search panel at 100% interface zoom. The
+# script first opens the All destination and resets the zoom.
+#   19 the panel just after its shortcut opened it (Command+T on macOS,
+#      Control+T on Windows and Linux), with the search field empty.
+#   20 the panel after the script typed "inbox". The list holds the
+#      command and the place with that name.
+#   21 the Inbox, which the script opened by pressing Enter on the first
+#      row, the command Inbox. The picture shows that the panel has closed
+#      and that the Inbox is open.
+wait 800
+shot 01-grid
+move 450 150
+wait 400
+shot 02-tile-hover
+scroll 740 400 -1200
+wait 800
+shot 03-scrolled
+scroll 740 400 1200
+wait 600
+down 450 150 1
+up 450 150 1
+down 450 150 2
+up 450 150 2
+wait 1500
+shot 04-viewer
+key escape
+wait 800
+move 450 150
+rdown 450 150
+rup 450 150
+wait 600
+shot 05-item-menu
+key escape
+wait 400
+move 1191 24
+wait 500
+shot 06-close-hover
+move 22 24
+down 22 24
+up 22 24
+wait 600
+move 60 87
+wait 600
+shot 07-app-menu
+key escape
+wait 300
+key escape
+wait 400
+move 226 24
+down 226 24
+up 226 24
+wait 1500
+window 1
+wait 600
+shot 08-settings
+window 0
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+wait 1200
+shot 09-zoom-150-grid
+move 580 170
+rdown 580 170
+rup 580 170
+wait 600
+shot 10-zoom-150-item-menu
+key escape
+wait 400
+key secondary-0
+wait 100
+key secondary--
+wait 100
+key secondary--
+wait 100
+key secondary--
+wait 100
+key secondary--
+wait 100
+wait 1200
+shot 11-zoom-80-grid
+window 1
+wait 600
+shot 12-zoom-80-settings
+window 0
+key secondary-0
+wait 600
+invoke subscriptions.create {"name":"Example","schedule":"manual","initial_post_limit":100,"periodic_post_limit":100,"queries":[{"site_id":"danbooru","query_text":"example","group_posts":false}]}
+wait 600
+move 81 309
+down 81 309
+up 81 309
+wait 1500
+shot 13-subscriptions-home
+down 420 165 2
+up 420 165 2
+wait 1500
+move 678 215
+wait 600
+shot 14-subscription-page
+key secondary-alt-2
+wait 800
+shot 15-subscription-page-rail-hidden
+key secondary-alt-2
+wait 300
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 1200
+shot 16-subscription-page-zoom-150
+window 0
+key secondary-0
+wait 300
+invoke duplicates.scan {"distance_threshold":16}
+wait 1500
+move 73 338
+down 73 338
+up 73 338
+wait 3000
+shot 17-duplicates-empty
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 1200
+shot 18-duplicates-empty-zoom-125
+key secondary-1
+wait 1500
+key secondary-0
+wait 600
+key secondary-t
+wait 600
+shot 19-quick-search
+type inbox
+wait 600
+shot 20-quick-search-typed
+key enter
+wait 1500
+shot 21-quick-search-opened-inbox

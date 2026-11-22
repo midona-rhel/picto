@@ -509,7 +509,7 @@ fn keep_file_merges_the_losing_item_into_the_kept_one_and_undoes_exactly() {
 }
 
 #[test]
-fn keep_file_takes_a_losing_member_out_of_its_collection_without_its_tags() {
+fn keep_file_takes_a_losing_member_out_of_its_collection_and_keeps_what_it_carried() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
     let mut member = named_import("member", "member-file", "Member", color(20.0));
@@ -555,11 +555,15 @@ fn keep_file_takes_a_losing_member_out_of_its_collection_without_its_tags() {
     );
     assert_eq!(after.root.cover_media_id, after.media[0].media_id);
     assert_eq!(after.root.name, "Post");
+    // The kept item gains the tags the member had as part of its post, and
+    // the post, which lives on, keeps them.
     let post_tag = library.projections().snapshot().tag_ids_by_name["post:only"];
-    assert!(!library.details(winner).unwrap().tag_ids.contains(&post_tag));
+    assert!(library.details(winner).unwrap().tag_ids.contains(&post_tag));
+    assert!(after.tag_ids.contains(&post_tag));
     assert_eq!(provenance_media(&library, "member"), vec![winner.0]);
 
     library.undo().unwrap().unwrap();
+    assert!(!library.details(winner).unwrap().tag_ids.contains(&post_tag));
     let restored = library.details(collection).unwrap();
     assert_eq!(restored.media, before.media);
     assert_eq!(restored.root.cover_media_id, before.root.cover_media_id);

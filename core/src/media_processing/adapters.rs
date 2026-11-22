@@ -250,7 +250,11 @@ pub(crate) async fn generate_thumbnail_with_adapter(
             match ffmpeg::render_video_thumbnail(path, target_resolution, percentage_in, dur).await
             {
                 Ok(bytes) => Ok((bytes, "jpg".into())),
-                Err(_) => {
+                Err(error) => {
+                    // A frame part of the way into the video could not be
+                    // read, so the first frame is tried. If that fails too,
+                    // the message gives the reason of the first failure, for
+                    // example that the ffmpeg program was not found.
                     if percentage_in > 0 {
                         if let Ok(bytes) =
                             ffmpeg::render_video_thumbnail(path, target_resolution, 0, dur).await
@@ -259,7 +263,7 @@ pub(crate) async fn generate_thumbnail_with_adapter(
                         }
                     }
                     Err(FileError::Thumbnail(format!(
-                        "ffmpeg could not generate thumbnail for {:?}",
+                        "ffmpeg could not generate thumbnail for {:?}: {error}",
                         mime
                     )))
                 }

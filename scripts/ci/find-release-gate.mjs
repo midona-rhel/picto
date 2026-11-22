@@ -1,12 +1,18 @@
 #!/usr/bin/env node
-// Resolve the one tested artifact set. Publication must never rebuild a tag.
+// Finds the packages that a release publishes: the three artifacts that the
+// Alpha Gate uploaded when the release branch was pushed at the tagged
+// commit. A tag publishes those files and builds nothing.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const packages = ['picto-macos-arm64', 'picto-windows-x64', 'picto-linux-x64'];
-const reports = ['alpha-smoke-macos', 'alpha-smoke-windows', 'alpha-smoke-linux'];
 
+// Returns the id of the qualifying run and the ids of its three package
+// artifacts, or throws with the reason why there is none. The run qualifies
+// when it is a successful run of `alpha-gate.yml` for a push of `sha` to the
+// branch `release/<version>` of this repository. `api` takes the path of a
+// GitHub API endpoint and returns the parsed answer.
 export function findReleaseGate({ repository, sha, tag, version, requireMainAncestry = true }, api) {
   if (!/^\d+\.\d+\.\d+-(?:alpha|rc)(?:[.-]\d+)?$/.test(version) || tag !== `v${version}`) {
     throw new Error('Release tag must match the alpha/rc package version.');
@@ -31,12 +37,12 @@ export function findReleaseGate({ repository, sha, tag, version, requireMainAnce
     && candidate.path === '.github/workflows/alpha-gate.yml' && candidate.head_repository?.full_name === repository);
   if (!run) throw new Error('No successful release-branch gate for this exact commit. Do not retag; finish the gate first.');
   const { artifacts } = api(`${base}/actions/runs/${run.id}/artifacts?per_page=100`);
-  const selected = [...packages, ...reports].map(name => {
+  const selected = packages.map(name => {
     const matches = artifacts.filter(artifact => artifact.name === name && !artifact.expired && artifact.size_in_bytes > 0);
     if (matches.length !== 1) throw new Error(`Missing, expired, or ambiguous release artifact: ${name}. Rerun the release-branch gate.`);
     return matches[0];
   });
-  return { runId: run.id, artifactIds: selected.slice(0, packages.length).map(artifact => artifact.id) };
+  return { runId: run.id, artifactIds: selected.map(artifact => artifact.id) };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -46,5 +52,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     encoding: 'utf8', timeout: 30_000,
   })));
   appendFileSync(process.env.GITHUB_OUTPUT, `run-id=${result.runId}\nartifact-ids=${result.artifactIds.join(',')}\n`);
-  console.log('Verified release-branch gate, main ancestry, and all three package and smoke artifacts.');
+  console.log('Verified release-branch gate, main ancestry, and all three package artifacts.');
 }

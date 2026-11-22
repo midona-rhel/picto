@@ -2,8 +2,8 @@
 
 [← User Guide](README.md)
 
-A library is a folder named `<name>.library`. Everything Picto knows about your media lives in it,
-together with a copy of every imported file. You can keep several libraries and switch between them.
+A library is a folder named `<name>.library`. It holds everything Picto knows about your media and
+a copy of every imported file. You can keep several libraries and switch between them.
 
 ## What is in a library folder
 
@@ -15,41 +15,64 @@ My Library.library/
     └── t/           ← thumbnails
 ```
 
-Picto also creates working folders (for example `blobs/tmp/`, `temp/`, and `cloud/` when cloud sync
-is on). Do not edit anything inside a library folder by hand.
+Picto also creates working folders in the library, for example `blobs/tmp/` and `temp/`, and
+`cloud/` when cloud sync is on. Do not change anything inside a library folder by hand.
 
 ## Open the Library Manager
 
-- **Library → Library Manager…**, or
-- click the library switcher at the top of the sidebar and choose **Library Manager…**.
+Open the Library Manager in one of these ways:
 
-The left column lists the libraries on this device, pinned ones first. Select one to see its
-appearance, statistics, and (for the open library) cloud sync status.
+- Choose **Library → Library Manager…** (`Mod+Shift+L`).
+- Click the library switcher at the top of the sidebar and choose **Library Manager…**.
+
+The left column lists the libraries on this device, with the pinned libraries first. Select a
+library to see its appearance and its statistics. For the open library the Library Manager also
+shows the state of cloud sync.
 
 ## Create a library
 
 1. Click **New Library…** and type a name.
-2. Click **Choose Location…** and pick the folder that will contain it.
+2. Click **Choose Location…** and pick the folder that will contain the library.
 
-Picto creates `<name>.library` there and opens it. A library cannot be created inside another library.
+Picto creates `<name>.library` in that folder and opens it. A library cannot be created inside
+another library.
 
 ## Open an existing library
 
-Click **Open Existing…** (or **Library → Open Library…**) and select a folder ending in `.library`.
-Picto opens it and adds it to the list.
+Click **Open Existing…** in the Library Manager, or choose **Library → Open Library…**, and select
+a folder whose name ends in `.library`. Picto opens the library and adds it to the list.
 
-To open a library stored in a synced Google Drive or Dropbox folder, use **Open from Cloud…**.
-Cloud sync is experimental; see [Settings](settings.md).
+The first time you open a library that Picto did not create on this computer, Picto asks **Open
+this library directly?** and names the library's folder. Click **Open Library**. Picto asks this
+once for each library. It asks again when the library is found at another place. The Library
+Manager asks the same question before it renames, shows, moves or deletes a library that is not
+open and that you have not answered the question for.
+
+Picto does not open a library in these cases:
+
+- The folder is not a library. A library is a `.library` folder that holds the file
+  `library.sqlite`. An empty `.library` folder is not a library.
+- The library's database has an older format. Picto does not convert such a library. It shows a
+  message that says so and leaves the library unchanged.
+- The `.library` folder was opened from the system's file manager, or was given to Picto when
+  Picto was started. Picto opens a library only from the Library Manager, from **Open Library…**,
+  from **Recent Libraries** and from the library switcher in the sidebar.
+
+To open a library that is stored in a synced Google Drive or Dropbox folder, use **Open from
+Cloud…**. Cloud sync is experimental. See [Cloud Sync](cloud-sync.md).
 
 ## Switch libraries
 
-Any of these closes the current library and opens the other one:
+Each of these closes the current library and opens the other one:
 
-- double-click it in the Library Manager, or select it and click **Open Library**;
-- pick it in the sidebar library switcher;
-- **Library → Recent Libraries**.
+- Double-click the library in the Library Manager, or select it and click **Open Library**.
+- Choose the library in the library switcher of the sidebar.
+- Choose the library under **Library → Recent Libraries**.
 
-On launch Picto opens the library you used last.
+When Picto switches to another library, it also closes the separate item windows, the Settings
+window and the log window.
+
+When Picto starts, it opens the library that was open last.
 
 ## Library actions
 
@@ -57,22 +80,23 @@ Select a library and click the **⋯** (Library actions) button.
 
 | Action | What it does |
 |--------|--------------|
-| Add to / Remove from Quick Access | Pins the library to the top of the lists. |
-| Rename | Renames the `.library` folder on disk. If it is the open library, Picto closes and reopens it. |
-| Show in File Manager | Reveals the library folder. |
-| Move… | Asks for a destination folder and moves the library folder there. If it is the open library, Picto reopens it from the new place. For a library marked **Missing on disk** this reads **Locate…**: pick the folder that now contains it. |
-| Remove from List | Forgets the library. Its folder stays on disk; open it again with **Open Existing…**. Not available for the open library. |
-| Delete… | After confirmation, permanently deletes the library folder and everything in it. Picto refuses to delete the open library; switch to another one first. **Cannot be undone.** |
+| Add to Quick Access, Remove from Quick Access | It pins the library to the top of the lists, or unpins it. |
+| Rename | It renames the `.library` folder on disk. If the library is open, Picto closes it and opens it again. |
+| Show in File Manager | It shows the library folder in the system's file manager. |
+| Move… | It asks for a folder and moves the library folder there. If the library is open, Picto opens it again from the new place. When the new place is on another disk, Picto copies the library, compares every copied file with its original, and only then removes the original. For a library that is marked **Missing on disk**, this row reads **Locate…**: pick the folder that now contains the library. |
+| Remove from List | It removes the library from the list. The library folder stays on disk, and **Open Existing…** opens it again. The row is disabled for the open library. |
+| Delete… | After a question, it permanently deletes the library folder and everything in it. This cannot be undone. The row is disabled for the open library, so switch to another library first. Picto deletes only a `.library` folder that holds `library.sqlite` and that no program has open. |
 
-For the open library the menu also has the cloud sync commands (experimental).
+For the open library the menu also has the commands of cloud sync, which is experimental.
 
 ## Appearance
 
-In the **Appearance** card you can set a color, an icon, and a cover image for each library. The
+In the **Appearance** card you can set a color, an icon and a cover image for each library. The
 cover is chosen from the library's own media, so open the library first.
 
 ## A library that moved or disappeared
 
-The list marks missing libraries with **Missing on disk**. If no library in the list can be opened
-at launch and the last-used one is missing, Picto asks what to do: **Locate…** (pick the folder
-that now contains it), **Remove from List**, or **Cancel**.
+The list marks a library whose folder is gone with **Missing on disk**. If the library that was
+open last is missing when Picto starts, Picto shows **Library Not Found** and asks what to do:
+**Locate…** lets you pick the folder that now contains the library, **Remove from List** removes
+the library from the list, and **Cancel** does neither.

@@ -1,17 +1,20 @@
+# The workspace of the crates below the user interface. The app has a
+# workspace of its own (`app/Cargo.toml`), which uses `core` and
+# `picto-library` as path dependencies and has its own profiles.
 [workspace]
 members = [
     "core",
     "picto-library",
     "picto-sources",
-    "native/picto-node",
 ]
 resolver = "2"
 
 [profile.release]
 strip = "symbols"
 
-# Optimize image-processing deps even in debug builds (PNG decode is 10-50x
-# slower without optimizations, making phash computation painfully slow).
+# The image crates are optimized in a debug build too. Without optimization
+# a PNG is decoded 10 to 50 times more slowly, and computing the perceptual
+# hash of an image then takes too long to work with.
 [profile.dev.package.image]
 opt-level = 3
 [profile.dev.package.png]
@@ -29,21 +32,20 @@ opt-level = 3
 [profile.dev.package.boring-sys2]
 opt-level = 2
 
-# The desktop debugger uses the native core directly. Leaving the application
-# crates at opt-level 0 makes ordinary query row mapping and JSON serialization
-# dominate IPC latency even though SQLite itself is fast.
+# The three crates of this workspace are optimized in a debug build. At
+# `opt-level` 0, turning query rows into values and writing JSON takes longer
+# than the SQLite query itself.
 [profile.dev.package.picto_core]
 opt-level = 2
 [profile.dev.package.picto_library]
 opt-level = 2
 [profile.dev.package.picto_sources]
 opt-level = 2
-[profile.dev.package.picto_node]
-opt-level = 2
 
-# Interactive debug queries exercise these dependencies directly (bitmap
-# membership, ordinal selection and SQLite row reads). Keep dependency hot
-# loops optimized just like image decoding; application debug info is retained.
+# Queries call these crates directly: bitmap membership, picking the item at
+# a position, and reading SQLite rows. They are optimized in a debug build
+# for the same reason as the image crates. The debug information of the
+# workspace's own crates is kept.
 [profile.dev.package.roaring]
 opt-level = 3
 [profile.dev.package.rusqlite]

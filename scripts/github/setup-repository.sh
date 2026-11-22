@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Configure the GitHub repository for the dev -> release/<version> -> main flow.
-# Idempotent: re-running updates labels and rulesets in place.
+# Sets up the GitHub repository for the flow dev -> release/<version> -> main:
+# the `dev` branch, the merge settings, the labels and the rulesets. The
+# script can be run again at any time. A second run updates the labels and
+# the rulesets that exist and creates nothing twice.
 #
 #   scripts/github/setup-repository.sh            # midona-rhel/picto
 #   REPO=owner/name scripts/github/setup-repository.sh
@@ -19,9 +21,10 @@ if ! api "repos/$REPO/branches/dev" >/dev/null 2>&1; then
 fi
 
 echo "== repository settings"
-# Squash for work PRs into dev (one commit per issue); merge commits for
-# release PRs into main so each released commit stays in main's ancestry,
-# which scripts/ci/find-release-gate.mjs requires before publishing.
+# A pull request into dev is squashed, which gives one commit per issue. A
+# release pull request into main is merged with a merge commit, so that the
+# released commit stays in main's ancestry. scripts/ci/find-release-gate.mjs
+# requires that before a release is published.
 api -X PATCH "repos/$REPO" \
   -f default_branch=dev \
   -F has_issues=true \
@@ -53,8 +56,7 @@ label "type: chore" ededed "Build, CI, dependencies, process"
 label "area: library" 1d76db "picto-library: schema, mutations, projections"
 label "area: core" 1d76db "core: runtime, queues, IPC, media processing"
 label "area: sources" 1d76db "picto-sources: site adapters and HTTP"
-label "area: renderer" 1d76db "React UI"
-label "area: electron" 1d76db "Electron shell, updater, packaging"
+label "area: gpui" 1d76db "The desktop app in app/, its updater and its packages"
 label "status: triage" ffffff "Needs evidence or a priority"
 label "status: blocked" 000000 "Waiting on something outside the issue"
 label "schema change" b60205 "Touches schema_v1.sql or migrations"
@@ -72,9 +74,14 @@ upsert_ruleset() {
   fi
 }
 
+# The checks that a pull request into `dev` or `main` must pass. The names
+# are the ones GitHub shows for the jobs of `ci.yml`: `verify / ` and the name
+# of a job of `verify.yml`, and `branch-policy`.
 checks='[
-  {"context": "verify / verify:renderer", "integration_id": 15368},
+  {"context": "verify / verify:scripts", "integration_id": 15368},
   {"context": "verify / verify:rust", "integration_id": 15368},
+  {"context": "verify / verify:app (linux)", "integration_id": 15368},
+  {"context": "verify / verify:app (windows)", "integration_id": 15368},
   {"context": "branch-policy", "integration_id": 15368}
 ]'
 
@@ -102,16 +109,19 @@ branch_ruleset() { # name ref merge_method
 upsert_ruleset "dev: reviewed squash merges" "$(branch_ruleset "dev: reviewed squash merges" refs/heads/dev squash,merge)"
 upsert_ruleset "main: releases only" "$(branch_ruleset "main: releases only" refs/heads/main merge)"
 
-# Release branches are the release record and must still exist when the tag
-# publishes (find-release-gate.mjs reads refs/heads/release/<version>). The
-# deletion rule also stops auto-delete-on-merge from removing them.
+# A release branch must still exist when its tag is pushed, because
+# find-release-gate.mjs reads refs/heads/release/<version> then. The rule
+# against deletion also stops GitHub from deleting the branch when its pull
+# request is merged.
 upsert_ruleset "release branches" "$(jq -n '{
   name: "release branches", target: "branch", enforcement: "active",
   conditions: {ref_name: {include: ["refs/heads/release/*"], exclude: []}},
   bypass_actors: [],
   rules: [{type: "deletion"}, {type: "non_fast_forward"}]}')"
 
-# Keep creation bypass separate from immutable-tag rules.
+# Two rulesets cover the release tags. The first forbids deleting and moving
+# a tag, for everyone. The second forbids creating a tag, except for
+# repository administrators.
 upsert_ruleset "release tags" "$(jq -n '{
   name: "release tags", target: "tag", enforcement: "active",
   conditions: {ref_name: {include: ["refs/tags/v*"], exclude: []}},

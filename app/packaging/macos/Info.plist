@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The Info.plist of the packaged macOS app, Picto.app. `package.sh` copies
+  this file into the bundle and replaces the two version values with the
+  version in the repository's `package.json`.
+
+  The name and the identifier are the ones that Picto 0.6.19 and earlier
+  have, because the packaged app is installed over such a version as its next
+  version. The bundle that
+  `run.sh` makes for a debug build has its own Info.plist, with another name
+  and another identifier.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleName</key>
+	<string>Picto</string>
+	<key>CFBundleDisplayName</key>
+	<string>Picto</string>
+	<key>CFBundleExecutable</key>
+	<string>Picto</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.picto.desktop</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<!-- `package.sh` replaces both version values. -->
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.0.0</string>
+	<!--
+	  `Icon.icns` is in Contents/Resources. When `package.sh` could compile
+	  `build/Picto.icon` with actool, Contents/Resources also holds
+	  `Assets.car`, and macOS 26 and later take the icon named `Icon` from it.
+	-->
+	<key>CFBundleIconFile</key>
+	<string>Icon.icns</string>
+	<key>CFBundleIconName</key>
+	<string>Icon</string>
+	<!-- The oldest macOS the release program runs on (the `minos` value that `otool -l` prints for it). -->
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<!--
+		  A pack is a file the app opens: it shows the pack's import dialog.
+		  Picto 0.6.19 and earlier declare the same entry.
+		-->
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>picto-pack</string>
+			</array>
+			<key>CFBundleTypeName</key>
+			<string>Picto Pack</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>picto-pack.icns</string>
+		</dict>
+		<!--
+		  A library is a folder that the Finder shows as one file with the
+		  library icon. The app does not open a library that the Finder hands
+		  to it (a library is opened only from inside the app), so the role
+		  is None: the entry describes the type and does not offer the app as
+		  the program that opens it.
+		-->
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>library</string>
+			</array>
+			<key>CFBundleTypeName</key>
+			<string>Picto Library</string>
+			<key>CFBundleTypeRole</key>
+			<string>None</string>
+			<key>LSHandlerRank</key>
+			<string>None</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>library.icns</string>
+			<key>LSTypeIsPackage</key>
+			<true/>
+		</dict>
+	</array>
+</dict>
+</plist>

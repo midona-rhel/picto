@@ -1,9 +1,9 @@
 name: CI
 
-# Every pull request is verified before review, not only release branches.
-# Release branches keep their own gate (alpha-gate.yml), which calls the same
-# verify workflow and additionally packages and smokes all three platforms.
-# Stacked pull requests (based on another work branch) are verified too.
+# Verifies every pull request, whatever branch it is based on, and every
+# push to `dev`. A release branch has its own workflow (`alpha-gate.yml`),
+# which calls the same verify workflow and also builds the packages for the
+# three systems.
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited, ready_for_review]
@@ -36,9 +36,11 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
-      # The protected branches predate this policy. Use this reviewed immutable
-      # implementation only until the base carries its own policy, never a PR's
-      # candidate script. This also lets the bootstrap PR satisfy its own gate.
+      # The policy script is taken from the base branch, never from the pull
+      # request, so that a pull request cannot change the policy it is
+      # checked against. A base branch that is older than the policy has no
+      # script. For such a branch the script is taken from the fixed commit
+      # named below.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ hashFiles('scripts/ci/check-branch-policy.mjs') == '' }}
         with:

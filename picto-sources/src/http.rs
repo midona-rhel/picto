@@ -481,6 +481,29 @@ impl HttpRuntime {
         })
     }
 
+    /// Fetches a page and returns its status, its final URL after redirects
+    /// and its body. A 403 or 404 response is returned to the caller and is
+    /// not turned into an error, so that a provider can read the body and
+    /// tell apart the different pages a site sends with those statuses.
+    pub async fn get_text_with_inaccessible_status(
+        &self,
+        url: Url,
+        credentials: &RequestCredentials,
+        cancel: &CancellationToken,
+    ) -> Result<(u16, Url, String), SourceError> {
+        let response = self.get_with_inaccessible(url, credentials, cancel).await?;
+        let status = response.response.status().as_u16();
+        let final_url = response.response.url().clone();
+        let body = response.response.text().await.map_err(|_| {
+            SourceError::new(
+                SourceErrorKind::InvalidResponse,
+                "HTTP response could not be decoded",
+                false,
+            )
+        })?;
+        Ok((status, final_url, body))
+    }
+
     pub async fn head(
         &self,
         url: Url,

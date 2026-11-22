@@ -2,225 +2,25 @@
   "name": "picto",
   "productName": "Picto",
   "private": true,
-  "version": "0.6.19-alpha",
+  "version": "0.6.20-alpha",
   "description": "Media library manager",
   "author": "Picto <noreply@picto.app>",
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "prepare:viewer-assets": "node scripts/prepare-viewer-assets.mjs",
     "generate:app-icons": "node scripts/generate-app-icons.mjs",
-    "generate:license-notices": "node scripts/generate-license-notices.mjs",
-    "check:localization": "node scripts/check-localization.mjs",
     "release:audit": "node scripts/release-audit.mjs",
-    "predev": "node scripts/prepare-viewer-assets.mjs",
-    "dev": "vite",
-    "predev:electron": "node scripts/prepare-viewer-assets.mjs",
-    "dev:electron": "concurrently -k -n vite,electron -c cyan,green \"vite --host 127.0.0.1 --port 8080\" \"wait-on tcp:8080 && nodemon --signal SIGTERM --watch electron --watch core/src --watch core/Cargo.toml --watch picto-library/src --watch picto-library/Cargo.toml --watch picto-sources/src --watch picto-sources/Cargo.toml --watch native/picto-node/src --watch native/picto-node/Cargo.toml --ext mjs,cjs,rs,toml --delay 1 --exec \\\"node scripts/run-electron-dev.mjs\\\"\"",
-    "dev:electron:vite": "vite --host 127.0.0.1 --port 8080",
-    "dev:electron:app": "wait-on tcp:8080 && nodemon --signal SIGTERM --watch electron --watch core/src --watch core/Cargo.toml --watch picto-library/src --watch picto-library/Cargo.toml --watch picto-sources/src --watch picto-sources/Cargo.toml --watch native/picto-node/src --watch native/picto-node/Cargo.toml --ext mjs,cjs,rs,toml --delay 1 --exec \"node scripts/run-electron-dev.mjs\"",
-    "start:electron": "npm run rebuild:native && electron .",
-    "rebuild:native": "npm --prefix native/picto-node run build:local",
-    "generate:bindings": "cargo run --manifest-path core/Cargo.toml --example export_bindings",
-    "build:native": "node scripts/build-native.mjs --release",
-    "prebuild": "npm run prepare:viewer-assets",
-    "build": "npm run check:localization && tsc && vite build && npm run generate:license-notices",
-    "build:electron": "npm run check:localization && tsc && vite build && npm run generate:license-notices",
-    "predist:electron": "npm run generate:app-icons",
-    "dist:electron": "electron-builder",
-    "preview": "vite preview",
-    "test": "vitest",
-    "test:ui": "vitest --ui",
-    "test:watch": "vitest --watch",
-    "alpha:verify": "npm run release:audit && npm run check:localization && npx tsc -p tsconfig.json --noEmit && npm run test -- --run && cargo test --workspace --lib --tests --quiet && cargo clippy --workspace --all-targets -- -D warnings && npm run check:command-parity",
-    "alpha:package": "node scripts/package-alpha.mjs",
-    "alpha:smoke": "node ./scripts/ci/alpha-smoke.mjs",
-    "duplicate:smoke": "node ./scripts/ci/duplicate-review-smoke.mjs",
-    "duplicate:benchmark": "node ./scripts/ci/duplicate-scan-benchmark.mjs",
+    "test": "vitest run",
     "subscriptions:verify-sites": "node ./scripts/verify-sites.mjs",
     "subscriptions:verify-mcp": "node ./scripts/subscription-verifier-mcp.mjs",
-    "test:subscriptions:verify-mcp": "node --test ./scripts/subscription-verifier-mcp.test.mjs",
-    "gate:alpha": "npm run alpha:verify",
-    "check:command-parity": "node ./scripts/check-command-parity.mjs",
-    "test:rust": "cargo test --workspace --lib --tests"
-  },
-  "main": "electron/main.mjs",
-  "build": {
-    "productName": "Picto",
-    "appId": "com.picto.desktop",
-    "electronVersion": "43.4.1",
-    "files": [
-      "dist/assets/**/*",
-      "dist/vendor/**/*",
-      "dist/licenses/**/*",
-      "dist/*.html",
-      "docs/*-release-notes.md",
-      "electron/**/*",
-      "!electron/**/*.test.mjs",
-      "native/picto-node/index.node",
-      "native/picto-node/*.so*",
-      "native/picto-node/*.dylib",
-      "native/picto-node/*.dll",
-      "!node_modules/**",
-      "node_modules/{electron-updater,builder-util-runtime,fs-extra,graceful-fs,jsonfile,universalify,js-yaml,argparse,lazy-val,lodash.escaperegexp,lodash.isequal,semver,tiny-typed-emitter,debug,ms,sax}/**/*",
-      "LICENSE",
-      "THIRD_PARTY_LICENSES",
-      "package.json"
-    ],
-    "asarUnpack": [
-      "native/**/*.node",
-      "native/**/*.so*",
-      "native/**/*.dylib",
-      "native/**/*.dll"
-    ],
-    "extraFiles": [
-      {
-        "from": "vendor/ffmpeg/",
-        "to": ".",
-        "filter": [
-          "ffmpeg",
-          "ffmpeg.exe",
-          "ffprobe",
-          "ffprobe.exe"
-        ]
-      }
-    ],
-    "extraResources": [
-      {
-        "from": "resources/tutorial/",
-        "to": "tutorial/"
-      },
-      {
-        "from": "build/library.ico",
-        "to": "library-icons/library.ico"
-      },
-      {
-        "from": "build/library.icns",
-        "to": "library-icons/library.icns"
-      }
-    ],
-    "publish": {
-      "provider": "github",
-      "owner": "midona-rhel",
-      "repo": "picto"
-    },
-    "fileAssociations": [
-      {
-        "ext": "library",
-        "name": "Picto Library",
-        "description": "Picto media library",
-        "mimeType": "application/vnd.picto.library",
-        "icon": "library",
-        "role": "Editor",
-        "rank": "Owner",
-        "isPackage": true
-      },
-      {
-        "ext": "picto-pack",
-        "name": "Picto Pack",
-        "description": "Portable Picto media package",
-        "mimeType": "application/vnd.picto.pack+zip",
-        "icon": "picto-pack",
-        "role": "Editor",
-        "rank": "Owner"
-      }
-    ],
-    "mac": {
-      "icon": "build/Picto.icon",
-      "timestamp": "none",
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "arm64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "arm64"
-          ]
-        }
-      ]
-    },
-    "win": {
-      "icon": "build/icon.ico",
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    },
-    "nsis": {
-      "artifactName": "Picto-Setup-${version}.${ext}",
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "installerIcon": null,
-      "uninstallerIcon": null,
-      "installerHeader": null
-    },
-    "linux": {
-      "icon": "build/icon-flat.png",
-      "maintainer": "Picto <noreply@picto.app>",
-      "target": [
-        {
-          "target": "AppImage",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    }
-  },
-  "dependencies": {
-    "@jsquash/jxl": "^1.3.0",
-    "@office-kit/pptx": "^0.12.0",
-    "@office-kit/pptx-preview": "^0.9.1",
-    "@ruffle-rs/ruffle": "0.5.0",
-    "djvu-rs": "^0.30.1",
-    "docx-preview": "^0.4.0",
-    "electron-updater": "^6.8.9",
-    "jotai": "^2.18.1",
-    "jszip": "^3.10.1",
-    "marked": "^18.0.11",
-    "pdfjs-dist": "^6.2.108",
-    "rtf.js": "^3.0.9"
+    "test:subscriptions:verify-mcp": "node --test ./scripts/subscription-verifier-mcp.test.mjs"
   },
   "devDependencies": {
-    "@mantine/core": "^8.3.14",
     "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "@resvg/resvg-js": "2.6.2",
-    "@tabler/icons-react": "^3.36.1",
-    "@tanstack/react-virtual": "^3.13.18",
-    "@testing-library/dom": "^10.4.1",
-    "@testing-library/jest-dom": "^6.2.0",
-    "@testing-library/react": "^14.1.2",
-    "@testing-library/user-event": "^14.5.2",
-    "@types/node": "^24.3.0",
-    "@types/react": "^18.2.48",
-    "@types/react-dom": "^18.2.18",
-    "@vitejs/plugin-react": "^4.2.1",
-    "concurrently": "^9.2.1",
-    "electron": "^43.4.1",
-    "electron-builder": "^26.0.12",
-    "jsdom": "^24.0.0",
-    "nodemon": "^3.1.14",
-    "postcss": "^8.5.6",
-    "postcss-preset-mantine": "^1.18.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "tsx": "^4.20.3",
-    "typescript": "^5.3.3",
-    "vite": "^5.0.12",
+    "js-yaml": "^4.3.2",
     "vitest": "^1.2.1",
-    "wait-on": "^8.0.5",
     "zod": "^4.4.3"
-  },
-  "allowScripts": {
-    "electron": true
   }
 }

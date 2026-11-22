@@ -1,0 +1,14 @@
+# The launcher entry of the packaged Linux app. `package.sh` puts this file
+# and the icon `picto.png` into the AppImage. The file is named after the
+# app's id, `com.picto.desktop`, because the app addresses its launcher entry
+# by that name when it sets the Inbox count on the launcher icon
+# (`launcher_uri` in `src/desktop/mod.rs`).
+[Desktop Entry]
+Type=Application
+Name=Picto
+Comment=Media library manager
+Exec=picto %F
+Icon=picto
+Terminal=false
+Categories=Graphics;
+MimeType=application/vnd.picto.pack+zip;

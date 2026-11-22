@@ -116,6 +116,7 @@ impl ProviderRegistry {
         registry.register(crate::providers::hentaifoundry::adapter());
         registry.register(crate::providers::newgrounds::adapter());
         registry.register(crate::providers::onlyfans::adapter());
+        registry.register(crate::providers::onlyhaven::adapter());
         registry.register(crate::providers::pawchive::adapter());
         registry.register(crate::providers::patreon::adapter());
         registry.register(crate::providers::pixiv::adapter());

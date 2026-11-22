@@ -1,12 +1,9 @@
-# JavaScript dependencies and build output
+# npm packages of the scripts, and the picture of the macOS icon's layer,
+# which scripts/generate-app-icons.mjs draws
 node_modules/
-dist/
-coverage/
-.vite/
-*.tsbuildinfo
 /build/Picto.icon/Assets/
 
-# Rust and native-addon build output
+# Rust build output
 **/target/
 *.o
 *.rlib
@@ -16,15 +13,11 @@ coverage/
 *.so
 *.dll
 *.exe
-/native/picto-node/index.node
-/native/picto-node/index.*.node
 
 # Downloaded runtime dependencies
 /vendor/ffmpeg/
 /vendor/gallery-dl/
 /vendor/onlyfans/
-/vendor/onnxruntime/
-/public/vendor/ruffle/
 
 # Local runtime and verification output
 /artifacts/

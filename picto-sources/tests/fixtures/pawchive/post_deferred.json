@@ -1,0 +1,51 @@
+{
+  "has_full": true,
+  "preview_state": "scraped",
+  "id": "167220250",
+  "user": "90730375",
+  "service": "patreon",
+  "title": "August requests",
+  "content": "<p>Request notes</p><img src=\"/5a5/55/5555555555555555555555555555555555555555555555555555555555555555.webp\">",
+  "published": "2026-08-21T17:40:56",
+  "tags": [],
+  "file": {
+    "name": "cover.png",
+    "path": "/3b3/33/3333333333333333333333333333333333333333333333333333333333333333.png",
+    "preview_only": true,
+    "temp_url": "https://t3.pawchive.pw/f/0000000000000001/cover.png?expires=0&signature=fixture",
+    "temp_expires": "2026-11-20T23:00:00"
+  },
+  "attachments": [
+    {
+      "name": "cover.png",
+      "path": "/3b3/33/3333333333333333333333333333333333333333333333333333333333333333.png",
+      "preview_only": true,
+      "temp_url": "https://t1.pawchive.pw/f/0000000000000002/cover.png?expires=0&signature=other"
+    },
+    {
+      "name": "page.png",
+      "path": "/44/44/4444444444444444444444444444444444444444444444444444444444444444.png",
+      "server": "https://n1.pawchive.pw"
+    },
+    {
+      "name": "clip.mp4",
+      "deferred": true,
+      "temp_url": "https://t1.pawchive.pw/f/0000000000000003/clip.mp4?expires=0&signature=fixture",
+      "temp_expires": "2026-11-20T23:00:00"
+    },
+    {
+      "name": "stream.mp4",
+      "deferred": true,
+      "temp_url": "https://t2.pawchive.pw/f/0000000000000004/stream.m3u8?expires=0&signature=fixture"
+    },
+    {
+      "name": "preview-only.png",
+      "path": "/66/66/6666666666666666666666666666666666666666666666666666666666666666.png",
+      "preview_only": true
+    },
+    {
+      "name": "pending.mp4",
+      "deferred": true
+    }
+  ]
+}
