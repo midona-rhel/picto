@@ -4,9 +4,10 @@
 # this script after it has started the app.
 #
 # The app draws these buttons itself and declares each one to Windows as a
-# caption button. This script finds each button by asking the window what is
-# at a point (the message WM_NCHITTEST), as Windows itself does, so it does
-# not depend on where the app puts the buttons.
+# caption button. This script finds each button by moving the mouse along
+# the titlebar and asking the window what is under it (the message
+# WM_NCHITTEST), as Windows itself does, so it does not depend on where the
+# app puts the buttons.
 param(
     # The id of the app's process.
     [Parameter(Mandatory)] [int] $ProcessId
@@ -45,33 +46,42 @@ function MainWindow {
     throw 'FAILED: the app opened no window in 120 seconds'
 }
 
-# Returns the screen position of the middle of the caption button whose
-# hit-test code is $code: 8 is the minimise button, 9 the maximise button and
-# 20 the close button. It asks the window what is at each point of a row
-# that is 24 pixels below the top of the window, from the right edge
-# leftwards.
-function ButtonCentre($window, $code) {
+# Finds the three caption buttons and returns, for each hit-test code, the
+# screen position of the middle of its button: 8 is the minimise button, 9
+# the maximise button and 20 the close button. The window answers a hit test
+# for the place where it last saw the mouse, so the mouse is moved along a
+# row that is 24 pixels below the top of the window, from the right edge
+# leftwards, and the window is asked at each stop what is there.
+function FindButtons($window) {
     $rect = New-Object Win.User32+RECT
     [Win.User32]::GetClientRect($window, [ref] $rect) | Out-Null
     $origin = New-Object Win.User32+POINT
     [Win.User32]::ClientToScreen($window, [ref] $origin) | Out-Null
     $y = $origin.Y + 24
-    $found = @()
-    for ($x = $origin.X + $rect.Right - 1; $x -ge $origin.X + $rect.Right - 400; $x--) {
+    $found = @{ 8 = @(); 9 = @(); 20 = @() }
+    for ($x = $origin.X + $rect.Right - 2; $x -ge $origin.X + $rect.Right - 300; $x -= 3) {
+        [Win.User32]::SetCursorPos($x, $y) | Out-Null
+        Start-Sleep -Milliseconds 60
         $lparam = [IntPtr] ((($y -band 0xFFFF) -shl 16) -bor ($x -band 0xFFFF))
-        $hit = [Win.User32]::SendMessage($window, 0x0084, [IntPtr]::Zero, $lparam).ToInt64()
-        if ($hit -eq $code) { $found += $x }
+        $hit = [int] [Win.User32]::SendMessage($window, 0x0084, [IntPtr]::Zero, $lparam).ToInt64()
+        if ($found.ContainsKey($hit)) { $found[$hit] += $x }
     }
-    if ($found.Count -eq 0) { throw "FAILED: no point of the titlebar answers with the hit-test code $code" }
-    $centre = [int] (($found | Measure-Object -Average).Average)
-    "the button with code $code is $($found.Count) pixels wide, and its middle is at $centre, $y" | Write-Host
-    return @($centre, $y)
+    $centres = @{}
+    foreach ($code in 8, 9, 20) {
+        if ($found[$code].Count -eq 0) {
+            throw "FAILED: no point of the titlebar answers with the hit-test code $code"
+        }
+        $centre = [int] (($found[$code] | Measure-Object -Average).Average)
+        Write-Host "the button with code $code answers at $($found[$code].Count) stops, and its middle is at $centre, $y"
+        $centres[$code] = @($centre, $y)
+    }
+    return $centres
 }
 
 # Moves the mouse to the middle of the button and presses and releases the
 # left button there.
 function Click($window, $code) {
-    $at = ButtonCentre $window $code
+    $at = (FindButtons $window)[$code]
     [Win.User32]::SetCursorPos($at[0], $at[1]) | Out-Null
     Start-Sleep -Milliseconds 300
     [Win.User32]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
