@@ -312,6 +312,32 @@ jobs:
           path: ${{ runner.temp }}/pictures
           if-no-files-found: warn
 
+      # TEMPORARY. Takes pictures of glass panels in the real app on
+      # Windows, which the DirectX renderer draws (`ci/blur-check.ps1`).
+      - name: Blur check (Windows, temporary)
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        run: |
+          . ci/env.sh
+          out="$(unix "$RUNNER_TEMP")/blur-check"
+          mkdir -p "$out"
+          library="$(unix "$RUNNER_TEMP")/picto-synthetic/Synthetic.library"
+          copy="$("$PICTO_APP" --make-copy "$(native "$library")" | tail -n 1)"
+          echo "copy: $copy"
+          pwsh -NoProfile -File "$(native "$PWD/ci/blur-check.ps1")" \
+            -App "$(native "$PICTO_APP")" -Tests "$(native "$PICTO_TESTS")" \
+            -Copy "$copy" -Out "$(native "$out")"
+
+      - name: Upload blur check (temporary)
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: blur-check-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/blur-check/*.png
+            ${{ runner.temp }}/blur-check/*.log
+            ${{ runner.temp }}/blur-check/offscreen-*/*.png
+          if-no-files-found: warn
+
       # Checks cloud sync from start to end, with the script `ci/cloud.txt`
       # played in an off-screen window. The script creates a library in a
       # test folder and connects it to a plain folder that stands in for the
