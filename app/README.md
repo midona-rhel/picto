@@ -145,17 +145,22 @@ out, and on Linux also the
    check sees names only. It does not see a Picto that was run from source,
    was renamed, is run by another user, or runs on another machine over a
    network share.
-6. **The core finds its schema current**, read through SQLite's `immutable`
-   flag, which writes nothing (`admission::compatibility`,
-   `picto_library::schema::validate`). An older schema is refused with the
-   core's words, never migrated; the user opens it once in Picto first
-   (`an_incompatible_schema_is_refused_with_the_cores_words_and_left_alone`).
-7. **The user agreed, once per library.** The first open asks, naming the
-   path. The answer is kept in `state.json` (`libraryConsents`: canonical
-   path and the database file's identity), never in the library; a different
-   library later at the same path is asked about again; New Library here
-   needs no question and a rename carries the consent
-   (`consent_is_asked_once_per_library_and_its_database`).
+6. **In a debug build, the core finds its schema current**, read through
+   SQLite's `immutable` flag, which writes nothing
+   (`admission::compatibility`, `picto_library::schema::validate`). A debug
+   build refuses another schema with the core's words and never updates it.
+   A release build does not look: the core updates a library of an earlier
+   schema when it opens it, after making a backup, and the app shows the
+   core's message when a library cannot be opened
+   (`a_debug_build_refuses_an_incompatible_schema_with_the_cores_words_and_leaves_it_alone`).
+7. **In a debug build, the user agreed, once per library.** The first open
+   asks, naming the path. The answer is kept in `state.json`
+   (`libraryConsents`: canonical path and the database file's identity),
+   never in the library; a different library later at the same path is
+   asked about again; New Library here needs no question and a rename
+   carries the consent. A release build is Picto itself and opens a library
+   without the question
+   (`a_debug_build_asks_for_consent_once_per_library_and_its_database`).
 
 Then (`libraries::host::begin`) this app's instance lock refuses a second
 instance on the library, and the core takes `.picto-library.lock`, an
@@ -170,9 +175,11 @@ The first run may list the libraries of an installed Picto 0.6.19 or earlier
 (`libraries::seed`): when this app's list is empty and was never seeded, a
 process that may list libraries the user keeps reads that version's
 `config.json` read-only and copies its `libraryHistory` and
-`pinnedLibraries`, once. Seeding only lists:
-no consent, no last library, nothing opened
-(`seeding_happens_once_into_an_empty_list_and_only_lists`,
+`pinnedLibraries`, once. Seeding gives no consent. A release build also
+takes `lastLibrary`, so its first start after an update opens the library
+that version had open last; a debug build takes no last library and opens
+nothing by itself
+(`seeding_happens_once_into_an_empty_list`,
 `a_process_that_cannot_list_kept_libraries_never_reads_the_file`). Listing
 shows only libraries this process may open (`libraries::listed`) and writes
 nothing to them (`listing_a_kept_library_writes_nothing_to_it`).
@@ -190,8 +197,8 @@ removes the files), drawn thumbnails, Regenerate Thumbnails, Set as
 Thumbnail, and the library's cover.
 
 The Library Manager's Rename, Show in File Manager, Move… and Delete… on a
-library that is not open run `admission::admit` first (`host::permit`) and
-ask the consent question. Delete… is
+library that is not open run `admission::admit` first (`host::permit`) and,
+in a debug build, ask the consent question. Delete… is
 refused for the open library and removes only a real `.library` folder
 holding `library.sqlite` that no one else holds locked
 (`delete_removes_only_a_library_that_is_neither_open_nor_held`); Move…
