@@ -268,6 +268,14 @@ out what this app does not need: lens, dispersion, tint and rim light.
   size of the atlas from `GetDimensions`. The DirectX renderer ignores
   `Scene::backdrop_blurs`, so on Windows a glass panel shows its
   translucent fill over a backdrop that is not blurred.
+- `src/events.rs`: A left press on the minimise, maximise or close button
+  of a window that draws its own titlebar is recorded before the press is
+  passed to the application, and the release carries the button out whether
+  or not the application also handled the release
+  (`handle_nc_mouse_down_msg`, `handle_nc_mouse_up_msg`). In the original
+  code an application whose button stops a press from propagating made the
+  backend return before it recorded the press, and the three buttons then
+  did nothing.
 
 Drops from other applications. GPUI hands an application only the paths of
 dropped files. What a web browser drags (the data of an image, its address,
