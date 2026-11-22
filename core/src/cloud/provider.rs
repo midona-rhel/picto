@@ -361,18 +361,24 @@ fn is_hex_pair(name: &str) -> bool {
 
 /// A snapshot id is the time the snapshot was made, written as
 /// `20261122T101500.123Z`, a hyphen, and a UUID.
+///
+/// The time is checked byte by byte. A name that holds a character of more
+/// than one byte is the name of a file that the sync did not write, and it
+/// must be answered with `false`: cutting such a name as text at a fixed
+/// position can fall inside the character, which stops the program.
 fn is_snapshot_id(name: &str) -> bool {
     let Some((time, id)) = name.split_once('-') else {
         return false;
     };
-    let digits = |text: &str| text.bytes().all(|byte| byte.is_ascii_digit());
+    let time = time.as_bytes();
+    let digits = |bytes: &[u8]| bytes.iter().all(u8::is_ascii_digit);
     time.len() == 20
         && digits(&time[..8])
-        && &time[8..9] == "T"
+        && time[8] == b'T'
         && digits(&time[9..15])
-        && &time[15..16] == "."
+        && time[15] == b'.'
         && digits(&time[16..19])
-        && &time[19..] == "Z"
+        && time[19] == b'Z'
         && is_uuid(id)
 }
 
@@ -1065,6 +1071,44 @@ mod tests {
         assert!(provider.delete("picto/linked/marker.txt").await.is_err());
         assert!(provider.list("picto").await.unwrap().is_empty());
         assert_eq!(std::fs::read(outside.join("marker.txt")).unwrap(), b"outside");
+    }
+
+    /// The names that `remove_library` takes for files of the sync, and
+    /// names that it must leave alone. The last names hold a character of
+    /// more than one byte at each position where the time of a snapshot id
+    /// is cut.
+    #[test]
+    fn only_names_that_the_sync_writes_are_taken_for_its_files() {
+        let id = "20261122T101500.123Z-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11";
+        assert!(is_snapshot_file(&format!("{id}.json")));
+        assert!(is_snapshot_file(&format!("{id}.sqlite.zst")));
+        assert!(is_deletion_file("0000000012.jsonl.zst"));
+        assert!(is_blob_file(&format!("{}.png", "a".repeat(64))));
+        assert!(is_upload_remnant(
+            "x.picto-uploading-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11"
+        ));
+        let uuid = "0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11";
+        for name in [
+            "readme.md".to_owned(),
+            format!("{id}.txt"),
+            format!("2026112２T101500.123Z-{uuid}.json"),
+            format!("202611世T101500.12Z-{uuid}.json"),
+            format!("20261122世1500.123Z-{uuid}.json"),
+            format!("20261122T1015世123Z-{uuid}.json"),
+            format!("20261122T101500.1世-{uuid}.json"),
+            format!("世界世界世界世界世界世界世界-{uuid}.json"),
+            "世界.json".to_owned(),
+            "000000001２.jsonl.zst".to_owned(),
+            format!("{}世.png", "a".repeat(61)),
+        ] {
+            assert!(!is_snapshot_file(&name), "{name}");
+            assert!(!is_deletion_file(&name), "{name}");
+            assert!(!is_blob_file(&name), "{name}");
+            assert!(!is_upload_remnant(&name), "{name}");
+            assert!(!is_hex_pair(&name), "{name}");
+        }
+        assert!(!is_hex_pair("世"));
+        assert!(!is_hex_pair("é"));
     }
 
     #[test]

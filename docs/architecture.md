@@ -415,9 +415,11 @@ through the delete code of each aggregate, with no history entry. The rules:
 - A permanent deletion deletes the item whatever its local status is, unless the item was imported
   locally after the deletion was made.
 - Of two moves of an item into or out of the Trash, the later one wins. `cloud_tombstone` holds
-  the time and the device of the last synced move per item, under the object kind `lifecycle`. A
-  move that the user makes after the library stored another device's move gets a later time than
-  that move, whatever the two clocks say.
+  the time and the device of the last synced move per item, and the library's revision at which it
+  was stored, under the object kind `lifecycle`. A move that the user makes after the library
+  stored another device's move gets a later time than that move, whatever the two clocks say:
+  its journal row has a greater revision than the stored move, and no clock is asked which of the
+  two came first.
 - A folder or a smart folder is deleted only when every folder below it locally is deleted by the
   same file.
 - Before the first waiting file is applied, every waiting file is read and checked against its

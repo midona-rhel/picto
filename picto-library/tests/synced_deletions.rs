@@ -466,6 +466,41 @@ fn a_move_made_after_a_synced_move_wins_when_this_devices_clock_is_behind() {
 }
 
 #[test]
+fn a_move_made_after_a_synced_move_wins_in_the_same_millisecond_and_after_the_clock_went_back() {
+    let (_directory, mut a, mut b) = devices();
+    // The second device, whose id is the greater one, moves two items to
+    // the Trash, and the first device takes the moves over.
+    b.trash(&["one", "two"]);
+    b.moved_at(5_000);
+    sync(&mut b, &a);
+
+    // The first device restores `one` in the millisecond of that move. By
+    // the time and the device ids alone, the restore would be the earlier
+    // of the two.
+    a.restore(&["one"]);
+    a.moved_at(5_000);
+    assert_eq!(sync(&mut a, &b).restored, 1);
+    // Then its clock is set back, and it restores `two` at a time before
+    // the second device's move.
+    a.restore(&["two"]);
+    a.moved_at(4_000);
+    assert_eq!(sync(&mut a, &b).restored, 1);
+
+    for key in ["one", "two"] {
+        assert_eq!(a.status(key), Some(Lifecycle::Active), "{key}");
+        assert_eq!(b.status(key), Some(Lifecycle::Active), "{key}");
+    }
+
+    // The second device has taken the restores over. It moves `two` to the
+    // Trash again with its clock set back, and that move is the last one.
+    b.trash(&["two"]);
+    b.moved_at(1_000);
+    assert_eq!(sync(&mut b, &a).trashed, 1);
+    assert_eq!(a.status("two"), Some(Lifecycle::Trash));
+    assert_eq!(b.status("two"), Some(Lifecycle::Trash));
+}
+
+#[test]
 fn a_device_that_was_away_neither_brings_items_back_nor_deletes_new_ones() {
     let (_directory, mut a, mut b) = devices();
     // While the second device is away, the first deletes `one`. The second

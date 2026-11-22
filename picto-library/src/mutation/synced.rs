@@ -22,15 +22,19 @@
 //! this library holds: applied for another device, written for this one.
 //! `cloud_tombstone` holds, under the object kind `lifecycle`, the time and
 //! the device of the last synced move of an item into or out of the Trash,
-//! so that the later of two moves wins on every device.
+//! and the library's revision at which the move was stored, so that the
+//! later of two moves wins on every device.
 //!
 //! The time of a move is the time of the clock of the device that made it,
 //! with one correction. A move that the user makes after this library has
 //! stored a move of the same item is the later of the two, whatever the
 //! clocks say, so it gets a time that is not before that move
-//! ([`StoredMove::time_of`]). Two moves that were made before either device
-//! knew of the other's are ordered by the clocks, and at the same time by
-//! the device ids.
+//! ([`StoredMove::time_of`]). Which of the two came first here is read from
+//! the library's revisions and not from a clock: the journal row of the
+//! user's move has a greater revision than the one at which the other move
+//! was stored. Two moves that were made before either device knew of the
+//! other's are ordered by the clocks, and at the same time by the device
+//! ids.
 
 use serde::{Deserialize, Serialize};
 
@@ -140,24 +144,29 @@ struct StoredMove {
     at_ms: i64,
     /// The device that made the move.
     device_id: String,
-    /// The time, by this device's clock, at which this library stored the
-    /// move.
-    stored_ms: i64,
+    /// The library's revision at which this library stored the move. A
+    /// journal row with a greater revision was written after that.
+    stored_revision: u64,
 }
 
 impl StoredMove {
     /// Returns the time to give a move that the device `own_device` made at
-    /// `made_at_ms` and has not written to the cloud folder yet.
+    /// `made_at_ms` by its clock, with a journal row of the revision
+    /// `made_revision`, and has not written to the cloud folder yet.
     ///
     /// Such a move is later than every move that the same device has
     /// written, so it does not get an earlier time than this one when this
     /// one is the device's own. It is also later than another device's
-    /// move that was stored here before it was made, so it then gets a
-    /// later time than this one.
-    fn time_of(&self, made_at_ms: i64, own_device: &str) -> i64 {
+    /// move that was stored here before it was made. It then gets a later
+    /// time than this one: the clock's time when that is later, and
+    /// otherwise this one's time plus one millisecond. The clock does not
+    /// decide whether the move was made after this one was stored, so a
+    /// clock that was set back, or two moves in one millisecond, do not
+    /// change the order.
+    fn time_of(&self, made_at_ms: i64, made_revision: u64, own_device: &str) -> i64 {
         if self.device_id == own_device {
             made_at_ms.max(self.at_ms)
-        } else if made_at_ms > self.stored_ms {
+        } else if made_revision > self.stored_revision {
             made_at_ms.max(self.at_ms + 1)
         } else {
             made_at_ms
@@ -195,7 +204,7 @@ impl Library {
                     transaction
                         .prepare_cached(&format!(
                             "SELECT journal_id, operation_kind, target_bitmap, payload_json,
-                                    created_at_ms
+                                    created_at_ms, revision
                              FROM cloud_journal
                              WHERE revision <= ?1 AND journal_id >= ?2
                                AND operation_kind IN ({OUTGOING_KINDS})
@@ -210,12 +219,13 @@ impl Library {
                                     row.get::<_, Option<Vec<u8>>>(2)?,
                                     row.get::<_, String>(3)?,
                                     row.get::<_, i64>(4)?,
+                                    row.get::<_, i64>(5)? as u64,
                                 ))
                             },
                         )
                         .optional()?
                 };
-                let Some((journal_id, kind, targets, payload, at_ms)) = row else {
+                let Some((journal_id, kind, targets, payload, at_ms, made_revision)) = row else {
                     return Ok(OutgoingDeletions {
                         deletions,
                         next: None,
@@ -251,7 +261,9 @@ impl Library {
                         for (key, files) in identities {
                             let at_ms = stored
                                 .get(&key)
-                                .map_or(at_ms, |stored| stored.time_of(at_ms, &own_device));
+                                .map_or(at_ms, |stored| {
+                                    stored.time_of(at_ms, made_revision, &own_device)
+                                });
                             deletions.push(if lifecycle == Lifecycle::Trash.bitmap_key() {
                                 SyncedDeletion::ItemTrash { key, files, at_ms }
                             } else {
@@ -371,6 +383,11 @@ impl Library {
         self.database
             .maintenance_write(WorkPriority::Cloud, |transaction| {
                 let device_id = own_device_id(transaction)?;
+                let revision = transaction.query_row(
+                    "SELECT revision FROM library_meta WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, i64>(0).map(|revision| revision as u64),
+                )?;
                 store_frontier(transaction, &device_id, sequence, created_at_ms)?;
                 let moves = deletions
                     .iter()
@@ -384,7 +401,7 @@ impl Library {
                         _ => None,
                     })
                     .collect::<Vec<_>>();
-                store_trash_moves(transaction, &device_id, &moves)?;
+                store_trash_moves(transaction, &device_id, revision, &moves)?;
                 let deleted = deletions
                     .iter()
                     .filter_map(|deletion| match deletion {
@@ -473,19 +490,18 @@ impl Library {
                     let pending = pending_trash_moves(transaction)?;
                     let mut wanted = HashMap::<u32, Lifecycle>::new();
                     let mut accepted = HashMap::<&str, (i64, bool)>::new();
-                    let stored_ms = now_ms();
                     for (key, at_ms, lifecycle) in &moves {
                         let root_id = matched[*key].root_id;
                         // The last move that this library knows: the stored
                         // one, or a later one that this device made and has
                         // not written to the cloud folder yet.
                         let mut local = latest.get(*key).cloned();
-                        for (roots, made_at_ms) in &pending {
+                        for (roots, made_at_ms, made_revision) in &pending {
                             if !roots.contains(root_id) {
                                 continue;
                             }
                             let at_ms = latest.get(*key).map_or(*made_at_ms, |stored| {
-                                stored.time_of(*made_at_ms, &own_device)
+                                stored.time_of(*made_at_ms, *made_revision, &own_device)
                             });
                             if local
                                 .as_ref()
@@ -494,7 +510,7 @@ impl Library {
                                 local = Some(StoredMove {
                                     at_ms,
                                     device_id: own_device.clone(),
-                                    stored_ms,
+                                    stored_revision: *made_revision,
                                 });
                             }
                         }
@@ -506,7 +522,7 @@ impl Library {
                             StoredMove {
                                 at_ms: *at_ms,
                                 device_id: received.device_id.to_owned(),
-                                stored_ms,
+                                stored_revision: revision,
                             },
                         );
                         wanted.insert(root_id, *lifecycle);
@@ -555,7 +571,7 @@ impl Library {
                         .iter()
                         .map(|(key, (at_ms, trashed))| (*key, *at_ms, *trashed))
                         .collect::<Vec<_>>();
-                    store_trash_moves(transaction, received.device_id, &stored)?;
+                    store_trash_moves(transaction, received.device_id, revision, &stored)?;
                 }
 
                 // Permanent deletions.
@@ -997,11 +1013,10 @@ fn stored_trash_moves(
     if keys.is_empty() {
         return Ok(HashMap::new());
     }
-    // `deleted_at` holds the time at which the row was stored. The Julian
-    // day 2440587.5 is the start of 1970.
+    // `causal_frontier_json` holds the revision at which the row was stored.
     let mut statement = transaction.prepare_cached(
         "SELECT stored.object_key, stored.hlc_physical_ms, stored.device_id,
-                CAST((julianday(stored.deleted_at) - 2440587.5) * 86400000 AS INTEGER)
+                COALESCE(json_extract(stored.causal_frontier_json, '$.revision'), 0)
          FROM json_each(?1) keys
          CROSS JOIN cloud_tombstone stored
            ON stored.object_kind = 'lifecycle' AND stored.object_key = keys.value",
@@ -1012,40 +1027,51 @@ fn stored_trash_moves(
             StoredMove {
                 at_ms: row.get(1)?,
                 device_id: row.get(2)?,
-                stored_ms: row.get(3)?,
+                stored_revision: row.get::<_, i64>(3)? as u64,
             },
         ))
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// Returns the roots and the time of every Trash move that this device made
-/// and has not yet written to the cloud folder.
-fn pending_trash_moves(transaction: &rusqlite::Transaction<'_>) -> Result<Vec<(RoaringBitmap, i64)>> {
+/// Returns the roots, the time and the revision of every Trash move that
+/// this device made and has not yet written to the cloud folder.
+fn pending_trash_moves(
+    transaction: &rusqlite::Transaction<'_>,
+) -> Result<Vec<(RoaringBitmap, i64, u64)>> {
     let mut statement = transaction.prepare_cached(
-        "SELECT target_bitmap, created_at_ms FROM cloud_journal
+        "SELECT target_bitmap, created_at_ms, revision FROM cloud_journal
          WHERE operation_kind = 'root.trash' AND target_bitmap IS NOT NULL",
     )?;
     let rows = statement
-        .query_map([], |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?)))?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)? as u64,
+            ))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|(bytes, at_ms)| {
+        .map(|(bytes, at_ms, revision)| {
             Ok((
                 RoaringBitmap::deserialize_from(&mut std::io::Cursor::new(bytes))?,
                 at_ms,
+                revision,
             ))
         })
         .collect()
 }
 
 /// Stores `moves` (key, time, whether the move was into the Trash) as the
-/// last synced Trash moves that `device_id` made. A move that is not later
-/// than the stored move of the same item is not stored
+/// last synced Trash moves that `device_id` made, together with `revision`,
+/// the library's revision at which they are stored. A move that is not
+/// later than the stored move of the same item is not stored
 /// ([`StoredMove::is_before`]).
 fn store_trash_moves(
     transaction: &rusqlite::Transaction<'_>,
     device_id: &str,
+    revision: u64,
     moves: &[(&str, i64, bool)],
 ) -> Result<()> {
     if moves.is_empty() {
@@ -1063,17 +1089,19 @@ fn store_trash_moves(
               device_id, causal_frontier_json, deleted_at, purge_after)
          SELECT 'lifecycle', json_extract(entry.value, '$[0]'), 'lifecycle',
                 json_extract(entry.value, '$[1]'), json_extract(entry.value, '$[2]'),
-                ?2, '{}', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), NULL
+                ?2, json_object('revision', ?3),
+                strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), NULL
          FROM json_each(?1) entry WHERE true
          ON CONFLICT(object_kind, object_key) DO UPDATE SET
              hlc_physical_ms = excluded.hlc_physical_ms,
              hlc_logical = excluded.hlc_logical,
              device_id = excluded.device_id,
+             causal_frontier_json = excluded.causal_frontier_json,
              deleted_at = excluded.deleted_at
          WHERE excluded.hlc_physical_ms > cloud_tombstone.hlc_physical_ms
             OR (excluded.hlc_physical_ms = cloud_tombstone.hlc_physical_ms
                 AND excluded.device_id >= cloud_tombstone.device_id)",
-        rusqlite::params![serde_json::to_string(&rows)?, device_id],
+        rusqlite::params![serde_json::to_string(&rows)?, device_id, revision as i64],
     )?;
     Ok(())
 }

@@ -456,8 +456,11 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
     )
     .unwrap();
     // Files that the sync did not write, in and beside the library's data.
+    // One of them is in `snapshots` and has a name with a character of
+    // three bytes where the time of a snapshot's name is cut.
     let foreign = [
         "notes.txt",
+        "snapshots/202611世T101500.12Z-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11.json",
         "snapshots/readme.md",
         "blobs/f/aa/bb/picture.txt",
         "deletions/not-a-device/0000000001.jsonl.zst",
@@ -495,10 +498,11 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
             "deletions/not-a-device",
             "extra",
             "notes.txt",
+            "snapshots/202611世T101500.12Z-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11.json",
             "snapshots/readme.md",
         ]
     );
-    assert_eq!(removal.kept_entries, 5);
+    assert_eq!(removal.kept_entries, 6);
     // The library's folder in the cloud holds exactly the foreign files.
     let mut expected = foreign.map(str::to_owned).to_vec();
     expected.sort();
