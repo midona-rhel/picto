@@ -48,7 +48,7 @@ jobs:
           ref: 4ef23325093f6e0c55b9db925643f26251d20ed9
           path: .branch-policy-bootstrap
           persist-credentials: false
-      - name: Enforce the release-only main branch
+      - name: Check the branch policy
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

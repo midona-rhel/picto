@@ -4,8 +4,8 @@
   PBI files.
 - Branch from `dev`, named by purpose (`feature/`, `bug/`, `perf/`,
   `refactor/`, `ui/`, `docs/`, `test/`, `chore/`, `deps/`) plus the issue
-  number. Never commit to `dev` or `main` directly, and never open a pull
-  request into `main` from anything but `release/<version>`.
+  number. Never commit to `dev` directly. The branch `main` is not used; never
+  open a pull request into it.
 - Open the pull request into `dev` and stop. Do not merge, push a release
   branch, or push a tag without explicit approval from the user.
 - Before writing code, find the existing owner of the behavior: the

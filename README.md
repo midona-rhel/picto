@@ -39,8 +39,8 @@ A library's data is stored in a SQLite database, and Roaring bitmaps keep the co
 - [`docs/RELEASE_READINESS.md`](./docs/RELEASE_READINESS.md) is the release procedure and its
   gates.
 
-Work is tracked in [GitHub issues](https://github.com/midona-rhel/picto/issues). `main` holds
-released code. Development happens on `dev`.
+Work is tracked in [GitHub issues](https://github.com/midona-rhel/picto/issues). Development
+happens on `dev`, and releases are tagged there.
 
 ## What the repository holds
 

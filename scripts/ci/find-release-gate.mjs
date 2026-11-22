@@ -11,9 +11,11 @@ const packages = ['picto-macos-arm64', 'picto-windows-x64', 'picto-linux-x64'];
 // Returns the id of the qualifying run and the ids of its three package
 // artifacts, or throws with the reason why there is none. The run qualifies
 // when it is a successful run of `alpha-gate.yml` for a push of `sha` to the
-// branch `release/<version>` of this repository. `api` takes the path of a
-// GitHub API endpoint and returns the parsed answer.
-export function findReleaseGate({ repository, sha, tag, version, requireMainAncestry = true }, api) {
+// branch `release/<version>` of this repository. With `requireDevAncestry`,
+// `sha` must also be in `dev`, which is the case once the release branch was
+// merged into `dev`. `api` takes the path of a GitHub API endpoint and
+// returns the parsed answer.
+export function findReleaseGate({ repository, sha, tag, version, requireDevAncestry = true }, api) {
   if (!/^\d+\.\d+\.\d+-(?:alpha|rc)(?:[.-]\d+)?$/.test(version) || tag !== `v${version}`) {
     throw new Error('Release tag must match the alpha/rc package version.');
   }
@@ -24,10 +26,10 @@ export function findReleaseGate({ repository, sha, tag, version, requireMainAnce
   const branch = `release/${version}`;
   const ref = api(`${base}/git/ref/heads/${branch}`);
   if (ref.object?.sha !== sha) throw new Error('Tag does not match the release branch.');
-  if (requireMainAncestry) {
-    const comparison = api(`${base}/compare/${sha}...main`);
+  if (requireDevAncestry) {
+    const comparison = api(`${base}/compare/${sha}...dev`);
     if (!['ahead', 'identical'].includes(comparison.status)) {
-      throw new Error('Release commit must be landed on main before publication.');
+      throw new Error('Release commit must be merged into dev before publication.');
     }
   }
   const query = new URLSearchParams({ branch, head_sha: sha, event: 'push', status: 'success', per_page: '100' });
@@ -52,5 +54,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     encoding: 'utf8', timeout: 30_000,
   })));
   appendFileSync(process.env.GITHUB_OUTPUT, `run-id=${result.runId}\nartifact-ids=${result.artifactIds.join(',')}\n`);
-  console.log('Verified release-branch gate, main ancestry, and all three package artifacts.');
+  console.log('Verified release-branch gate, dev ancestry, and all three package artifacts.');
 }
