@@ -70,6 +70,14 @@ videos** and **Loop videos** are on by default; change them in **Settings → Pr
 file shows a visualization, which is None, Spectrum, Oscilloscope or Orbit and is set in
 **Settings → Preview**.
 
+While a video loads, Picto shows a small picture of the video's first frame, scaled up to the
+size of the video. Playback starts at that frame, so the picture does not change when the video
+takes over. The grid shows another picture of the video: the frame at 35% of the video's
+length. Picto makes the picture of the first frame when it imports the video. For a video that
+was imported with a version of Picto that did not keep this picture, Picto makes it the first
+time you open the video. That first time, the viewer shows the picture from the grid while the
+video loads.
+
 ## Documents and comics
 
 PDF files, EPUB books, CBZ comic archives, DjVu files and text files (plain text, Markdown, JSON

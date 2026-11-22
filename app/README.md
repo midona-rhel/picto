@@ -679,12 +679,41 @@ at the same height on screen.
 Rule: every decoded picture leaves GPUI's sprite atlas through
 `crate::atlas::release`.
 
-**Viewer** (`viewer/`). One media surface for images, animation, Flash
-(Ruffle), video and audio (`video/`, behind `video/backend.rs`:
-AVFoundation on macOS, the `ffmpeg` binary elsewhere, Symphonia and CPAL for
-sound) and documents (`document/`). Three hosts: the media view, Quick Look
-and detail windows. Collections open in the reader or the editor. Rule:
-decoding never runs on the thread that draws.
+**Viewer** (`viewer/`). The media surface (`surface.rs`) shows one item:
+an image, an animation, a Flash movie (Ruffle), a video or an audio file,
+or a document (`document/`). Video and audio play in `video/`, behind
+`video/backend.rs`: video with AVFoundation on macOS and with the `ffmpeg`
+program elsewhere, and sound with Symphonia and CPAL. Three views have a
+media surface: the media view, Quick Look and a detail window. A collection
+opens in the reader or in the editor. Rule: decoding never runs on the
+thread that draws.
+
+Until an item's own picture is ready, the surface draws a small picture that
+the library keeps for the item's file (`viewer::picture_while_loading`).
+
+- For every file except a video, that picture is the thumbnail, which the
+  grid also draws.
+- For a video it is the picture of the video's first frame, which the
+  library keeps in the folder of the thumbnail as
+  `<hash>.first-frame.jpg`. Playback starts at the first frame, so the
+  picture on screen does not change when the video's player draws its first
+  frame. The thumbnail of a video is the frame at 35% of the video's length,
+  and the grid, the inspector's preview, the Duplicates screen, drag
+  pictures and Quick Search keep drawing it.
+- The core makes the first-frame picture whenever it makes the video's
+  thumbnail. A video that has a thumbnail and no first-frame picture is
+  drawn from its thumbnail. When the surface makes that video's player, it
+  sends the core the command `media.render_thumbnail_now`, which makes the
+  missing picture (`Session::first_frame_request`). The surface draws the
+  picture the next time the video is opened.
+- The media view, Quick Look, the detail window and the reader of a
+  collection all take the picture from `viewer::picture_while_loading`, so
+  all of them draw the first-frame picture for a video. The Inbox review is
+  made in the media view and in Quick Look.
+
+[`docs/architecture.md`](../docs/architecture.md), "Stored files and the
+pictures made from them", says where the pictures are stored and when they
+are made.
 
 **Screens** (`screens/`). There are three: Tags, Subscriptions and
 Duplicates. A screen puts its buttons in the titlebar

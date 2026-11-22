@@ -235,6 +235,72 @@ once the task was sent to the background, in the task bar.
 (`-- [roots] [runs] [smart_folders]`, default 1M roots and 100 smart folders). Its output is local and
 never committed.
 
+## Stored files and the pictures made from them
+
+A library keeps its files in its folder `blobs` (`core/src/blob_store.rs`). Every file is stored
+under the SHA-256 hash of its original's content. `<ab>` is the first two characters of the hash
+and `<cd>` is the next two.
+
+| Path | File |
+| --- | --- |
+| `blobs/f/<ab>/<cd>/<hash>.<extension>` | The original. |
+| `blobs/t/<ab>/<cd>/<hash>.jpg` or `<hash>.png` | The thumbnail. The `.jpg` is used when it exists, and the `.png` otherwise. |
+| `blobs/t/<ab>/<cd>/<hash>.first-frame.jpg` | For a video only: a picture of the video's first frame. |
+
+The thumbnail and the first-frame picture are derived data. They are made from the original and
+can be made again at any time, and no table of the database names them. The core and the app find
+either one by building its path from the content hash, so no folder is searched.
+
+**The thumbnail** fits inside 512 × 512 pixels. The grid, the inspector's preview, the Duplicates
+screen, the picture of a drag and Quick Search draw it.
+
+- The import of a still image makes the thumbnail before it publishes the item
+  (`library_ingest_runtime::ensure_visible_thumbnail`). A subscription makes the thumbnails of the
+  other files it downloads before it imports them.
+- Every import also queues `thumbnail` work for the file in `work_item`. The derivative worker
+  (`library_media_runtime::drain_batch`) makes the thumbnail when the file has none.
+- When a library opens, `library_media_runtime::recover` queues that work for every original that
+  has no thumbnail.
+- The command `media.render_thumbnail_now` makes the missing pictures of one file at once. The
+  app sends it for a tile whose thumbnail is missing and for Regenerate Thumbnail.
+- A video's thumbnail is the frame at 35% of the video's length, read by `ffmpeg`. When that frame
+  cannot be read, it is the first frame. An audio file's thumbnail is a PNG of its waveform.
+- The app writes a `.png` thumbnail itself in two cases: it draws the thumbnail of a Flash movie
+  or of a paged document, which the core cannot make, and Set as Thumbnail saves the frame that a
+  video or a Flash movie shows.
+
+**The first-frame picture** is made by the same `ffmpeg` call as a video's thumbnail, without a
+seek, as a JPEG that fits inside 512 × 512 pixels (`library_media_runtime::make_first_frame`). A
+video is a file whose MIME type starts with `video/`.
+
+- The viewers draw it while a video loads: the media view, Quick Look, the detail window, the
+  Inbox review, and a collection's reader for a video member (`viewer::picture_while_loading` in
+  the app). Playback starts at the first frame, so the picture on screen does not change when the
+  video's player takes over. With the thumbnail it would change from the frame at 35% to the
+  first frame.
+- It is always the first frame, also when that frame is black. No other frame is tried.
+- It is made whenever the video's thumbnail is made, and it then replaces an earlier one. Import
+  and Regenerate Thumbnail therefore make both pictures.
+- Whenever the `thumbnail` work or `media.render_thumbnail_now` finds the thumbnail in place and
+  no first-frame picture, it makes the first-frame picture alone. A video that was imported
+  before these pictures were kept gets its picture this way: a viewer that opens a video without
+  one draws the thumbnail, as before, and sends `media.render_thumbnail_now` when it makes the
+  video's player. The next time the video is opened, the viewer draws the picture. No pass over
+  the library makes these pictures.
+- When the picture cannot be made, the failure is written to the log, the work that made the
+  thumbnail still succeeds, and the viewers draw the thumbnail.
+- Set as Thumbnail changes only the thumbnail.
+
+Both pictures follow the same rules outside the library's folder and at deletion:
+
+- Cloud sync uploads and downloads only the originals in `blobs/f`
+  (`core/src/cloud/snapshot.rs`). When it has transferred an original that has no thumbnail, it
+  queues `thumbnail` work for it, and that work makes both pictures.
+- A Picto Pack holds only originals (`core/src/picto_pack.rs`). The import of a pack queues
+  `thumbnail` work for each file, as every import does.
+- A permanent delete queues the file in `blob_cleanup_queue`, and the cleanup deletes the
+  original, the thumbnail and the first-frame picture together (`BlobStore::delete`).
+
 ## Subscriptions
 
 Subscriptions store their definitions, runs, source posts, source items, retries and progress in
