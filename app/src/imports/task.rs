@@ -1,6 +1,7 @@
 //! A foreground task (an import) as the application reports it with the
 //! command `tasks.list`, and the texts, colours and states that the task
 //! dialog and the task bar show for it.
+use crate::i18n::en;
 use crate::i18n::format::grouped;
 use serde_json::Value;
 
@@ -143,9 +144,25 @@ impl Task {
         matches!(self.state.as_str(), "running" | "paused" | "reverting")
     }
 
+    /// Returns whether the task merges another library into the open one.
+    /// The application reports such a task with the kind "merge", and its
+    /// title is the other library's name. The texts of a merge have no key
+    /// in the locale files, so they are shown in English in every language.
+    pub fn merges(&self) -> bool {
+        self.kind == "merge"
+    }
+
     /// Returns the title that the task dialog and the task bar show.
     pub fn heading(&self) -> String {
         let title = &self.title;
+        if self.merges() {
+            return match self.phase() {
+                Phase::Finished => format!("Merged “{title}” into this library"),
+                Phase::Undone => format!("The merge of “{title}” was undone"),
+                Phase::Stopped | Phase::Removing => format!("Undoing the merge of “{title}”"),
+                _ => format!("Merging “{title}” into this library"),
+            };
+        }
         match self.phase() {
             Phase::Finished => crate::tf!("Imported “{value0}”", title),
             Phase::Stopped => crate::tf!("Stopped importing “{value0}”", title),
@@ -157,6 +174,22 @@ impl Task {
 
     /// Returns the line under the title of the task dialog.
     pub fn subtitle(&self) -> String {
+        if self.merges() {
+            let unchanged = || en("This library is as it was before the merge.").to_owned();
+            match self.phase() {
+                Phase::Finding => return en("Reading the other library…").into(),
+                Phase::Stopped | Phase::Removing => {
+                    return en("Removing what the merge added…").into();
+                }
+                Phase::Undone => {
+                    return match &self.error {
+                        Some(error) => format!("{error} {}", unchanged()),
+                        None => unchanged(),
+                    };
+                }
+                _ => {}
+            }
+        }
         match self.phase() {
             Phase::Finding => crate::i18n::t("Finding files…").into(),
             Phase::Importing => match self.rate_per_second {
@@ -280,6 +313,18 @@ impl Task {
     /// Returns the choices that the question about stopping offers: each
     /// choice, its title and its description.
     pub fn stop_choices(&self) -> Vec<(StopChoice, &'static str, String)> {
+        // A merge is never left half done, so the only choice is to remove
+        // what it has added.
+        if self.merges() {
+            return vec![(
+                StopChoice::Remove,
+                en("Cancel the merge"),
+                format!(
+                    "Removes the {} items that the merge has added. This library is then as it was before the merge. The other library is not changed.",
+                    grouped(self.added)
+                ),
+            )];
+        }
         let remaining = self.total.saturating_sub(self.done);
         let mut choices = vec![(
             StopChoice::Keep,
@@ -521,6 +566,33 @@ mod tests {
             choices[0].2,
             "The 4,651 new items stay. The remaining 7,446 files are not imported."
         );
+    }
+
+    #[test]
+    fn a_merge_is_named_a_merge_and_can_only_be_cancelled_as_a_whole() {
+        let mut task = task();
+        task.kind = "merge".into();
+        task.title = "Scans".into();
+        assert_eq!(task.heading(), "Merging “Scans” into this library");
+        assert_eq!(task.subtitle(), "Adding to library · 42 files/s");
+        assert_eq!(task.counts().0, "4,962 of 12,408 files");
+        let choices = task.stop_choices();
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices[0].0, StopChoice::Remove);
+        assert_eq!(choices[0].1, "Cancel the merge");
+        task.scan_complete = false;
+        assert_eq!(task.subtitle(), "Reading the other library…");
+        task.state = "reverting".into();
+        assert_eq!(task.heading(), "Undoing the merge of “Scans”");
+        task.state = "reverted".into();
+        task.error = Some("A file of the other library could not be merged.".into());
+        assert_eq!(task.heading(), "The merge of “Scans” was undone");
+        assert_eq!(
+            task.subtitle(),
+            "A file of the other library could not be merged. This library is as it was before the merge."
+        );
+        task.state = "finished".into();
+        assert_eq!(task.heading(), "Merged “Scans” into this library");
     }
 
     #[test]

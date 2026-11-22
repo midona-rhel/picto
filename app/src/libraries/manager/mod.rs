@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 
 mod cloud;
 mod dialogs;
+mod merge;
 mod panes;
 
 const WIDTH: f32 = 700.;
@@ -121,6 +122,9 @@ enum Act {
     Reveal,
     Move,
     Delete,
+    /// Opens the merge dialog. The merge reads the library, or writes to it
+    /// when it is the library that is kept.
+    Merge,
 }
 
 /// What the right side of the window shows.
@@ -213,6 +217,8 @@ pub struct Manager {
     /// the library's identity, its folder, and the action that runs when
     /// the user agrees.
     asking: ui::modal::Host<(super::Identity, PathBuf, Act)>,
+    /// The Merge with Another Library… dialog.
+    merging: ui::modal::Host<merge::Merge>,
     /// The icon picker. It is `Some` while the user has it open with
     /// Change….
     icons: Option<Entity<ui::icon_picker::IconPicker>>,
@@ -281,6 +287,7 @@ impl Manager {
                     this.error = Some(message);
                 }
                 this.read(cx);
+                this.continue_merge(cx);
             }),
             cx.on_release(|_, cx| {
                 cx.remove_global::<ManagerGlobal>();
@@ -304,6 +311,7 @@ impl Manager {
             removing: Default::default(),
             deleting: Default::default(),
             asking: Default::default(),
+            merging: Default::default(),
             icons: None,
             menu: menu::Host::deferred(ui::layer::MENU, menu::Return::Opener),
             busy: false,
@@ -470,6 +478,7 @@ impl Manager {
             Act::Delete => {
                 self.deleting.open(path, ui::menu::Return::Opener, cx);
             }
+            Act::Merge => self.open_merge(path, cx),
         }
     }
 
@@ -718,6 +727,12 @@ impl Manager {
             .icon("menu-folder-symlink")
             .disabled(self.busy || !real)
             .into(),
+            // The open library can be merged also when it is a disposable
+            // copy. The locale files have no key for this row.
+            menu::item("merge", en("Merge with Another Library…"))
+                .icon("menu-git-merge")
+                .disabled(self.busy || !self.can_merge(&row) || !(real || row.current))
+                .into(),
         ];
         let mut entries = entries;
         if row.current {
@@ -768,6 +783,7 @@ impl Manager {
                 }
                 "move" => this.guarded(path.clone(), Act::Move, window, cx),
                 "delete" => this.guarded(path.clone(), Act::Delete, window, cx),
+                "merge" => this.guarded(path.clone(), Act::Merge, window, cx),
                 "remove" => {
                     this.removing
                         .open(path.clone(), ui::menu::Return::Opener, cx);
@@ -893,6 +909,7 @@ impl Render for Manager {
             .children(self.menu.layer(window, cx))
             .children(self.removal(window, cx))
             .children(self.deletion(window, cx))
+            .children(self.merge_dialog(window, cx))
             .children(self.consent(window, cx))
             .children(self.stop_question(window, cx))
             .children(ui::window_chrome::rim(window, cx))

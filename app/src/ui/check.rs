@@ -130,10 +130,17 @@ impl RenderOnce for CheckBox {
 /// indicator lines up with the text above it and the fill has space around the
 /// indicator. A disabled row is drawn at half strength and does not react to
 /// clicks.
+///
+/// A row can have two more texts. The trailing text is drawn at the right end
+/// of the label's line. The detail is drawn under the label in small text.
+/// Both are drawn in the secondary text colour. The label and the detail are
+/// cut off with an ellipsis where the row is too narrow for them.
 #[derive(IntoElement)]
 pub struct Check {
     id: ElementId,
     label: SharedString,
+    trailing: Option<SharedString>,
+    detail: Option<SharedString>,
     /// Whether this is a radio button and not a check box.
     radio: bool,
     checked: bool,
@@ -145,6 +152,8 @@ pub fn check(id: impl Into<ElementId>, label: impl Into<SharedString>, checked: 
     Check {
         id: id.into(),
         label: label.into(),
+        trailing: None,
+        detail: None,
         radio: false,
         checked,
         disabled: false,
@@ -155,6 +164,17 @@ pub fn check(id: impl Into<ElementId>, label: impl Into<SharedString>, checked: 
 impl Check {
     pub fn radio(mut self) -> Self {
         self.radio = true;
+        self
+    }
+    /// Sets the text at the right end of the label's line, for example a
+    /// count.
+    pub fn trailing(mut self, trailing: impl Into<SharedString>) -> Self {
+        self.trailing = Some(trailing.into());
+        self
+    }
+    /// Sets the text under the label, for example a path.
+    pub fn detail(mut self, detail: impl Into<SharedString>) -> Self {
+        self.detail = Some(detail.into());
         self
     }
     pub fn disabled(mut self, disabled: bool) -> Self {
@@ -205,6 +225,44 @@ impl RenderOnce for Check {
                 )
                 .round(self.radio),
             );
+        // A row with a trailing text or a detail lays its texts out in a
+        // column that takes the rest of the row's width. A row with only a
+        // label is as wide as the label.
+        let two_lines = self.detail.is_some();
+        let texts = if self.trailing.is_none() && self.detail.is_none() {
+            div().relative().min_w_0().child(self.label.clone())
+        } else {
+            div()
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(div().flex_1().min_w_0().truncate().child(self.label.clone()))
+                        .children(self.trailing.map(|trailing| {
+                            div()
+                                .flex_none()
+                                .text_color(theme.text_secondary())
+                                .font_features(theme::tabular_figures())
+                                .child(trailing)
+                        })),
+                )
+                .children(self.detail.map(|detail| {
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text(theme::TEXT_SM)
+                        .line_height(px(14.))
+                        .text_color(theme.text_secondary())
+                        .child(detail)
+                }))
+        };
         let mut row = div()
             .id(self.id)
             .role(if self.radio {
@@ -212,7 +270,7 @@ impl RenderOnce for Check {
             } else {
                 Role::CheckBox
             })
-            .aria_label(self.label.clone())
+            .aria_label(self.label)
             .aria_toggled(super::a11y::toggled(self.checked))
             .aria_disabled(self.disabled)
             .relative()
@@ -223,6 +281,9 @@ impl RenderOnce for Check {
             .mr(px(6.))
             .pl(px(6.))
             .pr(px(8.))
+            // A row with a detail has two lines of text, with 5px above and
+            // below them.
+            .py(px(if two_lines { 5. } else { 0. }))
             .flex()
             .items_center()
             .rounded(px(theme::RADIUS_MD))
@@ -238,7 +299,7 @@ impl RenderOnce for Check {
                     .opacity(strength),
             )
             .child(indicator)
-            .child(div().relative().min_w_0().child(self.label));
+            .child(texts);
         if self.disabled {
             return row.opacity(0.5);
         }

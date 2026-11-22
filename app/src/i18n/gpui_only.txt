@@ -155,3 +155,20 @@ of pixels differ
 Quick Search
 Actions
 Places
+Merge with Another Library…
+Merge Libraries
+Merge
+Library to keep
+The second library
+1 item
+Cancel…
+Every item, tag, folder, smart folder and collection of both libraries is put into one library. A file that both libraries hold is kept once. Nothing is deleted from the other library.
+The library that is kept receives the content of the other one. Subscriptions, cloud sync settings, watched folders and application settings of the other library are not carried over. A merge cannot be undone with Undo.
+A library operation is already in progress.
+The library was closed before the merge started.
+Reading the other library…
+Removing what the merge added…
+This library is as it was before the merge.
+Cancel the merge
+Keep merging
+Cancel merge
