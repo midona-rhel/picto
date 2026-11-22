@@ -200,8 +200,28 @@ impl RelinkState {
     }
 }
 
+/// Who removed roots from the library. It decides what cloud sync does with
+/// the deletion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeletionOrigin {
+    /// The user deleted the items on this device (Delete Permanently, Empty
+    /// Trash, or a rejected Inbox item with the setting "Delete
+    /// permanently"). Cloud sync sends the deletion to the other devices.
+    User,
+    /// The library removed the roots itself: an item merged into another,
+    /// or the items of an import that was stopped and undone. Cloud sync
+    /// does not send it.
+    Library,
+    /// Another device deleted the items and cloud sync brought the deletion
+    /// here. It is not sent again, and the device that made the deletion
+    /// removes the originals from the cloud folder.
+    OtherDevice,
+}
+
 #[derive(Debug, Clone)]
 pub struct DeletedRootsState {
+    /// Who made the deletion. A redo deletes the roots with the same origin.
+    pub origin: DeletionOrigin,
     pub roots: Arc<RoaringBitmap>,
     pub structure: StructuralState,
     /// `library_item` rows of the roots and their media: id, stable key, kind.

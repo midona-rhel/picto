@@ -26,7 +26,7 @@ pub use picto_core::cloud::snapshot::RestorePoint;
 pub use picto_core::cloud::{CloudConfiguration as Configuration, CloudLibraryOption};
 pub use picto_core::cloud::CloudSyncStatus as Status;
 
-use crate::i18n::t;
+use crate::i18n::{en, t};
 
 /// Returns the provider's name as the interface shows it, "Google Drive" or
 /// "Dropbox", in the interface's language.
@@ -151,6 +151,33 @@ pub fn discover(root: &Root) -> Result<Vec<Choice>, String> {
             library,
         })
         .collect())
+}
+
+/// Returns the message that the Library Manager shows after Delete Cloud
+/// Data…. `removal` is the answer of the core's command `cloud.data.delete`.
+/// When the library's folder is still in the cloud folder, the message
+/// counts the files and folders that were left in it and names the first of
+/// them: Picto did not write them, or it could not remove them. The locale
+/// files have no keys for these texts, so they are shown in English in
+/// every language.
+pub fn removal_message(removal: &serde_json::Value) -> String {
+    let removed = en("Cloud data deleted. Cloud sync is off for this library.");
+    let removal: picto_core::cloud::provider::CloudDataRemoval =
+        match serde_json::from_value(removal.clone()) {
+            Ok(removal) => removal,
+            Err(_) => return removed.to_owned(),
+        };
+    if removal.folder_removed || removal.kept_entries == 0 {
+        return removed.to_owned();
+    }
+    let mut names = removal.kept.join(", ");
+    if removal.kept_entries > removal.kept.len() as u64 {
+        names.push_str(", …");
+    }
+    crate::i18n::fill(
+        en("Cloud data deleted. Cloud sync is off for this library. The library's folder in the cloud folder was not removed, because it still holds {value0} files or folders that Picto did not write or could not remove: {value1}"),
+        &[&removal.kept_entries, &names],
+    )
 }
 
 /// How the state of a library's sync is shown: whether a sync is running, the
@@ -343,4 +370,30 @@ pub fn last_sync(value: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> Str
         return crate::tf!("{value0} hr ago", hours);
     }
     crate::i18n::format::date_time(at.with_timezone(&chrono::Local).naive_local())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::removal_message;
+
+    /// The message after Delete Cloud Data… says that the cloud data is
+    /// deleted, and it names what was left when the folder could not be
+    /// removed.
+    #[test]
+    fn the_message_after_delete_cloud_data_names_what_was_left() {
+        let gone = serde_json::json!({
+            "removed_files": 9, "folder_removed": true, "kept_entries": 0, "kept": [],
+        });
+        assert_eq!(
+            removal_message(&gone),
+            "Cloud data deleted. Cloud sync is off for this library."
+        );
+        let left = serde_json::json!({
+            "removed_files": 9, "folder_removed": false, "kept_entries": 3,
+            "kept": ["notes.txt", "extra"],
+        });
+        let message = removal_message(&left);
+        assert!(message.contains("still holds 3 files or folders"), "{message}");
+        assert!(message.ends_with("notes.txt, extra, …"), "{message}");
+    }
 }

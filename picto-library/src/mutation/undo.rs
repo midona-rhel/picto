@@ -73,6 +73,18 @@ impl Library {
                 serde_json::json!({"label": entry.label}),
                 changed_at_ms,
             )?;
+            // Cloud sync sends what this replay moved into or out of the
+            // Trash, and the tags, folders and smart folders that the redo
+            // of a deletion deleted again, as it does for the first edit.
+            journal_trash_moves(transaction, revision, &snapshot, &next, changed_at_ms)?;
+            if use_after
+                && matches!(
+                    entry.command.as_str(),
+                    "tags.delete" | "tags.delete_unused" | "folders.delete" | "smart_folders.delete"
+                )
+            {
+                journal_redone_deletions(transaction, revision, &change, changed_at_ms)?;
+            }
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
                 revision,
@@ -90,6 +102,55 @@ impl Library {
         })?;
         Ok(receipt)
     }
+}
+
+/// Records in the cloud journal the tags, folders and smart folders that the
+/// redo of a deletion deleted: the definitions that `change` holds before
+/// and not after. The rows have the kinds and the `stable_keys` payload that
+/// the first deletion writes.
+fn journal_redone_deletions(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    change: &SemanticChange,
+    changed_at_ms: i64,
+) -> Result<()> {
+    fn collect(change: &SemanticChange, keys: &mut [Vec<String>; 3]) {
+        match change {
+            SemanticChange::Compound(changes) => {
+                for change in changes {
+                    collect(change, keys);
+                }
+            }
+            SemanticChange::TagDefinition { before: Some(state), after: None, .. } => {
+                keys[0].push(state.stable_key.clone());
+            }
+            SemanticChange::FolderDefinition { before: Some(state), after: None, .. } => {
+                keys[1].push(state.stable_key.clone());
+            }
+            SemanticChange::SmartFolderDefinition { before: Some(state), after: None, .. } => {
+                keys[2].push(state.stable_key.clone());
+            }
+            _ => {}
+        }
+    }
+    let mut keys = [Vec::new(), Vec::new(), Vec::new()];
+    collect(change, &mut keys);
+    for (kind, keys) in ["tag.delete", "folder.delete", "smart_folder.delete"]
+        .into_iter()
+        .zip(keys)
+    {
+        if !keys.is_empty() {
+            insert_cloud_journal(
+                transaction,
+                revision,
+                kind,
+                None,
+                serde_json::json!({ "stable_keys": keys }),
+                changed_at_ms,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn history_dependencies(
@@ -932,6 +993,7 @@ pub(super) fn apply_semantic_change(
                     roots,
                     now_ms(),
                     &std::collections::BTreeSet::new(),
+                    state.origin,
                 )?;
                 *snapshot = next;
                 resources.extend(receipt.resources);

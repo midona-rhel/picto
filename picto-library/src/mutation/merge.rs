@@ -184,12 +184,20 @@ pub(super) fn merge_media(
     let roots = RoaringBitmap::from_iter([loser_root.0]);
     let state = merge
         .record
-        .then(|| capture_deleted_roots(transaction, snapshot, &roots))
+        .then(|| capture_deleted_roots(transaction, snapshot, &roots, DeletionOrigin::Library))
         .transpose()?;
     // The merged-away file (a duplicate's) is freed by the cleanup worker once
     // no history entry needs it; nothing is removed here.
     let protected = std::collections::BTreeSet::new();
-    let (next, _, receipt) = delete_roots(transaction, revision, snapshot, &roots, now_ms, &protected)?;
+    let (next, _, receipt) = delete_roots(
+        transaction,
+        revision,
+        snapshot,
+        &roots,
+        now_ms,
+        &protected,
+        DeletionOrigin::Library,
+    )?;
     *snapshot = next;
     merge.affected |= &roots;
     merge.affected.insert(survivor_root.0);

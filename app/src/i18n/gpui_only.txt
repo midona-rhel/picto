@@ -155,3 +155,9 @@ of pixels differ
 Quick Search
 Actions
 Places
+Delete Cloud Data…
+Deleting Cloud Data…
+Delete Cloud Data
+Delete the cloud data of "{value0}"?\n\nThe library's copy in the cloud folder is deleted. The library on this device is not changed. Other devices that sync this library keep their local libraries and stop syncing.\n\nThis cannot be undone.
+Cloud data deleted. Cloud sync is off for this library.
+Cloud data deleted. Cloud sync is off for this library. The library's folder in the cloud folder was not removed, because it still holds {value0} files or folders that Picto did not write or could not remove: {value1}

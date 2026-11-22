@@ -6,7 +6,9 @@
 # here syncs, a snapshot is taken, a folder made after it is undone by
 # restoring it from Settings › Cloud (the library is closed, its database
 # replaced and opened again, which fails on Windows if this app still
-# holds a connection to it), and the sync is stopped.
+# holds a connection to it). Then pictures are taken of the Cloud Sync card
+# of the Library Manager and of the question that Delete Cloud Data… asks,
+# and the library's cloud data is deleted, which also stops the sync.
 wait 1500
 window 1
 move 260 529
@@ -56,5 +58,21 @@ wait 20000
 shot cloud-05-restored
 invoke navigation.get {}
 invoke cloud.restore.list {}
-invoke cloud.disable {}
+window 1
+wait 500
+scroll 470 300 -600
+wait 800
+shot cloud-06-card
+move 356 425
+down 356 425
+up 356 425
+wait 800
+shot cloud-07-delete-question
+key escape
+wait 500
+window 0
+invoke cloud.data.delete {}
 invoke cloud.configuration.get {}
+window 1
+wait 800
+shot cloud-08-deleted

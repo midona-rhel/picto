@@ -1,8 +1,8 @@
-//! Greenfield media-library kernel.
+//! The media library: its SQLite database, the projections that are built
+//! from it, the queries, the writes and the undo history of a session.
 //!
-//! This crate owns media roots, canonical memberships, queries, mutations,
-//! publication, and session history. It deliberately has no dependency on the
-//! application shell or the backend it replaces.
+//! The crate does not depend on the application core or on the app. Both
+//! reach a library through [`Library`].
 
 pub mod bitmap;
 mod browsing;
@@ -36,7 +36,10 @@ pub mod work_queue;
 pub use database::LibraryDatabase;
 pub use error::{LibraryError, Result};
 pub use model::*;
-pub use mutation::{Library, SharedFileMerge, merged_notes};
+pub use mutation::{
+    AppliedDeletions, Library, OutgoingCursor, OutgoingDeletions, ReceivedDeletions,
+    SharedFileMerge, SyncedDeletion, merged_notes, reset_synced_deletions,
+};
 
 /// The name a duplicate merge keeps of two: `incoming` only when it is a
 /// more descriptive kind of name than `existing`.
