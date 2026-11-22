@@ -24,7 +24,8 @@ use crate::{
     ModifiersChangedEvent, MouseButton, MouseClickEvent, MouseDownEvent, MouseExitEvent,
     MouseMoveEvent, MousePressureEvent, MouseUpEvent, OngoingScroll, Overflow, ParentElement,
     PinchEvent, Pixels, Point, Render, ScrollEvent, SharedString, Size, Style, StyleRefinement,
-    Styled, Task, TooltipId, TouchPhase, Visibility, Window, WindowControlArea, point, px, size,
+    Styled, Task, TooltipId, TouchPhase, Visibility, WheelScroll, Window, WindowControlArea, point,
+    px, size,
 };
 use collections::HashMap;
 use gpui_util::ResultExt;
@@ -2265,6 +2266,9 @@ pub struct Interactivity {
     pub(crate) scroll_anchor: Option<ScrollAnchor>,
     pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
     pub(crate) ongoing_scroll: Option<Rc<RefCell<OngoingScroll>>>,
+    /// The state of the animated wheel scroll of this element. It is set
+    /// together with `scroll_offset`.
+    pub(crate) wheel_scroll: Option<Rc<RefCell<WheelScroll>>>,
     pub(crate) group: Option<SharedString>,
     /// The base style of the element, before any modifications are applied
     /// by focus, active, etc.
@@ -2393,6 +2397,7 @@ impl Interactivity {
                     let scroll_handle_state = scroll_handle.0.borrow();
                     self.scroll_offset = Some(scroll_handle_state.offset.clone());
                     self.ongoing_scroll = Some(scroll_handle_state.ongoing_scroll.clone());
+                    self.wheel_scroll = Some(scroll_handle_state.wheel_scroll.clone());
                 } else if (self.base_style.overflow.x == Some(Overflow::Scroll)
                     || self.base_style.overflow.y == Some(Overflow::Scroll))
                     && let Some(element_state) = element_state.as_mut()
@@ -2407,6 +2412,12 @@ impl Interactivity {
                         element_state
                             .ongoing_scroll
                             .get_or_insert_with(|| Rc::new(RefCell::new(OngoingScroll::default())))
+                            .clone(),
+                    );
+                    self.wheel_scroll = Some(
+                        element_state
+                            .wheel_scroll
+                            .get_or_insert_with(Rc::default)
                             .clone(),
                     );
                 }
@@ -2638,6 +2649,11 @@ impl Interactivity {
             if let Some(mut scroll_handle_state) = tracked_scroll_handle {
                 scroll_handle_state.max_offset = scroll_max;
                 scroll_handle_state.bounds = bounds;
+            }
+            // The animation of a wheel scroll needs the same limit, so that
+            // it ends at the end of the content and not beyond it.
+            if let Some(wheel_scroll) = self.wheel_scroll.as_ref() {
+                wheel_scroll.borrow_mut().set_max(scroll_max);
             }
 
             *scroll_offset
@@ -3478,6 +3494,12 @@ impl Interactivity {
         }
     }
 
+    /// Registers the listener that scrolls this element when a scroll event
+    /// arrives over it. The element scrolls along the axes whose overflow is
+    /// `Overflow::Scroll`. A distance in pixels moves the content at once. A
+    /// distance in lines, which a mouse wheel reports, moves the content at
+    /// once on macOS and in an animation on Windows and Linux
+    /// ([`crate::animates_scroll`]).
     fn paint_scroll_listener(
         &self,
         hitbox: &Hitbox,
@@ -3485,8 +3507,9 @@ impl Interactivity {
         window: &mut Window,
         _cx: &mut App,
     ) {
-        if let Some(scroll_offset) = self.scroll_offset.clone() {
+        if let Some(shared_scroll_offset) = self.scroll_offset.clone() {
             let ongoing_scroll = self.ongoing_scroll.clone();
+            let wheel_scroll = self.wheel_scroll.clone();
             let overflow = style.overflow;
             let allow_concurrent_scroll = style.allow_concurrent_scroll;
             let restrict_scroll_to_axis = style.restrict_scroll_to_axis;
@@ -3495,7 +3518,7 @@ impl Interactivity {
             let current_view = window.current_view();
             window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
-                    let mut scroll_offset = scroll_offset.borrow_mut();
+                    let mut scroll_offset = shared_scroll_offset.borrow_mut();
                     let old_scroll_offset = *scroll_offset;
                     let mut delta = event.delta.pixel_delta(line_height);
 
@@ -3533,8 +3556,31 @@ impl Interactivity {
                             delta_x = Pixels::ZERO;
                         }
                     }
-                    scroll_offset.y += delta_y;
-                    scroll_offset.x += delta_x;
+                    if crate::animates_scroll(&event.delta)
+                        && let Some(wheel_scroll) = &wheel_scroll
+                    {
+                        // The offset is written by `step_each_frame`, once in
+                        // each frame until the animation ends. It is written
+                        // here only when the distance is too small to
+                        // animate.
+                        let animating = wheel_scroll.borrow_mut().scroll_by(
+                            &mut scroll_offset,
+                            point(delta_x, delta_y),
+                            window.scale_factor(),
+                            cx.background_executor().now(),
+                        );
+                        if animating {
+                            crate::step_each_frame(
+                                &shared_scroll_offset,
+                                wheel_scroll,
+                                current_view,
+                                window,
+                            );
+                        }
+                    } else {
+                        scroll_offset.y += delta_y;
+                        scroll_offset.x += delta_x;
+                    }
                     if *scroll_offset != old_scroll_offset {
                         cx.notify(current_view);
                     }
@@ -3800,6 +3846,7 @@ pub struct InteractiveElementState {
     pub(crate) pending_keyboard_down: Option<Rc<RefCell<Option<u64>>>>,
     pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
     ongoing_scroll: Option<Rc<RefCell<OngoingScroll>>>,
+    wheel_scroll: Option<Rc<RefCell<WheelScroll>>>,
     pub(crate) active_tooltip: Option<Rc<RefCell<Option<ActiveTooltip>>>>,
     long_press_tooltip_active: Option<Rc<Cell<bool>>>,
 }
@@ -4399,6 +4446,7 @@ impl ScrollAnchor {
 struct ScrollHandleState {
     offset: Rc<RefCell<Point<Pixels>>>,
     ongoing_scroll: Rc<RefCell<OngoingScroll>>,
+    wheel_scroll: Rc<RefCell<WheelScroll>>,
     bounds: Bounds<Pixels>,
     max_offset: Point<Pixels>,
     child_bounds: Vec<Bounds<Pixels>>,
