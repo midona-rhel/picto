@@ -1,4 +1,5 @@
-//! Foreground tasks as the renderer shows them: progress, rate and estimate.
+//! The foreground tasks as the renderer shows them: their progress, their
+//! rate and the estimate of the time that is left.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -12,13 +13,16 @@ pub struct ForegroundTask {
     pub task_id: i64,
     pub kind: String,
     pub title: String,
-    /// running, paused, reverting, finished, stopped or reverted.
+    /// One of "running", "paused", "reverting", "finished", "stopped" and
+    /// "reverted".
     pub state: String,
-    /// False while files are still being found; `total` grows meanwhile.
+    /// False while files are still being found. `total` grows during that
+    /// time.
     pub scan_complete: bool,
     #[ts(type = "number")]
     pub total: u64,
-    /// Files handled so far: added, already in the library, or failed.
+    /// The number of files that are handled so far: added, already in the
+    /// library, or failed.
     #[ts(type = "number")]
     pub done: u64,
     #[ts(type = "number")]
@@ -29,7 +33,8 @@ pub struct ForegroundTask {
     pub failed: u64,
     /// Whether "stop and remove what was imported" is offered.
     pub revertible: bool,
-    /// Files per second over the last stretch of work, once known.
+    /// The number of files per second over the last 20 seconds of work, once
+    /// it is known.
     pub rate_per_second: Option<f64>,
     #[ts(type = "number | null")]
     pub eta_seconds: Option<u64>,
@@ -38,7 +43,8 @@ pub struct ForegroundTask {
     #[ts(type = "number | null")]
     pub finished_at_ms: Option<i64>,
     pub error: Option<String>,
-    /// Actions that cannot start while this task is open (`blocked_actions`).
+    /// The actions that cannot start while this task is open
+    /// (`blocked_actions`).
     pub blocks: Vec<String>,
 }
 
@@ -49,8 +55,12 @@ pub struct TaskFailure {
     pub error: String,
 }
 
-/// Starting an import.
+/// The action of starting an import, as a task's `blocks` names it.
 pub const IMPORT_ACTION: &str = "import";
+
+/// The kind that [`foreground_tasks`] reports for a task that merges another
+/// library into the open one (`library_merge.rs`).
+pub const MERGE_TASK_KIND: &str = "merge";
 
 /// What an open (running, paused or undoing) task of `kind` keeps from
 /// starting. This is the one table of which work excludes which: the backend
@@ -65,15 +75,18 @@ pub fn blocked_actions(kind: &str) -> &'static [&'static str] {
     }
 }
 
-/// Running, paused, or undoing what it imported: the task still holds what it
-/// blocks.
+/// Returns whether a task in this state still blocks the actions of its
+/// kind. It does while it is running, while it is paused, and while it is
+/// undoing what it imported.
 fn holds_blocks(state: picto_library::TaskState) -> bool {
     use picto_library::TaskState::{Paused, Reverting, Running};
     matches!(state, Running | Paused | Reverting)
 }
 
-/// Serialize the foreground start check with task registration. A synchronous
-/// Picto Pack keeps this guard until its structural writes have finished.
+/// Takes the lock that makes the check for a blocked start and the recording
+/// of the new task one step, so that two starts cannot both pass the check.
+/// The import of a Picto Pack, which runs inside one command, keeps the lock
+/// until its writes have finished.
 pub(crate) fn lock_import_start(
     application: &crate::library_application::LibraryApplication,
 ) -> Result<std::sync::MutexGuard<'_, ()>, String> {
@@ -101,23 +114,26 @@ pub fn ensure_can_start(
     }
 }
 
-/// Recent progress samples per task, for the rate and estimate. Kept in
-/// memory: after a restart the estimate simply starts over.
+/// The recent measurements of each task's progress, from which the rate and
+/// the estimate are computed. They are kept in memory, so the estimate
+/// starts again after a restart.
 type ProgressKey = (std::path::PathBuf, i64);
 type ProgressSamples = Vec<(std::time::Instant, u64)>;
 static PROGRESS: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<ProgressKey, ProgressSamples>>,
 > = std::sync::LazyLock::new(Default::default);
 
-/// The rate is measured over this much recent work.
+/// The length of the most recent work over which the rate is measured.
 const RATE_WINDOW: std::time::Duration = std::time::Duration::from_secs(20);
-/// No estimate until progress has been watched for this long.
+/// How long the progress must have been measured before an estimate is
+/// given.
 const RATE_MINIMUM: std::time::Duration = std::time::Duration::from_secs(3);
 
 fn progress_rate(key: ProgressKey, done: u64, measuring: bool) -> Option<f64> {
     let mut progress = PROGRESS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if !measuring {
-        // Paused or ended: time spent here is not import time.
+        // The task is paused or has ended. The time that passes now is not
+        // time of importing, so the measurements are dropped.
         progress.remove(&key);
         return None;
     }
@@ -160,9 +176,17 @@ pub fn foreground_tasks(
             } else {
                 Vec::new()
             };
+            // A merge of another library is stored as an import task. It is
+            // reported with a kind of its own, so that the renderer can name
+            // it a merge and offer only to cancel it.
+            let kind = if picto_library::MergeTaskInput::from_json(&task.input_json).is_some() {
+                MERGE_TASK_KIND.to_owned()
+            } else {
+                task.kind
+            };
             ForegroundTask {
                 task_id: task.task_id.0,
-                kind: task.kind,
+                kind,
                 title: task.title,
                 state: task.state.as_str().to_owned(),
                 scan_complete: task.scan_complete,

@@ -7,13 +7,15 @@ use uuid::Uuid;
 use crate::bitmap::{self, BitmapDomain, BitmapKey};
 use crate::database::LibraryDatabase;
 use crate::fts;
-use crate::model::{FolderId, MediaId, PreparedImport, RootId, RootKind, TagId};
+use crate::model::{FolderId, MediaId, PreparedImport, Rating, RootId, RootKind, TagId};
 use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{color_cell, ProjectionSnapshot};
 use crate::{LibraryError, Result};
 
-// On the supported release host, 48 tag-rich roots stays below one frame while
-// retaining nearly all of the transaction amortization from a 64-item batch.
+// One batch imports at most 48 items. On the computer that releases are
+// measured on, a batch of 48 items with many tags is written in less time
+// than one frame takes, and it costs nearly as little for each item as a
+// batch of 64 does.
 pub const MAX_INGEST_BATCH: usize = 48;
 
 pub(crate) struct IngestResult {
@@ -24,25 +26,52 @@ pub(crate) struct IngestResult {
     pub bitmap_keys: Vec<BitmapKey>,
     pub folder_ids: Vec<FolderId>,
     pub affected_roots: RoaringBitmap,
-    /// Tags this import added to roots that already existed (reuse only).
+    /// The tags that this import added to a root that already existed.
     pub added_tags: Vec<(RootId, TagId)>,
+    /// The folders that a merge of another library put a root into that
+    /// already existed.
+    pub placed: Vec<(RootId, FolderId)>,
+    /// The rating that a merge of another library gave a root that already
+    /// existed and had no rating.
+    pub rated: Option<(RootId, Rating)>,
+}
+
+/// What an import gives an item that the library already holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Held {
+    /// The item gets the import's tags and source. It gets the import's
+    /// notes when it has none, and the import's name when its own name is a
+    /// generated one and the import's is not.
+    Refresh,
+    /// The import is an item of another library that is merged into this
+    /// one. The item keeps its name, its dates and its status. It gets the
+    /// import's tags, folders and source links, the import's notes when it
+    /// has none, and the import's rating when it has none.
+    ///
+    /// When the library does not hold the item yet, the new item gets
+    /// `modified_at_ms`, the time of the item's last change in the other
+    /// library, as the time of its last change. An ordinary import gives a
+    /// new item the time of its import.
+    Merge { modified_at_ms: i64 },
 }
 
 /// Import one file. One file is one media item: an import whose source item,
-/// stable key or file the library already holds resolves to that item (adding
-/// its tags and provenance) instead of creating another. Collection
-/// imports combine overlapping collections, including their tags.
+/// stable key or file the library already holds resolves to that item
+/// instead of creating another, and `held` says what that item gets from the
+/// import. Collection imports combine overlapping collections, including
+/// their tags.
 pub(crate) fn insert_one(
     transaction: &Transaction<'_>,
     revision: u64,
     mut snapshot: ProjectionSnapshot,
     input: &PreparedImport,
     task: Option<crate::TaskId>,
+    held: Held,
 ) -> Result<IngestResult> {
     if let Some(existing) = existing_import(transaction, &snapshot, input)? {
         let before = task.map(|_| reused_text(transaction, existing)).transpose()?;
         let mut affected_roots =
-            refresh_existing_file(transaction, &mut snapshot, existing.media_id, input)?;
+            refresh_existing_file(transaction, &mut snapshot, existing.media_id, input, held)?;
         if let (Some(task), Some((root_before, media_before))) = (task, before) {
             let (root_after, media_after) = reused_text(transaction, existing)?;
             use crate::mutation::tasks::{record_task_undo, TaskUndo};
@@ -104,16 +133,66 @@ pub(crate) fn insert_one(
                     source.source_text
                 ])?;
         }
+        let mut resources = vec!["roots".to_owned(), "tags".to_owned()];
+        let mut placed = Vec::new();
+        let mut rated = None;
+        if matches!(held, Held::Merge { .. }) {
+            let root_id = existing.root_id;
+            let (folders, auto_tags) =
+                place_in_folders(transaction, &mut snapshot, root_id, &input.folders)?;
+            if !folders.is_empty() {
+                let counts = Arc::make_mut(&mut snapshot.folder_count);
+                counts.insert(
+                    root_id.0,
+                    counts.value(root_id.0).unwrap_or(0) + folders.len() as u64,
+                );
+                resources.extend(["folders".to_owned(), "sidebar".to_owned()]);
+                affected_roots.insert(root_id.0);
+            }
+            if !auto_tags.is_empty() {
+                let counts = Arc::make_mut(&mut snapshot.tag_count);
+                counts.insert(
+                    root_id.0,
+                    counts.value(root_id.0).unwrap_or(0) + auto_tags.len() as u64,
+                );
+                affected_roots.insert(root_id.0);
+            }
+            for tag_id in auto_tags {
+                bitmap_keys.push(BitmapKey {
+                    domain: BitmapDomain::Tag,
+                    key_id: tag_id.0,
+                });
+                added_tags.push((root_id, tag_id));
+            }
+            placed.extend(folders.into_iter().map(|folder_id| (root_id, folder_id)));
+            if input.rating != Rating::Unrated && snapshot.rating(Rating::Unrated).contains(root_id.0)
+            {
+                let ratings = Arc::make_mut(&mut snapshot.ratings);
+                ratings.entry(Rating::Unrated).or_default().remove(root_id.0);
+                ratings.entry(input.rating).or_default().insert(root_id.0);
+                for rating in [Rating::Unrated, input.rating] {
+                    bitmap_keys.push(BitmapKey {
+                        domain: BitmapDomain::Rating,
+                        key_id: rating.bitmap_key(),
+                    });
+                }
+                resources.push("ratings".to_owned());
+                affected_roots.insert(root_id.0);
+                rated = Some((root_id, input.rating));
+            }
+        }
         snapshot.revision = revision;
         return Ok(IngestResult {
             root_id: existing.root_id,
             created_root: false,
             snapshot,
-            resources: vec!["roots".into(), "tags".into()],
+            resources,
             bitmap_keys,
-            folder_ids: Vec::new(),
+            folder_ids: placed.iter().map(|(_, folder_id)| *folder_id).collect(),
             affected_roots,
             added_tags,
+            placed,
+            rated,
         });
     }
     if let Some(deleted_at_ms) = transaction
@@ -233,12 +312,16 @@ pub(crate) fn insert_one(
             input.imported_at_ms,
         )?;
     }
+    let modified_at_ms = match held {
+        Held::Merge { modified_at_ms } => modified_at_ms,
+        Held::Refresh => input.imported_at_ms,
+    };
     transaction
         .prepare_cached(
             "INSERT INTO library_root
              (root_id, name, notes, source_urls_json, cover_media_id, imported_at_ms,
               captured_at_ms, modified_at_ms, media_count, total_size_bytes)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?6, 1, ?8)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?9, 1, ?8)",
         )?
         .execute(params![
             root_id.0,
@@ -249,6 +332,7 @@ pub(crate) fn insert_one(
             input.imported_at_ms,
             input.captured_at_ms,
             sqlite_i64(input.facts.size_bytes, "root size")?,
+            modified_at_ms,
         ])?;
     if let Some(source) = &input.source_identity {
         transaction
@@ -304,46 +388,13 @@ pub(crate) fn insert_one(
         });
     }
 
-    let mut assigned_folders = 0u64;
-    for folder_id in &input.folders {
-        let auto_tags = folder_auto_tags(transaction, *folder_id)?;
-        for tag_id in auto_tags {
-            let tag_id = TagId(tag_id);
-            let exists = transaction
-                .prepare_cached("SELECT EXISTS(SELECT 1 FROM tag_definition WHERE tag_id = ?1)")?
-                .query_row([tag_id.0], |row| row.get::<_, bool>(0))?;
-            if !exists {
-                return Err(LibraryError::InvalidState(format!(
-                    "folder {} references missing auto-tag {}",
-                    folder_id.0, tag_id.0
-                )));
-            }
-            if Arc::make_mut(&mut snapshot.tags)
-                .entry(tag_id)
-                .or_default()
-                .insert(root_id.0)
-            {
-                assigned_tags += 1;
-                bitmap_keys.push(BitmapKey {
-                    domain: BitmapDomain::Tag,
-                    key_id: tag_id.0,
-                });
-            }
-        }
-        let folder_orders = Arc::make_mut(&mut snapshot.folder_orders);
-        let order = folder_orders
-            .entry(*folder_id)
-            .or_insert_with(|| Arc::new(Vec::new()));
-        let order = Arc::make_mut(order);
-        if !order.contains(&root_id) {
-            order.push(root_id);
-            assigned_folders += 1;
-        }
-        Arc::make_mut(&mut snapshot.folders)
-            .entry(*folder_id)
-            .or_default()
-            .insert(root_id.0);
-    }
+    let (placed, auto_tags) = place_in_folders(transaction, &mut snapshot, root_id, &input.folders)?;
+    let assigned_folders = placed.len() as u64;
+    assigned_tags += auto_tags.len() as u64;
+    bitmap_keys.extend(auto_tags.into_iter().map(|tag_id| BitmapKey {
+        domain: BitmapDomain::Tag,
+        key_id: tag_id.0,
+    }));
 
     Arc::make_mut(&mut snapshot.root_kinds)
         .entry(RootKind::Media)
@@ -380,7 +431,7 @@ pub(crate) fn insert_one(
     if let Some(value) = input.captured_at_ms {
         Arc::make_mut(&mut snapshot.captured_at).insert(root_id.0, value);
     }
-    Arc::make_mut(&mut snapshot.modified_at).insert(root_id.0, input.imported_at_ms.max(0) as u64);
+    Arc::make_mut(&mut snapshot.modified_at).insert(root_id.0, modified_at_ms.max(0) as u64);
     if let Some(value) = input.facts.width {
         Arc::make_mut(&mut snapshot.width).insert(root_id.0, value as u64);
     }
@@ -420,7 +471,64 @@ pub(crate) fn insert_one(
         folder_ids: input.folders.clone(),
         affected_roots,
         added_tags: Vec::new(),
+        placed: Vec::new(),
+        rated: None,
     })
+}
+
+/// Puts `root_id` at the end of each of `folders` that it is not in yet, and
+/// gives it the tags that those folders give their items. Returns the folders
+/// that the root was put into and the tags that it did not have before. The
+/// caller adds both to the root's counts and stores the changed folder
+/// orders and tag bitmaps.
+fn place_in_folders(
+    transaction: &Transaction<'_>,
+    snapshot: &mut ProjectionSnapshot,
+    root_id: RootId,
+    folders: &[FolderId],
+) -> Result<(Vec<FolderId>, Vec<TagId>)> {
+    let mut placed = Vec::new();
+    let mut added_tags = Vec::new();
+    for folder_id in folders {
+        if snapshot
+            .folders
+            .get(folder_id)
+            .is_some_and(|roots| roots.contains(root_id.0))
+        {
+            continue;
+        }
+        let auto_tags = folder_auto_tags(transaction, *folder_id)?;
+        for tag_id in auto_tags {
+            let tag_id = TagId(tag_id);
+            let exists = transaction
+                .prepare_cached("SELECT EXISTS(SELECT 1 FROM tag_definition WHERE tag_id = ?1)")?
+                .query_row([tag_id.0], |row| row.get::<_, bool>(0))?;
+            if !exists {
+                return Err(LibraryError::InvalidState(format!(
+                    "folder {} references missing auto-tag {}",
+                    folder_id.0, tag_id.0
+                )));
+            }
+            if Arc::make_mut(&mut snapshot.tags)
+                .entry(tag_id)
+                .or_default()
+                .insert(root_id.0)
+            {
+                added_tags.push(tag_id);
+            }
+        }
+        let folder_orders = Arc::make_mut(&mut snapshot.folder_orders);
+        let order = folder_orders
+            .entry(*folder_id)
+            .or_insert_with(|| Arc::new(Vec::new()));
+        Arc::make_mut(order).push(root_id);
+        Arc::make_mut(&mut snapshot.folders)
+            .entry(*folder_id)
+            .or_default()
+            .insert(root_id.0);
+        placed.push(*folder_id);
+    }
+    Ok((placed, added_tags))
 }
 
 fn enqueue_file_work(
@@ -511,6 +619,7 @@ fn refresh_existing_file(
     snapshot: &mut ProjectionSnapshot,
     media_id: MediaId,
     input: &PreparedImport,
+    held: Held,
 ) -> Result<RoaringBitmap> {
     let (file_id, has_palette, has_perceptual_hash) = transaction.query_row(
         "SELECT file.file_id, file.palette_json != '[]', file.perceptual_hash IS NOT NULL
@@ -565,10 +674,13 @@ fn refresh_existing_file(
             crate::name_quality::preferred(&current_name, root_name)
         });
     let preferred_name = crate::name_quality::preferred(baseline_name, &input.media_name);
-    let replace_name = preferred_name != current_name;
-    let replace_root_name = current_root_name
-        .as_deref()
-        .is_some_and(|root_name| root_name != preferred_name);
+    // An item that is merged in from another library never renames the item
+    // that this library holds.
+    let replace_name = held == Held::Refresh && preferred_name != current_name;
+    let replace_root_name = held == Held::Refresh
+        && current_root_name
+            .as_deref()
+            .is_some_and(|root_name| root_name != preferred_name);
     let replace_note = current_note
         .as_deref()
         .is_none_or(|note| note.trim().is_empty())
@@ -609,6 +721,28 @@ fn refresh_existing_file(
             fts::mark_one(transaction, owner, input.imported_at_ms)?;
         }
     }
+    if matches!(held, Held::Merge { .. }) && !input.source_urls.is_empty() {
+        let stored = transaction.query_row(
+            "SELECT source_urls_json FROM library_root WHERE root_id = ?1",
+            [owner.0],
+            |row| row.get::<_, String>(0),
+        )?;
+        let mut urls = serde_json::from_str::<Vec<String>>(&stored)?;
+        let held_before = urls.len();
+        for url in &input.source_urls {
+            if !urls.contains(url) {
+                urls.push(url.clone());
+            }
+        }
+        if urls.len() != held_before {
+            transaction.execute(
+                "UPDATE library_root SET source_urls_json = ?2 WHERE root_id = ?1",
+                params![owner.0, serde_json::to_string(&urls)?],
+            )?;
+            Arc::make_mut(&mut snapshot.urls_present).insert(owner.0);
+            fts::mark_one(transaction, owner, input.imported_at_ms)?;
+        }
+    }
     enqueue_file_work(
         transaction,
         file_id,
@@ -643,9 +777,10 @@ struct ExistingImport {
     root_id: RootId,
 }
 
-/// The media item an import resolves to, if the library already has it: by
-/// stable key (or the alias a merged-away item left), by source item, or by
-/// file. Each file has at most one media item, so the file lookup is exact.
+/// Returns the media item that an import resolves to when the library
+/// already has it. The item is looked for by its stable key, or by the alias
+/// that a merged-away item left, then by its source item, and then by its
+/// file. Each file has at most one media item, so a file names exactly one.
 fn existing_import(
     transaction: &Transaction<'_>,
     snapshot: &ProjectionSnapshot,
@@ -900,10 +1035,11 @@ mod weak_name_tests {
         }
     }
 
-    /// Every synthetic shape the engine's name generators can emit must be
-    /// classified weak, so a later source carrying a human title can upgrade
-    /// it. Generators include `{provider}_{post_id}`, source file stems
-    /// (ids/hashes), and the OnlyFans `{creator} - {date}` fallback.
+    /// Every form of name that the application generates must be classified
+    /// as weak, so that a later import of the same file with a title that a
+    /// person wrote replaces it. The generated forms include
+    /// `{provider}_{post_id}`, the stems of source files (ids and hashes),
+    /// and the OnlyFans form `{creator} - {date}`.
     #[test]
     fn every_generated_name_shape_is_upgradeable() {
         for generated in [
@@ -923,8 +1059,8 @@ mod weak_name_tests {
                 "{generated} should be weak"
             );
         }
-        // OnlyFans post text used as a title is a human name and must never
-        // be downgraded.
+        // The text of an OnlyFans post that is used as a title was written by
+        // a person. It must never be classified as weak.
         assert_eq!(
             quality("custom latex catsuit..? don't mind if I"),
             NameQuality::Meaningful

@@ -28,8 +28,9 @@ use crate::selection::{SelectionSummary, SelectionTarget};
 use crate::smart::SmartFolderRecord;
 use crate::{LibraryDatabase, LibraryError, Result};
 
-// Library methods grouped by the aggregate they write. Shared helpers
-// (publication, projections, history plumbing) stay in this file.
+// The methods of `Library` are in one file for each kind of thing that they
+// write. The helpers that all of them share are in this file: publishing a
+// write, the projections and the undo history.
 mod tags;
 mod folders;
 mod smart_folders;
@@ -37,6 +38,7 @@ mod imports;
 mod duplicates;
 mod structure;
 mod merge;
+mod library_merge;
 mod undo;
 mod shared;
 pub(crate) mod tasks;
@@ -46,6 +48,7 @@ use smart_folders::*;
 use structure::*;
 use merge::*;
 pub use merge::{SharedFileMerge, merged_notes};
+pub use library_merge::{MergeTaskInput, translate_view, MERGE_BACKUP, MERGE_LIBRARY};
 pub use shared::{
     AppliedEntries, EntryClock, EntryKind, EntryState, SharedEntry, remove_item_tombstones,
     reset_published_entries,
@@ -59,11 +62,12 @@ struct PublishedDelta {
     history: Option<HistoryEntry>,
 }
 
-/// The one owner of resident derived state. Every publishing transaction
-/// settles here before commit: the dirty-root journal names every root whose
-/// canonical browsing facts changed, and the receipt names the auxiliary
-/// tables that changed. A failed transaction publishes nothing, so the
-/// resident model never drifts from what readers can see.
+/// This is the one place that brings the derived state in memory up to date.
+/// Every transaction that publishes runs it before it commits. The journal
+/// of changed roots names every root whose facts for browsing changed, and
+/// the receipt names the auxiliary tables that changed. A failed transaction
+/// publishes nothing, so the state in memory never differs from what readers
+/// can see.
 impl crate::database::PublicationDelta for PublishedDelta {
     fn settle(&mut self, transaction: &rusqlite::Transaction<'_>) -> Result<()> {
         let snapshot = &mut self.snapshot;
@@ -136,8 +140,8 @@ impl Library {
     ) -> Result<Self> {
         let token = crate::query_request::Cancellation::for_open(cancellation);
         token.check()?;
-        // Entered on this thread for the synchronous open only; dropped
-        // before the caller regains control.
+        // The cancellation is entered on this thread for the open only. It is
+        // dropped before this function returns.
         let _execution = token.enter();
         let database = LibraryDatabase::open_with(path, cancellation, progress)?;
         let library = Self::from_database_with(database, progress)?;
@@ -178,8 +182,8 @@ impl Library {
         progress: &mut dyn FnMut(OpenStage),
     ) -> Result<Self> {
         let database = Arc::new(database);
-        // Checked before, not inside, this bounded housekeeping write so it
-        // stays atomic.
+        // The cancellation is checked before this short write and not inside
+        // it, so that the write is done as a whole or not at all.
         crate::query_request::check()?;
         database.maintenance_write(WorkPriority::CorrectnessRecovery, |transaction| {
             transaction.execute(
@@ -194,8 +198,9 @@ impl Library {
                         ))",
                 [],
             )?;
-            // The resident model is rebuilt from canonical rows below, so
-            // journal rows left behind by an earlier session carry nothing.
+            // The state in memory is rebuilt from the canonical rows below, so
+            // the journal rows that an earlier session left behind are not
+            // needed.
             transaction.execute("DELETE FROM browsing_dirty_root", [])?;
             Ok(())
         })?;
@@ -453,9 +458,10 @@ impl Library {
         Ok(receipt)
     }
 
-    /// A version of everything snapshot-only queries can observe. Unlike the
-    /// database revision, queue and subscription bookkeeping does not move it,
-    /// so cached query responses survive background work.
+    /// Returns a version of everything that a query can see which reads only
+    /// the snapshot. The bookkeeping of queues and subscriptions changes the
+    /// database revision and does not change this version, so the cached
+    /// answers to queries stay valid while background work runs.
     pub fn query_epoch(&self) -> u64 {
         self.projections.snapshot().query_versions.epoch()
     }
@@ -585,7 +591,8 @@ impl Library {
         )
     }
 
-    /// Roots in the Inbox, read from the resident projection (no query).
+    /// Returns the number of roots in the Inbox. It is read from the
+    /// projection in memory, without a query.
     pub fn inbox_count(&self) -> u64 {
         self.projections.snapshot().lifecycle(Lifecycle::Inbox).len()
     }
@@ -647,7 +654,8 @@ impl Library {
             |revision| self.capture_revision(revision),
             |connection, snapshot| {
                 let values = connection.query_row(
-                    // One pass over media and one over files, instead of six scans.
+                    // The statistics are read in one pass over the media
+                    // items and one pass over the files.
                     "WITH assets AS (
                          SELECT COUNT(*) AS total,
                                 COALESCE(SUM(file.mime LIKE 'image/%'), 0) AS images,
@@ -715,7 +723,8 @@ impl Library {
         )
     }
 
-    /// Query membership for only the supplied roots, without building a result order.
+    /// Returns which of the given roots a query matches. It does not build
+    /// the order of the query's result.
     pub fn root_membership(
         &self,
         query: &crate::query::RootQuery,
@@ -738,7 +747,8 @@ impl Library {
         )
     }
 
-    /// Current positions of `roots` in `query`'s order (`None` when absent).
+    /// Returns the current position of each of `roots` in the order of
+    /// `query`, or `None` for a root that the query does not match.
     pub fn root_positions(
         &self,
         query: &crate::query::RootQuery,
@@ -780,9 +790,10 @@ impl Library {
         )
     }
 
-    /// How many collections a selection holds: a cheap check (no tag or
-    /// folder scan) for offering collection actions on a selection that
-    /// reaches past what the renderer has loaded.
+    /// Returns how many collections a selection holds. The check reads no
+    /// tags and no folders, so it is cheap. The renderer uses it to offer the
+    /// actions for collections on a selection that reaches beyond the items
+    /// that it has loaded.
     pub fn selection_collection_count(&self, target: &SelectionTarget) -> Result<u64> {
         self.database.read_consistent(
             WorkPriority::VisibleRead,
@@ -1881,7 +1892,9 @@ impl Library {
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| operation(transaction, revision, snapshot),
             |_, delta| {
-                // Cleanup shares this writer: protect retained files before releasing it.
+                // The cleanup of files waits for this writer. So the files
+                // that the history entry keeps are registered as protected
+                // before the writer is released.
                 push_history(&self.history, publish_delta(&projections, &publication, delta));
             },
         )?;
@@ -2050,8 +2063,9 @@ fn publish_delta(
     publication: &PublicationCoordinator,
     mut delta: PublishedDelta,
 ) -> Option<HistoryEntry> {
-    // Only known auxiliary-only publications can preserve SQL-derived results.
-    // Unknown resources and item changes conservatively invalidate them.
+    // A publication keeps the results that were derived with SQL only when
+    // it changed no item and named only resources that are known to be
+    // bookkeeping. Any other publication makes those results invalid.
     if !delta.receipt.item_ids.is_empty()
         || delta.receipt.resources.iter().any(|resource| {
             !matches!(

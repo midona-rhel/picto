@@ -1,4 +1,4 @@
-//! Smart folder definitions and their tree.
+//! The mutations of smart folders: their definitions and their tree.
 
 use super::*;
 
@@ -15,6 +15,25 @@ impl Library {
         &self,
         input: SmartFolderInput,
     ) -> Result<(SmartFolderId, MutationReceipt)> {
+        self.create_smart_folder_owned(input, None)
+    }
+
+    /// Creates a smart folder for a foreground task. The task records the
+    /// smart folder, so that undoing the task deletes it, and the session's
+    /// undo history gets no entry for it.
+    pub fn create_smart_folder_for_task(
+        &self,
+        input: SmartFolderInput,
+        task: crate::TaskId,
+    ) -> Result<(SmartFolderId, MutationReceipt)> {
+        self.create_smart_folder_owned(input, Some(task))
+    }
+
+    fn create_smart_folder_owned(
+        &self,
+        input: SmartFolderInput,
+        task: Option<crate::TaskId>,
+    ) -> Result<(SmartFolderId, MutationReceipt)> {
         let name = required_name("smart folder", &input.name)?;
         let parent_id = input.parent_id;
         let icon = normalized_optional(input.icon.as_deref());
@@ -24,6 +43,9 @@ impl Library {
         crate::smart::validate_view(&view)?;
         let changed_at_ms = now_ms();
         let (smart_folder_id, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            if let Some(task) = task {
+                super::tasks::require_running_task(transaction, task)?;
+            }
             crate::smart::validate_capacity(transaction)?;
             validate_smart_parent(transaction, parent_id, None)?;
             let smart_folder_id = SmartFolderId(LibraryDatabase::allocate_id(transaction)?);
@@ -68,6 +90,13 @@ impl Library {
                         smart_folder_id.0
                     ))
                 })?;
+            if let Some(task) = task {
+                super::tasks::record_task_undo(
+                    transaction,
+                    task,
+                    super::tasks::TaskUndo::SmartFolder { smart_folder_id },
+                )?;
+            }
             let receipt = PublicationCoordinator::receipt(
                 revision,
                 vec!["smart-folders".into(), "navigation".into()],
@@ -78,7 +107,7 @@ impl Library {
                 PublishedDelta {
                     snapshot: next,
                     receipt,
-                    history: Some(HistoryEntry::for_command(
+                    history: task.is_none().then(|| HistoryEntry::for_command(
                         "smart_folders.create",
                         "Create smart folder",
                         SemanticChange::SmartFolderDefinition {

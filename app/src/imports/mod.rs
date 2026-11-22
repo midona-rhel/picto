@@ -3,7 +3,8 @@
 //! application's import queue (the command `imports.enqueue`). Each import
 //! is a foreground task. This module shows the task in a dialog with its
 //! progress and its Pause and Stop buttons, and in the task bar when the
-//! user minimizes the dialog.
+//! user minimizes the dialog. A merge of another library, which the Library
+//! Manager starts, is a foreground task too and is shown in the same way.
 //!
 //! The window has one `Imports` view. The shell draws it over everything
 //! else, and other code reaches it through [`get`].
@@ -697,6 +698,15 @@ impl Imports {
         cx.notify();
     }
 
+    /// Brings a task that another view started to the task dialog, and reads
+    /// the task list so that the dialog has the task. The Library Manager
+    /// calls this for a merge. The dialog then shows the merge also when it
+    /// has already finished.
+    pub(crate) fn show_task(&mut self, task: i64, cx: &mut Context<Self>) {
+        self.show(task, cx);
+        self.refresh(cx);
+    }
+
     /// Reads the task list after [`REFRESH_COALESCE`], unless such a read is
     /// already waiting.
     fn refresh_soon(&mut self, cx: &mut Context<Self>) {
@@ -839,8 +849,12 @@ impl Imports {
             return;
         }
         let (id, running) = (task.task_id, task.state == "running");
+        // The first choice is chosen. For an import that is "Keep what was
+        // imported", and for a merge it is the only choice, to remove what
+        // the merge added.
+        let first = task.stop_choices().first().map(|(choice, _, _)| *choice);
         self.view.stopping = Some(running);
-        self.view.choice = Some(StopChoice::Keep);
+        self.view.choice = first;
         if running {
             self.pause(id, cx);
         }

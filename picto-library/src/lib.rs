@@ -7,6 +7,7 @@
 pub mod bitmap;
 mod browsing;
 pub mod checkpoint;
+pub mod content;
 pub mod database;
 pub mod duplicate;
 pub mod error;
@@ -37,12 +38,14 @@ pub use database::LibraryDatabase;
 pub use error::{LibraryError, Result};
 pub use model::*;
 pub use mutation::{
-    AppliedEntries, EntryClock, EntryKind, EntryState, Library, SharedEntry, SharedFileMerge,
-    merged_notes, remove_item_tombstones, reset_published_entries,
+    AppliedEntries, EntryClock, EntryKind, EntryState, Library, MergeTaskInput, SharedEntry,
+    SharedFileMerge, MERGE_BACKUP, MERGE_LIBRARY, merged_notes, remove_item_tombstones,
+    reset_published_entries, translate_view,
 };
 
-/// The name a duplicate merge keeps of two: `incoming` only when it is a
-/// more descriptive kind of name than `existing`.
+/// Returns the name that is kept when two items become one: `incoming` when
+/// it is a more descriptive kind of name than `existing`, and `existing`
+/// otherwise.
 pub fn preferred_name<'a>(existing: &'a str, incoming: &'a str) -> &'a str {
     name_quality::preferred(existing, incoming)
 }

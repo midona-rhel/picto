@@ -203,6 +203,19 @@ holding `library.sqlite` that no one else holds locked
 across volumes copies, compares every file and only then removes the
 original (`a_copy_across_volumes_is_verified_before_the_original_goes`).
 
+Merge with Another Library… (`libraries/manager/merge.rs`) runs
+`host::permit` for both libraries, so a build that may not open a library
+the user keeps cannot merge one either. The primary library, which is kept
+and receives the other's content, is the open library: when the primary
+library is not open, it is opened first through `host::request`, under every
+rule above. The other library is only
+read. The core opens its database with SQLite's `immutable` flag, holds its
+`.picto-library.lock` while it reads the database, refuses it while another
+application holds that lock, and never creates a file in its folder
+(`core/src/library_merge.rs`, `open_source`). The numbers of items in the
+dialog are read in the same way, and only for a library that `host::permit`
+allows.
+
 ### Cloud
 
 Cloud sync signs in to nothing: a library publishes verified
@@ -832,6 +845,27 @@ move, delete, cloud restore and join, the gate and its questions), the
 Library Manager (`manager/`) and the process probe (`platform/`). Rule: every
 open goes through `host::request` (or `host::create`), every change on disk
 through `host::rename`, `move_library` or `delete`.
+
+The Library Manager merges two libraries (`manager/merge.rs`). The dialog
+opens from the "Merge Libraries…" button at the left end of the footer, with
+the library that is selected in the list as the first library, and from the
+row "Merge with Another Library…" of a library's menu. The four buttons of
+the footer have 14 px of padding at their sides, so that they fit the
+window's width of 700 points. The dialog is built from `ui::modal`,
+`ui::form`, `ui::scrollbar` and radio rows of `ui::check`, which can show a
+detail after the label and a text at the right end of the row. From top to
+bottom it has: a paragraph that says what a merge does; the list "Merge …
+with" of the other libraries, each row with a radio button, the library's
+avatar, its name over its folder and the number of its items, two rows high
+and scrolling when it is longer; "Primary library" with a line that says
+what primary means and one radio row for each of the two libraries; a
+paragraph that says what is not carried over. The primary library is the one
+that is kept. Merge opens the primary library when it is not open and sends
+`library.merge.start` with the other library's folder. The core runs the
+merge as a foreground task, which it reports with the kind `merge`. The main
+window's task dialog (`imports/`) shows it with the texts of a merge, and its
+stop question has one choice, which undoes the merge
+(`a_merge_is_named_a_merge_and_can_only_be_cancelled_as_a_whole`).
 
 **Desktop** (`desktop/`). The Inbox badge, the system notification and the
 guarded file hand-offs; `mod.rs` is portable, `macos.rs`, `windows.rs` and

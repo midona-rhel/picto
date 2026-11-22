@@ -447,6 +447,20 @@ impl BlobStore {
         self.write_atomic(&path, data, false, true)
     }
 
+    /// Copies the thumbnail file `source`, which is another library's
+    /// thumbnail of the original with the hash `hex_hash`, into this store.
+    /// Does nothing when this store already holds a thumbnail for the hash.
+    pub fn adopt_thumbnail(&self, hex_hash: &str, source: &Path) -> BlobResult<()> {
+        if self.find_thumbnail_path(hex_hash)?.is_some() {
+            return Ok(());
+        }
+        let extension = source
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("jpg");
+        self.write_thumbnail(hex_hash, &fs::read(source)?, extension)
+    }
+
     /// Returns the bytes of the thumbnail of the original with the hash
     /// `hex_hash`, or `None` when it has no thumbnail.
     pub fn read_thumbnail(&self, hex_hash: &str) -> BlobResult<Option<Vec<u8>>> {
@@ -659,6 +673,49 @@ impl BlobStore {
         }
         Ok(None)
     }
+}
+
+/// Returns the path at which the library in the folder `library_root` stores
+/// the original with the hash `hex_hash` and the extension `ext`:
+/// `blobs/f/<ab>/<cd>/<hash>.<ext>`. Nothing is read or created, so this is
+/// how a file of a library that is not open is found.
+pub fn library_original_path(
+    library_root: &Path,
+    hex_hash: &str,
+    ext: &str,
+) -> BlobResult<PathBuf> {
+    let (ab, cd) = shard_prefix(hex_hash)?;
+    Ok(library_root
+        .join("blobs")
+        .join("f")
+        .join(ab)
+        .join(cd)
+        .join(format!("{hex_hash}.{ext}")))
+}
+
+/// Returns the thumbnail that belongs to `original` when `original` is the
+/// file with the hash `hex_hash` in the blob store of a library
+/// (`<library>/blobs/f/<ab>/<cd>/<hash>.<ext>`) and that library holds a
+/// thumbnail for it (`<library>/blobs/t/<ab>/<cd>/<hash>.jpg` or `.png`).
+/// Returns `None` for any other file.
+pub fn thumbnail_beside_original(original: &Path, hex_hash: &str) -> Option<PathBuf> {
+    let (ab, cd) = shard_prefix(hex_hash).ok()?;
+    let name = original.file_name()?.to_str()?;
+    if !name.starts_with(&format!("{hex_hash}.")) {
+        return None;
+    }
+    let mut folders = original.ancestors().skip(1);
+    let named = |folder: Option<&Path>, name: &str| {
+        folder.and_then(Path::file_name).and_then(|value| value.to_str()) == Some(name)
+    };
+    if !named(folders.next(), cd) || !named(folders.next(), ab) || !named(folders.next(), "f") {
+        return None;
+    }
+    let thumbnails = folders.next()?.join("t").join(ab).join(cd);
+    ["jpg", "png"]
+        .into_iter()
+        .map(|extension| thumbnails.join(format!("{hex_hash}.{extension}")))
+        .find(|path| path.is_file())
 }
 
 /// Returns whether the directory entry `entry` is a folder. A symbolic link
