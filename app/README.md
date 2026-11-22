@@ -206,17 +206,31 @@ original (`a_copy_across_volumes_is_verified_before_the_original_goes`).
 ### Cloud
 
 Cloud sync signs in to nothing: a library publishes verified
-snapshots of its database and originals into the folder of a Google Drive or
-Dropbox desktop app on the device, which carries them on. The core owns all
-of it (`core/src/cloud/`, commands `cloud.*`); the app sends those commands and
-keeps no tokens or secrets. The safety facts:
+snapshots of its database, its originals and the deletions that the user made
+into the folder of a Google Drive or Dropbox desktop app on the device, which
+carries them on. Another device that syncs the library makes the same
+deletions. The core owns all of it (`core/src/cloud/`, commands `cloud.*`;
+[`docs/architecture.md`](../docs/architecture.md), "Cloud sync"); the app sends
+those commands and keeps no tokens or secrets. The safety facts:
 
 - A copy's cloud is disconnected at every launch and has its own identity
   (above), so it never writes or purges as the library it came from.
 - While any automation seam is active only the folders `PICTO_GOOGLE_DRIVE_ROOT`
-  and `PICTO_DROPBOX_ROOT` name are listed or accepted; the core's own
-  validation looks under the home folder, so checks run with `HOME` pointed
-  at an empty folder.
+  and `PICTO_DROPBOX_ROOT` name are listed or accepted. The core accepts a
+  folder that one of the two variables names before it looks for installed
+  desktop apps, so a check that connects a library to such a folder does not
+  read the home folder.
+- **Delete Cloud Data…** (the button at the end of the Cloud Sync card of the
+  Library Manager, and the same row of the library's actions menu; both open
+  one question, `Manager::delete_cloud_question`) sends `cloud.data.delete`.
+  The core removes from the library's folder in the cloud folder only files
+  that the sync wrote, leaves every other file and every folder that still
+  holds one, and then switches sync off. The library on the device is not
+  changed. The message under the card names what was left.
+- A library whose cloud data is gone switches its own sync off at its next
+  sync and deletes nothing. The core's message about it is shown in the
+  Cloud Sync card above the buttons that connect a folder, in Settings ›
+  Cloud under the State row, and in a notification (`cloud::model::settle`).
 - **Restore** (`host::restore`) closes the library's views, waits until this
   app holds no connection to the database (at most 15 s, else nothing is
   restored), has the core keep the current database as an emergency copy and

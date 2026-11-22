@@ -320,7 +320,11 @@ jobs:
       # restore closes the library, replaces its database and opens it
       # again; on Windows that fails if the app still has the database open.
       # The lines after the script check that the library is back in the
-      # state of the snapshot. No cloud provider and no account is
+      # state of the snapshot. The script then takes pictures of the Cloud
+      # Sync card of the Library Manager and of the question that Delete
+      # Cloud Data… asks, and deletes the library's cloud data. The last
+      # lines check that sync is off and that the stand-in folder holds no
+      # library folder any more. No cloud provider and no account is
       # contacted.
       - name: Cloud
         run: |
@@ -361,8 +365,11 @@ jobs:
           [[ "$after" == *'String("Before")'* ]]
           [[ "$after" != *'String("After")'* ]]
           grep -q '^cloud.restore.list -> Ok(Array \[Object' "$out/cloud.log"
+          grep -q '^cloud.data.delete -> Ok(Object {"removed_files": ' "$out/cloud.log"
           grep -q '^cloud.configuration.get -> Ok(Object {"provider": Null' "$out/cloud.log"
           test -n "$(ls "$scratch/libraries/Cloudy.library/cloud/emergency")"
+          test -d "$scratch/Dropbox/picto"
+          test -z "$(ls "$scratch/Dropbox/picto")"
 
       - name: Upload cloud check
         if: always()

@@ -363,6 +363,21 @@ The originals of a permanently deleted item are removed from the cloud folder by
 made the deletion, after the "Keep deleted files" time (`purge_expired_cloud_blobs`). A device
 that applies the deletion does not queue that removal.
 
+**Removing the cloud data.** `cloud.data.delete` (Delete Cloud Data… in the Library Manager)
+removes the library's folder from the cloud folder and then switches sync off
+(`DirectoryProvider::remove_library`). It removes `library.json` first, and after it only files
+whose name and place are those of a file that the sync writes. A file of any other name stays, and
+so does every folder that still holds something. A sync, the removal and the check for deletion
+files hold one lock, so the data is not removed while a sync writes into it.
+
+A device whose library has synced with the folder before and no longer finds `library.json` there
+treats the cloud data as removed: it switches its sync off, leaves the message "The cloud data of
+this library was deleted. …" in `cloud_state`, writes nothing into the cloud folder and changes
+nothing else (`cloud::stop_if_cloud_data_removed`). Connecting a library to a cloud folder clears
+the time of the last sync and the positions in `cloud_device_frontier`, so the library then treats
+the folder's cloud data as new.
+
 **Compatibility.** The schema is unchanged. Snapshots, originals and `library.json` have the
 format that Picto 0.6.22 writes, and data that 0.6.22 wrote is read as before. A device that runs
-0.6.22 ignores the folder `deletions/`: it neither sends nor applies deletions.
+0.6.22 ignores the folder `deletions/`: it neither sends nor applies deletions, and after the
+cloud data was removed it writes a new snapshot into the folder at its next sync.

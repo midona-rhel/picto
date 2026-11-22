@@ -3,6 +3,7 @@
 //! provider's desktop app. The second library is made from the first one's
 //! newest snapshot, as Open from Cloud… makes it.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use picto_library::database::WorkPriority;
@@ -97,6 +98,64 @@ fn hash(application: &LibraryApplication, index: u8) -> String {
         ),
     )
     .unwrap()
+}
+
+/// Returns the content of every file below `folder`, by its path inside
+/// `folder` written with `/`.
+fn files_below(folder: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    let mut waiting = vec![folder.to_path_buf()];
+    while let Some(directory) = waiting.pop() {
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                waiting.push(path);
+            } else {
+                let name = path
+                    .strip_prefix(folder)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                files.insert(name, std::fs::read(&path).unwrap());
+            }
+        }
+    }
+    files
+}
+
+/// Returns every row of every table of the library's database, except the
+/// tables in `left_out`.
+fn rows(application: &LibraryApplication, left_out: &[&str]) -> BTreeMap<String, Vec<String>> {
+    application
+        .library()
+        .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+            let tables = connection
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")?
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut all = BTreeMap::new();
+            for table in tables {
+                if left_out.contains(&table.as_str()) {
+                    continue;
+                }
+                let mut statement = connection.prepare(&format!("SELECT * FROM \"{table}\""))?;
+                let columns = statement.column_count();
+                let rows = statement
+                    .query_map([], |row| {
+                        (0..columns)
+                            .map(|column| {
+                                row.get::<_, rusqlite::types::Value>(column)
+                                    .map(|value| format!("{value:?}"))
+                            })
+                            .collect::<rusqlite::Result<Vec<_>>>()
+                            .map(|values| values.join("|"))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                all.insert(table, rows);
+            }
+            Ok(all)
+        })
+        .unwrap()
 }
 
 /// Two devices that sync one library through the folder `cloud`, and that
@@ -371,4 +430,259 @@ async fn a_damaged_or_missing_deletion_file_deletes_nothing_and_is_reported() {
     assert_eq!(status(&second, 1), Some(Lifecycle::Trash));
     assert_eq!(status(&second, 2), Some(Lifecycle::Active));
     assert_eq!(status_library(&second).unwrap().message, "");
+}
+
+#[tokio::test]
+async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_library_as_it_is() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, _folders) = two_devices(cloud.path()).await;
+    first
+        .set_lifecycle(&target(&first, &[0]), Lifecycle::Trash)
+        .unwrap();
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    snapshot::publish_library(&second, &provider).await.unwrap();
+    let data = cloud_data(cloud.path(), &first);
+    assert!(deletion_file(cloud.path(), &first, 1).is_file());
+    // An upload that was interrupted left a file of the sync behind.
+    std::fs::write(
+        data.join("snapshots")
+            .join(format!("x.picto-uploading-{}", uuid::Uuid::new_v4())),
+        b"part",
+    )
+    .unwrap();
+    // Files that the sync did not write, in and beside the library's data.
+    let foreign = [
+        "notes.txt",
+        "snapshots/readme.md",
+        "blobs/f/aa/bb/picture.txt",
+        "deletions/not-a-device/0000000001.jsonl.zst",
+        "extra/file.bin",
+    ];
+    for name in foreign {
+        std::fs::create_dir_all(data.join(name).parent().unwrap()).unwrap();
+        std::fs::write(data.join(name), b"not written by the sync").unwrap();
+    }
+    let other_library = cloud.path().join("picto").join(uuid::Uuid::new_v4().to_string());
+    std::fs::create_dir_all(other_library.join("snapshots")).unwrap();
+    std::fs::write(other_library.join("library.json"), b"{}").unwrap();
+    std::fs::write(cloud.path().join("picto/beside.txt"), b"beside").unwrap();
+    std::fs::write(cloud.path().join("Holiday.jpg"), b"the user's own file").unwrap();
+
+    // The library's own files and rows before the removal. The database
+    // file is compared by its rows, because switching sync off changes the
+    // row of `cloud_state` and the revision in `library_meta`.
+    let library_files = |application: &LibraryApplication| {
+        let mut files = files_below(application.root());
+        files.retain(|name, _| !name.starts_with("library.sqlite"));
+        files
+    };
+    let files_before = library_files(&first);
+    let rows_before = rows(&first, &["cloud_state", "library_meta"]);
+    assert!(files_before.keys().any(|name| name.starts_with("blobs/")));
+
+    let removal = delete_cloud_data_library(&first).await.unwrap();
+
+    // The result names each entry that was left: a file, or a folder that
+    // the sync does not know and therefore did not look into.
+    assert!(!removal.folder_removed);
+    let mut kept = removal.kept.clone();
+    kept.sort();
+    assert_eq!(
+        kept,
+        [
+            "blobs/f/aa/bb/picture.txt",
+            "deletions/not-a-device",
+            "extra",
+            "notes.txt",
+            "snapshots/readme.md",
+        ]
+    );
+    assert_eq!(removal.kept_entries, 5);
+    // The library's folder in the cloud holds exactly the foreign files.
+    let mut expected = foreign.map(str::to_owned).to_vec();
+    expected.sort();
+    assert_eq!(
+        files_below(&data).into_keys().collect::<Vec<_>>(),
+        expected
+    );
+    // Nothing outside the library's folder was touched.
+    assert_eq!(std::fs::read(other_library.join("library.json")).unwrap(), b"{}");
+    assert!(other_library.join("snapshots").is_dir());
+    assert_eq!(std::fs::read(cloud.path().join("picto/beside.txt")).unwrap(), b"beside");
+    assert!(cloud.path().join("Holiday.jpg").is_file());
+
+    // Sync is off, and the library on the device is as it was.
+    let configuration = configuration_library(&first).unwrap();
+    assert_eq!(configuration.provider, None);
+    assert_eq!(configuration.root_path, None);
+    assert_eq!(status_library(&first).unwrap().state, "disabled");
+    assert_eq!(library_files(&first), files_before);
+    assert_eq!(rows(&first, &["cloud_state", "library_meta"]), rows_before);
+    assert_eq!(status(&first, 0), Some(Lifecycle::Trash));
+    assert_eq!(count(&first, "SELECT COUNT(*) FROM library_root"), 3);
+}
+
+#[tokio::test]
+async fn delete_cloud_data_removes_the_whole_folder_when_only_the_sync_wrote_into_it() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, _second, _provider, _folders) = two_devices(cloud.path()).await;
+    let data = cloud_data(cloud.path(), &first);
+    assert!(data.join("library.json").is_file());
+
+    let removal = delete_cloud_data_library(&first).await.unwrap();
+
+    assert!(removal.folder_removed);
+    assert_eq!((removal.kept_entries, removal.kept.len()), (0, 0));
+    assert!(removal.removed_files >= 8, "{removal:?}");
+    assert!(!data.exists());
+    assert!(cloud.path().join("picto").is_dir());
+    // A second removal finds nothing and removes nothing.
+    write(
+        &first,
+        "UPDATE cloud_state SET provider = 'dropbox', remote_root = ?1",
+        &[&cloud.path().to_string_lossy()],
+    );
+    let again = delete_cloud_data_library(&first).await.unwrap();
+    assert_eq!((again.removed_files, again.folder_removed), (0, true));
+}
+
+#[tokio::test]
+async fn cloud_data_of_another_library_or_behind_a_link_is_not_removed() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, _second, provider, _folders) = two_devices(cloud.path()).await;
+    let data = cloud_data(cloud.path(), &first);
+    let before = files_below(&data);
+
+    // The folder has this library's name and another library's manifest.
+    let manifest = std::fs::read(data.join("library.json")).unwrap();
+    std::fs::write(
+        data.join("library.json"),
+        serde_json::json!({ "library_id": uuid::Uuid::new_v4().to_string() }).to_string(),
+    )
+    .unwrap();
+    let error = delete_cloud_data_library(&first).await.unwrap_err();
+    assert!(error.contains("nothing was removed"), "{error}");
+    std::fs::write(data.join("library.json"), manifest).unwrap();
+    assert_eq!(files_below(&data), before);
+    assert!(configuration_library(&first).unwrap().provider.is_some());
+
+    // The library's folder is a link to another folder.
+    #[cfg(unix)]
+    {
+        let elsewhere = tempfile::tempdir().unwrap();
+        let moved = elsewhere.path().join("data");
+        std::fs::rename(&data, &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, &data).unwrap();
+        assert!(delete_cloud_data_library(&first).await.is_err());
+        assert_eq!(files_below(&moved), before);
+        assert!(provider
+            .remove_library(&configuration_library(&first).unwrap().library_id)
+            .is_err());
+    }
+}
+
+#[tokio::test]
+async fn another_device_notices_that_the_cloud_data_is_gone_and_switches_its_sync_off() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, _folders) = two_devices(cloud.path()).await;
+    let data = cloud_data(cloud.path(), &second);
+    let files_before = files_below(second.root().join("blobs").as_path());
+    let rows_before = rows(&second, &["cloud_state", "library_meta"]);
+    delete_cloud_data_library(&first).await.unwrap();
+    assert!(!data.exists());
+
+    // The worker's check between two snapshots finds the data gone.
+    assert!(receive_due_library(&second).unwrap());
+    let error = receive_library(&second, &provider).await.unwrap_err();
+
+    assert_eq!(error, CLOUD_DATA_REMOVED);
+    let state = status_library(&second).unwrap();
+    assert_eq!(
+        (state.state.as_str(), state.message.as_str()),
+        ("disabled", CLOUD_DATA_REMOVED)
+    );
+    assert_eq!(configuration_library(&second).unwrap().provider, None);
+    assert!(!receive_due_library(&second).unwrap());
+    assert!(!snapshot_due_library(&second, i64::MAX, 0).unwrap());
+    // Nothing was written into the cloud folder again, and nothing was
+    // deleted on the device.
+    assert!(!data.exists());
+    assert_eq!(files_below(second.root().join("blobs").as_path()), files_before);
+    assert_eq!(rows(&second, &["cloud_state", "library_meta"]), rows_before);
+    assert_eq!(count(&second, "SELECT COUNT(*) FROM library_root"), 3);
+}
+
+#[tokio::test]
+async fn a_sync_that_finds_the_cloud_data_gone_writes_nothing_and_switches_off() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, _folders) = two_devices(cloud.path()).await;
+    let data = cloud_data(cloud.path(), &second);
+    delete_cloud_data_library(&first).await.unwrap();
+    // The second device has a change that makes a snapshot due.
+    second
+        .set_lifecycle(&target(&second, &[2]), Lifecycle::Trash)
+        .unwrap();
+
+    let error = snapshot::publish_library(&second, &provider)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error, CLOUD_DATA_REMOVED);
+    assert_eq!(status_library(&second).unwrap().state, "disabled");
+    assert!(!data.exists());
+    assert_eq!(status(&second, 2), Some(Lifecycle::Trash));
+}
+
+/// The only test that sets `PICTO_GOOGLE_DRIVE_ROOT`, which `configure_library`
+/// reads to accept the folder.
+#[tokio::test]
+async fn sync_that_is_enabled_again_starts_from_new_cloud_data() {
+    let cloud = tempfile::tempdir().unwrap();
+    std::env::set_var("PICTO_GOOGLE_DRIVE_ROOT", cloud.path());
+    let folder = tempfile::tempdir().unwrap();
+    let application = LibraryApplication::create(folder.path().join("Again.library")).unwrap();
+    for index in 0..2 {
+        application
+            .library()
+            .enqueue_ingest_job(
+                &super::tests::image_job(folder.path(), index),
+                "2026-08-28T12:00:00Z",
+            )
+            .unwrap();
+    }
+    crate::library_ingest_runtime::run_batch(&application, 64).unwrap();
+    let input = ConfigureCloudInput {
+        provider: "google_drive".into(),
+        account_label: "Test".into(),
+        root_path: cloud.path().to_string_lossy().into_owned(),
+    };
+    configure_library(&application, &input).unwrap();
+    let provider = directory_provider_library(&application).unwrap();
+    application
+        .set_lifecycle(&target(&application, &[0]), Lifecycle::Trash)
+        .unwrap();
+    snapshot::publish_library(&application, &provider).await.unwrap();
+    assert!(deletion_file(cloud.path(), &application, 1).is_file());
+    let data = cloud_data(cloud.path(), &application);
+
+    delete_cloud_data_library(&application).await.unwrap();
+    assert!(!data.exists());
+    // A deletion made while sync is off is not sent later.
+    application
+        .set_lifecycle(&target(&application, &[1]), Lifecycle::Trash)
+        .unwrap();
+
+    configure_library(&application, &input).unwrap();
+    assert_eq!(status_library(&application).unwrap().last_sync_at, None);
+    snapshot::publish_library(&application, &provider).await.unwrap();
+    assert!(data.join("library.json").is_file());
+    assert!(!data.join("deletions").exists());
+
+    // The first deletion after that is the new cloud data's file 1.
+    application
+        .set_lifecycle(&target(&application, &[0]), Lifecycle::Active)
+        .unwrap();
+    snapshot::publish_library(&application, &provider).await.unwrap();
+    assert!(deletion_file(cloud.path(), &application, 1).is_file());
+    assert!(!deletion_file(cloud.path(), &application, 2).exists());
 }

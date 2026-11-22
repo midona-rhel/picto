@@ -672,10 +672,14 @@ pub(crate) fn initialize_joined_database(
         .transaction()
         .map_err(|error| format!("Failed to initialize joined cloud library: {error}"))?;
     let now = chrono::Utc::now().to_rfc3339();
+    // The library has just been made from the cloud data, so `last_sync_at`
+    // is set: if the cloud data is removed before this device's first sync,
+    // the device sees that it is gone and does not write it again.
     transaction
         .execute(
             "UPDATE cloud_state SET device_id = ?1, provider = ?2, account_label = ?3,
                     remote_root = ?4, paused = 0, state = 'idle', phase = 'blobs',
+                    last_sync_at = ?5,
                     blocking = CASE WHEN EXISTS (SELECT 1 FROM media_file) THEN 1 ELSE 0 END,
                     completed_units = 0,
                     total_units = CASE WHEN EXISTS (SELECT 1 FROM media_file)
@@ -688,7 +692,8 @@ pub(crate) fn initialize_joined_database(
                 uuid::Uuid::new_v4().to_string(),
                 provider,
                 account_label,
-                remote_root
+                remote_root,
+                now
             ],
         )
         .map_err(|error| format!("Failed to assign joined device identity: {error}"))?;

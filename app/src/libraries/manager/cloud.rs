@@ -1,9 +1,9 @@
 //! The cloud parts of the Library Manager: the Cloud Sync card of the open
 //! library, the cloud rows of its actions menu, the sync dot on its row,
-//! Connect Google Drive… and Connect Dropbox…, and the Open from Cloud…
-//! pane. Detecting and validating the providers' folders and finding the
-//! libraries in them need no open library. Everything else is a command of
-//! the open library's application.
+//! Connect Google Drive… and Connect Dropbox…, Delete Cloud Data…, and the
+//! Open from Cloud… pane. Detecting and validating the providers' folders
+//! and finding the libraries in them need no open library. Everything else
+//! is a command of the open library's application.
 use super::{Manager, Pane, host};
 use crate::cloud::{self, Choice, Root, Tone};
 use crate::i18n::{en, t};
@@ -254,9 +254,9 @@ impl Manager {
 
     /// Returns the cloud rows of the actions menu for the open library. A
     /// library that syncs gets Sync Now, Pause Sync or Resume Sync, Create
-    /// Recovery Snapshot, Show Cloud Folder and Stop Syncing. A library that
-    /// does not sync gets the submenu Enable Cloud Sync, with one row for
-    /// each provider folder that was found.
+    /// Recovery Snapshot, Show Cloud Folder, Stop Syncing and Delete Cloud
+    /// Data…. A library that does not sync gets the submenu Enable Cloud
+    /// Sync, with one row for each provider folder that was found.
     pub(super) fn cloud_rows(&self, cx: &App) -> Vec<menu::Entry> {
         let busy = self.working.is_some();
         if self.cloud_root(cx).is_some() {
@@ -294,6 +294,11 @@ impl Manager {
                 menu::item("cloud-stop", t("Stop Syncing"))
                     .icon("menu-cloud-off")
                     .disabled(busy)
+                    .into(),
+                menu::item("cloud-delete", en("Delete Cloud Data…"))
+                    .icon("menu-trash")
+                    .danger(true)
+                    .disabled(busy || active)
                     .into(),
             ];
         }
@@ -365,6 +370,7 @@ impl Manager {
             "cloud-stop" => {
                 self.stopping.open((), ui::menu::Return::Opener, cx);
             }
+            "cloud-delete" => self.ask_delete_cloud_data(cx),
             action => {
                 if let Some(root) = ENABLE
                     .iter()
@@ -416,6 +422,97 @@ impl Manager {
         )
     }
 
+    /// Opens the Delete Cloud Data… question. The button in the Cloud Sync
+    /// card and the row of the actions menu both call this.
+    fn ask_delete_cloud_data(&mut self, cx: &mut Context<Self>) {
+        if self.working.is_none() {
+            self.deleting_cloud.open((), ui::menu::Return::Opener, cx);
+        }
+    }
+
+    /// Does Delete Cloud Data… after the user has confirmed it
+    /// (`cloud.data.delete`). The core removes the library's data from the
+    /// cloud folder and switches cloud sync off. The message that is shown
+    /// afterwards says whether the library's folder in the cloud folder is
+    /// gone, and if it is not, what was left in it.
+    fn delete_cloud_data(&mut self, cx: &mut Context<Self>) {
+        let Some(cloud) = self.cloud.as_ref().map(|(cloud, _)| cloud.clone()) else {
+            return;
+        };
+        if self.working.is_some() {
+            return;
+        }
+        self.working = Some("cloud-delete");
+        self.error = None;
+        self.message = None;
+        cx.notify();
+        let manager = cx.entity().downgrade();
+        cloud.update(cx, |cloud, cx| {
+            cloud.run(
+                "cloud.data.delete",
+                serde_json::json!({}),
+                cx,
+                move |result, cx| {
+                    let _ = manager.update(cx, |this, cx| {
+                        this.working = None;
+                        match result {
+                            Ok(removal) => this.message = Some(cloud::removal_message(&removal)),
+                            Err(error) => this.error = Some(error),
+                        }
+                        this.refresh_cloud(cx);
+                        cx.notify();
+                    });
+                },
+            )
+        });
+    }
+
+    /// Draws the question that Delete Cloud Data… asks before it removes
+    /// the library's data from the cloud folder.
+    pub(super) fn delete_cloud_question(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let dialog = self.deleting_cloud.layer(window, cx)?;
+        let (presence, focus) = (dialog.presence, dialog.focus.clone());
+        let name = self
+            .rows
+            .iter()
+            .find(|row| row.current)
+            .map(|row| row.name.clone())
+            .unwrap_or_default();
+        let close = cx.listener(|this: &mut Self, _: &(), _, cx| this.deleting_cloud.dismiss(cx));
+        let cancel = cx.listener(|this: &mut Self, _: &(), _, cx| {
+            this.deleting_cloud.close(cx);
+        });
+        let accept = cx.listener(|this: &mut Self, _: &(), _, cx| {
+            this.deleting_cloud.dismiss(cx);
+            this.delete_cloud_data(cx);
+        });
+        // The locale files have no key for the title, the message and the
+        // button, so they are shown in English in every language.
+        let message = crate::i18n::fill(
+            en("Delete the cloud data of \"{value0}\"?\n\nThe library's copy in the cloud folder is deleted. The library on this device is not changed. Other devices that sync this library keep their local libraries and stop syncing.\n\nThis cannot be undone."),
+            &[&name],
+        );
+        Some(
+            ui::confirm::confirm(
+                "library-cloud-delete-question",
+                en("Delete Cloud Data"),
+                message,
+                en("Delete Cloud Data"),
+                presence,
+            )
+            .danger(true)
+            .focus(&focus)
+            .on_close(move |window, cx| close(&(), window, cx))
+            .on_cancel(move |window, cx| cancel(&(), window, cx))
+            .on_confirm(move |window, cx| accept(&(), window, cx))
+            .into_any_element(),
+        )
+    }
+
     /// Returns the sync dot for the open library's row in the list, or
     /// `None` when the library does not sync to a folder.
     pub(super) fn row_sync_dot(&self, cx: &App) -> Option<AnyElement> {
@@ -437,16 +534,51 @@ impl Manager {
 
     /// Draws the content of the Cloud Sync card of the open library. For a
     /// library that syncs it shows the provider, the state, the time of the
-    /// last sync, and the numbers of pending changes and files, and under
-    /// them the progress while a sync runs. For a library that does not sync
-    /// it shows the buttons of `connect_buttons`.
+    /// last sync, and the numbers of pending changes and files, under them
+    /// the progress while a sync runs or the sync's message, and at the end
+    /// the button Delete Cloud Data…. For a library that does not sync it
+    /// shows the buttons of `connect_buttons`, and above them the message
+    /// that the sync left when it switched itself off, for example because
+    /// the library's cloud data was deleted on another device.
     pub(super) fn cloud_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = theme::theme(cx);
         let Some(configuration) = self
             .configuration(cx)
             .filter(|configuration| configuration.root_path.is_some())
         else {
-            return self.connect_buttons("library-cloud", cx).into_any_element();
+            let notice = self
+                .status(cx)
+                .map(|status| status.message)
+                .filter(|message| !message.is_empty())
+                .map(|message| {
+                    // The warning triangle is 15px and has the warning
+                    // colour. The text wraps beside it.
+                    div()
+                        .id("library-cloud-notice")
+                        .flex()
+                        .items_start()
+                        .gap(px(8.))
+                        .child(div().flex_none().mt(px(1.)).child(ui::icon(
+                            "task-alert-triangle",
+                            15.,
+                            rgb(theme::WARNING),
+                        )))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text(theme::TEXT_SM)
+                                .text_color(theme.text())
+                                .child(message),
+                        )
+                });
+            return div()
+                .flex()
+                .flex_col()
+                .gap(px(10.))
+                .children(notice)
+                .child(self.connect_buttons("library-cloud", cx))
+                .into_any_element();
         };
         let status = self.status(cx);
         let presentation = cloud::present(status.as_ref());
@@ -573,11 +705,28 @@ impl Manager {
         } else {
             None
         };
+        let deleting = self.working == Some("cloud-delete");
+        // The locale files have no key for the two labels, so they are
+        // shown in English in every language.
+        let delete = div().mt(px(14.)).flex().child(
+            ui::action_button::action_button(
+                "library-cloud-delete",
+                ui::action_button::Look::Danger,
+            )
+            .label(if deleting {
+                en("Deleting Cloud Data…")
+            } else {
+                en("Delete Cloud Data…")
+            })
+            .disabled(self.busy || self.working.is_some() || presentation.active)
+            .on_click(cx.listener(|this, _, _, cx| this.ask_delete_cloud_data(cx))),
+        );
         div()
             .flex()
             .flex_col()
             .child(summary)
             .children(after)
+            .child(delete)
             .into_any_element()
     }
 

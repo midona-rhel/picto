@@ -133,13 +133,15 @@ pub fn create_verified_library(
 /// Syncs the library with its cloud folder once (Sync Now, Create Recovery
 /// Snapshot, and the worker when a snapshot is due). In this order it:
 ///
-/// 1. applies the deletion files of the other devices;
-/// 2. copies the database, which then holds those deletions;
-/// 3. writes this device's own deletions as deletion files;
-/// 4. removes the originals of deleted items whose "Keep deleted files" time
+/// 1. stops, and switches cloud sync off, if the library's cloud data is
+///    gone (`stop_if_cloud_data_removed`);
+/// 2. applies the deletion files of the other devices;
+/// 3. copies the database, which then holds those deletions;
+/// 4. writes this device's own deletions as deletion files;
+/// 5. removes the originals of deleted items whose "Keep deleted files" time
 ///    has passed, and uploads or downloads the originals that are missing on
 ///    one side;
-/// 5. uploads the copy of the database and its manifest as a new snapshot.
+/// 6. uploads the copy of the database and its manifest as a new snapshot.
 ///
 /// A failure leaves the sync state `error` with the failure as its message.
 pub async fn publish_library(
@@ -147,6 +149,8 @@ pub async fn publish_library(
     provider: &dyn CloudProvider,
 ) -> Result<SnapshotManifest, String> {
     let _running = super::SYNC.lock().await;
+    let (library_id, _) = identity_and_frontier_library(application)?;
+    super::stop_if_cloud_data_removed(application, provider, &library_id).await?;
     set_sync_state(
         application,
         "reconciling",

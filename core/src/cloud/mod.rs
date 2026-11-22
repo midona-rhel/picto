@@ -18,7 +18,8 @@
 //! snapshot is restored there.
 //!
 //! This file holds the configuration and the state of the sync
-//! (`cloud_state`) and the commands that switch it on and off.
+//! (`cloud_state`), the commands that switch it on and off, and the removal
+//! of a library's cloud data.
 
 use std::collections::BTreeMap;
 
@@ -35,13 +36,19 @@ pub mod snapshot;
 
 pub const CLOUD_SCHEMA_GENERATION: i64 = 1;
 
+/// The message that a library shows after it has found that its cloud data
+/// is gone and has switched its sync off.
+pub const CLOUD_DATA_REMOVED: &str = "The cloud data of this library was deleted. \
+    Cloud sync is now off on this device. Nothing was deleted from this library.";
+
 /// The message that a library shows while a deletion file of another device
 /// is expected and cannot be read yet.
 pub(crate) const WAITING_FOR_DELETIONS: &str =
     "Waiting for a deletion file from another device to arrive in the cloud folder.";
 
-/// Held by everything that reads or writes a library's cloud data: a sync
-/// and the check for deletion files. So the two never run at the same time.
+/// Held by everything that reads or writes a library's cloud data: a sync,
+/// the check for deletion files, and the removal of the cloud data. So the
+/// cloud data is never removed while a sync writes into it.
 static SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(
@@ -204,9 +211,15 @@ pub fn configure_library(
                     |row| row.get::<_, bool>(0),
                 )?;
                 if !connected {
-                    // The library starts to sync with this folder. Its
-                    // position in every device's deletion files belongs to
-                    // the cloud data it synced with before.
+                    // The library starts to sync with this folder. What it
+                    // knew about the cloud data it synced with before does
+                    // not hold here: the time of the last sync, and the
+                    // position in every device's deletion files.
+                    transaction.execute(
+                        "UPDATE cloud_state SET last_sync_at = NULL, last_snapshot_at = NULL
+                         WHERE singleton = 1",
+                        [],
+                    )?;
                     picto_library::reset_synced_deletions(transaction)?;
                 }
                 let changed = transaction.execute(
@@ -460,6 +473,15 @@ pub fn set_paused_library(
 pub fn disable_library(
     application: &LibraryApplication,
 ) -> Result<picto_library::MutationReceipt, String> {
+    disable_with_message(application, "")
+}
+
+/// Switches cloud sync off and leaves `message` as the sync's message, which
+/// the app shows where it shows the sync state.
+fn disable_with_message(
+    application: &LibraryApplication,
+    message: &str,
+) -> Result<picto_library::MutationReceipt, String> {
     let published = application
         .library()
         .auxiliary_write_if_changed(
@@ -472,21 +494,84 @@ pub fn disable_library(
                      SET provider = NULL, account_label = NULL, remote_root = NULL,
                          paused = 0, state = 'disabled', phase = 'idle',
                          blocking = 0, completed_units = 0, total_units = NULL,
-                         message = '', pending_blobs = 0, missing_blobs = 0
+                         message = ?1, pending_blobs = 0, missing_blobs = 0
                      WHERE singleton = 1
                        AND (provider IS NOT NULL OR account_label IS NOT NULL
                             OR remote_root IS NOT NULL OR paused != 0
                             OR state != 'disabled' OR phase != 'idle'
                             OR blocking != 0 OR completed_units != 0
-                            OR total_units IS NOT NULL OR message != ''
+                            OR total_units IS NOT NULL OR message != ?1
                             OR pending_blobs != 0 OR missing_blobs != 0)",
-                    [],
+                    [message],
                 )?;
                 Ok((changed != 0).then_some(()))
             },
         )
         .map_err(|error| error.to_string())?;
     cloud_receipt_or_current(application, published)
+}
+
+/// Returns whether the library's cloud data is gone: the folder of the
+/// provider is there, the library has synced with it before, and its
+/// `library.json` is no longer in it. A library that has not synced with the
+/// folder yet has no cloud data to lose; its first sync writes it.
+async fn cloud_data_removed(
+    application: &LibraryApplication,
+    provider: &dyn provider::CloudProvider,
+    library_id: &str,
+) -> Result<bool, String> {
+    if !provider.connectivity().await? {
+        return Err("Cloud sync folder is unavailable".to_string());
+    }
+    if provider
+        .exists(&format!("picto/{library_id}/library.json"))
+        .await?
+    {
+        return Ok(false);
+    }
+    application
+        .library()
+        .auxiliary_read(picto_library::database::WorkPriority::Cloud, |connection| {
+            Ok(connection.query_row(
+                "SELECT last_sync_at IS NOT NULL FROM cloud_state WHERE singleton = 1",
+                [],
+                |row| row.get::<_, bool>(0),
+            )?)
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// Stops a sync that finds the library's cloud data gone: it switches cloud
+/// sync off on this device, leaves [`CLOUD_DATA_REMOVED`] as the message,
+/// and returns that message as the error. It writes nothing into the cloud
+/// folder and changes nothing else in the library.
+pub(crate) async fn stop_if_cloud_data_removed(
+    application: &LibraryApplication,
+    provider: &dyn provider::CloudProvider,
+    library_id: &str,
+) -> Result<(), String> {
+    if !cloud_data_removed(application, provider, library_id).await? {
+        return Ok(());
+    }
+    disable_with_message(application, CLOUD_DATA_REMOVED)?;
+    Err(CLOUD_DATA_REMOVED.to_string())
+}
+
+/// Does Delete Cloud Data…: removes the library's data from the cloud folder
+/// (`DirectoryProvider::remove_library`) and then switches cloud sync off on
+/// this device. The library on this device keeps every item and file. It
+/// waits for a running sync to finish first.
+pub async fn delete_cloud_data_library(
+    application: &LibraryApplication,
+) -> Result<provider::CloudDataRemoval, String> {
+    let _running = SYNC.lock().await;
+    let provider = directory_provider_library(application)?;
+    let library_id = configuration_library(application)?.library_id;
+    let removal = tokio::task::spawn_blocking(move || provider.remove_library(&library_id))
+        .await
+        .map_err(|error| format!("Cloud data removal stopped: {error}"))??;
+    disable_library(application)?;
+    Ok(removal)
 }
 
 /// Returns whether the worker should look for deletion files of other
@@ -516,6 +601,7 @@ pub async fn receive_library(
 ) -> Result<deletions::Received, String> {
     let _running = SYNC.lock().await;
     let library_id = configuration_library(application)?.library_id;
+    stop_if_cloud_data_removed(application, provider, &library_id).await?;
     let (waiting, gap) = deletions::waiting_files(application, provider, &library_id).await?;
     if waiting.is_empty() {
         snapshot::settle_notice(application, if gap { WAITING_FOR_DELETIONS } else { "" })?;

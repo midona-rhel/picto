@@ -108,12 +108,38 @@ The **⋯** (Library actions) menu of the open library in the Library Manager ha
 | Create Recovery Snapshot | It syncs at once and publishes a snapshot. |
 | Show Cloud Folder | It opens the cloud folder in the system's file manager. |
 | Stop Syncing | It turns sync off, after a question. The local files and the copy in the cloud folder are not deleted. |
+| Delete Cloud Data… | It deletes the library's copy in the cloud folder and turns sync off, after a question. See below. |
 
 **Settings → Cloud** has the buttons **Sync now**, **Pause** or **Resume**, and **Create
 snapshot**, which do the same as the first three commands. It also shows the provider, the folder,
 the state and the time of the last sync. Under **Pending Work** it shows the numbers of mutations,
 of files, and of **Unavailable files**, which are originals that are missing both on this computer
 and in the cloud folder.
+
+## Delete a library's cloud data
+
+**Delete Cloud Data…** removes the library's copy from the cloud folder. The button is at the end
+of the **Cloud Sync** card of the open library in the Library Manager, and the **⋯** (Library
+actions) menu has the same command.
+
+After you confirm:
+
+- The folder `picto/<library id>/` is removed from the cloud folder, with the snapshots, the
+  originals and the deletion lists in it. This cannot be undone.
+- The library on this computer is not changed. It keeps every item and every file.
+- Cloud sync is off for the library on this computer. You can enable it again later; Picto then
+  writes new cloud data.
+- Your other computers keep their local libraries. Each of them notices at its next sync that the
+  cloud data is gone, turns its own sync off, and shows the message "The cloud data of this
+  library was deleted." in the Cloud Sync card and in a notification. It deletes nothing.
+
+Picto removes only files that its sync wrote, by their names. If the library's folder in the cloud
+folder holds anything else, for example a file that you put there, Picto leaves that file and the
+folder, and the message in the Library Manager names what was left.
+
+A computer that still runs Picto 0.6.22 or older does not notice that the cloud data is gone. It
+writes a new snapshot at its next sync, and the folder appears again. Turn sync off on such a
+computer first.
 
 ## Open a library on another computer
 
