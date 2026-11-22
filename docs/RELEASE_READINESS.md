@@ -134,15 +134,12 @@ What a user who upgrades from Picto 0.6.19 or earlier keeps and loses:
 - On Linux, the AppImage of Picto 0.6.19 and earlier needed no libraries of the system. This
   AppImage needs the ones named above.
 
-Open before the first release that is built from these packages:
+Open:
 
 - The packages hold `LICENSE`, `THIRD_PARTY_LICENSES` and the license texts that file names, in
   a folder `licenses`. They do not hold the license texts of the other crates the app is built
   from.
 - No `*.blockmap` files are made. An updater that does not find one downloads the whole package.
-- No package has been installed and used with a library on any system, and no update has been
-  installed from a published feed. [`app/README.md`](../app/README.md), section 7, lists what
-  was not verified.
 
 ## Publication rules
 
