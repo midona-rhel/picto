@@ -101,16 +101,21 @@ fn hash(application: &LibraryApplication, index: u8) -> String {
 }
 
 /// Returns the content of every file below `folder`, by its path inside
-/// `folder` written with `/`.
+/// `folder` written with `/`. The files of a library's database
+/// (`library.sqlite` and the two files beside it) are left out: Windows does
+/// not let them be read while the library that holds them is open.
 fn files_below(folder: &Path) -> BTreeMap<String, Vec<u8>> {
     let mut files = BTreeMap::new();
     let mut waiting = vec![folder.to_path_buf()];
     while let Some(directory) = waiting.pop() {
         for entry in std::fs::read_dir(&directory).unwrap() {
             let path = entry.unwrap().path();
+            let database = path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("library.sqlite"));
             if path.is_dir() {
                 waiting.push(path);
-            } else {
+            } else if !database {
                 let name = path
                     .strip_prefix(folder)
                     .unwrap()
@@ -469,13 +474,9 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
     std::fs::write(cloud.path().join("Holiday.jpg"), b"the user's own file").unwrap();
 
     // The library's own files and rows before the removal. The database
-    // file is compared by its rows, because switching sync off changes the
-    // row of `cloud_state` and the revision in `library_meta`.
-    let library_files = |application: &LibraryApplication| {
-        let mut files = files_below(application.root());
-        files.retain(|name, _| !name.starts_with("library.sqlite"));
-        files
-    };
+    // is compared by its rows, because switching sync off changes the row of
+    // `cloud_state` and the revision in `library_meta`.
+    let library_files = |application: &LibraryApplication| files_below(application.root());
     let files_before = library_files(&first);
     let rows_before = rows(&first, &["cloud_state", "library_meta"]);
     assert!(files_before.keys().any(|name| name.starts_with("blobs/")));
