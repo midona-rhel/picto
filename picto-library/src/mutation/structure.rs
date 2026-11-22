@@ -645,10 +645,10 @@ pub(super) fn delete_roots(
     stage_delete_ids(transaction, "delete_media", &media_ids)?;
     stage_delete_ids(transaction, "delete_item", &item_ids)?;
 
-    let (device_id, retention_json) = transaction.query_row(
-        "SELECT device_id, retention_json FROM cloud_state WHERE singleton = 1",
+    let retention_json = transaction.query_row(
+        "SELECT retention_json FROM cloud_state WHERE singleton = 1",
         [],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        |row| row.get::<_, String>(0),
     )?;
 
     // One set-based read of the deleted media's files. CROSS JOIN keeps
@@ -745,24 +745,13 @@ pub(super) fn delete_roots(
                 remote_extension.filter(|_| origin != DeletionOrigin::OtherDevice)
             {
                 transaction.execute(
-                    "INSERT INTO cloud_tombstone
-                         (object_kind, object_key, mutation_id, hlc_physical_ms,
-                          hlc_logical, device_id, causal_frontier_json,
-                          deleted_at, purge_after)
-                     VALUES ('blob', ?1, ?2, ?3, 0, ?4, '{}', ?5, ?6)
-                     ON CONFLICT(object_kind, object_key) DO UPDATE SET
-                         mutation_id = excluded.mutation_id,
-                         hlc_physical_ms = excluded.hlc_physical_ms,
-                         hlc_logical = excluded.hlc_logical,
-                         device_id = excluded.device_id,
-                         causal_frontier_json = excluded.causal_frontier_json,
+                    "INSERT INTO cloud_deleted_original (file_name, deleted_at, purge_after)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(file_name) DO UPDATE SET
                          deleted_at = excluded.deleted_at,
                          purge_after = excluded.purge_after",
                     rusqlite::params![
                         format!("{content_hash}.{remote_extension}"),
-                        uuid::Uuid::new_v4().to_string(),
-                        deleted_at_ms,
-                        device_id,
                         deleted_at.to_rfc3339(),
                         purge_after.to_rfc3339(),
                     ],
@@ -1190,12 +1179,12 @@ pub(super) fn restore_deleted_roots(
             .collect::<Vec<_>>(),
     )?;
     transaction.execute(
-        "DELETE FROM cloud_tombstone
-         WHERE object_kind = 'blob' AND EXISTS (
+        "DELETE FROM cloud_deleted_original
+         WHERE EXISTS (
              SELECT 1 FROM media_file file
              WHERE file.file_id IN (SELECT value FROM json_each(?1))
-               AND (cloud_tombstone.object_key = file.content_hash
-                    OR cloud_tombstone.object_key LIKE file.content_hash || '.%')
+               AND (cloud_deleted_original.file_name = file.content_hash
+                    OR cloud_deleted_original.file_name LIKE file.content_hash || '.%')
          )",
         [&files_json],
     )?;
@@ -1217,6 +1206,13 @@ pub(super) fn restore_deleted_roots(
     *Arc::make_mut(&mut snapshot.image_media) |= state.image_media.as_ref();
     crate::group::refresh_structural_projections(transaction, snapshot, roots)?;
     snapshot.revision = revision;
+    // The other devices deleted the roots when they merged the deletion.
+    // They import them again from these records.
+    record_imported_roots(
+        transaction,
+        snapshot,
+        &roots.iter().map(|root| (RootId(root), None)).collect::<Vec<_>>(),
+    )?;
     Ok(())
 }
 

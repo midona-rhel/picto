@@ -689,11 +689,15 @@ pub(crate) fn initialize_joined_database(
         )
         .map_err(|error| format!("Failed to assign joined device identity: {error}"))?;
     // The journal rows are the changes of the device that made the snapshot.
-    // This device must not turn the moves among them into tombstones of
-    // its own.
+    // This device must not turn the moves among them into entries of its
+    // own.
     transaction
         .execute("DELETE FROM cloud_journal", [])
         .map_err(|error| format!("Failed to clear the joined change journal: {error}"))?;
+    // From now on the library records the items that it imports. It has
+    // written no entry and merged no file as this device.
+    picto_library::reset_published_entries(&transaction)
+        .map_err(|error| format!("Failed to start the joined library's entries: {error}"))?;
     transaction
         .execute(
             "UPDATE folder_definition
@@ -730,16 +734,12 @@ fn initialize_restored_database(
     let connection = connection
         .transaction()
         .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;
-    // The restored library writes all of its own tombstones into the cloud
-    // folder again at its next sync, and it merges the tombstones in the
-    // cloud folder again, its own among them: a deletion that was synced
-    // after the snapshot was made is applied to the restored library too.
     // The journal rows of the snapshot are dropped, because the device that
     // made the snapshot has settled them. The clock does not go back: the
     // device has given out the times up to the one it had before the
     // restore.
     connection
-        .execute_batch("DELETE FROM cloud_device_frontier; DELETE FROM cloud_journal;")
+        .execute_batch("DELETE FROM cloud_journal;")
         .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;
     connection
         .execute(
@@ -769,6 +769,12 @@ fn initialize_restored_database(
                 local.retention_json,
             ],
         )
+        .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;
+    // The restored library writes all of its own entries into the cloud
+    // folder again at its next sync, and it merges the entries in the cloud
+    // folder again, its own among them: what was synced after the snapshot
+    // was made is applied to the restored library too.
+    picto_library::reset_published_entries(&connection)
         .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;
     connection
         .commit()

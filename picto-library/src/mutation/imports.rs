@@ -35,7 +35,7 @@ impl Library {
             let output = self.ingest_collection_with(&PreparedCollectionImport {
                 members: inputs.to_vec(), cover_index: 0, existing_root_id: None,
                 name: None, modified_at_ms: inputs[0].imported_at_ms,
-            }, auto_tag, Some(task), None)?;
+            }, auto_tag, Some(task), None, None)?;
             return Ok(vec![output; inputs.len()]);
         }
         self.ingest_batch_with(inputs, auto_tag, Some(task), &|_| ingest::Held::Refresh)
@@ -70,7 +70,13 @@ impl Library {
 
     /// Imports `inputs` in one publication. `held` says, for the input at an
     /// index, what an item gets that the library already holds.
-    fn ingest_batch_with(
+    ///
+    /// A library that records items writes an `add` entry with the record of
+    /// every item that the import creates. The inputs of
+    /// [`ingest::Held::Shared`] are items that another device imported. No
+    /// entry is recorded for them, and each gets the status of the `status`
+    /// entry that the library holds for its key.
+    pub(super) fn ingest_batch_with(
         &self,
         inputs: &[PreparedImport],
         auto_tag: bool,
@@ -86,10 +92,19 @@ impl Library {
                 ingest::MAX_INGEST_BATCH
             )));
         }
+        let shared = held(0) == ingest::Held::Shared;
         let outputs = self.publish(WorkPriority::CanonicalIngest, |transaction, revision, snapshot| {
             if let Some(task) = task {
                 super::tasks::require_running_task(transaction, task)?;
             }
+            let with_statuses;
+            let inputs = if shared {
+                with_statuses = with_held_statuses(transaction, inputs, None)?;
+                with_statuses.as_slice()
+            } else {
+                inputs
+            };
+            let mut created = Vec::new();
             let mut next = (*snapshot).clone();
             let mut root_ids = Vec::with_capacity(inputs.len());
             let mut created_root_ids = Vec::with_capacity(inputs.len());
@@ -132,6 +147,17 @@ impl Library {
                         resources.insert("subscriptions".to_owned());
                     }
                 }
+                if output.created_root && !shared {
+                    // The tag bitmaps that the import of a new item changed
+                    // are the item's tags.
+                    let tags = output
+                        .bitmap_keys
+                        .iter()
+                        .filter(|key| key.domain == BitmapDomain::Tag)
+                        .map(|key| crate::TagId(key.key_id))
+                        .collect::<BTreeSet<_>>();
+                    created.push((output.root_id, Some(tags.into_iter().collect())));
+                }
                 resources.extend(output.resources);
                 bitmap_keys.extend(output.bitmap_keys);
                 folder_ids.extend(output.folder_ids);
@@ -173,6 +199,7 @@ impl Library {
                     .max()
                     .unwrap_or_else(now_ms),
             )?;
+            record_imported_roots(transaction, &next, &created)?;
             let receipt = PublicationCoordinator::receipt(
                 revision,
                 resources,
@@ -198,7 +225,7 @@ impl Library {
         &self,
         input: &PreparedCollectionImport,
     ) -> Result<(RootId, MutationReceipt)> {
-        self.ingest_collection_with(input, false, None, None)
+        self.ingest_collection_with(input, false, None, None, None)
     }
 
     /// Imports a collection for a foreground task, as
@@ -209,7 +236,7 @@ impl Library {
         task: crate::TaskId,
         auto_tag: bool,
     ) -> Result<(RootId, MutationReceipt)> {
-        self.ingest_collection_with(input, auto_tag, Some(task), None)
+        self.ingest_collection_with(input, auto_tag, Some(task), None, None)
     }
 
     /// Imports a collection of another library for a task that merges that
@@ -222,14 +249,14 @@ impl Library {
         input: &crate::MergedCollectionImport,
         task: crate::TaskId,
     ) -> Result<(RootId, MutationReceipt)> {
-        self.ingest_collection_with(&input.collection, false, Some(task), Some(&input.notes))
+        self.ingest_collection_with(&input.collection, false, Some(task), Some(&input.notes), None)
     }
 
     pub fn ingest_collection_with_auto_tags(
         &self,
         input: &PreparedCollectionImport,
     ) -> Result<(RootId, MutationReceipt)> {
-        self.ingest_collection_with(input, true, None, None)
+        self.ingest_collection_with(input, true, None, None, None)
     }
 
     /// Import a post's files as one collection. A file the library already
@@ -238,15 +265,24 @@ impl Library {
     /// with the post, keeping each original set complete without copying media.
     ///
     /// `merged_notes` is given for a collection of another library that a
-    /// merge imports. It is the collection's own note there, which a new
-    /// collection gets. Without it, a new collection gets the note of its
-    /// cover file.
-    fn ingest_collection_with(
+    /// merge imports, and for a collection that another device imported. It
+    /// is the collection's own note there, which a new collection gets.
+    /// Without it, a new collection gets the note of its cover file.
+    ///
+    /// `shared` is given for a collection that another device of this
+    /// library imported, and is the stable key of that collection. A
+    /// collection that the import creates gets that key, and a collection
+    /// that the library already holds for the files gets it as an alias. The
+    /// files get what [`ingest::Held::Shared`] names. Without `shared`, a
+    /// library that records items writes an `add` entry with the record of
+    /// the collection.
+    pub(super) fn ingest_collection_with(
         &self,
         input: &PreparedCollectionImport,
         auto_tag: bool,
         task: Option<crate::TaskId>,
         merged_notes: Option<&Option<String>>,
+        shared: Option<&str>,
     ) -> Result<(RootId, MutationReceipt)> {
         if input.members.is_empty() {
             return Err(LibraryError::InvalidInput(
@@ -267,10 +303,14 @@ impl Library {
             // that the task has built so far, so that a later batch finds it,
             // also after a pause and after the library was opened again.
             let mut grouped = input.clone();
-            let held = match merged_notes {
-                Some(_) => ingest::Held::Merge { modified_at_ms: input.modified_at_ms },
-                None => ingest::Held::Refresh,
+            let held = match (shared, merged_notes) {
+                (Some(_), _) => ingest::Held::Shared,
+                (None, Some(_)) => ingest::Held::Merge { modified_at_ms: input.modified_at_ms },
+                (None, None) => ingest::Held::Refresh,
             };
+            if shared.is_some() {
+                grouped.members = with_held_statuses(transaction, &grouped.members, shared)?;
+            }
             let group_key = if let Some(task) = task {
                 let options: String = transaction.query_row("SELECT input_json FROM task WHERE task_id = ?1", [task.0], |row| row.get(0))?;
                 let options: serde_json::Value = serde_json::from_str(&options)?;
@@ -441,6 +481,25 @@ impl Library {
             if let Some(key) = group_key {
                 transaction.execute("INSERT INTO library_item_alias(stable_key, local_id) VALUES (?1, ?2) ON CONFLICT(stable_key) DO UPDATE SET local_id = excluded.local_id", params![key, published_root.0])?;
             }
+            if let Some(key) = shared {
+                let held: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM library_item WHERE stable_key = ?1)
+                         OR EXISTS(SELECT 1 FROM library_item_alias WHERE stable_key = ?1)",
+                    [key],
+                    |row| row.get(0),
+                )?;
+                if !held && creates_collection {
+                    transaction.execute(
+                        "UPDATE library_item SET stable_key = ?1 WHERE local_id = ?2",
+                        params![key, published_root.0],
+                    )?;
+                } else if !held {
+                    transaction.execute(
+                        "INSERT INTO library_item_alias(stable_key, local_id) VALUES (?1, ?2)",
+                        params![key, published_root.0],
+                    )?;
+                }
+            }
             affected |= &ingest_affected;
             ingest::persist_touched(
                 transaction,
@@ -486,6 +545,9 @@ impl Library {
                 )?;
                 resources.insert("tasks".to_owned());
             }
+            if shared.is_none() && (!created_root_ids.is_empty() || creates_collection) {
+                record_imported_roots(transaction, &next, &[(published_root, None)])?;
+            }
             resources.extend(["tags".to_owned(), "folders".to_owned()]);
             let receipt = PublicationCoordinator::receipt(
                 revision,
@@ -505,6 +567,32 @@ impl Library {
         })?;
         Ok((collection_id, receipt))
     }
+}
+
+/// Returns `inputs` with the status that the library holds a `status` entry
+/// of: for each input the entry of the input's own stable key, or, with
+/// `key`, the entry of that key for all of them. An input without such an
+/// entry keeps its status.
+fn with_held_statuses(
+    transaction: &rusqlite::Transaction<'_>,
+    inputs: &[PreparedImport],
+    key: Option<&str>,
+) -> Result<Vec<PreparedImport>> {
+    let keys = match key {
+        Some(key) => vec![key],
+        None => inputs.iter().map(|input| input.stable_key.as_str()).collect(),
+    };
+    let held = held_statuses(transaction, &keys)?;
+    Ok(inputs
+        .iter()
+        .map(|input| {
+            let mut input = input.clone();
+            if let Some(status) = held.get(key.unwrap_or(input.stable_key.as_str())) {
+                input.lifecycle = *status;
+            }
+            input
+        })
+        .collect())
 }
 
 /// Move `roots` into the lifecycle among them that keeps an item most (Active,

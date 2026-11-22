@@ -273,6 +273,9 @@ pub(crate) fn validate_job(job: &PreparedIngestJob) -> Result<()> {
         PreparedIngestPayload::PendingCollection(input) if input.members.len() < 2 => Err(
             LibraryError::InvalidInput("collection ingest needs at least two members".into()),
         ),
+        PreparedIngestPayload::Shared(input) if input.record.files.is_empty() => Err(
+            LibraryError::InvalidInput("the record of a shared item names no file".into()),
+        ),
         _ => Ok(()),
     }
 }

@@ -394,17 +394,40 @@ CREATE TABLE cloud_device_frontier (
     updated_at TEXT NOT NULL
 ) WITHOUT ROWID, STRICT;
 
-CREATE TABLE cloud_tombstone (
-    object_kind TEXT NOT NULL,
-    object_key TEXT NOT NULL,
-    mutation_id TEXT NOT NULL,
-    hlc_physical_ms INTEGER NOT NULL,
-    hlc_logical INTEGER NOT NULL,
+-- The entries that the devices of one library share through cloud sync: for
+-- each key, what was done to it last. `kind` and `key` name the key, `state`
+-- says what was done, and `value` holds what the state carries as JSON: the
+-- record of an added item, or the content hash of a deleted item's file.
+-- `clock_ms` and `clock_counter` are the time of the library's hybrid logical
+-- clock at which it was done, and `device_id` is the device that did it.
+CREATE TABLE shared_entry (
+    kind TEXT NOT NULL,
+    key TEXT NOT NULL,
+    state TEXT NOT NULL,
+    value TEXT,
+    clock_ms INTEGER NOT NULL,
+    clock_counter INTEGER NOT NULL,
     device_id TEXT NOT NULL,
-    causal_frontier_json TEXT NOT NULL,
+    PRIMARY KEY(kind, key)
+) WITHOUT ROWID, STRICT;
+
+-- The entry files in the cloud folder that this library has merged: for each
+-- device and each of its shards, the name of the file that was merged last.
+CREATE TABLE merged_entry_file (
+    device_id TEXT NOT NULL,
+    shard TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    PRIMARY KEY(device_id, shard)
+) WITHOUT ROWID, STRICT;
+
+-- The originals in the cloud folder whose item this device deleted.
+-- `file_name` is the content hash, a dot and the extension. The original is
+-- removed from the cloud folder at `purge_after`, and the row then stays with
+-- `purge_after` NULL.
+CREATE TABLE cloud_deleted_original (
+    file_name TEXT PRIMARY KEY,
     deleted_at TEXT NOT NULL,
-    purge_after TEXT,
-    PRIMARY KEY(object_kind, object_key)
+    purge_after TEXT
 ) WITHOUT ROWID, STRICT;
 
 CREATE TABLE cloud_quarantine (

@@ -9,7 +9,8 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-13-task-rollback-aliases";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-11-23-shared-entries";
+const TOMBSTONE_ENTRIES_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-task-rollback-aliases";
 const COMBINED_IMPORT_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-media-aliases-import-tasks";
 const TASK_ROLLBACK_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-task-rollback";
 const MEDIA_ALIASES_PREDECESSOR: &str = "picto-library-schema-1-2026-10-12-media-aliases";
@@ -131,7 +132,8 @@ pub fn migrate_for_open(
     if generation != SCHEMA_GENERATION
         || !matches!(
             fingerprint.as_str(),
-            COMBINED_IMPORT_PREDECESSOR
+            TOMBSTONE_ENTRIES_PREDECESSOR
+                | COMBINED_IMPORT_PREDECESSOR
                 | TASK_ROLLBACK_PREDECESSOR
                 | MEDIA_ALIASES_PREDECESSOR
                 | IMPORT_TASKS_PREDECESSOR
@@ -211,6 +213,7 @@ pub fn migrate_for_open(
             )?;
             }
             if ![
+                TOMBSTONE_ENTRIES_PREDECESSOR,
                 COMBINED_IMPORT_PREDECESSOR,
                 TASK_ROLLBACK_PREDECESSOR,
                 MEDIA_ALIASES_PREDECESSOR,
@@ -266,6 +269,7 @@ pub fn migrate_for_open(
             // journal of changed roots and its triggers are kept, defined
             // once for every earlier schema.
             if ![
+                TOMBSTONE_ENTRIES_PREDECESSOR,
                 COMBINED_IMPORT_PREDECESSOR,
                 TASK_ROLLBACK_PREDECESSOR,
                 MEDIA_ALIASES_PREDECESSOR,
@@ -303,6 +307,7 @@ pub fn migrate_for_open(
             // These predecessors change only derived storage. Their canonical
             // data and existing checkpoint representation are unchanged.
             if [
+                TOMBSTONE_ENTRIES_PREDECESSOR,
                 COMBINED_IMPORT_PREDECESSOR,
                 TASK_ROLLBACK_PREDECESSOR,
                 MEDIA_ALIASES_PREDECESSOR,
@@ -404,6 +409,12 @@ pub fn migrate_for_open(
                  DROP TABLE IF EXISTS cloud_field_clock;
                  DROP TABLE IF EXISTS cloud_membership_clock;",
             )?;
+            // The entries that the devices share had the table
+            // `cloud_tombstone`, together with the originals that wait to be
+            // removed from the cloud folder. Each gets a table of its own.
+            if has_table(connection, "cloud_tombstone")? {
+                migrate_shared_entries(connection)?;
+            }
             connection.execute(
                 "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
                 [SCHEMA_FINGERPRINT],
@@ -438,6 +449,71 @@ pub fn migrate_for_open(
             Err(error)
         }
     }
+}
+
+/// Moves the rows of `cloud_tombstone` into the tables that replace it and
+/// drops it. An entry keeps its kind, key, state, clock time and device, and
+/// the content hash of a deleted file as its value. A row of the kind `blob`
+/// becomes a row of `cloud_deleted_original`.
+///
+/// A library that has synced before records entries for the items that it
+/// imports from now on. The mark for that is the device's own row in
+/// `cloud_device_frontier`, and the time in it is zero, so that the next sync
+/// writes all of the device's entries into the cloud folder.
+fn migrate_shared_entries(connection: &Connection) -> Result<()> {
+    let synced_before: bool = connection.query_row(
+        "SELECT provider IS NOT NULL
+                OR EXISTS (SELECT 1 FROM cloud_snapshot)
+                OR EXISTS (SELECT 1 FROM cloud_device_frontier frontier
+                           WHERE frontier.device_id = cloud_state.device_id)
+         FROM cloud_state WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    connection.execute_batch(
+        "CREATE TABLE shared_entry (
+             kind TEXT NOT NULL,
+             key TEXT NOT NULL,
+             state TEXT NOT NULL,
+             value TEXT,
+             clock_ms INTEGER NOT NULL,
+             clock_counter INTEGER NOT NULL,
+             device_id TEXT NOT NULL,
+             PRIMARY KEY(kind, key)
+         ) WITHOUT ROWID, STRICT;
+         CREATE TABLE merged_entry_file (
+             device_id TEXT NOT NULL,
+             shard TEXT NOT NULL,
+             file_name TEXT NOT NULL,
+             PRIMARY KEY(device_id, shard)
+         ) WITHOUT ROWID, STRICT;
+         CREATE TABLE cloud_deleted_original (
+             file_name TEXT PRIMARY KEY,
+             deleted_at TEXT NOT NULL,
+             purge_after TEXT
+         ) WITHOUT ROWID, STRICT;
+         INSERT INTO shared_entry (kind, key, state, value, clock_ms, clock_counter, device_id)
+         SELECT object_kind, object_key, mutation_id,
+                CASE WHEN json_extract(causal_frontier_json, '$.file') IS NULL THEN NULL
+                     ELSE json_object('file', json_extract(causal_frontier_json, '$.file'))
+                END,
+                hlc_physical_ms, hlc_logical, device_id
+         FROM cloud_tombstone WHERE object_kind != 'blob';
+         INSERT INTO cloud_deleted_original (file_name, deleted_at, purge_after)
+         SELECT object_key, deleted_at, purge_after
+         FROM cloud_tombstone WHERE object_kind = 'blob';
+         DROP TABLE cloud_tombstone;
+         DELETE FROM cloud_device_frontier;",
+    )?;
+    if synced_before {
+        connection.execute(
+            "INSERT INTO cloud_device_frontier (device_id, hlc_physical_ms, hlc_logical, updated_at)
+             SELECT device_id, 0, 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             FROM cloud_state WHERE singleton = 1",
+            [],
+        )?;
+    }
+    Ok(())
 }
 
 fn metadata(connection: &Connection) -> Result<(u32, String, u64)> {
@@ -758,6 +834,208 @@ mod tests {
             ),
             2
         );
+    }
+
+    /// The tables of a library made by this version, as SQLite stores their
+    /// definitions.
+    fn table_definitions(connection: &Connection, names: &[&str]) -> Vec<String> {
+        names
+            .iter()
+            .map(|name| {
+                connection
+                    .query_row(
+                        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                        [name],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_shared_entries_move_into_their_own_tables_and_the_library_opens_again() {
+        const TABLES: [&str; 3] = ["shared_entry", "merged_entry_file", "cloud_deleted_original"];
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        let created = table_definitions(&connection, &TABLES);
+        connection
+            .execute_batch(
+                "DROP TABLE shared_entry;
+                 DROP TABLE merged_entry_file;
+                 DROP TABLE cloud_deleted_original;
+                 CREATE TABLE cloud_tombstone (
+                     object_kind TEXT NOT NULL,
+                     object_key TEXT NOT NULL,
+                     mutation_id TEXT NOT NULL,
+                     hlc_physical_ms INTEGER NOT NULL,
+                     hlc_logical INTEGER NOT NULL,
+                     device_id TEXT NOT NULL,
+                     causal_frontier_json TEXT NOT NULL,
+                     deleted_at TEXT NOT NULL,
+                     purge_after TEXT,
+                     PRIMARY KEY(object_kind, object_key)
+                 ) WITHOUT ROWID, STRICT;
+                 INSERT INTO cloud_tombstone VALUES
+                     ('item', 'deleted-item', 'delete', 70, 2, 'device-a',
+                      '{\"file\":\"abc\"}', '2026-11-01T00:00:00Z', NULL),
+                     ('status', 'trashed-item', 'trash', 71, 0, 'device-b',
+                      '{}', '2026-11-01T00:00:00Z', NULL),
+                     ('blob', 'abc.png', 'delete-1', 1, 0, 'device-a',
+                      '{}', '2026-11-01T00:00:00Z', '2026-11-08T00:00:00Z');
+                 UPDATE cloud_state SET provider = 'dropbox', remote_root = 'folder';
+                 INSERT INTO cloud_device_frontier VALUES
+                     ('device-b', 5, 0, '2026-11-01T00:00:00Z');",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE library_meta SET schema_fingerprint=?1",
+                [super::TOMBSTONE_ENTRIES_PREDECESSOR],
+            )
+            .unwrap();
+        drop(connection);
+
+        drop(LibraryDatabase::open(&path).unwrap());
+        // The library opens a second time without another migration.
+        drop(LibraryDatabase::open(&path).unwrap());
+
+        let connection = Connection::open(&path).unwrap();
+        super::validate(&connection).unwrap();
+        assert_eq!(table_definitions(&connection, &TABLES), created);
+        assert_eq!(
+            count(
+                &connection,
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'cloud_tombstone'"
+            ),
+            0
+        );
+        let entries = connection
+            .prepare(
+                "SELECT kind, key, state, value, clock_ms, clock_counter, device_id
+                 FROM shared_entry ORDER BY kind, key",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "item".into(),
+                    "deleted-item".into(),
+                    "delete".into(),
+                    Some("{\"file\":\"abc\"}".into()),
+                    70,
+                    2,
+                    "device-a".into()
+                ),
+                (
+                    "status".into(),
+                    "trashed-item".into(),
+                    "trash".into(),
+                    None,
+                    71,
+                    0,
+                    "device-b".into()
+                ),
+            ]
+        );
+        let waiting: (String, String, Option<String>) = connection
+            .query_row(
+                "SELECT file_name, deleted_at, purge_after FROM cloud_deleted_original",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            waiting,
+            (
+                "abc.png".into(),
+                "2026-11-01T00:00:00Z".into(),
+                Some("2026-11-08T00:00:00Z".into())
+            )
+        );
+        // The library was connected to a cloud folder, so it records entries
+        // from now on, and its next sync writes all of them.
+        assert_eq!(
+            count(
+                &connection,
+                "SELECT COUNT(*) FROM cloud_device_frontier frontier
+                 JOIN cloud_state state ON state.device_id = frontier.device_id
+                 WHERE frontier.hlc_physical_ms = 0 AND frontier.hlc_logical = 0"
+            ),
+            1
+        );
+        assert_eq!(count(&connection, "SELECT COUNT(*) FROM cloud_device_frontier"), 1);
+
+        let backups = std::fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "backup"))
+            .collect::<Vec<_>>();
+        assert_eq!(backups.len(), 1);
+        let backup = Connection::open(&backups[0]).unwrap();
+        assert_eq!(
+            super::metadata(&backup).unwrap().1,
+            super::TOMBSTONE_ENTRIES_PREDECESSOR
+        );
+        assert_eq!(count(&backup, "SELECT COUNT(*) FROM cloud_tombstone"), 3);
+    }
+
+    #[test]
+    fn a_library_that_never_synced_records_no_entries_after_the_migration() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "DROP TABLE shared_entry;
+                 DROP TABLE merged_entry_file;
+                 DROP TABLE cloud_deleted_original;
+                 CREATE TABLE cloud_tombstone (
+                     object_kind TEXT NOT NULL,
+                     object_key TEXT NOT NULL,
+                     mutation_id TEXT NOT NULL,
+                     hlc_physical_ms INTEGER NOT NULL,
+                     hlc_logical INTEGER NOT NULL,
+                     device_id TEXT NOT NULL,
+                     causal_frontier_json TEXT NOT NULL,
+                     deleted_at TEXT NOT NULL,
+                     purge_after TEXT,
+                     PRIMARY KEY(object_kind, object_key)
+                 ) WITHOUT ROWID, STRICT;",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE library_meta SET schema_fingerprint=?1",
+                [super::TOMBSTONE_ENTRIES_PREDECESSOR],
+            )
+            .unwrap();
+        drop(connection);
+        drop(LibraryDatabase::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        super::validate(&connection).unwrap();
+        assert_eq!(count(&connection, "SELECT COUNT(*) FROM cloud_device_frontier"), 0);
     }
 
     #[test]

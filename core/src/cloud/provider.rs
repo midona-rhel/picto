@@ -22,9 +22,38 @@ pub struct RemoteObject {
     pub revision: Option<String>,
 }
 
+/// What reading a file of the cloud folder gave.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CloudRead<T> {
+    /// The file was read.
+    Read(T),
+    /// No file is at the path.
+    Missing,
+    /// A file is at the path, and its content is not on this device yet. The
+    /// desktop app of the provider lists a file before it has downloaded it,
+    /// and while that app is not running, reading such a file ends with an
+    /// error after a wait, on macOS with "Operation timed out". The text
+    /// says what the read reported.
+    NotDelivered(String),
+}
+
 pub trait CloudProvider: Send + Sync {
     fn connectivity(&self) -> ProviderFuture<'_, bool>;
     fn exists(&self, path: &str) -> ProviderFuture<'_, bool>;
+    /// Reads the file at `path`, and tells a file that is not there from a
+    /// file that cannot be read now.
+    fn read(&self, path: &str) -> ProviderFuture<'_, CloudRead<Vec<u8>>>;
+    /// Copies the original at `path` to `destination` when it has
+    /// `size_bytes` bytes and the SHA-256 `checksum`. A file of another size
+    /// and a file that cannot be read now are not delivered yet. A file of
+    /// the right size with another checksum is an error.
+    fn fetch_file(
+        &self,
+        path: &str,
+        destination: PathBuf,
+        size_bytes: u64,
+        checksum: &str,
+    ) -> ProviderFuture<'_, CloudRead<()>>;
     fn list(&self, prefix: &str) -> ProviderFuture<'_, Vec<RemoteObject>>;
     /// Returns the names of the folders directly inside `prefix`, without
     /// reading what they hold. A `prefix` that does not exist has none.
@@ -56,6 +85,8 @@ pub trait CloudProvider: Send + Sync {
         expected_revision: Option<&str>,
     ) -> ProviderFuture<'_, RemoteObject>;
     fn delete(&self, path: &str) -> ProviderFuture<'_, ()>;
+    /// Removes the folder at `path` when it is there and holds nothing.
+    fn remove_empty_folder(&self, path: &str) -> ProviderFuture<'_, ()>;
 }
 
 pub type ProviderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>;
@@ -187,9 +218,10 @@ impl DirectoryProvider {
     /// its `library.json`, if it has one, names this library. A file is
     /// removed only when its name and its place are those of a file that
     /// the sync writes: `library.json`, a snapshot and its manifest in
-    /// `snapshots/`, an original in `blobs/f/<aa>/<bb>/`, a tombstone file in
-    /// `tombstones/<device id>/`, and a file that an interrupted upload left
-    /// beside one of them. Everything else is left where it is and counted in
+    /// `snapshots/`, an original in `blobs/f/<aa>/<bb>/`, an entry file in
+    /// `entries/<device id>/`, a file of the same kind that an earlier
+    /// version wrote into `tombstones/<device id>/`, and a file that an
+    /// interrupted upload left beside one of them. Everything else is left where it is and counted in
     /// the result, and a folder that still holds something is not removed.
     /// Links are never followed and never removed.
     ///
@@ -229,14 +261,18 @@ impl DirectoryProvider {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(format!("Failed to inspect the cloud folder: {error}")),
         }
-        let trees: [(&str, &[Known]); 3] = [
+        let trees: [(&str, &[Known]); 4] = [
             ("snapshots", &[Known::Files(is_snapshot_file)]),
             (
-                "tombstones",
+                "entries",
                 &[
                     Known::Folders(is_uuid),
-                    Known::Files(super::tombstones::is_file_name),
+                    Known::Files(super::entries::is_file_name),
                 ],
+            ),
+            (
+                "tombstones",
+                &[Known::Folders(is_uuid), Known::Files(is_tombstone_file)],
             ),
             (
                 "blobs",
@@ -394,6 +430,18 @@ fn is_snapshot_file(name: &str) -> bool {
 }
 
 /// An original: its SHA-256 in hexadecimal, a dot, and its extension.
+/// Returns whether `name` is the name of a file that an earlier version
+/// wrote into `tombstones/<device id>/`: two hexadecimal digits, a dot, 16
+/// hexadecimal digits and `.jsonl.zst`.
+pub(super) fn is_tombstone_file(name: &str) -> bool {
+    let hexadecimal = |text: &str| text.bytes().all(|byte| byte.is_ascii_hexdigit());
+    name.strip_suffix(".jsonl.zst")
+        .and_then(|stem| stem.split_once('.'))
+        .is_some_and(|(shard, digest)| {
+            shard.len() == 2 && hexadecimal(shard) && digest.len() == 16 && hexadecimal(digest)
+        })
+}
+
 fn is_blob_file(name: &str) -> bool {
     name.split_once('.').is_some_and(|(hash, extension)| {
         hash.len() == 64
@@ -887,6 +935,77 @@ impl CloudProvider for DirectoryProvider {
         })
     }
 
+    fn read(&self, path: &str) -> ProviderFuture<'_, CloudRead<Vec<u8>>> {
+        let resolved = self.resolve(path);
+        Box::pin(async move {
+            let resolved = resolved?;
+            // The read can wait for the provider's app for a minute, so it
+            // runs beside the other tasks of the runtime.
+            tokio::task::spawn_blocking(move || match std::fs::read(&resolved) {
+                Ok(bytes) => CloudRead::Read(bytes),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => CloudRead::Missing,
+                Err(error) => CloudRead::NotDelivered(error.to_string()),
+            })
+            .await
+            .map_err(|error| format!("Cloud read worker failed: {error}"))
+        })
+    }
+
+    fn fetch_file(
+        &self,
+        path: &str,
+        destination: PathBuf,
+        size_bytes: u64,
+        checksum: &str,
+    ) -> ProviderFuture<'_, CloudRead<()>> {
+        let source = self.resolve(path);
+        let checksum = checksum.to_string();
+        Box::pin(async move {
+            let source = source?;
+            tokio::task::spawn_blocking(move || {
+                // The metadata of a file that the provider's app has not
+                // downloaded is answered without its content.
+                match std::fs::symlink_metadata(&source) {
+                    Ok(metadata) if !metadata.file_type().is_file() => {
+                        return Ok(CloudRead::Missing)
+                    }
+                    Ok(metadata) if metadata.len() != size_bytes => {
+                        return Ok(CloudRead::NotDelivered(format!(
+                            "the file has {} of {size_bytes} bytes",
+                            metadata.len()
+                        )))
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        return Ok(CloudRead::Missing)
+                    }
+                    Err(error) => return Ok(CloudRead::NotDelivered(error.to_string())),
+                }
+                match file_checksum(&source) {
+                    Ok(found) if found == checksum => {}
+                    Ok(_) => {
+                        return Err(
+                            "Cloud original checksum does not match its content hash".to_string()
+                        )
+                    }
+                    Err(error) => return Ok(CloudRead::NotDelivered(error)),
+                }
+                if let Some(parent) = destination.parent() {
+                    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                }
+                match std::fs::copy(&source, &destination) {
+                    Ok(_) => Ok(CloudRead::Read(())),
+                    Err(error) => {
+                        let _ = std::fs::remove_file(&destination);
+                        Ok(CloudRead::NotDelivered(error.to_string()))
+                    }
+                }
+            })
+            .await
+            .map_err(|error| format!("Cloud download worker failed: {error}"))?
+        })
+    }
+
     fn download(&self, path: &str) -> ProviderFuture<'_, Vec<u8>> {
         let resolved = self.resolve(path);
         let path = path.to_string();
@@ -980,6 +1099,20 @@ impl CloudProvider for DirectoryProvider {
             let resolved = resolved?;
             if resolved.exists() {
                 std::fs::remove_file(resolved).map_err(|error| error.to_string())?;
+            }
+            Ok(())
+        })
+    }
+
+    fn remove_empty_folder(&self, path: &str) -> ProviderFuture<'_, ()> {
+        let resolved = self.resolve(path);
+        Box::pin(async move {
+            let resolved = resolved?;
+            let folder = std::fs::symlink_metadata(&resolved)
+                .is_ok_and(|metadata| metadata.file_type().is_dir());
+            if folder {
+                // A folder that still holds something stays.
+                let _ = std::fs::remove_dir(&resolved);
             }
             Ok(())
         })
@@ -1079,9 +1212,10 @@ mod tests {
         let id = "20261122T101500.123Z-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11";
         assert!(is_snapshot_file(&format!("{id}.json")));
         assert!(is_snapshot_file(&format!("{id}.sqlite.zst")));
-        assert!(super::super::tombstones::is_file_name(
-            "0a.0123456789abcdef.jsonl.zst"
+        assert!(super::super::entries::is_file_name(
+            "0a1.0123456789abcdef.jsonl.zst"
         ));
+        assert!(is_tombstone_file("0a.0123456789abcdef.jsonl.zst"));
         assert!(is_blob_file(&format!("{}.png", "a".repeat(64))));
         assert!(is_upload_remnant(
             "x.picto-uploading-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11"
@@ -1098,10 +1232,12 @@ mod tests {
             format!("世界世界世界世界世界世界世界-{uuid}.json"),
             "世界.json".to_owned(),
             "0a.012345678９abcd.jsonl.zst".to_owned(),
+            "0a1.012345678９abcd.jsonl.zst".to_owned(),
             format!("{}世.png", "a".repeat(61)),
         ] {
             assert!(!is_snapshot_file(&name), "{name}");
-            assert!(!super::super::tombstones::is_file_name(&name), "{name}");
+            assert!(!super::super::entries::is_file_name(&name), "{name}");
+            assert!(!is_tombstone_file(&name), "{name}");
             assert!(!is_blob_file(&name), "{name}");
             assert!(!is_upload_remnant(&name), "{name}");
             assert!(!is_hex_pair(&name), "{name}");

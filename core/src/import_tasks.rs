@@ -136,6 +136,12 @@ pub fn scan_import_task(
     }
     let library = application.library();
     let task_id = task.task_id;
+    // The stable key of an imported file holds the id of this device, so
+    // that two devices of one library never give one key to two files.
+    let device_id = library
+        .entry_clock()
+        .map_err(|error| error.to_string())?
+        .device_id;
     let input: ManualImportInput =
         serde_json::from_str(&task.input_json).map_err(|error| error.to_string())?;
     let fail = |error: &str| {
@@ -187,7 +193,7 @@ pub fn scan_import_task(
             found = true;
             let path = candidate.path.to_string_lossy().into_owned();
             let pending = PendingImport {
-                stable_key: format!("task:{}:{path}", task_id.0),
+                stable_key: format!("task:{device_id}:{}:{path}", task_id.0),
                 path: path.clone(),
                 lifecycle: input.lifecycle,
                 tags: input.tags.clone(),

@@ -239,6 +239,10 @@ pub(crate) fn scan(
 ) -> Result<(), String> {
     let library = application.library();
     let task_id = task.task_id;
+    let device_id = library
+        .entry_clock()
+        .map_err(|error| error.to_string())?
+        .device_id;
     let source = open_source(&input.library)?;
     let outline = content::outline(&source.connection).map_err(|error| error.to_string())?;
 
@@ -296,7 +300,7 @@ pub(crate) fn scan(
     let mut failure = None;
     let mut running = true;
     content::for_each_root(&source.connection, |details| {
-        match job(task_id, &source.root, &details, &tag_names, &folders) {
+        match job(&device_id, task_id, &source.root, &details, &tag_names, &folders) {
             Ok(job) => chunk.push(job),
             Err(error) => {
                 failure = Some(error);
@@ -436,7 +440,9 @@ fn add_smart_folders(
 
 /// Returns the import job for one item of the other library.
 ///
-/// The item's key in the open library starts with `merge:<task>:`. The keys
+/// The item's key in the open library starts with `merge:<device
+/// id>:<task>:`. It holds the id of this device, so that two devices of one
+/// library never give one key to two items. The keys
 /// of two libraries are not comparable, so an item of the other library is
 /// recognised as one that the open library holds only by the hash of its
 /// file. `file_path` is the file in the other library's blob store, from
@@ -448,6 +454,7 @@ fn add_smart_folders(
 /// the item's last change in the other library, and for a collection its
 /// own note, which can differ from the note of its cover file.
 fn job(
+    device_id: &str,
     task_id: TaskId,
     other: &Path,
     details: &RootDetails,
@@ -455,7 +462,7 @@ fn job(
     folders: &HashMap<FolderId, FolderId>,
 ) -> Result<TaskIngestJob, String> {
     let root = &details.root;
-    let key = format!("merge:{}:{}", task_id.0, root.stable_key);
+    let key = format!("merge:{device_id}:{}:{}", task_id.0, root.stable_key);
     let tags = details
         .tag_ids
         .iter()

@@ -135,13 +135,15 @@ pub fn create_verified_library(
 ///
 /// 1. stops, and switches cloud sync off, if the library's cloud data is
 ///    gone (`stop_if_cloud_data_removed`);
-/// 2. merges the tombstones of the other devices;
-/// 3. copies the database, which then holds what the merge deleted;
-/// 4. writes this device's own tombstones;
-/// 5. removes the originals of deleted items whose "Keep deleted files" time
-///    has passed, and uploads or downloads the originals that are missing on
-///    one side;
-/// 6. uploads the copy of the database and its manifest as a new snapshot.
+/// 2. merges the entries of the other devices, and copies the originals
+///    of the items that those entries add and that are in the cloud folder;
+/// 3. uploads or downloads the originals that are missing on one side;
+/// 4. writes this device's own entries;
+/// 5. copies the database, which then holds what the merge changed;
+/// 6. removes the originals of deleted items whose "Keep deleted files" time
+///    has passed, and uploads the originals of files that were imported
+///    since step 3;
+/// 7. uploads the copy of the database and its manifest as a new snapshot.
 ///
 /// A failure leaves the sync state `error` with the failure as its message.
 pub async fn publish_library(
@@ -169,13 +171,19 @@ async fn publish_library_inner(
     provider: &dyn CloudProvider,
 ) -> Result<SnapshotManifest, String> {
     let (library_id, _) = identity_and_frontier_library(application)?;
-    super::tombstones::receive_library(application, provider, &library_id).await?;
+    super::entries::receive_library(application, provider, &library_id).await?;
+    ensure_manifest_library(application, provider, &library_id).await?;
+    // The originals are in the cloud folder before the entries that name
+    // them, and both before the snapshot is made, so that a change reaches
+    // the other devices without waiting for the copy of the database.
+    sync_blobs(application, provider, None, &library_id).await?;
+    super::entries::publish_library(application, provider, &library_id).await?;
     let (artifact, database_revision) = create_verified_library(application)?;
     let (library_id, frontier) = identity_and_frontier_library(application)?;
-    ensure_manifest_library(application, provider, &library_id).await?;
-    super::tombstones::publish_library(application, provider, &library_id).await?;
     purge_expired_cloud_blobs(application, provider, &library_id).await?;
-    sync_snapshot_blobs(application, provider, &artifact.database_path, &library_id).await?;
+    // The snapshot can hold files that were imported while the originals
+    // above were written.
+    sync_blobs(application, provider, Some(&artifact.database_path), &library_id).await?;
     finish_blocking_restore(application)?;
     set_sync_state(
         application,
@@ -265,12 +273,11 @@ async fn purge_expired_cloud_blobs(
         .library()
         .auxiliary_read(picto_library::database::WorkPriority::Cloud, |connection| {
             let mut statement = connection.prepare(
-                "SELECT object_key
-                     FROM cloud_tombstone
-                     WHERE object_kind = 'blob'
-                       AND purge_after IS NOT NULL
+                "SELECT file_name
+                     FROM cloud_deleted_original
+                     WHERE purge_after IS NOT NULL
                        AND purge_after <= ?1
-                     ORDER BY purge_after, object_key
+                     ORDER BY purge_after, file_name
                      LIMIT 128",
             )?;
             let rows = statement
@@ -281,16 +288,16 @@ async fn purge_expired_cloud_blobs(
         })
         .map_err(|error| error.to_string())?;
 
-    for object_key in due {
-        let (hash, extension) = object_key
+    for file_name in due {
+        let (hash, extension) = file_name
             .split_once('.')
-            .ok_or_else(|| format!("Invalid retained cloud blob key: {object_key}"))?;
+            .ok_or_else(|| format!("Invalid retained cloud blob key: {file_name}"))?;
         if hash.len() != 64
             || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
             || extension.is_empty()
             || !extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
         {
-            return Err(format!("Invalid retained cloud blob key: {object_key}"));
+            return Err(format!("Invalid retained cloud blob key: {file_name}"));
         }
         let still_due = application
             .library()
@@ -298,16 +305,15 @@ async fn purge_expired_cloud_blobs(
                 connection
                     .query_row(
                         "SELECT EXISTS(
-                                 SELECT 1 FROM cloud_tombstone tombstone
-                                 WHERE tombstone.object_kind = 'blob'
-                                   AND tombstone.object_key = ?1
-                                   AND tombstone.purge_after IS NOT NULL
+                                 SELECT 1 FROM cloud_deleted_original deleted
+                                 WHERE deleted.file_name = ?1
+                                   AND deleted.purge_after IS NOT NULL
                                    AND NOT EXISTS(
                                        SELECT 1 FROM media_file
                                        WHERE content_hash = ?2
                                    )
                              )",
-                        rusqlite::params![object_key, hash],
+                        rusqlite::params![file_name, hash],
                         |row| row.get::<_, bool>(0),
                     )
                     .map_err(Into::into)
@@ -320,7 +326,7 @@ async fn purge_expired_cloud_blobs(
             "picto/{library_id}/blobs/f/{}/{}/{}",
             &hash[..2],
             &hash[2..4],
-            object_key
+            file_name
         );
         provider.delete(&remote_path).await?;
         application
@@ -332,9 +338,9 @@ async fn purge_expired_cloud_blobs(
                     // The row stays and loses the time at which the original
                     // was to be removed, so the removal is not tried again.
                     transaction.execute(
-                        "UPDATE cloud_tombstone SET purge_after = NULL
-                         WHERE object_kind = 'blob' AND object_key = ?1",
-                        [&object_key],
+                        "UPDATE cloud_deleted_original SET purge_after = NULL
+                         WHERE file_name = ?1",
+                        [&file_name],
                     )?;
                     Ok(())
                 },
@@ -344,13 +350,18 @@ async fn purge_expired_cloud_blobs(
     Ok(())
 }
 
-async fn sync_snapshot_blobs(
+/// Brings the originals of the library and of the cloud folder together:
+/// an original that is only in the library is written into the cloud
+/// folder, and one that is only in the cloud folder is copied into the
+/// library. With `snapshot_database` it does so for the files of that
+/// snapshot, and without it for the files of the library as it is now.
+async fn sync_blobs(
     application: &LibraryApplication,
     provider: &dyn CloudProvider,
-    snapshot_database: &Path,
+    snapshot_database: Option<&Path>,
     library_id: &str,
 ) -> Result<(), String> {
-    let total = count_snapshot_blobs(snapshot_database)?;
+    let total = with_blob_database(application, snapshot_database, count_unsynced_blobs)?;
     if total == 0 {
         return Ok(());
     }
@@ -366,7 +377,9 @@ async fn sync_snapshot_blobs(
     let mut cursor = String::new();
     let mut completed = 0_i64;
     loop {
-        let page = load_snapshot_blob_page(snapshot_database, &cursor)?;
+        let page = with_blob_database(application, snapshot_database, |connection| {
+            load_unsynced_blob_page(connection, &cursor)
+        })?;
         if page.is_empty() {
             break;
         }
@@ -419,12 +432,36 @@ async fn sync_snapshot_blobs(
     Ok(())
 }
 
-fn count_snapshot_blobs(snapshot_database: &Path) -> Result<i64, String> {
+/// Calls `read` with a connection to the database of the snapshot at
+/// `snapshot_database`, or to the library's own database without one.
+fn with_blob_database<T>(
+    application: &LibraryApplication,
+    snapshot_database: Option<&Path>,
+    read: impl FnOnce(&Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    let Some(snapshot_database) = snapshot_database else {
+        let mut read = Some(read);
+        let mut output = None;
+        application
+            .library()
+            .auxiliary_read(picto_library::database::WorkPriority::Cloud, |connection| {
+                if let Some(read) = read.take() {
+                    output = Some(read(connection));
+                }
+                Ok(())
+            })
+            .map_err(|error| error.to_string())?;
+        return output.unwrap_or_else(|| Err("The library was not read".to_string()));
+    };
     let snapshot = Connection::open_with_flags(
         snapshot_database,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )
     .map_err(|error| format!("Failed to inspect staged cloud snapshot: {error}"))?;
+    read(&snapshot)
+}
+
+fn count_unsynced_blobs(snapshot: &Connection) -> Result<i64, String> {
     snapshot
         .query_row(
             "SELECT COALESCE(SUM(MAX(file.size_bytes, 1)), 0)
@@ -437,15 +474,10 @@ fn count_snapshot_blobs(snapshot_database: &Path) -> Result<i64, String> {
         .map_err(|error| format!("Failed to count cloud originals: {error}"))
 }
 
-fn load_snapshot_blob_page(
-    snapshot_database: &Path,
+fn load_unsynced_blob_page(
+    snapshot: &Connection,
     cursor: &str,
 ) -> Result<Vec<SnapshotBlob>, String> {
-    let snapshot = Connection::open_with_flags(
-        snapshot_database,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(|error| format!("Failed to inspect staged cloud snapshot: {error}"))?;
     let mut statement = snapshot
         .prepare(
             "SELECT file.content_hash, file.mime,
@@ -992,8 +1024,9 @@ mod tests {
         }
         drop(connection);
 
-        assert_eq!(count_snapshot_blobs(&database_path).unwrap(), 12_000);
-        let page = load_snapshot_blob_page(&database_path, "").unwrap();
+        let connection = Connection::open(&database_path).unwrap();
+        assert_eq!(count_unsynced_blobs(&connection).unwrap(), 12_000);
+        let page = load_unsynced_blob_page(&connection, "").unwrap();
         assert_eq!(page.iter().map(|blob| blob.size_bytes).sum::<i64>(), 12_000);
     }
 
@@ -1019,12 +1052,12 @@ mod tests {
                 },
             )
             .unwrap();
-        let object_key = format!("{hash}.png");
+        let file_name = format!("{hash}.png");
         let remote_path = format!(
             "picto/{library_id}/blobs/f/{}/{}/{}",
             &hash[..2],
             &hash[2..4],
-            object_key
+            file_name
         );
         let bytes = b"retained cloud original".to_vec();
         let checksum = hex::encode(Sha256::digest(&bytes));
@@ -1039,13 +1072,9 @@ mod tests {
                 picto_library::database::WorkPriority::Cloud,
                 |transaction| {
                     transaction.execute(
-                        "INSERT INTO cloud_tombstone
-                             (object_kind, object_key, mutation_id, hlc_physical_ms,
-                              hlc_logical, device_id, causal_frontier_json,
-                              deleted_at, purge_after)
-                         VALUES ('blob', ?1, 'delete-1', 1, 0, 'device-1', '{}',
-                                 '2026-08-01T00:00:00Z', '2026-08-08T00:00:00Z')",
-                        [&object_key],
+                        "INSERT INTO cloud_deleted_original (file_name, deleted_at, purge_after)
+                         VALUES (?1, '2026-08-01T00:00:00Z', '2026-08-08T00:00:00Z')",
+                        [&file_name],
                     )?;
                     Ok(())
                 },
@@ -1064,9 +1093,9 @@ mod tests {
                 |connection| {
                     connection
                         .query_row(
-                            "SELECT purge_after FROM cloud_tombstone
-                             WHERE object_kind = 'blob' AND object_key = ?1",
-                            [&object_key],
+                            "SELECT purge_after FROM cloud_deleted_original
+                             WHERE file_name = ?1",
+                            [&file_name],
                             |row| row.get::<_, Option<String>>(0),
                         )
                         .map_err(Into::into)

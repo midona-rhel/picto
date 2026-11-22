@@ -1,6 +1,6 @@
-//! The tombstones that the devices of one library share. Three libraries
-//! stand for three devices: the second and the third are copies of the first
-//! with device ids of their own, as a library opened from the cloud is. The
+//! The entries that the devices of one library share. Three libraries stand
+//! for three devices: the second and the third are copies of the first with
+//! device ids of their own, as a library opened from the cloud is. The
 //! entries travel as the JSON that the cloud files hold.
 
 use std::collections::BTreeMap;
@@ -240,9 +240,8 @@ impl Device {
                 "entries",
                 lines(
                     &self.library,
-                    "SELECT object_kind, object_key, mutation_id, hlc_physical_ms, hlc_logical,
-                            device_id
-                     FROM cloud_tombstone WHERE object_kind != 'blob' ORDER BY 1, 2",
+                    "SELECT kind, key, state, clock_ms, clock_counter, device_id
+                     FROM shared_entry ORDER BY 1, 2",
                 ),
             ),
         ])
@@ -574,7 +573,7 @@ fn an_item_with_another_file_under_the_same_stable_key_is_not_deleted() {
         .find(|entry| entry.kind == EntryKind::Item && entry.key == key)
         .unwrap();
     assert_eq!(deletion.state, EntryState::Delete);
-    assert_eq!(deletion.file.as_deref(), Some("hash-on-a"));
+    assert_eq!(deletion.value, Some(serde_json::json!({"file": "hash-on-a"})));
 
     // The second device merges the entry and keeps its own picture. The
     // entry is stored and the tombstone is written, as for an item that the
@@ -597,10 +596,10 @@ fn an_item_with_another_file_under_the_same_stable_key_is_not_deleted() {
             .iter()
             .find(|entry| entry.kind == EntryKind::Item && entry.key == key)
             .unwrap()
-            .file
+            .value
             .clone()
     };
-    assert_eq!(file_of("one").as_deref(), Some("hash-one"));
+    assert_eq!(file_of("one"), Some(serde_json::json!({"file": "hash-one"})));
     assert_eq!(file_of(&post), None);
     assert_eq!(b.receive(&a, &entries).deleted, 2);
     assert_eq!(b.status("one"), None);
@@ -808,4 +807,398 @@ fn a_deleted_item_keeps_no_status_entry() {
     assert!(named(EntryKind::Status, "one").is_empty());
     assert_eq!(named(EntryKind::Status, "two"), [EntryState::Trash]);
     assert_eq!(entries.len(), 2);
+}
+
+/// Makes the three devices record the items that they import from now on,
+/// as connecting a library to a cloud folder does.
+fn start_recording(devices: [&Device; 3]) {
+    for device in devices {
+        device
+            .library
+            .database()
+            .maintenance_write(WorkPriority::Cloud, |transaction| {
+                picto_library::reset_published_entries(transaction)
+            })
+            .unwrap();
+    }
+}
+
+impl Device {
+    /// Does for the items that wait in the ingest queue what the cloud
+    /// worker and the ingest worker do: gives each the paths of its files
+    /// and imports it. Returns the number of items that were imported, and
+    /// leaves out those that were deleted since they were queued.
+    fn import_awaited(&self) -> usize {
+        let awaited = self
+            .library
+            .awaited_shared_imports(100, "9999-01-01T00:00:00Z")
+            .unwrap();
+        let mut imported = 0;
+        for item in awaited {
+            let paths = item
+                .import
+                .record
+                .files
+                .iter()
+                .map(|file| format!("/tmp/{}", file.facts.content_hash))
+                .collect();
+            let import = picto_library::SharedImport {
+                paths,
+                ..item.import
+            };
+            match self.library.ingest_shared(&import) {
+                Ok(_) => imported += 1,
+                Err(picto_library::LibraryError::ImportDeleted) => {}
+                Err(error) => panic!("{error}"),
+            }
+            write(
+                &self.library,
+                &format!(
+                    "DELETE FROM ingest_job WHERE ingest_job_id = {}",
+                    item.ingest_job_id
+                ),
+            );
+        }
+        imported
+    }
+
+    /// The names of the item's tags and the keys and names of its folders,
+    /// each list in order.
+    fn tags_and_folders(&self, key: &str) -> (Vec<String>, Vec<String>) {
+        let details = self.library.details(self.root(key).unwrap()).unwrap();
+        let mut tags = details
+            .tag_ids
+            .iter()
+            .map(|tag| {
+                lines(
+                    &self.library,
+                    &format!(
+                        "SELECT namespace.display_name || ':' || tag.subname
+                         FROM tag_definition tag JOIN tag_namespace namespace
+                           ON namespace.namespace_id = tag.namespace_id
+                         WHERE tag.tag_id = {}",
+                        tag.0
+                    ),
+                )
+                .remove(0)
+            })
+            .collect::<Vec<_>>();
+        tags.sort();
+        let mut folders = details
+            .folder_ids
+            .iter()
+            .map(|folder| {
+                lines(
+                    &self.library,
+                    &format!(
+                        "SELECT stable_key || ' ' || name FROM folder_definition
+                         WHERE folder_id = {}",
+                        folder.0
+                    ),
+                )
+                .remove(0)
+            })
+            .collect::<Vec<_>>();
+        folders.sort();
+        (tags, folders)
+    }
+}
+
+/// An import of the key `new` with a name, notes, a source link, a rating
+/// and two tags, into the folder `folder` and into the Inbox.
+fn rich_import(folder: FolderId) -> PreparedImport {
+    PreparedImport {
+        media_name: "Evening.png".into(),
+        lifecycle: Lifecycle::Inbox,
+        rating: Rating::Four,
+        notes: Some("Taken at the lake".into()),
+        tags: vec!["keep:tag".into(), "place:lake".into()],
+        folders: vec![folder],
+        source_urls: vec!["https://example.com/evening".into()],
+        ..imported_later("new", "hash-new")
+    }
+}
+
+#[test]
+fn an_item_imported_on_one_device_is_imported_on_the_others_as_it_was() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    let folder_id = folder(&a, "Folder").unwrap();
+    // The first device also puts the item into a folder that the others do
+    // not hold yet.
+    let (album, _) = a.library.create_folder("Album", None).unwrap();
+    let mut import = rich_import(folder_id);
+    import.folders.push(album);
+    a.library.ingest(&import).unwrap();
+
+    let entries = a.take();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        (entries[0].kind, entries[0].state),
+        (EntryKind::Item, EntryState::Add)
+    );
+    assert_eq!(entries[0].key, "new");
+
+    // The other devices queue the item. Nothing is in their library until
+    // its file is there.
+    for device in [&b, &c] {
+        let applied = device.receive(&a, &entries);
+        assert_eq!((applied.queued, applied.aliased), (1, 0));
+        assert_eq!(device.status("new"), None);
+        // Merging the same entry again queues nothing.
+        assert_eq!(device.receive(&a, &entries).won, 0);
+        assert_eq!(device.import_awaited(), 1);
+    }
+
+    let on_a = a.library.details(a.root("new").unwrap()).unwrap();
+    for device in [&b, &c] {
+        let details = device.library.details(device.root("new").unwrap()).unwrap();
+        assert_eq!(details.lifecycle, Lifecycle::Inbox);
+        assert_eq!(details.rating, Rating::Four);
+        assert_eq!(details.root.name, "Evening.png");
+        assert_eq!(details.root.notes.as_deref(), Some("Taken at the lake"));
+        assert_eq!(details.root.source_urls, ["https://example.com/evening"]);
+        assert_eq!(details.root.imported_at_ms, on_a.root.imported_at_ms);
+        assert_eq!(details.media[0].facts, on_a.media[0].facts);
+        assert_eq!(device.tags_and_folders("new"), a.tags_and_folders("new"));
+        // The merged import is not on the undo stack, and the device made
+        // no entry of its own for it.
+        assert!(!device.library.history().state().can_undo);
+        assert!(device.take().is_empty());
+        assert_eq!(
+            lines(&device.library, "SELECT device_id FROM shared_entry WHERE key = 'new'"),
+            lines(&a.library, "SELECT device_id FROM shared_entry WHERE key = 'new'"),
+        );
+    }
+    // The tag that the import created has the same key on every device.
+    let tag_key = "SELECT stable_key FROM tag_definition WHERE subname = 'lake'";
+    assert_eq!(lines(&b.library, tag_key), lines(&a.library, tag_key));
+    assert_eq!(lines(&c.library, tag_key), lines(&a.library, tag_key));
+}
+
+#[test]
+fn a_library_that_never_synced_records_no_item() {
+    let (_directory, a, b, _c) = devices();
+    a.library.ingest(&imported_later("new", "hash-new")).unwrap();
+    assert!(a.take().is_empty());
+    assert_eq!(scalar(&a.library, "SELECT COUNT(*) FROM shared_entry"), 0);
+    // Its deletions are recorded as before.
+    a.delete(&["new"]);
+    assert_eq!(a.take().len(), 1);
+    assert_eq!(sync(&a, &b).queued, 0);
+}
+
+#[test]
+fn a_move_to_the_trash_that_arrives_before_the_item_is_kept_for_it() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    a.library.ingest(&imported_later("new", "hash-new")).unwrap();
+    let added = a.take();
+    a.trash(&["new"]);
+    let all = a.take();
+    let moved = all
+        .iter()
+        .filter(|entry| entry.kind == EntryKind::Status)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(moved.len(), 1);
+
+    // The second device gets the move first and the item afterwards. The
+    // third gets both before the item's file is there.
+    b.receive(&a, &moved);
+    assert_eq!(b.status("new"), None);
+    b.receive(&a, &added);
+    assert_eq!(b.import_awaited(), 1);
+    c.receive(&a, &all);
+    assert_eq!(c.import_awaited(), 1);
+    for device in [&b, &c] {
+        assert_eq!(device.status("new"), Some(Lifecycle::Trash), "{}", device.id);
+    }
+
+    // A device that already holds the item moves it at once.
+    a.restore(&["new"]);
+    sync(&a, &b);
+    assert_eq!(b.status("new"), Some(Lifecycle::Active));
+}
+
+#[test]
+fn an_item_that_is_deleted_before_its_file_arrives_is_never_imported() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    a.library.ingest(&imported_later("new", "hash-new")).unwrap();
+    assert_eq!(sync(&a, &b).queued, 1);
+    a.delete(&["new"]);
+
+    // The deletion takes the item out of the queue.
+    sync(&a, &b);
+    assert_eq!(scalar(&b.library, "SELECT COUNT(*) FROM ingest_job"), 0);
+    assert_eq!(b.import_awaited(), 0);
+    assert_eq!(b.status("new"), None);
+    assert!(b.tombstoned("new"));
+
+    // A device that gets only the deletion queues nothing.
+    let deletion = a.take();
+    c.receive(&a, &deletion);
+    assert_eq!(scalar(&c.library, "SELECT COUNT(*) FROM ingest_job"), 0);
+    assert_eq!(c.status("new"), None);
+}
+
+#[test]
+fn the_same_file_under_two_keys_is_one_item_and_a_deletion_reaches_it_under_both() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    // Two devices import the same picture, each under a key of its own.
+    a.library
+        .ingest(&imported_later("key-on-a", "hash-same"))
+        .unwrap();
+    b.library
+        .ingest(&imported_later("key-on-b", "hash-same"))
+        .unwrap();
+
+    let applied = sync(&a, &b);
+    assert_eq!((applied.queued, applied.aliased), (0, 1));
+    let applied = sync(&b, &a);
+    assert_eq!((applied.queued, applied.aliased), (0, 1));
+    for device in [&a, &b] {
+        assert_eq!(
+            scalar(
+                &device.library,
+                "SELECT COUNT(*) FROM media_file WHERE content_hash = 'hash-same'"
+            ),
+            1
+        );
+        assert_eq!(scalar(&device.library, "SELECT COUNT(*) FROM library_root"), 5);
+        assert_eq!(
+            scalar(&device.library, "SELECT COUNT(*) FROM library_item_alias"),
+            1
+        );
+    }
+
+    // A move to the Trash that names the other device's key moves the item.
+    a.trash(&["key-on-a"]);
+    sync(&a, &b);
+    assert_eq!(b.status("key-on-b"), Some(Lifecycle::Trash));
+
+    // The first device deletes the item. The second device holds it under
+    // its own key and deletes it too. The third device never held it.
+    a.library
+        .permanently_delete(&a.target(&["key-on-a"]), DELETED_AT_MS, 0, false)
+        .unwrap();
+    assert_eq!(sync(&a, &b).deleted, 1);
+    assert_eq!(b.status("key-on-b"), None);
+    assert!(b.tombstoned("key-on-a") && b.tombstoned("key-on-b"));
+    sync(&a, &c);
+    sync(&b, &c);
+    assert_eq!(c.import_awaited(), 0);
+    assert_eq!(scalar(&c.library, "SELECT COUNT(*) FROM library_root"), 4);
+}
+
+#[test]
+fn an_imported_collection_arrives_with_its_files_in_order_and_its_key() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    let mut members = ["hash-s-1", "hash-s-2", "hash-s-3"]
+        .iter()
+        .enumerate()
+        .map(|(index, hash)| PreparedImport {
+            tags: vec!["series:tag".into()],
+            ..imported_later(&format!("series-{index}"), hash)
+        })
+        .collect::<Vec<_>>();
+    members[1].media_name = "Second page.png".into();
+    let (collection, _) = a
+        .library
+        .ingest_collection(&PreparedCollectionImport {
+            members,
+            cover_index: 1,
+            existing_root_id: None,
+            name: Some("Series".into()),
+            modified_at_ms: IMPORTED_AT_MS,
+        })
+        .unwrap();
+    let key = a.library.details(collection).unwrap().root.stable_key;
+
+    let entries = a.take();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].key, key);
+    assert_eq!(sync(&a, &b).queued, 1);
+    assert_eq!(b.import_awaited(), 1);
+
+    let of = |device: &Device| {
+        let details = device.library.details(device.root(&key).unwrap()).unwrap();
+        (
+            details.root.name.clone(),
+            details.lifecycle,
+            details
+                .media
+                .iter()
+                .map(|media| (media.media_name.clone(), media.facts.content_hash.clone()))
+                .collect::<Vec<_>>(),
+            details
+                .media
+                .iter()
+                .position(|media| media.media_id == details.root.cover_media_id),
+            device.tags_and_folders(&key).0,
+        )
+    };
+    assert_eq!(of(&b), of(&a));
+    assert_eq!(of(&b).2.len(), 3);
+    assert_eq!(of(&b).3, Some(1));
+    // The files have the keys that they have on the first device.
+    let member_keys = "SELECT item.stable_key FROM media_item media
+        JOIN library_item item ON item.local_id = media.media_id
+        JOIN media_file file ON file.file_id = media.file_id
+        WHERE file.content_hash LIKE 'hash-s-%' ORDER BY 1";
+    assert_eq!(lines(&b.library, member_keys), lines(&a.library, member_keys));
+    assert!(b.take().is_empty());
+    // Merging the entry again queues nothing, because every file is here.
+    write(
+        &b.library,
+        &format!("DELETE FROM shared_entry WHERE kind = 'item' AND key = '{key}'"),
+    );
+    assert_eq!(b.receive(&a, &entries).queued, 0);
+
+    // Deleting the collection deletes it on the other device.
+    a.delete(&[&key]);
+    assert_eq!(sync(&a, &b).deleted, 1);
+    assert_eq!(b.status(&key), None);
+    drop(c);
+}
+
+#[test]
+fn additions_and_deletions_give_the_same_library_in_every_order() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    let mut steps = Vec::new();
+    a.library.ingest(&imported_later("x", "hash-x")).unwrap();
+    a.library.ingest(&imported_later("y", "hash-y")).unwrap();
+    steps.push(a.take());
+    a.trash(&["x", "y", "one"]);
+    steps.push(a.take());
+    a.library
+        .permanently_delete(&a.target(&["y"]), DELETED_AT_MS, 0, false)
+        .unwrap();
+    a.restore(&["one"]);
+    steps.push(a.take());
+
+    // The second device merges the steps in order and imports after each.
+    // The third merges them in the reverse order, every entry twice, and
+    // imports at the end.
+    for step in &steps {
+        b.receive(&a, step);
+        b.import_awaited();
+    }
+    for step in steps.iter().rev() {
+        for entry in step.iter().rev() {
+            c.receive(&a, std::slice::from_ref(entry));
+            c.receive(&a, std::slice::from_ref(entry));
+        }
+    }
+    c.import_awaited();
+
+    assert_eq!(b.content(), c.content());
+    assert_eq!(b.status("x"), Some(Lifecycle::Trash));
+    assert_eq!(b.status("y"), None);
+    assert_eq!(b.status("one"), Some(Lifecycle::Active));
+    assert_eq!(scalar(&c.library, "SELECT COUNT(*) FROM ingest_job"), 0);
 }

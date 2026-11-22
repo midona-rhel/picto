@@ -146,6 +146,9 @@ fn settle_claimed(
                         report,
                     )?;
                 }
+                PreparedIngestPayload::Shared(import) => {
+                    settle_shared(application, job.ingest_job_id, &import, &now, report)?;
+                }
                 PreparedIngestPayload::Pending(_) | PreparedIngestPayload::PendingCollection(_) => {
                     unreachable!("prepare_job rejects unread task files")
                 }
@@ -478,6 +481,41 @@ fn settle_collection(
     Ok(())
 }
 
+/// Imports an item or a collection that another device imported and whose
+/// files the cloud worker has copied into the library
+/// (`Library::ingest_shared`). An item that was deleted since is not
+/// imported, and its job ends as done.
+fn settle_shared(
+    application: &LibraryApplication,
+    job_id: i64,
+    import: &picto_library::SharedImport,
+    now: &str,
+    report: &mut CanonicalIngestRunReport,
+) -> Result<(), String> {
+    match application.library().ingest_shared(import) {
+        Ok((root_id, _)) => {
+            application
+                .library()
+                .complete_ingest_jobs(&[job_id], now)
+                .map_err(|error| error.to_string())?;
+            report.ingested += 1;
+            report.root_ids.push(root_id);
+        }
+        Err(LibraryError::ImportDeleted) => {
+            settle_deleted_import(application, job_id, &[], now)?;
+            report.skipped += 1;
+        }
+        Err(error) => {
+            application
+                .library()
+                .fail_ingest_job(job_id, &error.to_string(), now)
+                .map_err(|failure| failure.to_string())?;
+            report.failed += 1;
+        }
+    }
+    Ok(())
+}
+
 fn settle_deleted_import(
     application: &LibraryApplication,
     ingest_job_id: i64,
@@ -534,7 +572,9 @@ fn payload_inputs(payload: &PreparedIngestPayload) -> &[PreparedImport] {
         | PreparedIngestPayload::MergedCollection(MergedCollectionImport {
             collection: input, ..
         }) => &input.members,
-        PreparedIngestPayload::Pending(_) | PreparedIngestPayload::PendingCollection(_) => &[],
+        PreparedIngestPayload::Pending(_)
+        | PreparedIngestPayload::PendingCollection(_)
+        | PreparedIngestPayload::Shared(_) => &[],
     }
 }
 
@@ -668,7 +708,7 @@ fn prepare_job(
         PreparedIngestPayload::Item(input)
         | PreparedIngestPayload::MergedItem(MergedImport { item: input, .. }) => {
             prepare_import(application, input, job.delete_after_ingest, &mut cleanup)?;
-            ensure_visible_thumbnail(application, input)?;
+            ensure_visible_thumbnail(application, &input.file_path, &input.facts)?;
         }
         PreparedIngestPayload::Collection(input)
         | PreparedIngestPayload::MergedCollection(MergedCollectionImport {
@@ -680,7 +720,23 @@ fn prepare_job(
             let cover = input.members.get(input.cover_index).ok_or_else(|| {
                 "Collection cover index is outside the prepared members".to_string()
             })?;
-            ensure_visible_thumbnail(application, cover)?;
+            ensure_visible_thumbnail(application, &cover.file_path, &cover.facts)?;
+        }
+        PreparedIngestPayload::Shared(import) => {
+            // The cloud worker has copied the files into the library and
+            // checked their size and content hash.
+            let cover = import.record.cover.unwrap_or(0);
+            let (path, file) = import
+                .paths
+                .get(cover)
+                .zip(import.record.files.get(cover))
+                .ok_or_else(|| "The files of a shared item were not copied".to_string())?;
+            for path in &import.paths {
+                if !Path::new(path).is_file() {
+                    return Err(format!("Ingest source is unavailable: {path}"));
+                }
+            }
+            ensure_visible_thumbnail(application, path, &file.facts)?;
         }
         PreparedIngestPayload::Pending(_) | PreparedIngestPayload::PendingCollection(_) => {
             return Err("Import file was queued but never read".into());
@@ -689,13 +745,16 @@ fn prepare_job(
     Ok(cleanup)
 }
 
+/// Makes the thumbnail of the file at `file_path` with the stored `facts`
+/// when the library has none for it and the thumbnail can be made at once.
 fn ensure_visible_thumbnail(
     application: &LibraryApplication,
-    input: &PreparedImport,
+    file_path: &str,
+    facts: &picto_library::ImmutableMediaFacts,
 ) -> Result<(), String> {
     if application
         .blobs()
-        .find_thumbnail_path(&input.facts.content_hash)
+        .find_thumbnail_path(&facts.content_hash)
         .map_err(|error| format!("Thumbnail lookup failed: {error}"))?
         .is_some()
     {
@@ -703,13 +762,12 @@ fn ensure_visible_thumbnail(
     }
 
     let mut source = PreparedMediaSource::from_stored_metadata(
-        PathBuf::from(&input.file_path),
-        &input.facts.mime,
-        input
-            .facts
+        PathBuf::from(file_path),
+        &facts.mime,
+        facts
             .duration_ms
             .and_then(|value| i64::try_from(value).ok()),
-        input.facts.frame_count.map(i64::from),
+        facts.frame_count.map(i64::from),
     );
     if source.caps.thumbnail_backend != Some(ThumbnailBackend::Inline) {
         return Ok(());
@@ -719,7 +777,7 @@ fn ensure_visible_thumbnail(
         .map_err(|error| format!("Initial thumbnail generation failed: {error}"))?;
     application
         .blobs()
-        .write_thumbnail(&input.facts.content_hash, &bytes, &extension)
+        .write_thumbnail(&facts.content_hash, &bytes, &extension)
         .map_err(|error| format!("Initial thumbnail write failed: {error}"))
 }
 

@@ -50,8 +50,9 @@ use merge::*;
 pub use merge::{SharedFileMerge, merged_notes};
 pub use library_merge::{MergeTaskInput, translate_view, MERGE_BACKUP, MERGE_LIBRARY};
 pub use shared::{
-    AppliedEntries, EntryClock, EntryKind, EntryState, SharedEntry, remove_item_tombstones,
-    reset_published_entries,
+    AppliedEntries, AwaitedImport, EntryClock, EntryKind, EntryState, SharedEntry, SharedFile,
+    SharedImport, SharedItem, SharedName, SharedSource, SHARED_JOB_KIND, records_items,
+    remove_item_tombstones, reset_published_entries,
 };
 use shared::*;
 use undo::*;

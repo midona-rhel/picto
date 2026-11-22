@@ -166,7 +166,7 @@ fn rows(application: &LibraryApplication, left_out: &[&str]) -> BTreeMap<String,
 /// Two devices that sync one library through the folder `cloud`, and that
 /// folder as a provider. Both hold the items 0, 1 and 2 in All, with their
 /// files. Item 0 has the tag `sync:tag`, and item 1 is in the folder
-/// `Folder`. Both have synced, and the cloud folder holds no tombstone file.
+/// `Folder`. Both have synced, and the cloud folder holds no entry file.
 /// The two folders that hold the libraries are returned to keep them.
 async fn two_devices(
     cloud: &Path,
@@ -206,6 +206,15 @@ async fn two_devices(
                 remote_root = ?1, state = 'idle', paused = 0",
         &[&cloud_text],
     );
+    // Connecting a library to a cloud folder makes it record the items
+    // that it imports from then on.
+    first
+        .library()
+        .database()
+        .maintenance_write(WorkPriority::Cloud, |transaction| {
+            picto_library::reset_published_entries(transaction)
+        })
+        .unwrap();
     let provider = DirectoryProvider::open(cloud).unwrap();
     let manifest = snapshot::publish_library(&first, &provider).await.unwrap();
 
@@ -239,12 +248,12 @@ fn cloud_data(cloud: &Path, application: &LibraryApplication) -> PathBuf {
         .join(configuration_library(application).unwrap().library_id)
 }
 
-/// The tombstone files that `application`'s device wrote, in the order of
-/// their names.
-fn tombstone_files(cloud: &Path, application: &LibraryApplication) -> Vec<PathBuf> {
+/// The entry files that `application`'s device wrote, in the order of their
+/// names.
+fn entry_files(cloud: &Path, application: &LibraryApplication) -> Vec<PathBuf> {
     let configuration = configuration_library(application).unwrap();
     let folder = cloud_data(cloud, application)
-        .join("tombstones")
+        .join("entries")
         .join(configuration.device_id);
     let mut files = match std::fs::read_dir(folder) {
         Ok(entries) => entries.map(|entry| entry.unwrap().path()).collect::<Vec<_>>(),
@@ -252,6 +261,12 @@ fn tombstone_files(cloud: &Path, application: &LibraryApplication) -> Vec<PathBu
     };
     files.sort();
     files
+}
+
+/// Makes the library read every entry file again at its next merge, as a
+/// library does whose database was replaced by a snapshot.
+fn forget_merged(application: &LibraryApplication) {
+    write(application, "DELETE FROM merged_entry_file", &[]);
 }
 
 /// Imports the picture `index` into `application` a minute from now, which
@@ -302,7 +317,7 @@ async fn a_deletion_on_one_device_arrives_on_the_other_and_a_restore_comes_back(
     first.delete_tag(tag).unwrap();
     first.delete_folders(&[folder]).unwrap();
     snapshot::publish_library(&first, &provider).await.unwrap();
-    assert!(!tombstone_files(cloud.path(), &first).is_empty());
+    assert!(!entry_files(cloud.path(), &first).is_empty());
 
     assert!(receive_library(&second, &provider).await.unwrap() > 0);
 
@@ -342,15 +357,26 @@ async fn a_deletion_on_one_device_arrives_on_the_other_and_a_restore_comes_back(
 
     // Merging every file again, as after a restart, changes nothing.
     let before = [rows(&first, &["cloud_state", "library_meta"]), rows(&second, &["cloud_state", "library_meta"])];
-    tombstones::forget_merged();
+    forget_merged(&first);
+    forget_merged(&second);
     receive_library(&first, &provider).await.unwrap();
     receive_library(&second, &provider).await.unwrap();
     assert_eq!(rows(&first, &["cloud_state", "library_meta"]), before[0]);
     assert_eq!(rows(&second, &["cloud_state", "library_meta"]), before[1]);
 }
 
+/// Merges what is in the cloud folder into `application` and imports the
+/// items whose originals the merge has copied into the library. Returns the
+/// number of items that were imported.
+async fn receive_and_import(application: &LibraryApplication, provider: &DirectoryProvider) -> usize {
+    receive_library(application, provider).await.unwrap();
+    crate::library_ingest_runtime::run_batch(application, 64)
+        .unwrap()
+        .ingested
+}
+
 #[tokio::test]
-async fn an_item_that_is_imported_again_after_its_deletion_stays_and_its_tombstone_goes() {
+async fn an_item_that_is_imported_again_after_its_deletion_comes_back_on_the_other_device() {
     let cloud = tempfile::tempdir().unwrap();
     let (first, second, provider, folders) = two_devices(cloud.path()).await;
     first
@@ -367,24 +393,24 @@ async fn an_item_that_is_imported_again_after_its_deletion_stays_and_its_tombsto
     assert!(!tombstoned(&second, 1));
     snapshot::publish_library(&second, &provider).await.unwrap();
 
-    // The first device's tombstone goes. Its own files still hold the
-    // deletion until its next sync, and they do not delete the item on the
-    // second device, however often they are merged.
-    receive_library(&first, &provider).await.unwrap();
+    // The first device's tombstone goes, and it imports the item from the
+    // cloud folder. Its own files still hold the deletion until its next
+    // sync, and they do not delete the item on the second device, however
+    // often they are merged.
+    assert_eq!(receive_and_import(&first, &provider).await, 1);
     assert!(!tombstoned(&first, 1));
-    tombstones::forget_merged();
+    assert_eq!(status(&first, 1), Some(Lifecycle::Inbox));
+    forget_merged(&second);
     receive_library(&second, &provider).await.unwrap();
     assert_eq!(status(&second, 1), Some(Lifecycle::Inbox));
     snapshot::publish_library(&first, &provider).await.unwrap();
-    tombstones::forget_merged();
+    forget_merged(&second);
     snapshot::publish_library(&second, &provider).await.unwrap();
     assert_eq!(status(&second, 1), Some(Lifecycle::Inbox));
     assert!(!tombstoned(&second, 1));
 
-    // The first device can import the item again as well. When it then
-    // deletes the item, the deletion is the later one and reaches the
-    // second device.
-    import_later(&first, folders[0].path(), 1);
+    // When the first device then deletes the item, the deletion is the
+    // later one and reaches the second device.
     first
         .set_lifecycle(&target(&first, &[1]), Lifecycle::Trash)
         .unwrap();
@@ -469,7 +495,7 @@ async fn a_device_that_was_away_takes_the_deletions_over_and_keeps_what_it_added
 }
 
 #[tokio::test]
-async fn damaged_tombstone_files_delete_nothing_and_missing_ones_hold_nothing_back() {
+async fn damaged_entry_files_change_nothing_and_missing_ones_hold_nothing_back() {
     let cloud = tempfile::tempdir().unwrap();
     let (first, second, provider, _folders) = two_devices(cloud.path()).await;
     first
@@ -477,7 +503,7 @@ async fn damaged_tombstone_files_delete_nothing_and_missing_ones_hold_nothing_ba
         .unwrap();
     first.delete_items(&target(&first, &[0]), false).unwrap();
     snapshot::publish_library(&first, &provider).await.unwrap();
-    let files = tombstone_files(cloud.path(), &first);
+    let files = entry_files(cloud.path(), &first);
     assert!(!files.is_empty());
     let whole = files
         .iter()
@@ -497,7 +523,7 @@ async fn damaged_tombstone_files_delete_nothing_and_missing_ones_hold_nothing_ba
         .unwrap_err();
     let name = files[0].file_name().unwrap().to_string_lossy().into_owned();
     assert!(error.contains(&name), "{error}");
-    assert!(error.contains("Nothing was deleted on this device"), "{error}");
+    assert!(error.contains("Nothing was merged on this device"), "{error}");
     let state = status_library(&second).unwrap();
     assert_eq!((state.state.as_str(), state.message), ("error", error));
     unchanged(&second);
@@ -533,7 +559,7 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
     snapshot::publish_library(&first, &provider).await.unwrap();
     snapshot::publish_library(&second, &provider).await.unwrap();
     let data = cloud_data(cloud.path(), &first);
-    assert!(!tombstone_files(cloud.path(), &first).is_empty());
+    assert!(!entry_files(cloud.path(), &first).is_empty());
     // An upload that was interrupted left a file of the sync behind.
     std::fs::write(
         data.join("snapshots")
@@ -549,6 +575,7 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
         "snapshots/202611世T101500.12Z-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11.json",
         "snapshots/readme.md",
         "blobs/f/aa/bb/picture.txt",
+        "entries/not-a-device/0a1.0123456789abcdef.jsonl.zst",
         "tombstones/not-a-device/0a.0123456789abcdef.jsonl.zst",
         "extra/file.bin",
     ];
@@ -556,6 +583,11 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
         std::fs::create_dir_all(data.join(name).parent().unwrap()).unwrap();
         std::fs::write(data.join(name), b"not written by the sync").unwrap();
     }
+    // A device that has not synced since it was updated left the folder
+    // that the earlier version wrote its entries into.
+    let earlier = data.join("tombstones").join(uuid::Uuid::new_v4().to_string());
+    std::fs::create_dir_all(&earlier).unwrap();
+    std::fs::write(earlier.join("0a.0123456789abcdef.jsonl.zst"), b"earlier").unwrap();
     let other_library = cloud.path().join("picto").join(uuid::Uuid::new_v4().to_string());
     std::fs::create_dir_all(other_library.join("snapshots")).unwrap();
     std::fs::write(other_library.join("library.json"), b"{}").unwrap();
@@ -581,6 +613,7 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
         kept,
         [
             "blobs/f/aa/bb/picture.txt",
+            "entries/not-a-device",
             "extra",
             "notes.txt",
             "snapshots/202611世T101500.12Z-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11.json",
@@ -588,7 +621,7 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
             "tombstones/not-a-device",
         ]
     );
-    assert_eq!(removal.kept_entries, 6);
+    assert_eq!(removal.kept_entries, 7);
     // The library's folder in the cloud holds exactly the foreign files.
     let mut expected = foreign.map(str::to_owned).to_vec();
     expected.sort();
@@ -753,7 +786,7 @@ async fn sync_that_is_enabled_again_starts_from_new_cloud_data() {
         .set_lifecycle(&target(&application, &[0]), Lifecycle::Trash)
         .unwrap();
     snapshot::publish_library(&application, &provider).await.unwrap();
-    assert_eq!(tombstone_files(cloud.path(), &application).len(), 1);
+    assert_eq!(entry_files(cloud.path(), &application).len(), 1);
     let data = cloud_data(cloud.path(), &application);
 
     delete_cloud_data_library(&application).await.unwrap();
@@ -763,11 +796,300 @@ async fn sync_that_is_enabled_again_starts_from_new_cloud_data() {
         .unwrap();
 
     // The library is connected again. It writes new cloud data, and all of
-    // its tombstones with it: the one that was in the removed cloud data,
+    // its entries with it: the one that was in the removed cloud data,
     // and the one that it made while sync was off.
     configure_library(&application, &input).unwrap();
     assert_eq!(status_library(&application).unwrap().last_sync_at, None);
     snapshot::publish_library(&application, &provider).await.unwrap();
     assert!(data.join("library.json").is_file());
-    assert_eq!(tombstone_files(cloud.path(), &application).len(), 2);
+    assert_eq!(entry_files(cloud.path(), &application).len(), 2);
+
+    // A copy of the library that was made by hand has the library's id and
+    // has never synced. The folder holds the library, so the copy is not
+    // connected to it.
+    let library_id = configuration_library(&application).unwrap().library_id;
+    let copy = LibraryApplication::create(folder.path().join("Copy.library")).unwrap();
+    write(&copy, "UPDATE cloud_state SET library_id = ?1", &[&library_id]);
+    let error = configure_library(&copy, &input).unwrap_err();
+    assert!(error.contains(CLOUD_HOLDS_LIBRARY), "{error}");
+    assert_eq!(configuration_library(&copy).unwrap().provider, None);
+    assert_eq!(count(&copy, "SELECT COUNT(*) FROM cloud_device_frontier"), 0);
+
+    // A library with another id is connected to the same folder, and from
+    // then on it records the items that it imports.
+    let other = LibraryApplication::create(folder.path().join("Other.library")).unwrap();
+    configure_library(&other, &input).unwrap();
+    assert_eq!(count(&other, "SELECT COUNT(*) FROM cloud_device_frontier"), 1);
+    // The library that has synced before is connected again to the folder
+    // that holds it.
+    disable_library(&application).unwrap();
+    configure_library(&application, &input).unwrap();
+}
+
+/// Imports the picture `index` into `application` a minute from now, after
+/// `change` has changed what the import gives the item.
+fn import_with(
+    application: &LibraryApplication,
+    folder: &Path,
+    index: u8,
+    change: impl FnOnce(&mut picto_library::PreparedImport),
+) {
+    let mut job = super::tests::image_job(folder, index);
+    if let picto_library::PreparedIngestPayload::Item(import) = &mut job.payload {
+        import.imported_at_ms = chrono::Utc::now().timestamp_millis() + 60_000;
+        change(import);
+    }
+    application
+        .library()
+        .enqueue_ingest_job(&job, "2026-08-29T12:00:00Z")
+        .unwrap();
+    let report = crate::library_ingest_runtime::run_batch(application, 64).unwrap();
+    assert_eq!(report.ingested, 1);
+}
+
+/// Makes the cloud worker look for the originals of every waiting item at
+/// its next round, as it does a minute after it did not find them.
+fn look_again(application: &LibraryApplication) {
+    write(
+        application,
+        "UPDATE ingest_job SET available_at = '2000-01-01T00:00:00Z' WHERE prepared = 0",
+        &[],
+    );
+}
+
+/// The number of items of other devices that wait for their originals.
+fn waiting(application: &LibraryApplication) -> i64 {
+    count(
+        application,
+        "SELECT COUNT(*) FROM ingest_job
+         WHERE source_kind = 'cloud' AND status = 'pending' AND prepared = 0",
+    )
+}
+
+fn sync_state(application: &LibraryApplication) -> (String, String) {
+    let state = status_library(application).unwrap();
+    (state.state, state.message)
+}
+
+#[tokio::test]
+async fn an_item_imported_on_one_device_appears_on_the_other_with_its_file() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, folders) = two_devices(cloud.path()).await;
+    // The first sync of a library writes no entry for the items it holds.
+    assert!(entry_files(cloud.path(), &first).is_empty());
+    assert!(entry_files(cloud.path(), &second).is_empty());
+
+    let folder = first.library().folders().unwrap()[0].folder_id;
+    import_with(&first, folders[0].path(), 3, |import| {
+        import.media_name = "Evening.png".into();
+        import.notes = Some("Taken at the lake".into());
+        import.rating = picto_library::Rating::Five;
+        import.tags = vec!["sync:tag".into(), "place:lake".into()];
+        import.folders = vec![folder];
+        import.source_urls = vec!["https://example.com/evening".into()];
+    });
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    assert_eq!(entry_files(cloud.path(), &first).len(), 1);
+
+    // The second device merges the entry and copies the original. The
+    // ingest worker then imports the item.
+    assert!(receive_library(&second, &provider).await.unwrap() > 0);
+    assert_eq!(status(&second, 3), None);
+    assert_eq!(waiting(&second), 0);
+    assert_eq!(
+        crate::library_ingest_runtime::run_batch(&second, 64)
+            .unwrap()
+            .ingested,
+        1
+    );
+    assert_eq!(sync_state(&second), ("idle".to_string(), String::new()));
+
+    let on_first = first.details(root(&first, 3).unwrap()).unwrap();
+    let on_second = second.details(root(&second, 3).unwrap()).unwrap();
+    assert_eq!(on_second.lifecycle, Lifecycle::Inbox);
+    assert_eq!(on_second.rating, picto_library::Rating::Five);
+    assert_eq!(on_second.root.name, "Evening.png");
+    assert_eq!(on_second.root.notes.as_deref(), Some("Taken at the lake"));
+    assert_eq!(on_second.root.source_urls, on_first.root.source_urls);
+    assert_eq!(on_second.root.imported_at_ms, on_first.root.imported_at_ms);
+    assert_eq!(on_second.media[0].facts, on_first.media[0].facts);
+    assert_eq!(on_second.tag_ids.len(), 2);
+    assert_eq!(on_second.folder_ids.len(), 1);
+    let names = |application: &LibraryApplication| {
+        let snapshot = application.library().projections().snapshot();
+        let mut names = snapshot.tag_ids_by_name.keys().cloned().collect::<Vec<_>>();
+        names.sort();
+        names
+    };
+    assert_eq!(names(&second), names(&first));
+    let hash = hash(&second, 3);
+    let original = second
+        .blobs()
+        .original_path_with_ext(&hash, Some("png"))
+        .unwrap();
+    assert_eq!(
+        std::fs::read(original).unwrap(),
+        std::fs::read(folders[0].path().join("cloud-3.png")).unwrap()
+    );
+    assert!(second.blobs().find_thumbnail_path(&hash).unwrap().is_some());
+    // The merged import is not on the undo stack.
+    assert!(!second.library().history().state().can_undo);
+
+    // The second device writes no entry of its own for the item, and the
+    // first device imports nothing when it merges again.
+    snapshot::publish_library(&second, &provider).await.unwrap();
+    assert!(entry_files(cloud.path(), &second).is_empty());
+    assert_eq!(receive_and_import(&first, &provider).await, 0);
+    assert_eq!(count(&first, "SELECT COUNT(*) FROM library_root"), 4);
+    assert_eq!(count(&second, "SELECT COUNT(*) FROM library_root"), 4);
+
+    // A deletion of the item on the second device reaches the first.
+    second
+        .set_lifecycle(&target(&second, &[3]), Lifecycle::Trash)
+        .unwrap();
+    second.delete_items(&target(&second, &[3]), false).unwrap();
+    snapshot::publish_library(&second, &provider).await.unwrap();
+    receive_library(&first, &provider).await.unwrap();
+    assert_eq!(status(&first, 3), None);
+}
+
+#[tokio::test]
+async fn an_item_waits_without_an_error_until_its_original_is_in_the_cloud_folder() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, folders) = two_devices(cloud.path()).await;
+    import_later(&first, folders[0].path(), 3);
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    let original = cloud_original(cloud.path(), &first, &hash(&first, 3));
+    let whole = std::fs::read(&original).unwrap();
+    let waits = |application: &LibraryApplication| {
+        assert_eq!(waiting(application), 1);
+        assert_eq!(
+            crate::library_ingest_runtime::run_batch(application, 64)
+                .unwrap()
+                .claimed,
+            0
+        );
+        assert_eq!(status(application, 3), None);
+        assert_eq!(sync_state(application), ("idle".to_string(), String::new()));
+    };
+
+    // The entry is there and the original is not.
+    std::fs::remove_file(&original).unwrap();
+    receive_library(&second, &provider).await.unwrap();
+    waits(&second);
+    // The item is not looked at again before a minute has passed.
+    std::fs::write(&original, &whole).unwrap();
+    receive_library(&second, &provider).await.unwrap();
+    waits(&second);
+
+    // The provider's app has written a part of the original.
+    std::fs::write(&original, &whole[..whole.len() / 2]).unwrap();
+    look_again(&second);
+    receive_library(&second, &provider).await.unwrap();
+    waits(&second);
+
+    // The original is listed whole and cannot be read, as a file is that
+    // the provider's app has not downloaded while that app is not running.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(&original, &whole).unwrap();
+        std::fs::set_permissions(&original, std::fs::Permissions::from_mode(0o000)).unwrap();
+        look_again(&second);
+        receive_library(&second, &provider).await.unwrap();
+        waits(&second);
+        std::fs::set_permissions(&original, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    // The original is there.
+    std::fs::write(&original, &whole).unwrap();
+    look_again(&second);
+    assert_eq!(receive_and_import(&second, &provider).await, 1);
+    assert_eq!(status(&second, 3), Some(Lifecycle::Inbox));
+    assert_eq!(waiting(&second), 0);
+
+    // An original of the whole size with other content fails the item's
+    // job with a reason, and the sync goes on.
+    import_later(&first, folders[0].path(), 4);
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    let original = cloud_original(cloud.path(), &first, &hash(&first, 4));
+    let mut changed = std::fs::read(&original).unwrap();
+    let last = changed.len() - 1;
+    changed[last] ^= 0xff;
+    std::fs::write(&original, changed).unwrap();
+    receive_library(&second, &provider).await.unwrap();
+    assert_eq!(status(&second, 4), None);
+    assert_eq!(
+        text(
+            &second,
+            "SELECT last_error FROM ingest_job WHERE source_kind = 'cloud' AND status = 'failed'"
+        )
+        .as_deref(),
+        Some("Cloud original checksum does not match its content hash")
+    );
+    assert_eq!(sync_state(&second), ("idle".to_string(), String::new()));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_entry_file_that_cannot_be_read_yet_is_merged_later_without_an_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, _folders) = two_devices(cloud.path()).await;
+    first
+        .set_lifecycle(&target(&first, &[0, 1, 2]), Lifecycle::Trash)
+        .unwrap();
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    let files = entry_files(cloud.path(), &first);
+    assert!(files.len() >= 2, "three keys are in at least two files");
+
+    // The first file is listed and cannot be read. The round reads no file
+    // after it, merges nothing, and leaves no error.
+    std::fs::set_permissions(&files[0], std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert_eq!(receive_library(&second, &provider).await.unwrap(), 0);
+    assert_eq!(sync_state(&second), ("idle".to_string(), String::new()));
+    for index in 0..3 {
+        assert_eq!(status(&second, index), Some(Lifecycle::Active));
+    }
+    // A sync of the second device does the same and still ends idle.
+    snapshot::publish_library(&second, &provider).await.unwrap();
+    assert_eq!(sync_state(&second), ("idle".to_string(), String::new()));
+
+    // The file can be read. Every file is merged.
+    std::fs::set_permissions(&files[0], std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(
+        receive_library(&second, &provider).await.unwrap(),
+        files.len() as u64
+    );
+    for index in 0..3 {
+        assert_eq!(status(&second, index), Some(Lifecycle::Trash));
+    }
+    // A file that was merged is not read again.
+    assert_eq!(receive_library(&second, &provider).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_device_removes_the_folder_that_an_earlier_version_wrote_its_entries_into() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, _folders) = two_devices(cloud.path()).await;
+    let earlier = cloud_data(cloud.path(), &first).join("tombstones");
+    let own = earlier.join(configuration_library(&first).unwrap().device_id);
+    let others = earlier.join(configuration_library(&second).unwrap().device_id);
+    for folder in [&own, &others] {
+        std::fs::create_dir_all(folder).unwrap();
+        std::fs::write(folder.join("0a.0123456789abcdef.jsonl.zst"), b"earlier").unwrap();
+    }
+    first
+        .set_lifecycle(&target(&first, &[0]), Lifecycle::Trash)
+        .unwrap();
+
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    assert!(!own.exists());
+    assert!(others.join("0a.0123456789abcdef.jsonl.zst").is_file());
+    // The files there are not merged.
+    receive_library(&second, &provider).await.unwrap();
+    assert_eq!(status(&second, 0), Some(Lifecycle::Trash));
+
+    snapshot::publish_library(&second, &provider).await.unwrap();
+    assert!(!earlier.exists());
 }

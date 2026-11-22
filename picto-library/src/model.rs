@@ -464,6 +464,9 @@ pub enum PreparedIngestPayload {
     MergedItem(MergedImport),
     /// A collection of another library that a merge imports.
     MergedCollection(MergedCollectionImport),
+    /// An item or a collection that another device of this library imported
+    /// and that cloud sync merges.
+    Shared(crate::mutation::SharedImport),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -53,6 +53,12 @@ pub(crate) enum Held {
     /// library, as the time of its last change. An ordinary import gives a
     /// new item the time of its import.
     Merge { modified_at_ms: i64 },
+    /// The import is an item that another device of this library imported
+    /// and that cloud sync merges. The item that the library holds gets
+    /// nothing. When it is held under another stable key, the import's key
+    /// becomes an alias of it. A new item is created as an ordinary import
+    /// creates it, and no entry is recorded for it.
+    Shared,
 }
 
 /// Import one file. One file is one media item: an import whose source item,
@@ -69,6 +75,28 @@ pub(crate) fn insert_one(
     held: Held,
 ) -> Result<IngestResult> {
     if let Some(existing) = existing_import(transaction, &snapshot, input)? {
+        if held == Held::Shared {
+            transaction
+                .prepare_cached(
+                    "INSERT OR IGNORE INTO library_item_alias(stable_key, local_id)
+                     SELECT ?1, ?2
+                     WHERE NOT EXISTS (SELECT 1 FROM library_item WHERE stable_key = ?1)",
+                )?
+                .execute(params![input.stable_key, existing.media_id.0])?;
+            snapshot.revision = revision;
+            return Ok(IngestResult {
+                root_id: existing.root_id,
+                created_root: false,
+                snapshot,
+                resources: Vec::new(),
+                bitmap_keys: Vec::new(),
+                folder_ids: Vec::new(),
+                affected_roots: RoaringBitmap::new(),
+                added_tags: Vec::new(),
+                placed: Vec::new(),
+                rated: None,
+            });
+        }
         let before = task.map(|_| reused_text(transaction, existing)).transpose()?;
         let mut affected_roots =
             refresh_existing_file(transaction, &mut snapshot, existing.media_id, input, held)?;
@@ -200,7 +228,10 @@ pub(crate) fn insert_one(
         .query_row([&input.stable_key], |row| row.get::<_, i64>(0))
         .optional()?
     {
-        if input.imported_at_ms <= deleted_at_ms {
+        // A merged import is refused by every tombstone: the merge removed
+        // the tombstone that the item's entry is later than, so a tombstone
+        // that is here now is a later deletion.
+        if input.imported_at_ms <= deleted_at_ms || held == Held::Shared {
             return Err(LibraryError::ImportDeleted);
         }
         // The import is later than the deletion, so the tombstone goes, and
@@ -217,9 +248,8 @@ pub(crate) fn insert_one(
     // and does not upload the file a second time.
     transaction
         .prepare_cached(
-            "DELETE FROM cloud_tombstone
-             WHERE object_kind = 'blob'
-               AND (object_key = ?1 OR object_key LIKE ?1 || '.%')",
+            "DELETE FROM cloud_deleted_original
+             WHERE file_name = ?1 OR file_name LIKE ?1 || '.%'",
         )?
         .execute([&input.facts.content_hash])?;
 
@@ -314,7 +344,7 @@ pub(crate) fn insert_one(
     }
     let modified_at_ms = match held {
         Held::Merge { modified_at_ms } => modified_at_ms,
-        Held::Refresh => input.imported_at_ms,
+        Held::Refresh | Held::Shared => input.imported_at_ms,
     };
     transaction
         .prepare_cached(
@@ -918,12 +948,57 @@ pub(crate) fn ensure_tag(transaction: &Transaction<'_>, name: &str) -> Result<Ta
         return Ok(TagId(id));
     }
     let tag_id = LibraryDatabase::allocate_id(transaction)?;
+    let namespace = if namespace.eq_ignore_ascii_case("general") {
+        ""
+    } else {
+        namespace
+    };
+    let stable_key = free_key(
+        transaction,
+        "tag_definition",
+        name_key("tag", &[namespace, subname]),
+    )?;
     transaction.execute(
         "INSERT INTO tag_definition(tag_id, stable_key, namespace_id, subname)
          VALUES (?1, ?2, ?3, ?4)",
-        params![tag_id, Uuid::new_v4().to_string(), namespace_id, subname],
+        params![tag_id, stable_key, namespace_id, subname],
     )?;
     Ok(TagId(tag_id))
+}
+
+/// Returns the stable key of a new tag or tag namespace with the name
+/// `parts`: `kind`, a colon and the first 32 hexadecimal digits of the
+/// SHA-256 of the parts. Two devices of a library that create the same name
+/// give it the same key, so cloud sync takes them for one tag.
+pub(crate) fn name_key(kind: &str, parts: &[&str]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part.as_bytes());
+        hasher.update([0x1f]);
+    }
+    let digest = hasher.finalize();
+    let digits = digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("{kind}:{digits}")
+}
+
+/// Returns `key` when no row of `table` has it as its stable key, and a
+/// random key otherwise. A key made from a name is taken when the row that
+/// was created under that name was renamed since.
+pub(crate) fn free_key(transaction: &Transaction<'_>, table: &str, key: String) -> Result<String> {
+    let taken = transaction.query_row(
+        &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE stable_key = ?1)"),
+        [&key],
+        |row| row.get::<_, bool>(0),
+    )?;
+    Ok(if taken {
+        Uuid::new_v4().to_string()
+    } else {
+        key
+    })
 }
 
 pub(crate) fn canonical_tag_name(name: &str) -> Result<String> {
@@ -960,10 +1035,11 @@ pub(crate) fn ensure_namespace(transaction: &Transaction<'_>, name: &str) -> Res
         id
     } else {
         let id = LibraryDatabase::allocate_id(transaction)?;
+        let stable_key = free_key(transaction, "tag_namespace", name_key("namespace", &[name]))?;
         transaction.execute(
             "INSERT INTO tag_namespace(namespace_id, stable_key, display_name)
              VALUES (?1, ?2, ?3)",
-            params![id, Uuid::new_v4().to_string(), name],
+            params![id, stable_key, name],
         )?;
         id
     };

@@ -457,7 +457,11 @@ impl Library {
             let namespace_id = TagNamespaceId(LibraryDatabase::allocate_id(transaction)?);
             let state = TagNamespaceDefinitionState {
                 namespace_id,
-                stable_key: uuid::Uuid::new_v4().to_string(),
+                stable_key: ingest::free_key(
+                    transaction,
+                    "tag_namespace",
+                    ingest::name_key("namespace", &[name.as_str()]),
+                )?,
                 display_name: name.clone(),
             };
             transaction.execute(

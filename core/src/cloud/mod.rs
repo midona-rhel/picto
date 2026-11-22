@@ -6,17 +6,25 @@
 //! - `snapshots/`, compressed copies of the whole database, each with a
 //!   manifest (`snapshot.rs`). A device writes a new one when the library
 //!   has changed and has been idle for 30 seconds.
-//! - `tombstones/<device id>/`, the tombstones that the device made: what it
-//!   deleted, moved into or out of the Trash, or added again
-//!   (`tombstones.rs`).
+//! - `entries/<device id>/`, the entries that the device made: what it
+//!   imported, deleted, moved into or out of the Trash, or added again
+//!   (`entries.rs`).
 //!
 //! Another device gets the library by taking the newest snapshot as its
 //! database (Open from Cloud…) and copying the originals. After that, the
-//! only thing that the devices share by themselves is the tombstones: an
-//! item that was deleted permanently, moved to the Trash or restored, a
-//! deleted tag, folder or smart folder, and the removal of a tombstone. An
-//! item that is added or edited on one device reaches another device only
-//! when a snapshot is restored there.
+//! devices share the entries by themselves: an item or a collection that
+//! was imported, with its file and what it was given at the import, an item
+//! that was deleted permanently, moved to the Trash or restored, a deleted
+//! tag, folder or smart folder, and the removal of a tombstone. A change to
+//! an item that the devices already hold, other than those, reaches another
+//! device only when a snapshot is restored there.
+//!
+//! A library records the items that it imports from its first sync on
+//! (`picto_library::records_items`). What it held before is in its first
+//! snapshot. So a copy of a library that has never synced cannot be
+//! connected to a cloud folder that already holds the same library
+//! ([`configure_library`]): nothing would tell the devices what each of the
+//! two copies holds that the other does not.
 //!
 //! This file holds the configuration and the state of the sync
 //! (`cloud_state`), the commands that switch it on and off, and the removal
@@ -33,7 +41,7 @@ use crate::library_application::LibraryApplication;
 
 pub mod provider;
 pub mod snapshot;
-pub mod tombstones;
+pub mod entries;
 
 pub const CLOUD_SCHEMA_GENERATION: i64 = 1;
 
@@ -43,7 +51,7 @@ pub const CLOUD_DATA_REMOVED: &str = "The cloud data of this library was deleted
     Cloud sync is now off on this device. Nothing was deleted from this library.";
 
 /// Held by everything that reads or writes a library's cloud data: a sync,
-/// the merge of the other devices' tombstones, and the removal of the cloud
+/// the merge of the other devices' entries, and the removal of the cloud
 /// data. So the cloud data is never removed while a sync writes into it.
 static SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -178,6 +186,18 @@ pub fn configuration_library(
         .map_err(|error| error.to_string())
 }
 
+/// The error of [`configure_library`] for a copy of a library that has
+/// never synced and a cloud folder that already holds the same library.
+pub const CLOUD_HOLDS_LIBRARY: &str = "This cloud folder already holds this library from     another computer, and this copy has never synced with it. Open the library on this     computer with Open from Cloud…. To bring in what only this copy holds, merge this     copy into the opened library with Merge Library….";
+
+/// Connects the library to the cloud folder `input.root_path` of a provider.
+///
+/// When the folder is not the one that the library is connected to, the
+/// library forgets what it wrote into and merged from the folder it synced
+/// with before, and it records the items that it imports from now on
+/// (`picto_library::reset_published_entries`). A library that has never
+/// synced is refused with [`CLOUD_HOLDS_LIBRARY`] when the folder already
+/// holds the same library.
 pub fn configure_library(
     application: &LibraryApplication,
     input: &ConfigureCloudInput,
@@ -200,17 +220,28 @@ pub fn configure_library(
             ["cloud".to_string(), "tasks".to_string()],
             [],
             |transaction, _| {
-                let connected = transaction.query_row(
-                    "SELECT provider IS ?1 AND remote_root IS ?2
+                let (connected, library_id) = transaction.query_row(
+                    "SELECT provider IS ?1 AND remote_root IS ?2, library_id
                      FROM cloud_state WHERE singleton = 1",
                     params![input.provider, root_path],
-                    |row| row.get::<_, bool>(0),
+                    |row| Ok((row.get::<_, bool>(0)?, row.get::<_, String>(1)?)),
                 )?;
                 if !connected {
+                    // The metadata of `library.json` is answered also while
+                    // the provider's app has not downloaded the file.
+                    let held = std::fs::symlink_metadata(
+                        root.join("picto").join(&library_id).join("library.json"),
+                    )
+                    .is_ok();
+                    if held && !picto_library::records_items(transaction)? {
+                        return Err(picto_library::LibraryError::InvalidState(
+                            CLOUD_HOLDS_LIBRARY.to_string(),
+                        ));
+                    }
                     // The library starts to sync with this folder. What it
                     // knew about the cloud data it synced with before does
-                    // not hold here: the time of the last sync, and which
-                    // of its tombstones are written there.
+                    // not hold here: the time of the last sync, which of its
+                    // entries are written there, and which files it merged.
                     transaction.execute(
                         "UPDATE cloud_state SET last_sync_at = NULL, last_snapshot_at = NULL
                          WHERE singleton = 1",
@@ -280,7 +311,6 @@ pub fn snapshot_due_library(
 }
 
 pub fn recover_interrupted_sync_library(application: &LibraryApplication) -> Result<(), String> {
-    tombstones::forget_merged();
     application
         .library()
         .database()
@@ -571,8 +601,8 @@ pub async fn delete_cloud_data_library(
     Ok(removal)
 }
 
-/// Returns whether the worker should merge the tombstones in the cloud
-/// folder now: cloud sync is on, not paused, and no sync runs or failed.
+/// Returns whether the worker should merge the entries in the cloud folder
+/// now: cloud sync is on, not paused, and no sync runs or failed.
 pub fn receive_due_library(application: &LibraryApplication) -> Result<bool, String> {
     application
         .library()
@@ -587,11 +617,13 @@ pub fn receive_due_library(application: &LibraryApplication) -> Result<bool, Str
         .map_err(|error| error.to_string())
 }
 
-/// Merges the tombstone files that are in the cloud folder and were not
-/// merged yet, and returns the number of files. The
-/// worker calls it between two syncs, so that a deletion made on another
-/// device arrives while this library is idle. A damaged file leaves the
-/// sync state `error` with a message that names it, and nothing is merged.
+/// Merges the entry files that are in the cloud folder and were not merged
+/// yet, copies the originals of the items that wait for them, and returns
+/// the number of files that were merged. The worker calls it between two
+/// syncs, so that an import or a deletion made on another device arrives
+/// while this library is idle. A damaged file leaves the sync state `error`
+/// with a message that names it, and nothing is merged. A file that the
+/// provider's app has not delivered yet leaves no error.
 pub async fn receive_library(
     application: &LibraryApplication,
     provider: &dyn provider::CloudProvider,
@@ -599,7 +631,7 @@ pub async fn receive_library(
     let _running = SYNC.lock().await;
     let library_id = configuration_library(application)?.library_id;
     stop_if_cloud_data_removed(application, provider, &library_id).await?;
-    let merged = tombstones::receive_library(application, provider, &library_id).await;
+    let merged = entries::receive_library(application, provider, &library_id).await;
     if let Err(error) = &merged {
         let _ = snapshot::set_sync_state(application, "error", "idle", error);
     }
