@@ -14,9 +14,12 @@
 //! started without the flag, and never under automation). The file is only
 //! read, and its entries are copied into this app's own state.
 //! `librariesSeeded` records that this was done, so it is never done again.
-//! Seeding only adds libraries to the list: it gives no consent, opens no
-//! library and sets no last library. If the file is missing, unreadable or
-//! malformed, nothing is seeded and no error is reported.
+//! Seeding adds libraries to the list and gives no consent. In a release
+//! build it also takes `lastLibrary`, so that the first start after an
+//! update opens the library that the earlier version had open last. A debug
+//! build takes no last library and so opens none by itself. If the file is
+//! missing, unreadable or malformed, nothing is seeded and no error is
+//! reported.
 use std::path::{Path, PathBuf};
 
 /// The libraries that the `config.json` of an Electron-based Picto (version
@@ -25,6 +28,9 @@ use std::path::{Path, PathBuf};
 pub struct Seed {
     pub history: Vec<String>,
     pub pinned: Vec<String>,
+    /// The library that was open last (`lastLibrary`), if the file names one
+    /// with an absolute path.
+    pub last: Option<String>,
     /// The colour and icon of each library from `libraryMeta`, keyed by the
     /// library's path.
     pub looks: std::collections::BTreeMap<String, crate::state::LibraryLook>,
@@ -75,18 +81,30 @@ pub fn read(path: &Path) -> Option<Seed> {
         .map(|(path, look)| (path.clone(), crate::state::LibraryLook::from_value(look)))
         .filter(|(_, look)| !look.is_default())
         .collect();
+    let last = object
+        .get("lastLibrary")
+        .and_then(serde_json::Value::as_str)
+        .filter(|path| Path::new(path).is_absolute())
+        .map(str::to_owned);
     Some(Seed {
         history,
         pinned,
+        last,
         looks,
     })
 }
 
 /// Copies the libraries of `seed` into `state`, if `state` was never seeded
-/// and its list of libraries is empty. It sets `libraries_seeded` whenever it
-/// was not set, whatever `seed` returns, so seeding is tried only once.
-/// Returns whether any library was added to the list.
-pub fn apply(state: &mut crate::state::State, seed: impl FnOnce() -> Option<Seed>) -> bool {
+/// and its list of libraries is empty. With `open_last` set, it also makes
+/// the seed's last library the one that the app opens when it starts. It
+/// sets `libraries_seeded` whenever it was not set, whatever `seed` returns,
+/// so seeding is tried only once. Returns whether any library was added to
+/// the list.
+pub fn apply(
+    state: &mut crate::state::State,
+    open_last: bool,
+    seed: impl FnOnce() -> Option<Seed>,
+) -> bool {
     if state.libraries_seeded {
         return false;
     }
@@ -97,6 +115,9 @@ pub fn apply(state: &mut crate::state::State, seed: impl FnOnce() -> Option<Seed
     let Some(seed) = seed() else {
         return false;
     };
+    if open_last {
+        state.last_library = seed.last;
+    }
     state.library_history = seed.history;
     state.pinned_libraries = seed.pinned;
     state.library_meta.extend(seed.looks);
@@ -104,16 +125,18 @@ pub fn apply(state: &mut crate::state::State, seed: impl FnOnce() -> Option<Seed
 }
 
 /// Called when the app starts. Seeds the list of libraries, if it was never
-/// seeded and this process is allowed to list libraries the user keeps.
+/// seeded and this process is allowed to list libraries the user keeps. A
+/// release build also takes the last library.
 pub fn once(cx: &mut gpui::App) {
-    if crate::state::get(cx).libraries_seeded || super::facts().permits().is_err() {
+    let facts = super::facts();
+    if crate::state::get(cx).libraries_seeded || facts.permits().is_err() {
         return;
     }
     let Some(path) = earlier_version_config() else {
         return;
     };
     crate::state::update(cx, |state| {
-        apply(state, || read(&path));
+        apply(state, facts.release, || read(&path));
     });
 }
 
@@ -159,6 +182,7 @@ mod tests {
             ]
         );
         assert_eq!(seed.pinned, ["/Volumes/Art/Art.library"]);
+        assert_eq!(seed.last.as_deref(), Some("/home/me/Pictures/Main.library"));
         assert_eq!(
             seed.looks.into_iter().collect::<Vec<_>>(),
             [(
@@ -187,34 +211,41 @@ mod tests {
         let (_folder, path) = fixture(r#"{"libraryHistory": "x", "pinnedLibraries": {}}"#);
         assert_eq!(read(&path), Some(Seed::default()));
         let mut state = State::default();
-        assert!(!apply(&mut state, || read(&path)));
+        assert!(!apply(&mut state, false, || read(&path)));
         assert!(state.libraries_seeded);
         assert!(state.library_history.is_empty());
     }
 
     #[test]
-    fn seeding_happens_once_into_an_empty_list_and_only_lists() {
+    fn seeding_happens_once_into_an_empty_list() {
         let seed = || {
             Some(Seed {
                 history: vec!["/a/Main.library".into(), "/b/Art.library".into()],
                 pinned: vec!["/b/Art.library".into()],
+                last: Some("/b/Art.library".into()),
                 looks: Default::default(),
             })
         };
         let mut state = State::default();
-        assert!(apply(&mut state, seed));
+        assert!(apply(&mut state, false, seed));
         assert_eq!(state.library_history, ["/a/Main.library", "/b/Art.library"]);
         assert_eq!(state.pinned_libraries, ["/b/Art.library"]);
         assert!(state.libraries_seeded);
-        // Seeding only adds libraries to the list. It sets no last library and
-        // gives no consent.
+        // Without `open_last`, seeding only adds libraries to the list. It
+        // sets no last library, and it never gives consent.
         assert_eq!(state.last_library, None);
         assert!(state.library_consents.is_empty());
+        // With `open_last`, as in a release build, the last library of the
+        // earlier version is the one the app opens when it starts.
+        let mut released = State::default();
+        assert!(apply(&mut released, true, seed));
+        assert_eq!(released.last_library.as_deref(), Some("/b/Art.library"));
+        assert!(released.library_consents.is_empty());
         // Seeding does not happen a second time, even after the list was
         // emptied.
         state.library_history.clear();
         state.pinned_libraries.clear();
-        assert!(!apply(&mut state, seed));
+        assert!(!apply(&mut state, false, seed));
         assert!(state.library_history.is_empty());
         // A list that this app already has is not replaced. The state is
         // marked as seeded, so it is not seeded later either.
@@ -222,13 +253,13 @@ mod tests {
             library_history: vec!["/c/Own.library".into()],
             ..State::default()
         };
-        assert!(!apply(&mut own, seed));
+        assert!(!apply(&mut own, false, seed));
         assert_eq!(own.library_history, ["/c/Own.library"]);
         assert!(own.libraries_seeded);
         // When the file is missing, the state is still marked as seeded, so
         // seeding is not tried again.
         let mut fresh = State::default();
-        assert!(!apply(&mut fresh, || None));
+        assert!(!apply(&mut fresh, false, || None));
         assert!(fresh.libraries_seeded);
     }
 

@@ -16,10 +16,13 @@
 //!    that the system handed over never opens a library.
 //! 5. No other Picto is running. Picto 0.6.19 and earlier hold no lock that
 //!    this app can see, so the list of processes is read instead.
-//! 6. The core finds the library's schema current. The schema is read
-//!    without writing anything.
-//! 7. The user agreed, once for each library (its path and its database
-//!    file), that this app reads and writes the library directly.
+//! 6. In a debug build only: the core finds the library's schema current.
+//!    The schema is read without writing anything. A release build leaves
+//!    this to the core, which updates a library of an earlier schema when
+//!    it opens it, after making a backup.
+//! 7. In a debug build only: the user agreed, once for each library (its
+//!    path and its database file), that this build reads and writes the
+//!    library directly. A release build is Picto itself and does not ask.
 //!
 //! Nothing in this module writes. The checks read the folder, the system's
 //! list of processes, and the database with SQLite's `immutable` flag.
@@ -112,10 +115,10 @@ impl Facts {
     }
 }
 
-/// What the user's consent is given for: the library's path and the
-/// identity of its database file on disk. Because the database file is part
-/// of it, the user is asked again when a different library is later put at
-/// the same path.
+/// What the user's consent is given for in a debug build: the library's
+/// path and the identity of its database file on disk. Because the database
+/// file is part of it, the user is asked again when a different library is
+/// later put at the same path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
     pub path: String,
@@ -213,10 +216,10 @@ pub enum Decision {
         root: PathBuf,
         identity: Identity,
     },
-    /// A library the user keeps that passed every rule except the last: the
-    /// user has not yet given consent for this library. The caller asks the
-    /// user, naming the library's path, stores the consent if the user
-    /// agrees, and then calls `admit` again.
+    /// A library the user keeps that passed every rule except the last: this
+    /// is a debug build, and the user has not yet given consent for this
+    /// library. The caller asks the user, naming the library's path, stores
+    /// the consent if the user agrees, and then calls `admit` again.
     Ask {
         root: PathBuf,
         identity: Identity,
@@ -298,11 +301,17 @@ pub fn admit(
         Ok(Some(process)) => return Decision::Refused(Refusal::PictoRunning(process)),
         Err(error) => return Decision::Refused(Refusal::ProbeFailed(error)),
     }
-    // Rule 6: the core finds the schema current.
-    if let Err(message) = compatibility(&root) {
+    // Rule 6: in a debug build, the core finds the schema current. A release
+    // build does not look: the core updates a library of an earlier schema
+    // when it opens it, after making a backup, and reports a library it
+    // cannot open.
+    if !facts.release
+        && let Err(message) = compatibility(&root)
+    {
         return Decision::Refused(Refusal::Incompatible(message));
     }
-    // Rule 7: the user has given consent for this library.
+    // Rule 7: a debug build needs the user's consent for this library. A
+    // release build is Picto itself and opens the library without asking.
     let identity = match probes.file_identity(&database) {
         Ok(database) => Identity {
             path: root.to_string_lossy().into_owned(),
@@ -315,7 +324,7 @@ pub fn admit(
             )));
         }
     };
-    if consents.contains(&identity) {
+    if facts.release || consents.contains(&identity) {
         Decision::Real { root, identity }
     } else {
         Decision::Ask { root, identity }
@@ -568,11 +577,22 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn consent_is_asked_once_per_library_and_its_database() {
+    fn a_debug_build_asks_for_consent_once_per_library_and_its_database() {
         let folder = tempfile::tempdir().unwrap();
         let root = real_library(folder.path(), "Kept");
         let first = Database("first");
-        let decision = admit(&root, Origin::Manager, &release(), &[], &first);
+        // A release build opens the library without a stored consent.
+        assert!(matches!(
+            admit(&root, Origin::Manager, &release(), &[], &first),
+            Decision::Real { .. }
+        ));
+        // A debug build that was started with the flag asks.
+        let debug = Facts {
+            release: false,
+            flag: true,
+            ..release()
+        };
+        let decision = admit(&root, Origin::Manager, &debug, &[], &first);
         let Decision::Ask { identity, .. } = decision else {
             panic!("{decision:?}");
         };
@@ -580,20 +600,20 @@ pub(crate) mod tests {
         assert_eq!(identity.database, "first");
         let consents = [identity];
         assert!(matches!(
-            admit(&root, Origin::Manager, &release(), &consents, &first),
+            admit(&root, Origin::Manager, &debug, &consents, &first),
             Decision::Real { .. }
         ));
         // When another library is put at the same path, the user is asked
         // again.
         let replaced = Database("second");
         assert!(matches!(
-            admit(&root, Origin::Manager, &release(), &consents, &replaced),
+            admit(&root, Origin::Manager, &debug, &consents, &replaced),
             Decision::Ask { .. }
         ));
         // A consent does not cover the same database at another path.
         let elsewhere = real_library(folder.path(), "Other");
         assert!(matches!(
-            admit(&elsewhere, Origin::Manager, &release(), &consents, &first),
+            admit(&elsewhere, Origin::Manager, &debug, &consents, &first),
             Decision::Ask { .. }
         ));
     }
@@ -619,7 +639,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_incompatible_schema_is_refused_with_the_cores_words_and_left_alone() {
+    fn a_debug_build_refuses_an_incompatible_schema_with_the_cores_words_and_leaves_it_alone() {
         let folder = tempfile::tempdir().unwrap();
         let root = real_library(folder.path(), "Old");
         rusqlite::Connection::open(root.join("library.sqlite"))
@@ -630,10 +650,28 @@ pub(crate) mod tests {
             )
             .unwrap();
         let before = snapshot(&root);
+        // A release build admits the library and leaves its schema to the
+        // core, which updates it when it opens it.
+        assert!(matches!(
+            admit(
+                &root,
+                Origin::Manager,
+                &release(),
+                &agreed(&root),
+                &not_running()
+            ),
+            Decision::Real { .. }
+        ));
+        assert_eq!(snapshot(&root), before);
+        let debug = Facts {
+            release: false,
+            flag: true,
+            ..release()
+        };
         let Decision::Refused(Refusal::Incompatible(message)) = admit(
             &root,
             Origin::Manager,
-            &release(),
+            &debug,
             &agreed(&root),
             &not_running(),
         ) else {
@@ -652,7 +690,7 @@ pub(crate) mod tests {
             .execute_batch("CREATE TABLE t(x)")
             .unwrap();
         assert!(matches!(
-            admit(&other, Origin::Manager, &release(), &[], &not_running()),
+            admit(&other, Origin::Manager, &debug, &[], &not_running()),
             Decision::Refused(Refusal::Incompatible(message))
                 if message.contains("missing schema-generation-1 metadata")
         ));
