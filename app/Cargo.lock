@@ -7092,7 +7092,7 @@ dependencies = [
 
 [[package]]
 name = "picto_core"
-version = "0.6.24-alpha"
+version = "0.6.25-alpha"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -7168,7 +7168,7 @@ dependencies = [
 
 [[package]]
 name = "picto_sources"
-version = "0.6.24-alpha"
+version = "0.6.25-alpha"
 dependencies = [
  "chrono",
  "futures-util",
