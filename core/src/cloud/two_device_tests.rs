@@ -976,3 +976,92 @@ async fn a_file_that_a_merge_kept_is_not_a_file_of_the_library_for_cloud_sync() 
     assert_eq!(count(&third, "SELECT COUNT(*) FROM kept_deleted_file"), 0);
     drop(folders);
 }
+
+/// A restore can take the snapshot of another computer. A file that a merge
+/// kept on that computer and that isn't on this computer's disk goes with
+/// the restore, so a later add doesn't bring its picture back without the
+/// file. A kept file that is on this computer's disk stays, and the add
+/// brings its picture back from it.
+#[tokio::test]
+async fn a_restore_keeps_only_the_kept_files_that_are_on_this_disk() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, _provider, folders) = two_devices(cloud.path()).await;
+    // The second computer imports a file that the first doesn't have, and
+    // then a third computer deletes it and item 1.
+    import_later(&second, folders[1].path(), 3);
+    let (missing, present) = (hash(&second, 3), hash(&second, 1));
+    let third = "ffffffff-0000-4000-8000-000000000099";
+    let entry = |kind, subject_key: &str, value: Option<&str>, clock_ms| {
+        picto_library::SharedEntry {
+            kind,
+            subject_key: subject_key.to_owned(),
+            second_key: if kind == picto_library::EntryKind::Add {
+                third.into()
+            } else {
+                String::new()
+            },
+            value: value.map(str::to_owned),
+            clock_ms,
+            clock_counter: 0,
+            device_id: third.into(),
+        }
+    };
+    let later = second.library().entry_clock().unwrap().now.0 + 60_000;
+    second
+        .library()
+        .merge_entries(&[
+            entry(picto_library::EntryKind::Delete, &missing, None, later),
+            entry(picto_library::EntryKind::Delete, &present, None, later),
+        ])
+        .unwrap();
+    assert_eq!(count(&second, "SELECT COUNT(*) FROM kept_deleted_file"), 2);
+    let (artifact, _) = snapshot::create_verified_library(&second).unwrap();
+
+    // The first computer restores the second computer's snapshot.
+    let local = crate::state::local_cloud_configuration(&first).unwrap();
+    let root = first.root().to_path_buf();
+    drop(first);
+    let database = root.join("library.sqlite");
+    for sidecar in ["library.sqlite-wal", "library.sqlite-shm"] {
+        let _ = std::fs::remove_file(root.join(sidecar));
+    }
+    std::fs::copy(&artifact.database_path, &database).unwrap();
+    crate::state::initialize_restored_database(&database, &local).unwrap();
+    let restored = LibraryApplication::open(&root).unwrap();
+    assert_eq!(
+        count(
+            &restored,
+            &format!("SELECT COUNT(*) FROM kept_deleted_file WHERE content_hash = '{present}'")
+        ),
+        1
+    );
+
+    // Both pictures are added again.
+    restored
+        .library()
+        .merge_entries(&[
+            entry(picto_library::EntryKind::Add, &missing, Some(r#"{"name":"again"}"#), later + 1),
+            entry(picto_library::EntryKind::Add, &present, Some(r#"{"name":"again"}"#), later + 1),
+        ])
+        .unwrap();
+    let held = |hash: &str| {
+        count(
+            &restored,
+            &format!(
+                "SELECT COUNT(*) FROM media_item media
+                 JOIN media_file file ON file.file_id = media.file_id
+                 WHERE file.content_hash = '{hash}'"
+            ),
+        )
+    };
+    assert_eq!(held(&missing), 0, "a picture came back without its file");
+    let wanted = restored.library().wanted_files(None, 10).unwrap();
+    assert_eq!(wanted.iter().map(|file| file.content_hash.clone()).collect::<Vec<_>>(), [missing]);
+    assert_eq!(held(&present), 1);
+    assert!(restored
+        .blobs()
+        .original_path_with_ext(&present, Some("png"))
+        .unwrap()
+        .is_file());
+    drop(second);
+}

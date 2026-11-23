@@ -22,7 +22,7 @@ pub struct SnapshotArtifact {
     pub artifact_sha256: String,
     pub size_bytes: u64,
     pub compressed_path: PathBuf,
-    database_path: PathBuf,
+    pub(super) database_path: PathBuf,
 }
 
 impl Drop for SnapshotArtifact {

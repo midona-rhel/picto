@@ -481,7 +481,7 @@ struct RestoredCloudSnapshot {
 
 /// What a restore keeps of the library that it replaces, because it belongs
 /// to this device and to its sync, and not to the snapshot.
-struct LocalCloudConfiguration {
+pub(crate) struct LocalCloudConfiguration {
     device_id: String,
     provider: Option<String>,
     account_label: Option<String>,
@@ -492,12 +492,11 @@ struct LocalCloudConfiguration {
     clock: (i64, i64),
 }
 
-async fn restore_cloud_snapshot(args_json: &str) -> Result<String, String> {
-    let input: RestoreCloudSnapshotInput = serde_json::from_str(args_json)
-        .map_err(|error| format!("Invalid command arguments: {error}"))?;
-    let state = get_state()?;
-    let local = state
-        .application()
+/// Reads what a restore keeps of `application`'s library.
+pub(crate) fn local_cloud_configuration(
+    application: &LibraryApplication,
+) -> Result<LocalCloudConfiguration, String> {
+    application
         .library()
         .auxiliary_read(
             picto_library::database::WorkPriority::VisibleRead,
@@ -521,7 +520,14 @@ async fn restore_cloud_snapshot(args_json: &str) -> Result<String, String> {
                 )?)
             },
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())
+}
+
+async fn restore_cloud_snapshot(args_json: &str) -> Result<String, String> {
+    let input: RestoreCloudSnapshotInput = serde_json::from_str(args_json)
+        .map_err(|error| format!("Invalid command arguments: {error}"))?;
+    let state = get_state()?;
+    let local = local_cloud_configuration(state.application())?;
     let provider = crate::cloud::directory_provider_library(state.application())?;
     let prepared =
         crate::cloud::snapshot::prepare_restore(state.application(), &provider, &input.snapshot_id)
@@ -668,23 +674,10 @@ pub(crate) fn initialize_joined_database(
         .transaction()
         .map_err(|error| format!("Failed to initialize joined cloud library: {error}"))?;
     let now = chrono::Utc::now().to_rfc3339();
-    // A file that a merge kept on the device that made the snapshot is not
-    // on this device, and no picture uses it, so it is removed with the
-    // duplicate decisions that name it as the file that stayed.
-    transaction
-        .execute_batch(
-            "CREATE TEMP TABLE joined_kept_file AS
-                 SELECT file.file_id FROM media_file file
-                 WHERE file.content_hash IN (SELECT content_hash FROM kept_deleted_file)
-                   AND NOT EXISTS (SELECT 1 FROM media_item media
-                                   WHERE media.file_id = file.file_id);
-             DELETE FROM duplicate_pair
-             WHERE winner_file_id IN (SELECT file_id FROM temp.joined_kept_file);
-             DELETE FROM media_file WHERE file_id IN (SELECT file_id FROM temp.joined_kept_file);
-             DELETE FROM kept_deleted_file;
-             DROP TABLE temp.joined_kept_file;",
-        )
-        .map_err(|error| format!("Failed to remove the kept files of the snapshot: {error}"))?;
+    // The files that a merge kept on the device that made the snapshot are
+    // not on this device.
+    let kept = kept_file_hashes(&transaction)?;
+    remove_kept_files(&transaction, &kept)?;
     // The library has just been made from the cloud data, so `last_sync_at`
     // is set: if the cloud data is removed before this device's first sync,
     // the device sees that it is gone and does not write it again.
@@ -734,32 +727,102 @@ pub(crate) fn initialize_joined_database(
         .map_err(|error| format!("Failed to commit joined cloud library: {error}"))
 }
 
-// SQLite otherwise parses `ON` as a possible JOIN clause after `FROM media_file`.
-// The always-true predicate unambiguously terminates the SELECT before the UPSERT.
+/// Returns the content hashes of the files in `kept_deleted_file`.
+fn kept_file_hashes(connection: &rusqlite::Connection) -> Result<Vec<String>, String> {
+    let read = || -> rusqlite::Result<Vec<String>> {
+        connection
+            .prepare("SELECT content_hash FROM kept_deleted_file")?
+            .query_map([], |row| row.get(0))?
+            .collect()
+    };
+    read().map_err(|error| format!("Failed to read the kept files of the snapshot: {error}"))
+}
+
+/// Removes the files `hashes` of `kept_deleted_file` from the database of a
+/// snapshot, for files that a merge kept and that are not on this device's
+/// disk. No picture uses such a file, so its `media_file` row goes, and with
+/// it, through the foreign keys, the rows that refer to it. A duplicate
+/// decision that names it as the file that stayed is removed first, because
+/// that foreign key doesn't allow the removal. The connection must have
+/// foreign keys switched on.
+fn remove_kept_files(connection: &rusqlite::Connection, hashes: &[String]) -> Result<(), String> {
+    if hashes.is_empty() {
+        return Ok(());
+    }
+    let hashes = serde_json::to_string(hashes).map_err(|error| error.to_string())?;
+    let remove = || -> rusqlite::Result<()> {
+        connection.execute(
+            "CREATE TEMP TABLE removed_kept_file AS
+                 SELECT file.file_id FROM json_each(?1) hashes
+                 CROSS JOIN media_file file ON file.content_hash = hashes.value
+                 WHERE NOT EXISTS (SELECT 1 FROM media_item media
+                                   WHERE media.file_id = file.file_id)",
+            [&hashes],
+        )?;
+        connection.execute_batch(
+            "DELETE FROM duplicate_pair
+             WHERE winner_file_id IN (SELECT file_id FROM temp.removed_kept_file);
+             DELETE FROM media_file
+             WHERE file_id IN (SELECT file_id FROM temp.removed_kept_file);
+             DROP TABLE temp.removed_kept_file;",
+        )?;
+        connection.execute(
+            "DELETE FROM kept_deleted_file
+             WHERE content_hash IN (SELECT value FROM json_each(?1))",
+            [&hashes],
+        )?;
+        Ok(())
+    };
+    remove().map_err(|error| format!("Failed to remove the kept files of the snapshot: {error}"))
+}
+
+// The `WHERE` clause ends the SELECT: after `FROM media_file` SQLite would
+// otherwise read `ON` as a join constraint.
 const QUEUE_CLOUD_MEDIA_RECOVERY_SQL: &str =
     "INSERT INTO cloud_blob_state (file_hash, state, updated_at)
      SELECT content_hash, 'queued', ?1 FROM media_file WHERE 1
      ON CONFLICT(file_hash) DO UPDATE SET
          state = 'queued', priority = 0, last_error = NULL, updated_at = excluded.updated_at";
 
-fn initialize_restored_database(
+/// Turns the database of a snapshot, at `database_path` in the library's
+/// folder, into the database of this device's library: it keeps this
+/// device's id, cloud settings and clock (`local`), and it keeps only those
+/// files that a merge kept (`kept_deleted_file`) that are on this device's
+/// disk. A snapshot can come from another device, whose kept files are not
+/// here.
+pub(crate) fn initialize_restored_database(
     database_path: &std::path::Path,
     local: &LocalCloudConfiguration,
 ) -> Result<(), String> {
     let mut connection = rusqlite::Connection::open(database_path)
         .map_err(|error| format!("Failed to open the restored database: {error}"))?;
     picto_library::schema::validate(&connection).map_err(|error| error.to_string())?;
+    // Removing a kept file also removes the rows that refer to it.
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON")
+        .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;
     let connection = connection
         .transaction()
         .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;
-    // The restored library writes all of its own tombstones into the cloud
-    // folder again at its next sync, and it merges the tombstones in the
-    // cloud folder again, its own among them: a deletion that was synced
-    // after the snapshot was made is applied to the restored library too.
-    // The journal rows of the snapshot are dropped, because the device that
-    // made the snapshot has settled them. The clock does not go back: the
-    // device has given out the times up to the one it had before the
-    // restore.
+    let library_root = database_path
+        .parent()
+        .ok_or_else(|| "The restored database has no library folder".to_string())?;
+    let mut missing = Vec::new();
+    for hash in kept_file_hashes(&connection)? {
+        let present = crate::blob_store::library_has_original(library_root, &hash)
+            .map_err(|error| format!("Failed to look for the kept file {hash}: {error}"))?;
+        if !present {
+            missing.push(hash);
+        }
+    }
+    remove_kept_files(&connection, &missing)?;
+    // The restored library writes all of its own entries into the cloud
+    // folder again at its next sync, and it merges the entries in the cloud
+    // folder again, its own among them: a deletion that was synced after the
+    // snapshot was made is applied to the restored library too. The journal
+    // rows of the snapshot are dropped, because the device that made the
+    // snapshot has settled them. The clock does not go back: the device has
+    // given out the times up to the one it had before the restore.
     connection
         .execute_batch("DELETE FROM cloud_device_frontier; DELETE FROM cloud_journal;")
         .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;

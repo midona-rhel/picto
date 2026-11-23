@@ -473,7 +473,9 @@ tags and folders. Once the time is over, `Library::clean_pending_blobs`
 queues a kept file for removal when its picture doesn't exist by the entries. A kept file is not a
 file of the library: the statistics and the duplicate scan leave it out, its detected duplicate
 pairs are removed, cloud sync doesn't upload it as an original, and a library opened from a
-snapshot that holds it removes it, because the file isn't on that computer.
+snapshot that holds it removes it, because the file isn't on that computer. A restore keeps a kept
+file only when the file is on this computer's disk, since the snapshot can come from another
+computer.
 
 A computer's entries are spread over 256 files in `entries/<device id>/` by the first byte of the
 SHA-256 of an entry's key (`core/src/cloud/entries.rs`). A sync rewrites only the files whose
