@@ -652,7 +652,13 @@ async fn cloud_data_of_another_library_or_behind_a_link_is_not_removed() {
     )
     .unwrap();
     let error = delete_cloud_data_library(&first).await.unwrap_err();
+    assert!(error.contains("another library"), "{error}");
     assert!(error.contains("nothing was removed"), "{error}");
+
+    // The manifest names no library.
+    std::fs::write(data.join("library.json"), b"").unwrap();
+    let error = delete_cloud_data_library(&first).await.unwrap_err();
+    assert!(error.contains("does not name a library"), "{error}");
     std::fs::write(data.join("library.json"), manifest).unwrap();
     assert_eq!(files_below(&data), before);
     assert!(configuration_library(&first).unwrap().provider.is_some());
