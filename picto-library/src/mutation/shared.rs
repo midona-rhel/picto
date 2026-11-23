@@ -1282,7 +1282,7 @@ impl Library {
     /// Returns whether the library records entries.
     pub fn records_entries(&self) -> Result<bool> {
         self.database
-            .read(WorkPriority::Cloud, |connection| recording(connection))
+            .read(WorkPriority::Cloud, recording)
     }
 
     /// Turns this computer's pending changes into entries, at most `limit`

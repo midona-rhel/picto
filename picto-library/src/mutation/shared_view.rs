@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn a_file_exists_when_an_add_is_later_than_the_delete() {
         let add = HeldEntry::Add { time: at(5, "a"), record: record("one", &[]) };
-        assert!(view(&[add.clone()], &[]).is_some());
+        assert!(view(std::slice::from_ref(&add), &[]).is_some());
         assert!(view(&[add.clone(), HeldEntry::Delete { time: at(6, "b") }], &[]).is_none());
         assert!(view(&[add, HeldEntry::Delete { time: at(4, "b") }], &[]).is_some());
         assert!(view(&[HeldEntry::Name { time: at(9, "a"), value: "x".into() }], &[]).is_none());
