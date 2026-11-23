@@ -362,12 +362,16 @@ fn start_checkpoint_worker(
                             while library.settle_trash_moves(20_000)? {}
                             // While the library does not sync, no snapshot
                             // removes the rows of the change journal, so
-                            // they are removed here.
+                            // they are removed here. A row with a clock time
+                            // stays: it was written after the line above ran
+                            // and is turned into entries by the next round.
                             library.database().maintenance_write(
                                 picto_library::database::WorkPriority::Maintenance,
                                 |transaction| {
                                     transaction.execute(
-                                        "DELETE FROM cloud_journal WHERE NOT EXISTS (
+                                        "DELETE FROM cloud_journal
+                                         WHERE json_extract(payload_json, '$.at_ms') IS NULL
+                                           AND NOT EXISTS (
                                              SELECT 1 FROM cloud_state WHERE provider IS NOT NULL)",
                                         [],
                                     )?;

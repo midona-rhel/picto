@@ -237,9 +237,12 @@ async fn publish_library_inner(
                     ],
                 )?;
                 // The snapshot holds these changes. Nothing reads the rows
-                // again.
+                // again, except a row with a clock time: it waits to be
+                // turned into entries, which removes it. Such a row can have
+                // been written after this sync wrote the entries.
                 transaction.execute(
-                    "DELETE FROM cloud_journal WHERE revision <= ?1",
+                    "DELETE FROM cloud_journal
+                     WHERE revision <= ?1 AND json_extract(payload_json, '$.at_ms') IS NULL",
                     [database_revision as i64],
                 )?;
                 transaction.execute(
