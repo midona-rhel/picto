@@ -630,10 +630,13 @@ fn seed_local_originals_library(application: &LibraryApplication) -> Result<(), 
             picto_library::database::WorkPriority::Cloud,
             |transaction| {
                 transaction.execute(
-                    // `WHERE true` ends the SELECT: after `FROM media_file`
-                    // SQLite would otherwise read `ON` as a join constraint.
+                    // A file that a merge kept after deleting its picture
+                    // isn't uploaded. The `WHERE` clause also ends the
+                    // SELECT: after `FROM media_file` SQLite would otherwise
+                    // read `ON` as a join constraint.
                     "INSERT INTO cloud_blob_state (file_hash, state, updated_at)
-                     SELECT content_hash, 'queued', ?1 FROM media_file WHERE true
+                     SELECT content_hash, 'queued', ?1 FROM media_file
+                     WHERE content_hash NOT IN (SELECT content_hash FROM kept_deleted_file)
                      ON CONFLICT(file_hash) DO UPDATE SET
                          state = 'queued', remote_present = 0, last_error = NULL,
                          uploaded_at = NULL, updated_at = excluded.updated_at",

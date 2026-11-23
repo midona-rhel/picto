@@ -440,6 +440,10 @@ async fn sync_snapshot_blobs(
     Ok(())
 }
 
+/// Returns the size of the originals that a sync uploads or downloads: the
+/// files in the copy of the database whose original isn't known to be in the
+/// cloud folder. A file that a merge kept after deleting its picture
+/// (`kept_deleted_file`) isn't one of them.
 fn count_snapshot_blobs(snapshot_database: &Path) -> Result<i64, String> {
     let snapshot = Connection::open_with_flags(
         snapshot_database,
@@ -451,13 +455,16 @@ fn count_snapshot_blobs(snapshot_database: &Path) -> Result<i64, String> {
             "SELECT COALESCE(SUM(MAX(file.size_bytes, 1)), 0)
              FROM media_file AS file
              LEFT JOIN cloud_blob_state AS blob ON blob.file_hash = file.content_hash
-             WHERE blob.file_hash IS NULL OR blob.state != 'available' OR blob.remote_present = 0",
+             WHERE (blob.file_hash IS NULL OR blob.state != 'available' OR blob.remote_present = 0)
+               AND file.content_hash NOT IN (SELECT content_hash FROM kept_deleted_file)",
             [],
             |row| row.get(0),
         )
         .map_err(|error| format!("Failed to count cloud originals: {error}"))
 }
 
+/// Returns the next 64 of the originals that [`count_snapshot_blobs`]
+/// counts, after the content hash `cursor`.
 fn load_snapshot_blob_page(
     snapshot_database: &Path,
     cursor: &str,
@@ -476,6 +483,7 @@ fn load_snapshot_blob_page(
              WHERE file.content_hash > ?1
                AND (blob.file_hash IS NULL OR blob.state != 'available'
                     OR blob.remote_present = 0)
+               AND file.content_hash NOT IN (SELECT content_hash FROM kept_deleted_file)
              ORDER BY file.content_hash
              LIMIT 64",
         )

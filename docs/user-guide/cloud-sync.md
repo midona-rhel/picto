@@ -144,5 +144,6 @@ unless that library has the file again. While the deletion can still be undone o
 the original stays.
 
 The other computers keep the file of a picture that sync deleted on them for the same number of
-days. If you undo the deletion, or a computer imports the file again in that time, the picture
-comes back on them from that file.
+days, and for at least 7 days. If you undo the deletion, or a computer imports the file again in
+that time, the picture comes back on them from that file. Picto doesn't count these files in the
+library's statistics.

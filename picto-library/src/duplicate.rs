@@ -12,7 +12,7 @@ use crate::model::{
 use crate::projection::ProjectionSnapshot;
 use crate::{LibraryError, Result};
 
-const STATUS_DETECTED: u8 = 1;
+pub(crate) const STATUS_DETECTED: u8 = 1;
 const STATUS_NOT_DUPLICATE: u8 = 2;
 const STATUS_RESOLVED: u8 = 3;
 
@@ -141,9 +141,10 @@ pub(crate) fn replace_detected(
             .or_insert(distance);
     }
 
-    // Diff against the stored detections: a rescan that finds what it found
-    // last time writes nothing, keeps each pair's first detection time, and
-    // names only the roots whose pairs appeared, moved or vanished.
+    // The new pairs are compared with the stored ones. A scan that finds the
+    // pairs it found last time writes nothing, each pair keeps the time it
+    // was first found, and only the roots whose pairs were added, changed or
+    // removed are named as changed.
     let existing = {
         let mut statement = transaction.prepare(
             "SELECT file_id_a, file_id_b, distance FROM duplicate_pair WHERE status = ?1",
@@ -295,7 +296,9 @@ pub(crate) fn count_visible_candidates(
     connection: &Connection,
     snapshot: &ProjectionSnapshot,
 ) -> Result<u64> {
-    // Two set-based reads instead of one or two queries per pair side.
+    // Two queries for all pairs, not one for each side of each pair: the
+    // first reads the media items of the files in the pairs, the second the
+    // pairs.
     let mut owned_files = std::collections::HashSet::new();
     let mut statement = connection.prepare_cached(
         "SELECT media.file_id, media.media_id FROM media_item media

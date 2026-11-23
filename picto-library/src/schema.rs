@@ -9,7 +9,7 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-11-23-shared-entries";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-11-23-kept-deleted-files";
 const TOMBSTONE_ENTRIES_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-task-rollback-aliases";
 const COMBINED_IMPORT_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-media-aliases-import-tasks";
 const TASK_ROLLBACK_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-task-rollback";
@@ -1476,49 +1476,55 @@ mod tests {
         );
     }
 
+    /// A library whose schema fingerprint is none that this version knows is
+    /// not opened and not changed. The second fingerprint is the one that
+    /// an unreleased build of the cloud sync entries wrote before the table
+    /// `kept_deleted_file` was added.
     #[test]
     fn open_rejects_an_unknown_schema_without_mutating_it() {
-        let directory = tempfile::tempdir().unwrap();
-        let database_path = directory.path().join("library.sqlite");
-        drop(LibraryDatabase::create(&database_path).unwrap());
-        let connection = Connection::open(&database_path).unwrap();
-        connection
-            .execute(
-                "UPDATE library_meta SET schema_fingerprint = 'unknown' WHERE singleton = 1",
-                [],
-            )
-            .unwrap();
-        drop(connection);
-
-        let error = match LibraryDatabase::open(&database_path) {
-            Ok(_) => panic!("unknown schema unexpectedly opened"),
-            Err(error) => error,
-        };
-        assert!(matches!(error, LibraryError::Incompatible(_)));
-        let connection = Connection::open(&database_path).unwrap();
-        assert_eq!(
+        for fingerprint in ["unknown", "picto-library-schema-1-2026-11-23-shared-entries"] {
+            let directory = tempfile::tempdir().unwrap();
+            let database_path = directory.path().join("library.sqlite");
+            drop(LibraryDatabase::create(&database_path).unwrap());
+            let connection = Connection::open(&database_path).unwrap();
             connection
-                .query_row(
-                    "SELECT schema_fingerprint FROM library_meta WHERE singleton = 1",
-                    [],
-                    |row| row.get::<_, String>(0),
+                .execute(
+                    "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
+                    [fingerprint],
                 )
-                .unwrap(),
-            "unknown"
-        );
-        assert_eq!(
-            std::fs::read_dir(directory.path())
-                .unwrap()
-                .filter_map(|entry| entry.ok())
-                .filter(|entry| {
-                    entry
-                        .file_name()
-                        .to_str()
-                        .is_some_and(|name| name.contains(".pre-migration-"))
-                })
-                .count(),
-            0
-        );
+                .unwrap();
+            drop(connection);
+
+            let error = match LibraryDatabase::open(&database_path) {
+                Ok(_) => panic!("{fingerprint}: the library was opened"),
+                Err(error) => error,
+            };
+            assert!(matches!(error, LibraryError::Incompatible(_)), "{fingerprint}");
+            let connection = Connection::open(&database_path).unwrap();
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT schema_fingerprint FROM library_meta WHERE singleton = 1",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap(),
+                fingerprint
+            );
+            assert_eq!(
+                std::fs::read_dir(directory.path())
+                    .unwrap()
+                    .filter_map(|entry| entry.ok())
+                    .filter(|entry| {
+                        entry
+                            .file_name()
+                            .to_str()
+                            .is_some_and(|name| name.contains(".pre-migration-"))
+                    })
+                    .count(),
+                0
+            );
+        }
     }
 
     fn predecessor_fixture(directory: &std::path::Path) -> std::path::PathBuf {

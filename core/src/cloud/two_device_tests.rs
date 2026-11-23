@@ -910,3 +910,69 @@ async fn an_unread_own_file_is_not_replaced() {
     result.unwrap();
     assert!(kept, "the newer own entry file was removed");
 }
+
+/// The file of a picture that a merge deleted stays on the computer, but it
+/// isn't one of the library's files for cloud sync. Connecting a new cloud
+/// folder doesn't queue it for upload, a sync doesn't upload it as an
+/// original, and a computer that opens the library from the cloud neither
+/// downloads it nor counts it.
+#[tokio::test]
+async fn a_file_that_a_merge_kept_is_not_a_file_of_the_library_for_cloud_sync() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, folders) = two_devices(cloud.path()).await;
+    let kept = hash(&first, 1);
+    let queued = |application: &LibraryApplication, hash: &str| {
+        count(
+            application,
+            &format!(
+                "SELECT COUNT(*) FROM cloud_blob_state
+                 WHERE file_hash = '{hash}' AND state = 'queued'"
+            ),
+        )
+    };
+    second
+        .set_lifecycle(&target(&second, &[1]), Lifecycle::Trash)
+        .unwrap();
+    second.delete_items(&target(&second, &[1]), false).unwrap();
+    snapshot::publish_library(&second, &provider).await.unwrap();
+    receive_library(&first, &provider).await.unwrap();
+    assert_eq!(count(&first, "SELECT COUNT(*) FROM kept_deleted_file"), 1);
+
+    super::seed_local_originals_library(&first).unwrap();
+    assert_eq!(queued(&first, &hash(&first, 0)), 1);
+    assert_eq!(queued(&first, &kept), 0);
+
+    // Even when its state says that its original is missing, a sync doesn't
+    // upload the kept file.
+    write(
+        &first,
+        "UPDATE cloud_blob_state SET state = 'queued', remote_present = 0 WHERE file_hash = ?1",
+        &[&kept],
+    );
+    let original = cloud_original(cloud.path(), &first, &kept);
+    std::fs::remove_file(&original).unwrap();
+    let manifest = snapshot::publish_library(&first, &provider).await.unwrap();
+    assert!(!original.exists());
+
+    // Open from Cloud… on a third computer, from the first computer's
+    // snapshot.
+    let third_folder = tempfile::tempdir().unwrap();
+    let third_root = third_folder.path().join("Third.library");
+    let joined = snapshot::prepare_join(&provider, &manifest.library_id, &third_root)
+        .await
+        .unwrap();
+    std::fs::create_dir_all(third_root.join("blobs")).unwrap();
+    let database = third_root.join("library.sqlite");
+    std::fs::rename(&joined.database_path, &database).unwrap();
+    let cloud_text = cloud.path().to_string_lossy().into_owned();
+    crate::state::initialize_joined_database(&database, "dropbox", "Test", &cloud_text).unwrap();
+    let third = LibraryApplication::open(&third_root).unwrap();
+    assert_eq!(queued(&third, &kept), 0);
+    assert_eq!(count(&third, "SELECT pending_blobs FROM cloud_state"), 2);
+    assert_eq!(
+        count(&third, &format!("SELECT COUNT(*) FROM media_file WHERE content_hash = '{kept}'")),
+        0
+    );
+    assert_eq!(count(&third, "SELECT COUNT(*) FROM kept_deleted_file"), 0);
+    drop(folders);
+}

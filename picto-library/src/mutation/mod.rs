@@ -242,8 +242,8 @@ impl Library {
                         ))",
                 [],
             )?;
-            // The state in memory is rebuilt from the canonical rows below, so
-            // the journal rows that an earlier session left behind are not
+            // The state in memory is rebuilt from the library's tables below,
+            // so the journal rows that an earlier session left behind are not
             // needed.
             transaction.execute("DELETE FROM browsing_dirty_root", [])?;
             Ok(())
@@ -529,9 +529,10 @@ impl Library {
         })
     }
 
-    /// Run a query on one captured snapshot. Duplicate inspection is the one
-    /// scope that still reads canonical tables, inside a consistent read that
-    /// captures the matching snapshot; every other query never touches SQLite.
+    /// Runs a query on one captured snapshot. A query of duplicate pairs is
+    /// the only one that reads the database, inside a read that captures the
+    /// snapshot of the same revision. Every other query reads only the
+    /// snapshot in memory.
     fn scoped<T>(
         &self,
         scope: &crate::query::ItemScope,
@@ -699,7 +700,8 @@ impl Library {
             |connection, snapshot| {
                 let values = connection.query_row(
                     // The statistics are read in one pass over the media
-                    // items and one pass over the files.
+                    // items and one pass over the files. The files that a
+                    // merge kept after deleting their pictures don't count.
                     "WITH assets AS (
                          SELECT COUNT(*) AS total,
                                 COALESCE(SUM(file.mime LIKE 'image/%'), 0) AS images,
@@ -709,6 +711,7 @@ impl Library {
                      ), files AS (
                          SELECT COUNT(*) AS total, COALESCE(SUM(size_bytes), 0) AS bytes
                          FROM media_file
+                         WHERE content_hash NOT IN (SELECT content_hash FROM kept_deleted_file)
                      )
                      SELECT
                          assets.total, assets.images, assets.videos, assets.audio,
@@ -1921,8 +1924,8 @@ impl Library {
         Ok(receipt)
     }
 
-    /// Run one canonical write, publish its projection delta and, when the
-    /// write is undoable, record its history entry.
+    /// Runs one write of the library, publishes what it changed in the state
+    /// in memory and, when the write can be undone, records its undo step.
     fn publish<T>(
         &self,
         priority: WorkPriority,

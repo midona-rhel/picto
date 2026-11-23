@@ -611,6 +611,10 @@ impl Library {
     }
 }
 
+/// The shortest time, in days, that a file stays on this computer after a
+/// merge deleted its picture.
+const MIN_KEPT_DELETED_FILE_DAYS: i64 = 7;
+
 /// Removes `roots` and their media from the library inside a publication:
 /// their rows, tombstones, projections, orders, smart folders and a row of
 /// the cloud journal. The files that no other media item uses are queued for
@@ -622,8 +626,9 @@ impl Library {
 /// other computers delete the same pictures, and its originals in the cloud
 /// folder are noted for removal. A deletion that came from another computer
 /// gets neither, because the computer that made the deletion removes the
-/// originals. Its files stay on this computer for "Keep deleted files" and
-/// are noted in `kept_deleted_file` instead of being queued.
+/// originals. Its files stay on this computer for "Keep deleted files", and
+/// for at least `MIN_KEPT_DELETED_FILE_DAYS`, and are noted in
+/// `kept_deleted_file` instead of being queued.
 pub(super) fn delete_roots(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
@@ -750,16 +755,28 @@ pub(super) fn delete_roots(
             continue;
         }
         if origin == DeletionOrigin::OtherDevice {
-            // The file stays on this computer for "Keep deleted files", in
-            // case the entries of another computer add the picture again
-            // (`kept_deleted_file`).
+            // The file stays on this computer in case the entries of another
+            // computer add the picture again (`kept_deleted_file`). It stays
+            // for "Keep deleted files", and for at least
+            // `MIN_KEPT_DELETED_FILE_DAYS` even when that setting is shorter,
+            // because the setting is about the originals in the cloud folder
+            // and this file is the copy on this computer.
+            let remove_after = deleted_at
+                + chrono::Duration::days(retention_days.max(MIN_KEPT_DELETED_FILE_DAYS));
             transaction.execute(
                 "INSERT INTO kept_deleted_file (content_hash, remove_after_ms) VALUES (?1, ?2)
                  ON CONFLICT(content_hash) DO UPDATE SET
                      remove_after_ms = excluded.remove_after_ms",
-                rusqlite::params![content_hash, purge_after.timestamp_millis()],
+                rusqlite::params![content_hash, remove_after.timestamp_millis()],
             )?;
             transaction.execute("DELETE FROM blob_cleanup_queue WHERE file_id = ?1", [file_id])?;
+            // The file is no picture of the library, so it is no candidate
+            // for duplicate review either. A pair that was decided stays.
+            transaction.execute(
+                "DELETE FROM duplicate_pair
+                 WHERE status = ?2 AND (file_id_a = ?1 OR file_id_b = ?1)",
+                rusqlite::params![file_id, crate::duplicate::STATUS_DETECTED],
+            )?;
             continue;
         }
         if let Some(remote_extension) = remote_extension {

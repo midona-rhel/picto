@@ -467,10 +467,11 @@ CREATE TABLE wanted_file (
 
 -- Files of pictures that a merge deleted. The file and its `media_file` row
 -- stay on this computer until `remove_after_ms`, which is the time of the
--- merge plus "Keep deleted files". When the entries say that the picture
--- exists again in that time, the picture is imported again from this file.
--- After that time the file goes to `blob_cleanup_queue` unless the picture
--- exists by the entries.
+-- merge plus "Keep deleted files", and at least 7 days. When the entries say
+-- that the picture exists again in that time, the picture is imported again
+-- from this file. After that time the file goes to `blob_cleanup_queue`
+-- unless the picture exists by the entries. These files are not files of
+-- the library: statistics, the duplicate scan and cloud sync leave them out.
 CREATE TABLE kept_deleted_file (
     content_hash TEXT PRIMARY KEY,
     remove_after_ms INTEGER NOT NULL

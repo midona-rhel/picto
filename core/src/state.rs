@@ -648,8 +648,9 @@ async fn join_cloud_library(args_json: &str) -> Result<String, String> {
 /// Turns the database of a snapshot into the database of a new device's
 /// library: it gets a device id of its own and the cloud folder it was made
 /// from, loses what belongs to the device that made the snapshot (watched
-/// folders, view settings, the change journal), and queues every original
-/// for download.
+/// folders, view settings, the change journal, and the files that a merge
+/// kept there after deleting their pictures), and queues every original for
+/// download.
 pub(crate) fn initialize_joined_database(
     database_path: &std::path::Path,
     provider: &str,
@@ -659,10 +660,31 @@ pub(crate) fn initialize_joined_database(
     let mut connection = rusqlite::Connection::open(database_path)
         .map_err(|error| format!("Failed to initialize joined cloud library: {error}"))?;
     picto_library::schema::validate(&connection).map_err(|error| error.to_string())?;
+    // Deleting a file below also deletes the rows that refer to it.
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON")
+        .map_err(|error| format!("Failed to initialize joined cloud library: {error}"))?;
     let transaction = connection
         .transaction()
         .map_err(|error| format!("Failed to initialize joined cloud library: {error}"))?;
     let now = chrono::Utc::now().to_rfc3339();
+    // A file that a merge kept on the device that made the snapshot is not
+    // on this device, and no picture uses it, so it is removed with the
+    // duplicate decisions that name it as the file that stayed.
+    transaction
+        .execute_batch(
+            "CREATE TEMP TABLE joined_kept_file AS
+                 SELECT file.file_id FROM media_file file
+                 WHERE file.content_hash IN (SELECT content_hash FROM kept_deleted_file)
+                   AND NOT EXISTS (SELECT 1 FROM media_item media
+                                   WHERE media.file_id = file.file_id);
+             DELETE FROM duplicate_pair
+             WHERE winner_file_id IN (SELECT file_id FROM temp.joined_kept_file);
+             DELETE FROM media_file WHERE file_id IN (SELECT file_id FROM temp.joined_kept_file);
+             DELETE FROM kept_deleted_file;
+             DROP TABLE temp.joined_kept_file;",
+        )
+        .map_err(|error| format!("Failed to remove the kept files of the snapshot: {error}"))?;
     // The library has just been made from the cloud data, so `last_sync_at`
     // is set: if the cloud data is removed before this device's first sync,
     // the device sees that it is gone and does not write it again.

@@ -327,8 +327,8 @@ Both pictures follow the same rules outside the library's folder and at deletion
   `thumbnail` work for each file, as every import does.
 - A permanent delete queues the file in `blob_cleanup_queue`, and the cleanup deletes the
   original, the thumbnail and the first-frame picture together (`BlobStore::delete`). A picture
-  that a cloud sync merge deleted keeps its files for "Keep deleted files" first
-  (`kept_deleted_file`).
+  that a cloud sync merge deleted keeps its files for "Keep deleted files", and at least 7 days,
+  first (`kept_deleted_file`).
 
 ## Subscriptions
 
@@ -462,14 +462,18 @@ entries and isn't on this computer is listed by `Library::wanted_files`; fetchin
 built yet. Pictures in collections, and collections, get no entries and are left alone by a merge.
 
 A merge that deletes a picture keeps its file on this computer for the "Keep deleted files" time,
-counted from the merge, and notes it in `kept_deleted_file` instead of queuing it in
-`blob_cleanup_queue`. The entries of one action can arrive in two files, for example the deletion
+counted from the merge and at least 7 days, and notes it in `kept_deleted_file` instead of queuing
+it in `blob_cleanup_queue`. The setting is about the originals in the cloud folder, and this file is
+the copy on this computer, so a setting of 0 days still keeps it for 7. The entries of one action can arrive in two files, for example the deletion
 in one and its undo in another, and a provider's desktop app can download the file with the
 deletion first. When a later merge says that the picture exists again, `Library::apply_stored`
 imports it from the kept file through `Library::ingest_batch`, without fetching it. The file
 exists by the entries, so the import writes no `add`, and the next apply gives the picture its
 tags and folders. Once the time is over, `Library::clean_pending_blobs`
-queues a kept file for removal when its picture doesn't exist by the entries.
+queues a kept file for removal when its picture doesn't exist by the entries. A kept file is not a
+file of the library: the statistics and the duplicate scan leave it out, its detected duplicate
+pairs are removed, cloud sync doesn't upload it as an original, and a library opened from a
+snapshot that holds it removes it, because the file isn't on that computer.
 
 A computer's entries are spread over 256 files in `entries/<device id>/` by the first byte of the
 SHA-256 of an entry's key (`core/src/cloud/entries.rs`). A sync rewrites only the files whose

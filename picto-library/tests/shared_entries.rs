@@ -7,11 +7,12 @@
 //! In between, random sets of one computer's entries reach another, split
 //! into files as the cloud folder holds them, in any order, some twice and
 //! some files not readable yet. The receiving computer sometimes makes changes
-//! of its own between storing the files and applying them. At the end every
-//! entry is delivered. Files aren't fetched, as in the app today. A computer
-//! gets a picture's file when it imports the file itself, and it keeps the
-//! file of a picture that a merge deleted, which brings the picture back when
-//! the entries add it again.
+//! of its own between storing the files and applying them. "Keep deleted
+//! files" is 0 days, and the cleanup worker removes queued files at random
+//! moments. At the end every entry is delivered. Files aren't fetched, as in
+//! the app today. A computer gets a picture's file when it imports the file
+//! itself, and it keeps the file of a picture that a merge deleted, which
+//! brings the picture back when the entries add it again.
 //!
 //! The test logs what each computer did and when, by that computer's clock,
 //! and then checks:
@@ -758,7 +759,8 @@ fn log_differences(log: &mut Vec<Action>, hash: &str, was: &Picture, now: &Pictu
 /// and with some entries twice. The entries come in four files, as the cloud
 /// folder spreads them, and some files can't be read in this round. Between
 /// storing the files and applying them, the receiving computer sometimes
-/// makes changes of its own.
+/// makes changes of its own, and afterwards its cleanup worker sometimes
+/// runs.
 fn deliver(
     random: &mut Random,
     computers: &mut [Computer],
@@ -794,11 +796,17 @@ fn deliver(
         }
     }
     computers[to].library.apply_stored(unread).unwrap();
+    if random.chance(50) {
+        clean_files(&computers[to]);
+    }
 }
 
 fn run(seed: u64, template: &std::path::Path) {
     let mut random = Random(seed);
     let mut computers = (0..3).map(|_| Computer::new(template)).collect::<Vec<_>>();
+    for computer in &computers {
+        set_keep_days(computer, 0);
+    }
     let mut log = Vec::new();
     let steps = 15 + random.below(25);
     for _ in 0..steps {
@@ -815,6 +823,9 @@ fn run(seed: u64, template: &std::path::Path) {
         }
         for computer in &mut computers {
             computer.note_held();
+        }
+        if random.chance(30) {
+            clean_files(&computers[random.below(3) as usize]);
         }
     }
     for computer in &mut computers {
@@ -1394,44 +1405,122 @@ fn a_picture_that_a_merge_deleted_comes_back_with_its_file() {
     }
 }
 
-/// The file that a merge kept is removed from the disk once "Keep deleted
-/// files" has passed since the merge and the picture doesn't exist by the
-/// entries.
+/// Sets "Keep deleted files" of `computer` to `days`.
+fn set_keep_days(computer: &Computer, days: i64) {
+    computer
+        .library
+        .database()
+        .maintenance_write(WorkPriority::Maintenance, |transaction| {
+            transaction.execute(
+                "UPDATE cloud_state
+                 SET retention_json = json_set(retention_json, '$.deleted_blobs_days', ?1)",
+                [days],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// Runs the removal of queued files the way the cleanup worker does, and
+/// returns the hashes of the files it removed.
+fn clean_files(computer: &Computer) -> Vec<String> {
+    let mut removed = Vec::new();
+    computer
+        .library
+        .clean_pending_blobs(64, |pending| {
+            removed.push(pending.content_hash.clone());
+            Ok(())
+        })
+        .unwrap();
+    removed
+}
+
+/// "Keep deleted files" is about the originals in the cloud folder. The file
+/// that a merge keeps on this computer stays for at least 7 days even when
+/// the setting is 0 days, so a later add still brings the picture back.
+#[test]
+fn a_merge_keeps_the_file_for_seven_days_whatever_the_setting() {
+    let (_directory, template) = template();
+    let (one, two) = two_synced(&template);
+    set_keep_days(&one, 0);
+    let file = file_on_disk(&one, &hash(1)).unwrap();
+    let root = two.roots()[&hash(1)];
+    two.library.set_lifecycle(&two.target(root), Lifecycle::Trash).unwrap();
+    two.library.permanently_delete(&two.target(root), now_ms(), 500, false).unwrap();
+    one.library.merge_entries(&two.own_entries()).unwrap();
+    assert!(one.roots().is_empty());
+    clean_files(&one);
+    two.library.undo().unwrap();
+    one.library.merge_entries(&two.own_entries()).unwrap();
+    assert!(one.roots().contains_key(&hash(1)), "the picture is not back");
+    assert_eq!(file_on_disk(&one, &hash(1)), Some(file));
+}
+
+/// The file that a merge kept is removed from the disk once its keep time is
+/// over and the picture doesn't exist by the entries.
 #[test]
 fn a_kept_file_is_removed_after_the_keep_time() {
-    for days in [7, 0] {
-        let (_directory, template) = template();
-        let (one, two) = two_synced(&template);
-        one.library
-            .database()
-            .maintenance_write(WorkPriority::Maintenance, |transaction| {
-                transaction.execute(
-                    "UPDATE cloud_state
-                     SET retention_json = json_set(retention_json, '$.deleted_blobs_days', ?1)",
-                    [days],
-                )?;
-                Ok(())
-            })
-            .unwrap();
-        let root = two.roots()[&hash(1)];
-        two.library.set_lifecycle(&two.target(root), Lifecycle::Trash).unwrap();
-        two.library.permanently_delete(&two.target(root), now_ms(), 500, false).unwrap();
-        one.library.merge_entries(&two.own_entries()).unwrap();
-        assert!(one.roots().is_empty());
+    let (_directory, template) = template();
+    let (one, two) = two_synced(&template);
+    let root = two.roots()[&hash(1)];
+    two.library.set_lifecycle(&two.target(root), Lifecycle::Trash).unwrap();
+    two.library.permanently_delete(&two.target(root), now_ms(), 500, false).unwrap();
+    one.library.merge_entries(&two.own_entries()).unwrap();
+    assert!(clean_files(&one).is_empty());
+    assert!(file_on_disk(&one, &hash(1)).is_some());
 
-        let mut removed = Vec::new();
-        one.library
-            .clean_pending_blobs(10, |pending| {
-                removed.push(pending.content_hash.clone());
-                Ok(())
-            })
-            .unwrap();
-        if days == 0 {
-            assert_eq!(removed, [hash(1)]);
-            assert_eq!(file_on_disk(&one, &hash(1)), None);
-        } else {
-            assert!(removed.is_empty());
-            assert!(file_on_disk(&one, &hash(1)).is_some());
-        }
-    }
+    // The keep time is over.
+    one.library
+        .database()
+        .maintenance_write(WorkPriority::Maintenance, |transaction| {
+            transaction.execute("UPDATE kept_deleted_file SET remove_after_ms = 0", [])?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(clean_files(&one), [hash(1)]);
+    assert_eq!(file_on_disk(&one, &hash(1)), None);
+}
+
+/// A file that a merge kept isn't one of the library's files in its
+/// statistics.
+#[test]
+fn a_kept_file_is_not_counted_in_the_statistics() {
+    let (_directory, template) = template();
+    let (one, two) = two_synced(&template);
+    let root = two.roots()[&hash(1)];
+    two.library.set_lifecycle(&two.target(root), Lifecycle::Trash).unwrap();
+    two.library.permanently_delete(&two.target(root), now_ms(), 500, false).unwrap();
+    one.library.merge_entries(&two.own_entries()).unwrap();
+    assert!(file_on_disk(&one, &hash(1)).is_some());
+    let statistics = one.library.library_statistics().unwrap();
+    assert_eq!((statistics.physical_files, statistics.original_bytes), (0, 0));
+}
+
+/// A file that a merge kept is no candidate for duplicate review, so its
+/// pairs don't take the place of the pairs of pictures in the library.
+#[test]
+fn a_kept_file_is_not_a_duplicate_candidate() {
+    let (_directory, template) = template();
+    let (mut one, two) = two_synced(&template);
+    one.import(&hash(2), "second", Vec::new(), Vec::new());
+    let file_of = |computer: &Computer, hash: &str| {
+        computer.library.details(computer.roots()[hash]).unwrap().media[0].file_id
+    };
+    one.library
+        .record_duplicate_pair(file_of(&one, &hash(1)), file_of(&one, &hash(2)), 1, now_ms())
+        .unwrap();
+    assert_eq!(
+        one.library.duplicate_pairs(Some(picto_library::DuplicateStatus::Detected), 10).unwrap().len(),
+        1
+    );
+    let root = two.roots()[&hash(1)];
+    two.library.set_lifecycle(&two.target(root), Lifecycle::Trash).unwrap();
+    two.library.permanently_delete(&two.target(root), now_ms(), 500, false).unwrap();
+    one.library.merge_entries(&two.own_entries()).unwrap();
+    assert!(file_on_disk(&one, &hash(1)).is_some());
+    assert!(one
+        .library
+        .duplicate_pairs(Some(picto_library::DuplicateStatus::Detected), 10)
+        .unwrap()
+        .is_empty());
 }
