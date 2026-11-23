@@ -30,6 +30,9 @@ pub fn recover(application: &LibraryApplication) -> Result<(), String> {
 
 /// A job whose batch keeps failing is retried this many times in all.
 const MAX_INGEST_ATTEMPTS: u32 = 5;
+/// How long an item of another device whose import failed waits before the
+/// import is tried again.
+const SHARED_RETRY_DELAY: chrono::Duration = chrono::Duration::minutes(5);
 /// How long a released job waits before it is claimed again.
 const RELEASED_JOB_RETRY_DELAY: chrono::Duration = chrono::Duration::seconds(10);
 
@@ -546,12 +549,16 @@ fn settle_shared(
         }
         Err(LibraryError::ImportDeleted) => {
             settle_deleted_import(application, job_id, &[], now)?;
+            crate::cloud::entries::discard_unreferenced_originals(application, import);
             report.skipped += 1;
         }
+        // An import that failed is tried again later. The item stays in the
+        // entries of the library, and nothing else would bring it.
         Err(error) => {
+            let retry_at = (chrono::Utc::now() + SHARED_RETRY_DELAY).to_rfc3339();
             application
                 .library()
-                .fail_ingest_job(job_id, &error.to_string(), now)
+                .retry_shared_import(job_id, &error.to_string(), &retry_at)
                 .map_err(|failure| failure.to_string())?;
             report.failed += 1;
         }

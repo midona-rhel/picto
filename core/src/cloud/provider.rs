@@ -44,9 +44,10 @@ pub trait CloudProvider: Send + Sync {
     /// file that cannot be read now.
     fn read(&self, path: &str) -> ProviderFuture<'_, CloudRead<Vec<u8>>>;
     /// Copies the original at `path` to `destination` when it has
-    /// `size_bytes` bytes and the SHA-256 `checksum`. A file of another size
-    /// and a file that cannot be read now are not delivered yet. A file of
-    /// the right size with another checksum is an error.
+    /// `size_bytes` bytes and the SHA-256 `checksum`. A file of another size,
+    /// a file that cannot be read now and a copy that cannot be written now
+    /// are not delivered yet. The only error is a file of the right size
+    /// with another checksum.
     fn fetch_file(
         &self,
         path: &str,
@@ -991,7 +992,9 @@ impl CloudProvider for DirectoryProvider {
                     Err(error) => return Ok(CloudRead::NotDelivered(error)),
                 }
                 if let Some(parent) = destination.parent() {
-                    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                    if let Err(error) = std::fs::create_dir_all(parent) {
+                        return Ok(CloudRead::NotDelivered(error.to_string()));
+                    }
                 }
                 match std::fs::copy(&source, &destination) {
                     Ok(_) => Ok(CloudRead::Read(())),

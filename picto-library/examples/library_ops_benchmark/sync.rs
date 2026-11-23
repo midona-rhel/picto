@@ -162,3 +162,43 @@ pub fn run(roots: usize) -> R<()> {
     );
     Ok(())
 }
+
+/// Measures what a sync reads from the library to write the entries of an
+/// import of 5,000 items, in a library with `tags` tags: the entries of the
+/// device, and the records of the items that they add. The library holds one
+/// item for each tag before it starts to record items.
+pub fn run_publish(tags: usize) -> R<()> {
+    const IMPORTED: usize = 5_000;
+    let directory = tempfile::tempdir()?;
+    let library = library(directory.path(), "tags.sqlite", false)?;
+    let tagged = |index: usize| {
+        let mut item = prepared(index);
+        item.tags = vec![format!("unique:{index}")];
+        item
+    };
+    for start in (0..tags).step_by(picto_library::ingest::MAX_INGEST_BATCH) {
+        let end = (start + picto_library::ingest::MAX_INGEST_BATCH).min(tags);
+        library.ingest_batch(&(start..end).map(tagged).collect::<Vec<_>>())?;
+    }
+    library
+        .database()
+        .maintenance_write(WorkPriority::Cloud, |transaction| {
+            picto_library::reset_published_entries(transaction)
+        })?;
+    for start in (tags..tags + IMPORTED).step_by(picto_library::ingest::MAX_INGEST_BATCH) {
+        let end = (start + picto_library::ingest::MAX_INGEST_BATCH).min(tags + IMPORTED);
+        library.ingest_batch(&(start..end).map(prepared).collect::<Vec<_>>())?;
+    }
+
+    let started = Instant::now();
+    let clock = library.entry_clock()?;
+    let mut entries = Vec::<SharedEntry>::new();
+    library.visit_own_entries(clock.published, &mut |entry| entries.push(entry))?;
+    library.attach_records(&mut entries)?;
+    println!(
+        "ROW|read the entries of an import of {IMPORTED} items with their records|{tags} tags|{:.2} s|{} entries",
+        started.elapsed().as_secs_f64(),
+        entries.len()
+    );
+    Ok(())
+}

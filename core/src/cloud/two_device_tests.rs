@@ -889,7 +889,7 @@ async fn an_item_imported_on_one_device_appears_on_the_other_with_its_file() {
         import.source_urls = vec!["https://example.com/evening".into()];
     });
     snapshot::publish_library(&first, &provider).await.unwrap();
-    assert_eq!(entry_files(cloud.path(), &first).len(), 1);
+    assert!(!entry_files(cloud.path(), &first).is_empty());
 
     // The second device merges the entry and copies the original. The
     // ingest worker then imports the item.
@@ -938,7 +938,14 @@ async fn an_item_imported_on_one_device_appears_on_the_other_with_its_file() {
     // The second device writes no entry of its own for the item, and the
     // first device imports nothing when it merges again.
     snapshot::publish_library(&second, &provider).await.unwrap();
-    assert!(entry_files(cloud.path(), &second).is_empty());
+    assert_eq!(
+        count(
+            &second,
+            "SELECT COUNT(*) FROM shared_entry entry JOIN cloud_state state
+               ON state.device_id = entry.device_id WHERE entry.kind = 'item'"
+        ),
+        0
+    );
     assert_eq!(receive_and_import(&first, &provider).await, 0);
     assert_eq!(count(&first, "SELECT COUNT(*) FROM library_root"), 4);
     assert_eq!(count(&second, "SELECT COUNT(*) FROM library_root"), 4);
@@ -1176,4 +1183,77 @@ async fn a_device_removes_the_folder_that_an_earlier_version_wrote_its_entries_i
 
     snapshot::publish_library(&second, &provider).await.unwrap();
     assert!(!earlier.exists());
+}
+
+#[tokio::test]
+async fn a_library_opened_from_a_snapshot_imports_what_the_snapshots_device_waited_for() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, folders) = two_devices(cloud.path()).await;
+    import_later(&first, folders[0].path(), 3);
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    // The second device has merged the entry and waits for the original,
+    // and its snapshot holds the job with the paths of the second device.
+    let original = cloud_original(cloud.path(), &first, &hash(&first, 3));
+    let whole = std::fs::read(&original).unwrap();
+    std::fs::remove_file(&original).unwrap();
+    receive_library(&second, &provider).await.unwrap();
+    assert_eq!(waiting(&second), 1);
+    write(
+        &second,
+        "UPDATE ingest_job SET prepared = 1, source_path = '/gone/on/this/device'
+         WHERE source_kind = 'cloud'",
+        &[],
+    );
+    let manifest = snapshot::publish_library(&second, &provider).await.unwrap();
+    std::fs::write(&original, &whole).unwrap();
+
+    // A third device opens the library from that snapshot.
+    let third_folder = tempfile::tempdir().unwrap();
+    let third_root = third_folder.path().join("Third.library");
+    let joined = snapshot::prepare_join(&provider, &manifest.library_id, &third_root)
+        .await
+        .unwrap();
+    std::fs::create_dir_all(third_root.join("blobs")).unwrap();
+    let database = third_root.join("library.sqlite");
+    std::fs::rename(&joined.database_path, &database).unwrap();
+    crate::state::initialize_joined_database(
+        &database,
+        "dropbox",
+        "Test",
+        &cloud.path().to_string_lossy(),
+    )
+    .unwrap();
+    let third = LibraryApplication::open(&third_root).unwrap();
+    assert_eq!(count(&third, "SELECT COUNT(*) FROM ingest_job WHERE source_kind = 'cloud'"), 0);
+    snapshot::publish_library(&third, &provider).await.unwrap();
+    assert_eq!(
+        crate::library_ingest_runtime::run_batch(&third, 64)
+            .unwrap()
+            .ingested,
+        1
+    );
+    assert_eq!(status(&third, 3), Some(Lifecycle::Inbox));
+}
+
+#[tokio::test]
+async fn a_round_that_fails_does_not_stop_the_next_round() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, _folders) = two_devices(cloud.path()).await;
+    first
+        .set_lifecycle(&target(&first, &[0]), Lifecycle::Trash)
+        .unwrap();
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    let file = entry_files(cloud.path(), &first).remove(0);
+    let whole = std::fs::read(&file).unwrap();
+    std::fs::write(&file, &whole[..whole.len() / 2]).unwrap();
+
+    assert!(receive_library(&second, &provider).await.is_err());
+    assert_eq!(sync_state(&second).0, "error");
+    // The worker tries again while the state is `error`. When the file is
+    // whole, the round merges it and the error is gone.
+    assert!(receive_due_library(&second).unwrap());
+    std::fs::write(&file, &whole).unwrap();
+    assert!(receive_library(&second, &provider).await.unwrap() > 0);
+    assert_eq!(sync_state(&second), ("idle".to_string(), String::new()));
+    assert_eq!(status(&second, 0), Some(Lifecycle::Trash));
 }

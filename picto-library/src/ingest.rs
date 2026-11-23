@@ -963,6 +963,7 @@ pub(crate) fn ensure_tag(transaction: &Transaction<'_>, name: &str) -> Result<Ta
          VALUES (?1, ?2, ?3, ?4)",
         params![tag_id, stable_key, namespace_id, subname],
     )?;
+    crate::mutation::record_created_tag(transaction, &stable_key)?;
     Ok(TagId(tag_id))
 }
 

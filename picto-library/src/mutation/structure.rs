@@ -691,7 +691,7 @@ pub(super) fn delete_roots(
              deleted_at_ms = excluded.deleted_at_ms",
         rusqlite::params![revision as i64, deleted_at_ms],
     )?;
-    record_deleted_roots(transaction, origin)?;
+    record_deleted_roots(transaction, snapshot, &roots, origin)?;
     transaction.execute(
         "DELETE FROM root_fts WHERE rowid IN
              (SELECT local_id FROM temp.delete_root)",

@@ -192,6 +192,14 @@ impl Library {
                     .unwrap_or_else(now_ms),
             )?;
             record_imported_items(transaction, &created)?;
+            if shared {
+                // The library holds these items now, so their entries no
+                // longer keep the records.
+                clear_item_records(
+                    transaction,
+                    &inputs.iter().map(|input| input.stable_key.as_str()).collect::<Vec<_>>(),
+                )?;
+            }
             let receipt = PublicationCoordinator::receipt(
                 revision,
                 resources,
@@ -535,6 +543,9 @@ impl Library {
                     wholly_created.then_some(published_root),
                 )?;
                 resources.insert("tasks".to_owned());
+            }
+            if let Some(key) = shared {
+                clear_item_records(transaction, &[key])?;
             }
             if shared.is_none() && (!created_root_ids.is_empty() || creates_collection) {
                 let key = transaction.query_row(

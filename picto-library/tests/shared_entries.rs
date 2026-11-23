@@ -601,7 +601,11 @@ fn an_item_with_another_file_under_the_same_stable_key_is_not_deleted() {
             .clone()
     };
     assert_eq!(file_of("one"), Some(serde_json::json!({"file": "hash-one"})));
-    assert_eq!(file_of(&post), None);
+    // The entry of a collection names the files of the collection.
+    assert_eq!(
+        file_of(&post),
+        Some(serde_json::json!({"files": ["hash-post-1", "hash-post-2"]}))
+    );
     assert_eq!(b.receive(&a, &entries).deleted, 2);
     assert_eq!(b.status("one"), None);
     assert_eq!(b.status(&post), None);
@@ -830,6 +834,13 @@ impl Device {
     /// and imports it. Returns the number of items that were imported, and
     /// leaves out those that were deleted since they were queued.
     fn import_awaited(&self) -> usize {
+        // A round of the cloud worker queues what the entries add and
+        // removes the jobs of items that are no longer waited for.
+        self.library.queue_waiting_items().unwrap();
+        let unwanted = self.library.unwanted_shared_imports().unwrap();
+        self.library
+            .remove_shared_imports(&unwanted.iter().map(|item| item.ingest_job_id).collect::<Vec<_>>())
+            .unwrap();
         let awaited = self
             .library
             .awaited_shared_imports(100, "9999-01-01T00:00:00Z")
@@ -933,10 +944,13 @@ fn an_item_imported_on_one_device_is_imported_on_the_others_as_it_was() {
     a.library.ingest(&import).unwrap();
 
     let entries = a.take();
-    assert_eq!(entries.len(), 1);
+    // The item has its entry, and so has the tag that the import created.
     assert_eq!(
-        (entries[0].kind, entries[0].state),
-        (EntryKind::Item, EntryState::Add)
+        entries
+            .iter()
+            .map(|entry| (entry.kind, entry.state))
+            .collect::<Vec<_>>(),
+        [(EntryKind::Item, EntryState::Add), (EntryKind::Tag, EntryState::Add)]
     );
     assert_eq!(entries[0].key, "new");
 
@@ -946,8 +960,8 @@ fn an_item_imported_on_one_device_is_imported_on_the_others_as_it_was() {
         let applied = device.receive(&a, &entries);
         assert_eq!((applied.queued, applied.aliased), (1, 0));
         assert_eq!(device.status("new"), None);
-        // Merging the same entry again queues nothing.
-        assert_eq!(device.receive(&a, &entries).won, 0);
+        // Merging the same entries again queues nothing.
+        assert_eq!(device.receive(&a, &entries).queued, 0);
         assert_eq!(device.import_awaited(), 1);
     }
 
@@ -965,7 +979,7 @@ fn an_item_imported_on_one_device_is_imported_on_the_others_as_it_was() {
         // The merged import is not on the undo stack, and the device made
         // no entry of its own for it.
         assert!(!device.library.history().state().can_undo);
-        assert!(device.take().is_empty());
+        assert!(device.take().iter().all(|entry| entry.kind == EntryKind::Tag));
         assert_eq!(
             lines(&device.library, "SELECT device_id FROM shared_entry WHERE key = 'new'"),
             lines(&a.library, "SELECT device_id FROM shared_entry WHERE key = 'new'"),
@@ -1030,10 +1044,12 @@ fn an_item_that_is_deleted_before_its_file_arrives_is_never_imported() {
     assert_eq!(sync(&a, &b).queued, 1);
     a.delete(&["new"]);
 
-    // The deletion takes the item out of the queue.
+    // The item is no longer waited for, and the next round of the cloud
+    // worker takes it out of the queue.
     sync(&a, &b);
-    assert_eq!(scalar(&b.library, "SELECT COUNT(*) FROM ingest_job"), 0);
+    assert_eq!(b.library.unwanted_shared_imports().unwrap().len(), 1);
     assert_eq!(b.import_awaited(), 0);
+    assert_eq!(scalar(&b.library, "SELECT COUNT(*) FROM ingest_job"), 0);
     assert_eq!(b.status("new"), None);
     assert!(b.tombstoned("new"));
 
@@ -1045,7 +1061,7 @@ fn an_item_that_is_deleted_before_its_file_arrives_is_never_imported() {
 }
 
 #[test]
-fn the_same_file_under_two_keys_is_one_item_and_a_deletion_reaches_it_under_both() {
+fn the_same_file_under_two_keys_is_one_item_with_one_key_and_one_clock() {
     let (_directory, a, b, c) = devices();
     start_recording([&a, &b, &c]);
     // Two devices import the same picture, each under a key of its own.
@@ -1055,43 +1071,273 @@ fn the_same_file_under_two_keys_is_one_item_and_a_deletion_reaches_it_under_both
     b.library
         .ingest(&imported_later("key-on-b", "hash-same"))
         .unwrap();
+    // The second device moves its item to the Trash and back, which gives
+    // the item a `status` entry under the second device's key.
+    b.trash(&["key-on-b"]);
+    b.restore(&["key-on-b"]);
+    let from_b = b.take();
 
+    // The second device learns that the first holds the file under a
+    // smaller key. Its item takes that key, and the old key is an alias.
     let applied = sync(&a, &b);
     assert_eq!((applied.queued, applied.aliased), (0, 1));
-    let applied = sync(&b, &a);
-    assert_eq!((applied.queued, applied.aliased), (0, 1));
+    assert!(b.root("key-on-a").is_some() && b.root("key-on-b").is_none());
+    assert_eq!(
+        lines(&b.library, "SELECT stable_key FROM library_item_alias"),
+        ["Text(\"key-on-b\")"]
+    );
+    // The item has one `status` entry, under the key that it has now.
+    assert_eq!(
+        lines(&b.library, "SELECT key FROM shared_entry WHERE kind = 'status'"),
+        ["Text(\"key-on-a\")"]
+    );
+    // The first device keeps its key. An entry that names the item by the
+    // other key is an entry for the same item.
+    a.receive(&b, &from_b);
+    assert!(a.root("key-on-a").is_some());
     for device in [&a, &b] {
-        assert_eq!(
-            scalar(
-                &device.library,
-                "SELECT COUNT(*) FROM media_file WHERE content_hash = 'hash-same'"
-            ),
-            1
-        );
         assert_eq!(scalar(&device.library, "SELECT COUNT(*) FROM library_root"), 5);
-        assert_eq!(
-            scalar(&device.library, "SELECT COUNT(*) FROM library_item_alias"),
-            1
-        );
     }
 
-    // A move to the Trash that names the other device's key moves the item.
+    // The first device moves the item to the Trash. The move is later than
+    // the second device's move, whatever key that was made under.
     a.trash(&["key-on-a"]);
     sync(&a, &b);
-    assert_eq!(b.status("key-on-b"), Some(Lifecycle::Trash));
+    assert_eq!(b.status("key-on-a"), Some(Lifecycle::Trash));
 
-    // The first device deletes the item. The second device holds it under
-    // its own key and deletes it too. The third device never held it.
+    // The first device deletes the item and undoes the deletion. The second
+    // device ends with the item, in every order of the two states.
     a.library
-        .permanently_delete(&a.target(&["key-on-a"]), DELETED_AT_MS, 0, false)
+        .permanently_delete(&a.target(&["key-on-a"]), DELETED_AT_MS, 500, false)
         .unwrap();
+    let deleted = a.take();
+    a.library.undo().unwrap().unwrap();
+    let undone = a.take();
+    assert_eq!(b.receive(&a, &deleted).deleted, 1);
+    b.receive(&a, &undone);
+    assert_eq!(b.import_awaited(), 1);
+    assert_eq!(b.status("key-on-a"), Some(Lifecycle::Trash));
+    c.receive(&a, &undone);
+    c.receive(&a, &deleted);
+    assert_eq!(c.import_awaited(), 1);
+    assert_eq!(c.status("key-on-a"), Some(Lifecycle::Trash));
+}
+
+#[test]
+fn a_deletion_deletes_only_the_files_that_the_other_device_deleted() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    let entry = |key: &str, value: serde_json::Value| SharedEntry {
+        kind: EntryKind::Item,
+        key: key.into(),
+        state: EntryState::Delete,
+        at_ms: IMPORTED_AT_MS + 10,
+        logical: 0,
+        value: Some(value),
+    };
+    let post_key = post(&b);
+    let roots = |device: &Device| scalar(&device.library, "SELECT COUNT(*) FROM library_root");
+
+    // An earlier version gave the collection of a grouped import an alias
+    // with the task's number and no device id. Two devices can hold
+    // different collections under it. A deletion that names the alias
+    // deletes nothing.
+    write(
+        &b.library,
+        &format!(
+            "INSERT INTO library_item_alias(stable_key, local_id)
+             SELECT 'task:8:collection', local_id FROM library_item
+             WHERE stable_key = '{post_key}'"
+        ),
+    );
+    let by_alias = entry(
+        "task:8:collection",
+        serde_json::json!({"files": ["hash-post-1", "hash-post-2"]}),
+    );
+    assert_eq!(b.receive(&a, &[by_alias]).deleted, 0);
+    assert_eq!(roots(&b), 4);
+
+    // A deletion of a collection without the names of its files deletes
+    // nothing, and one that names another file than the item's deletes
+    // nothing.
+    let without_files = SharedEntry {
+        value: None,
+        ..entry(&post_key, serde_json::json!(null))
+    };
+    assert_eq!(c.receive(&a, &[without_files]).deleted, 0);
+    assert_eq!(c.receive(&a, &[entry("one", serde_json::json!({"file": "other"}))]).deleted, 0);
+    assert_eq!(roots(&c), 4);
+
+    // The other device deleted a collection that held one of the two files
+    // of the collection here. Only that file is deleted here.
+    let one_file = entry(&post_key, serde_json::json!({"files": ["hash-post-2", "hash-x"]}));
+    assert_eq!(b.receive(&a, &[one_file]).deleted, 1);
+    assert_eq!(
+        scalar(
+            &b.library,
+            "SELECT COUNT(*) FROM media_item media
+             JOIN media_file file ON file.file_id = media.file_id
+             WHERE file.content_hash LIKE 'hash-post-%'"
+        ),
+        1
+    );
+    assert_eq!(roots(&b), 4);
+
+    // An item that holds the deleted file under another key is deleted.
+    let other_key = entry("key-elsewhere", serde_json::json!({"file": "hash-two"}));
+    assert_eq!(b.receive(&a, &[other_key]).deleted, 1);
+    assert_eq!(b.status("two"), None);
+}
+
+#[test]
+fn what_an_undone_import_added_is_removed_on_the_other_device() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    let task = a
+        .library
+        .create_task("import", "test", "{}", true, false, 1)
+        .unwrap();
+    a.library
+        .ingest_batch_for_task(&[imported_later("new", "hash-new")], task, false)
+        .unwrap();
+    assert_eq!(sync(&a, &b).queued, 1);
+    assert_eq!(b.import_awaited(), 1);
+
+    a.library.stop_task(task, true, 2).unwrap();
+    a.library.revert_task(task, 3).unwrap();
+    assert_eq!(a.status("new"), None);
     assert_eq!(sync(&a, &b).deleted, 1);
-    assert_eq!(b.status("key-on-b"), None);
-    assert!(b.tombstoned("key-on-a") && b.tombstoned("key-on-b"));
-    sync(&a, &c);
-    sync(&b, &c);
-    assert_eq!(c.import_awaited(), 0);
-    assert_eq!(scalar(&c.library, "SELECT COUNT(*) FROM library_root"), 4);
+    assert_eq!(b.status("new"), None);
+}
+
+#[test]
+fn a_job_that_was_lost_or_came_with_a_snapshot_is_queued_again_from_the_entries() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    a.library.ingest(&imported_later("new", "hash-new")).unwrap();
+    assert_eq!(sync(&a, &b).queued, 1);
+    // The record stays with the entry while the item is not here.
+    assert_eq!(
+        scalar(&b.library, "SELECT COUNT(*) FROM shared_entry WHERE key = 'new' AND value IS NOT NULL"),
+        1
+    );
+    // A database that came from a snapshot holds no job of another device.
+    write(&b.library, "DELETE FROM ingest_job");
+    assert_eq!(b.library.queue_waiting_items().unwrap(), 1);
+    assert_eq!(b.library.queue_waiting_items().unwrap(), 0);
+
+    // An import that failed waits and is tried again.
+    let job = b
+        .library
+        .awaited_shared_imports(10, "9999-01-01T00:00:00Z")
+        .unwrap()
+        .remove(0);
+    b.library
+        .retry_shared_import(job.ingest_job_id, "The disk is full", "2000-01-01T00:00:00Z")
+        .unwrap();
+    assert_eq!(b.import_awaited(), 1);
+    assert_eq!(b.status("new"), Some(Lifecycle::Active));
+    // The library holds the item, so the entry no longer keeps the record.
+    assert_eq!(
+        scalar(&b.library, "SELECT COUNT(*) FROM shared_entry WHERE key = 'new' AND value IS NOT NULL"),
+        0
+    );
+}
+
+#[test]
+fn an_entry_that_is_written_again_with_its_record_replaces_the_one_without() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    a.library.ingest(&imported_later("new", "hash-new")).unwrap();
+    let whole = a.take();
+    let mut bare = whole.clone();
+    bare[0].value = None;
+    assert_eq!(b.receive(&a, &bare).queued, 0);
+    // The same entry with its record has the same clock time and wins.
+    assert_eq!(b.receive(&a, &whole).queued, 1);
+    assert_eq!(b.import_awaited(), 1);
+
+    // A device that holds an entry of its own for an item that is not in
+    // its library, as after a restore, writes the entry with the record
+    // that it stores.
+    c.receive(&a, &whole);
+    write(&c.library, "UPDATE shared_entry SET device_id = 'device-c' WHERE key = 'new'");
+    let rewritten = c.take();
+    assert!(rewritten[0].value.as_ref().is_some_and(|value| value["files"].is_array()));
+}
+
+#[test]
+fn a_collection_that_is_added_again_is_imported_before_the_entries_of_its_files_arrive() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    let key = post(&a);
+    a.delete(&[&key]);
+    assert_eq!(sync(&a, &b).deleted, 1);
+    a.library.undo().unwrap().unwrap();
+    // The second device gets the entry of the collection alone. The
+    // tombstones of the files are earlier than it and go with it.
+    let collection = a
+        .take()
+        .into_iter()
+        .filter(|entry| entry.key == key)
+        .collect::<Vec<_>>();
+    assert_eq!(b.receive(&a, &collection).queued, 1);
+    assert_eq!(b.import_awaited(), 1);
+    // The collection was in the Trash when it was deleted.
+    assert_eq!(b.status(&key), Some(Lifecycle::Trash));
+    drop(c);
+}
+
+#[test]
+fn a_tag_that_is_created_after_its_deletion_is_not_taken_from_the_new_items() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    // The tag is created by an import, which gives it a key made from its
+    // name, and deleted. A later import creates it again under that key.
+    let mut first = imported_later("first", "hash-first");
+    first.tags = vec!["again:tag".into()];
+    a.library.ingest(&first).unwrap();
+    let tag = a.library.projections().snapshot().tag_ids_by_name["again:tag"];
+    a.library.delete_tag(tag, DELETED_AT_MS).unwrap();
+    let stale = a
+        .take()
+        .into_iter()
+        .filter(|entry| entry.kind == EntryKind::Tag)
+        .collect::<Vec<_>>();
+    assert_eq!(stale[0].state, EntryState::Delete);
+    let mut second = imported_later("second", "hash-second");
+    second.tags = vec!["again:tag".into()];
+    a.library.ingest(&second).unwrap();
+    let current = a.take();
+
+    // The second device gets the item with the tag first and the stale
+    // deletion afterwards. The tag stays on the item.
+    sync(&a, &b);
+    assert_eq!(b.receive(&a, &current).queued, 0);
+    b.import_awaited();
+    b.receive(&a, &stale);
+    assert!(has_tag(&b, "again:tag"));
+
+    // A record that was made before the tag was deleted does not create the
+    // tag again.
+    let before_deletion = current
+        .iter()
+        .filter(|entry| entry.key == "first")
+        .cloned()
+        .map(|mut entry| {
+            entry.value.as_mut().unwrap()["made_at"] = serde_json::json!([1, 0]);
+            entry.value.as_mut().unwrap()["tags"] =
+                serde_json::json!([{"key": "tag:gone", "name": "gone:tag"}]);
+            entry
+        })
+        .collect::<Vec<_>>();
+    write(
+        &c.library,
+        "INSERT INTO shared_entry VALUES ('tag', 'tag:gone', 'delete', NULL, 5, 0, 'device-a')",
+    );
+    c.receive(&a, &before_deletion);
+    assert_eq!(c.import_awaited(), 1);
+    assert!(!has_tag(&c, "gone:tag"));
 }
 
 #[test]
@@ -1120,8 +1366,14 @@ fn an_imported_collection_arrives_with_its_files_in_order_and_its_key() {
     let key = a.library.details(collection).unwrap().root.stable_key;
 
     let entries = a.take();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].key, key);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.kind == EntryKind::Item)
+            .map(|entry| entry.key.as_str())
+            .collect::<Vec<_>>(),
+        [key.as_str()]
+    );
     assert_eq!(sync(&a, &b).queued, 1);
     assert_eq!(b.import_awaited(), 1);
 
@@ -1151,7 +1403,7 @@ fn an_imported_collection_arrives_with_its_files_in_order_and_its_key() {
         JOIN media_file file ON file.file_id = media.file_id
         WHERE file.content_hash LIKE 'hash-s-%' ORDER BY 1";
     assert_eq!(lines(&b.library, member_keys), lines(&a.library, member_keys));
-    assert!(b.take().is_empty());
+    assert!(b.take().iter().all(|entry| entry.kind == EntryKind::Tag));
     // Merging the entry again queues nothing, because every file is here.
     write(
         &b.library,

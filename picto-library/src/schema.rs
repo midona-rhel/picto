@@ -481,6 +481,8 @@ fn migrate_shared_entries(connection: &Connection) -> Result<()> {
              device_id TEXT NOT NULL,
              PRIMARY KEY(kind, key)
          ) WITHOUT ROWID, STRICT;
+         CREATE INDEX idx_shared_entry_record ON shared_entry(key)
+             WHERE kind = 'item' AND state = 'add' AND value IS NOT NULL;
          CREATE TABLE merged_entry_file (
              device_id TEXT NOT NULL,
              shard TEXT NOT NULL,
@@ -908,6 +910,14 @@ mod tests {
         let connection = Connection::open(&path).unwrap();
         super::validate(&connection).unwrap();
         assert_eq!(table_definitions(&connection, &TABLES), created);
+        assert_eq!(
+            count(
+                &connection,
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index' AND name = 'idx_shared_entry_record'"
+            ),
+            1
+        );
         assert_eq!(
             count(
                 &connection,

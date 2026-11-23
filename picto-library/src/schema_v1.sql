@@ -411,6 +411,12 @@ CREATE TABLE shared_entry (
     PRIMARY KEY(kind, key)
 ) WITHOUT ROWID, STRICT;
 
+-- The `add` entries that are stored with a record: the items that another
+-- device added and that this library does not hold yet. Every merge round
+-- reads them.
+CREATE INDEX idx_shared_entry_record ON shared_entry(key)
+    WHERE kind = 'item' AND state = 'add' AND value IS NOT NULL;
+
 -- The entry files in the cloud folder that this library has merged: for each
 -- device and each of its shards, the name of the file that was merged last.
 CREATE TABLE merged_entry_file (

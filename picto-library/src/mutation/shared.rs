@@ -10,7 +10,7 @@
 //!
 //! | Kind | Key | States |
 //! | --- | --- | --- |
-//! | `item` | stable key of an item or a collection | `add`: the item was imported, or its tombstone was removed by a subscription or by the undo of a deletion. In the cloud folder the entry carries the record of the item ([`SharedItem`]) when the device that made it holds the item: its file or, for a collection, its files, with their names and stored facts, and its name, notes, source links, rating, status, dates, tags and folders. `delete`: deleted permanently; the value is `{"file": "<content hash>"}` for an item with a file, and there is none for a collection. |
+//! | `item` | stable key of an item or a collection | `add`: the item was imported, or its tombstone was removed by a subscription or by the undo of a deletion. In the cloud folder the entry carries the record of the item ([`SharedItem`]) when the device that made it holds the item or stores the record that it received: its file or, for a collection, its files, with their names and stored facts, and its name, notes, source links, rating, status, dates, tags and folders. `delete`: deleted permanently; the value is `{"file": "<content hash>"}` for an item with a file and `{"files": [...]}` with the content hashes of its files for a collection. |
 //! | `status` | stable key of an item or a collection | `trash`, `active`, `inbox`: where the last move into or out of the Trash put it. |
 //! | `tag`, `folder`, `smart_folder` | stable key | `delete`, and `add` when the deletion was undone. |
 //!
@@ -38,39 +38,46 @@
 //! reach the other devices in its snapshot, and no entry is written for
 //! them.
 //!
-//! The library stores an `add` entry without the record. The record is made
-//! when the entry is written into the cloud folder
-//! ([`Library::attach_records`]), from the item as the library holds it
-//! then, so an imported item costs one short row and not a copy of what the
-//! library already holds.
+//! The library stores the `add` entry of an item that it holds without the
+//! record. The record is made when the entry is written into the cloud
+//! folder ([`Library::attach_records`]), from the item as the library holds
+//! it then, so an imported item costs one short row and not a copy of what
+//! the library already holds.
 //!
 //! # Merged additions
 //!
-//! A merged `add` with a record does nothing when the library holds an item
-//! with the entry's key. When the library holds the record's file under
-//! another key, the entry's key becomes an alias of that item
-//! (`library_item_alias`), because one file is one item. Otherwise a job is
-//! put into the ingest queue (`ingest_job`, source kind `cloud`), not
-//! prepared. The cloud worker copies the job's files from the cloud folder
-//! into the library and marks the job prepared, and the ingest worker
-//! imports it ([`Library::ingest_shared`]). An entry of another kind that
-//! names an item which is not here yet is stored, and the import reads it.
-//! An import that was merged records no entry of its own.
+//! A merged `add` is stored with its record. Every merge round reads the
+//! entries that are stored with a record ([`queue_waiting_items`]). An item
+//! that the library holds needs nothing more, and its entry loses the
+//! record. When the library holds the record's file under another key, the
+//! item takes the smaller of the two keys and the other key becomes its
+//! alias (`library_item_alias`), because one file is one item and one item
+//! has one key on all devices. Every other item gets a job in the ingest
+//! queue (`ingest_job`, source kind `cloud`), not prepared. The cloud worker
+//! copies the job's files from the cloud folder into the library and marks
+//! the job prepared, and the ingest worker imports it
+//! ([`Library::ingest_shared`]). An entry of another kind that names an item
+//! which is not here yet is stored, and the import reads it. An import that
+//! was merged records no entry of its own for the item.
 //!
 //! # Merged deletions
 //!
-//! A merged `delete` deletes the item through the existing delete code.
-//! Three things are left alone. An item whose file has another content hash
-//! than the entry names is another item under the same stable key: before
-//! stable keys of manual imports held the device's id, two devices could
-//! give the same key to different files. Such an item stays, as if the
-//! library did not hold an item with that key. An item of which the library
-//! holds no entry yet, and which was imported here after the deletion was
-//! made, was added again: it stays and gets an `add` entry. That is the rule
-//! of an import, which removes a tombstone that is earlier than the import.
-//! A folder or smart folder with a folder below it that has no `delete`
-//! entry stays until that folder is deleted too, so a merge deletes no
-//! folder that the other device did not delete.
+//! A merged `delete` deletes what the other device deleted, through the
+//! existing delete code. An entry with the content hash of a file deletes
+//! the item with the entry's key when its file has that hash, or else the
+//! item that holds that file under another key. An item with another file
+//! under the entry's key stays: before stable keys of manual imports held
+//! the device's id, two devices could give one key to different files. An
+//! entry of a collection names the content hashes of the collection's
+//! files. The collection with the entry's key is deleted when all its files
+//! are named, and otherwise only the named files are taken out of it and
+//! deleted. An entry that names no hash deletes nothing. An item of which
+//! the library holds no entry yet, and which was imported here after the
+//! deletion was made, was added again: it stays and gets an `add` entry.
+//! That is the rule of an import, which removes a tombstone that is earlier
+//! than the import. A folder or smart folder with a folder below it that
+//! has no `delete` entry stays until that folder is deleted too, so a merge
+//! deletes no folder that the other device did not delete.
 
 use serde::{Deserialize, Serialize};
 
@@ -173,11 +180,28 @@ pub struct SharedEntry {
 }
 
 impl SharedEntry {
-    /// The content hash that a `delete` entry names.
+    /// The content hash that a `delete` entry of an item with a file names.
     fn deleted_file(&self) -> Option<&str> {
         (self.state == EntryState::Delete)
             .then(|| self.value.as_ref()?.get("file")?.as_str())
             .flatten()
+    }
+
+    /// The content hashes of the files of the collection that a `delete`
+    /// entry of a collection names.
+    fn deleted_files(&self) -> Option<HashSet<&str>> {
+        if self.state != EntryState::Delete {
+            return None;
+        }
+        Some(
+            self.value
+                .as_ref()?
+                .get("files")?
+                .as_array()?
+                .iter()
+                .filter_map(|file| file.as_str())
+                .collect(),
+        )
     }
 
     /// The record of the item that an `add` entry of the kind `item`
@@ -207,6 +231,11 @@ pub struct SharedItem {
     pub imported_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub captured_at_ms: Option<i64>,
+    /// The time of the clock of the library that made the record, when it
+    /// made it. A tag that was deleted after that time is not created again
+    /// from the record.
+    #[serde(default)]
+    pub made_at: (i64, i64),
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<SharedName>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -438,14 +467,36 @@ pub fn remove_item_tombstones(
     Ok(removed)
 }
 
+/// Returns whether `key` is a stable key of the form that an earlier version
+/// gave an imported file or an item of a merged library: `task:` or `merge:`
+/// and a task number, without the id of a device. Two devices can hold
+/// different things under such a key.
+fn has_local_number(key: &str) -> bool {
+    ["task:", "merge:"].iter().any(|prefix| {
+        key.strip_prefix(prefix)
+            .and_then(|rest| rest.split_once(':'))
+            .is_some_and(|(number, _)| {
+                !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+            })
+    })
+}
+
 /// Called by `delete_roots` while the ids of the roots and of their media
 /// are staged in `temp.delete_root` and `temp.delete_item` and their rows
-/// still exist. For a deletion that the user made it records a `delete`
-/// entry for every item that gets a tombstone, with the content hash of the
-/// item's file when the item has one. For every deletion it drops
-/// the `status` entries of the deleted roots, which no longer mean anything.
+/// still exist. `snapshot` holds the roots as they are before the deletion.
+///
+/// For a deletion that the user made, and for the removal of what an import
+/// added, it records a `delete` entry for every item that gets a tombstone.
+/// The entry of an item with a file carries the content hash of that file,
+/// and the entry of a collection the content hashes of all its files, so
+/// that a device which merges the entry deletes only those files. No entry
+/// is written for an alias: another device can hold something else under
+/// it. For every deletion the `status` entries of the deleted roots are
+/// dropped, which no longer mean anything.
 pub(super) fn record_deleted_roots(
     transaction: &rusqlite::Transaction<'_>,
+    snapshot: &ProjectionSnapshot,
+    roots: &RoaringBitmap,
     origin: DeletionOrigin,
 ) -> Result<()> {
     transaction.execute(
@@ -455,31 +506,59 @@ pub(super) fn record_deleted_roots(
              CROSS JOIN library_item item ON item.local_id = selected.local_id)",
         [],
     )?;
-    if origin != DeletionOrigin::User {
+    if !matches!(origin, DeletionOrigin::User | DeletionOrigin::ImportUndone) {
         return Ok(());
     }
     let (at_ms, logical) = tick(transaction)?;
-    // An item is deleted under its stable key and under every alias it has.
-    // A device that holds the same file under one of the aliases deletes it
-    // by that entry.
-    for names in ["library_item", "library_item_alias"] {
+    transaction.execute(
+        &format!(
+            "INSERT INTO shared_entry
+                 (kind, key, state, value, clock_ms, clock_counter, device_id)
+             SELECT 'item', item.stable_key, 'delete',
+                    CASE WHEN file.content_hash IS NULL THEN NULL
+                         ELSE json_object('file', file.content_hash) END,
+                    ?1, ?2, (SELECT device_id FROM cloud_state WHERE singleton = 1)
+             FROM temp.delete_item selected
+             CROSS JOIN library_item item ON item.local_id = selected.local_id
+             LEFT JOIN media_item media ON media.media_id = selected.local_id
+             LEFT JOIN media_file file ON file.file_id = media.file_id
+             WHERE true
+             {UPSERT}"
+        ),
+        [at_ms, logical],
+    )?;
+    for root in roots {
+        let Some(members) = snapshot.collection_orders.get(&RootId(root)) else {
+            continue;
+        };
+        let members = members.iter().map(|media| media.0).collect::<Vec<_>>();
         transaction.execute(
-            &format!(
-                "INSERT INTO shared_entry
-                     (kind, key, state, value, clock_ms, clock_counter, device_id)
-                 SELECT 'item', named.stable_key, 'delete',
-                        CASE WHEN file.content_hash IS NULL THEN NULL
-                             ELSE json_object('file', file.content_hash) END,
-                        ?1, ?2, (SELECT device_id FROM cloud_state WHERE singleton = 1)
-                 FROM temp.delete_item selected
-                 CROSS JOIN {names} named ON named.local_id = selected.local_id
-                 LEFT JOIN media_item media ON media.media_id = selected.local_id
-                 LEFT JOIN media_file file ON file.file_id = media.file_id
-                 WHERE true
-                 {UPSERT}"
-            ),
-            [at_ms, logical],
+            "UPDATE shared_entry SET value = json_object('files', (
+                 SELECT json_group_array(file.content_hash) FROM json_each(?2) ids
+                 CROSS JOIN media_item media ON media.media_id = ids.value
+                 JOIN media_file file ON file.file_id = media.file_id))
+             WHERE kind = 'item' AND state = 'delete'
+               AND key = (SELECT stable_key FROM library_item WHERE local_id = ?1)",
+            rusqlite::params![root, serde_json::to_string(&members)?],
         )?;
+    }
+    Ok(())
+}
+
+/// Records that the tag with the stable key `key` was created now: in a
+/// library that records items, and in every library that holds a `delete`
+/// entry for the key, the tag gets an `add` entry. An entry of another
+/// device that deleted a tag under this key earlier then loses against it,
+/// and does not take the tag from the items that have it now.
+pub fn record_created_tag(transaction: &rusqlite::Transaction<'_>, key: &str) -> Result<()> {
+    let deleted: bool = transaction
+        .prepare_cached(
+            "SELECT EXISTS(SELECT 1 FROM shared_entry
+             WHERE kind = 'tag' AND key = ?1 AND state = 'delete')",
+        )?
+        .query_row([key], |row| row.get(0))?;
+    if deleted || records_items(transaction)? {
+        record_entries(transaction, EntryKind::Tag, EntryState::Add, &[key.to_owned()])?;
     }
     Ok(())
 }
@@ -526,6 +605,7 @@ fn item_record(
     root_id: RootId,
     tags: &[crate::TagId],
     folders: &[FolderId],
+    made_at: (i64, i64),
 ) -> Result<Option<SharedItem>> {
     use rusqlite::OptionalExtension;
     let Some((name, notes, urls, imported_at_ms, captured_at_ms, cover)) = transaction
@@ -657,6 +737,7 @@ fn item_record(
         rating,
         imported_at_ms,
         captured_at_ms,
+        made_at,
         tags,
         folders,
         cover: members.map(|_| media_ids.iter().position(|media| *media == cover).unwrap_or(0)),
@@ -709,6 +790,21 @@ fn held_item_times(
         Ok((row.get(0)?, (row.get(1)?, row.get(2)?, row.get(3)?)))
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Removes the records that the library stores with the `add` entries of the
+/// items `keys`, which it holds now.
+pub(super) fn clear_item_records(
+    transaction: &rusqlite::Transaction<'_>,
+    keys: &[&str],
+) -> Result<()> {
+    transaction.execute(
+        "UPDATE shared_entry SET value = NULL
+         WHERE kind = 'item' AND state = 'add' AND value IS NOT NULL
+           AND key IN (SELECT value FROM json_each(?1))",
+        [serde_json::to_string(keys)?],
+    )?;
+    Ok(())
 }
 
 /// Returns the status that the library holds a `status` entry of for each of
@@ -865,11 +961,21 @@ impl Library {
 
     /// Fills in the record of every `add` entry of the kind `item` among
     /// `entries` whose item or collection the library holds, from the item
-    /// as the library holds it now. The entries are entries of this device
+    /// as the library holds it now. An entry whose item the library does
+    /// not hold keeps the record that the library stores with it, which is
+    /// the record that it received. The entries are entries of this device
     /// as [`Self::visit_own_entries`] returns them.
+    ///
+    /// One call asks each tag and each folder once which of the items it
+    /// holds, so a sync calls it once for all the entries that it writes.
     pub fn attach_records(&self, entries: &mut [SharedEntry]) -> Result<()> {
         let snapshot = self.projections.snapshot();
         self.database.read(WorkPriority::Cloud, |connection| {
+            let made_at = connection.query_row(
+                "SELECT hlc_physical_ms, hlc_logical FROM cloud_state WHERE singleton = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
             let added = entries
                 .iter()
                 .enumerate()
@@ -897,13 +1003,15 @@ impl Library {
             let wanted = roots.values().copied().collect::<RoaringBitmap>();
             let mut tags_of = HashMap::<u32, Vec<crate::TagId>>::new();
             for (tag, members) in snapshot.tags.iter() {
-                for root in &members.to_bitmap() & &wanted {
+                let members: &RoaringBitmap = members;
+                for root in members & &wanted {
                     tags_of.entry(root).or_default().push(*tag);
                 }
             }
             let mut folders_of = HashMap::<u32, Vec<FolderId>>::new();
             for (folder, members) in snapshot.folders.iter() {
-                for root in &members.to_bitmap() & &wanted {
+                let members: &RoaringBitmap = members;
+                for root in members & &wanted {
                     folders_of.entry(root).or_default().push(*folder);
                 }
             }
@@ -915,7 +1023,8 @@ impl Library {
                     tags.sort_unstable_by_key(|tag| tag.0);
                     let mut folders = folders_of.remove(&root).unwrap_or_default();
                     folders.sort_unstable_by_key(|folder| folder.0);
-                    let record = item_record(connection, &snapshot, RootId(root), &tags, &folders)?;
+                    let record =
+                        item_record(connection, &snapshot, RootId(root), &tags, &folders, made_at)?;
                     Ok((index, record))
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -1040,13 +1149,24 @@ impl Library {
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
                 settle_trash_moves_in(transaction, usize::MAX)?;
+                // An entry that names an item by an alias is an entry for
+                // that item's stable key, so that one item has one entry of
+                // each kind.
+                let named = with_stable_keys(transaction, entries)?;
+                let entries = named.as_slice();
                 let held = held_entries(transaction, entries)?;
                 let mut winners = entries
                     .iter()
                     .filter(|entry| {
                         held.get(&(entry.kind, entry.key.as_str())).is_none_or(|held| {
-                            (entry.at_ms, entry.logical, device_id)
-                                > (held.0, held.1, held.2.as_str())
+                            let (new, old) = (
+                                (entry.at_ms, entry.logical, device_id),
+                                (held.0, held.1, held.2.as_str()),
+                            );
+                            // An entry of the same time and device that
+                            // carries the record which the held entry lacks
+                            // is the same entry, written whole.
+                            new > old || (new == old && !held.3 && entry.record().is_some())
                         })
                     })
                     .collect::<Vec<_>>();
@@ -1181,7 +1301,13 @@ impl Library {
                     resources.extend(["roots", "sidebar", "tags", "folders"].map(str::to_owned));
                 }
 
-                // Permanent deletions.
+                // Permanent deletions. An item is deleted when its file has
+                // the hash that the entry names: the item with the entry's
+                // key, or else the item that holds that file under another
+                // key, when it was not imported after the deletion. A
+                // collection is deleted when every file of it is named by
+                // the entry. When the collection here holds other files too,
+                // only the named files are taken out of it and deleted.
                 let deleted_items = winners
                     .iter()
                     .filter(|entry| {
@@ -1189,11 +1315,71 @@ impl Library {
                     })
                     .map(|entry| (entry.key.as_str(), entry.at_ms))
                     .collect::<Vec<_>>();
-                let deleted = deleted_items
-                    .iter()
-                    .filter(|(key, _)| !other_file.contains(key))
-                    .filter_map(|(key, _)| roots.get(key).map(|(root, _, _)| *root))
-                    .collect::<RoaringBitmap>();
+                let mut deleted = RoaringBitmap::new();
+                for entry in winners.iter().filter(|entry| {
+                    entry.kind == EntryKind::Item && entry.state == EntryState::Delete
+                }) {
+                    let held_root = roots.get(entry.key.as_str());
+                    if let Some(file) = entry.deleted_file() {
+                        match held_root {
+                            Some((root, _, held)) if held.as_deref() == Some(file) => {
+                                deleted.insert(*root);
+                            }
+                            Some(_) => {}
+                            None => {
+                                if let Some((root, imported_at_ms)) =
+                                    root_of_file(transaction, file)?
+                                {
+                                    if imported_at_ms <= entry.at_ms {
+                                        deleted.insert(root);
+                                    }
+                                }
+                            }
+                        }
+                    } else if let (Some(files), Some((root, _, None))) =
+                        (entry.deleted_files(), held_root)
+                    {
+                        let Some(members) = next.collection_orders.get(&RootId(*root)).cloned()
+                        else {
+                            continue;
+                        };
+                        let mut named = Vec::new();
+                        for media in members.iter() {
+                            let hash = transaction
+                                .prepare_cached(
+                                    "SELECT file.content_hash FROM media_item media
+                                     JOIN media_file file ON file.file_id = media.file_id
+                                     WHERE media.media_id = ?1",
+                                )?
+                                .query_row([media.0], |row| row.get::<_, String>(0))?;
+                            if files.contains(hash.as_str()) {
+                                named.push(*media);
+                            }
+                        }
+                        if named.len() == members.len() {
+                            deleted.insert(*root);
+                        } else if !named.is_empty() {
+                            let detached = crate::group::detach_many(
+                                transaction,
+                                revision,
+                                next,
+                                RootId(*root),
+                                &named,
+                                None,
+                                now_ms(),
+                                None,
+                            )?;
+                            next = detached.snapshot;
+                            affected |= &detached.affected;
+                            // A file that was taken out of a collection is
+                            // a root with the id of its media item.
+                            deleted.extend(named.iter().map(|media| media.0).filter(|media| {
+                                detached.root_ids.iter().any(|root| root.0 == *media)
+                            }));
+                            resources.extend(["roots", "collections"].map(str::to_owned));
+                        }
+                    }
+                }
                 if !deleted.is_empty() {
                     let (after, _, receipt) = delete_roots(
                         transaction,
@@ -1235,36 +1421,43 @@ impl Library {
                         [serde_json::to_string(&added)?],
                     )?;
                 }
-
-                // Items that another device imported.
-                let records = winners
-                    .iter()
-                    .filter_map(|entry| Some((entry.key.as_str(), entry.record()?)))
-                    .collect::<Vec<_>>();
-                let (queued, aliased) = queue_shared_items(transaction, &records)?;
-                applied.queued = queued;
-                applied.aliased = aliased;
-                if queued != 0 {
-                    resources.extend(["ingest", "tasks"].map(str::to_owned));
-                }
-                if !deleted_items.is_empty() {
-                    // A deleted item is not imported any more.
-                    let jobs = deleted_items
-                        .iter()
-                        .map(|(key, _)| shared_job_key(key))
-                        .collect::<Vec<_>>();
-                    transaction.execute(
-                        "DELETE FROM ingest_job
-                         WHERE source_kind = ?2 AND status != 'running'
-                           AND job_key IN (SELECT value FROM json_each(?1))",
-                        rusqlite::params![serde_json::to_string(&jobs)?, SHARED_JOB_KIND],
-                    )?;
+                for entry in &winners {
+                    let Some(record) = entry.record() else {
+                        continue;
+                    };
+                    for file in &record.files {
+                        // A collection that was added again brings its
+                        // files with it: their earlier tombstones go, so
+                        // that the import of the collection is not refused.
+                        transaction
+                            .prepare_cached(
+                                "DELETE FROM deletion_tombstone
+                                 WHERE stable_key = ?1 AND deleted_at_ms <= ?2",
+                            )?
+                            .execute(rusqlite::params![file.key, entry.at_ms])?;
+                        // The original is needed again, so it is not removed
+                        // from the cloud folder.
+                        transaction
+                            .prepare_cached(
+                                "DELETE FROM cloud_deleted_original
+                                 WHERE file_name LIKE ?1 || '.%'",
+                            )?
+                            .execute([&file.facts.content_hash])?;
+                    }
                 }
 
                 // The winning entries are stored before the folders are
                 // looked at, because a folder is deleted by the entries that
                 // the library holds and not by this call's entries alone.
                 store_entries(transaction, device_id, &winners)?;
+                // The items that the stored entries add and that are not
+                // here are put into the ingest queue.
+                let (queued, aliased) = queue_waiting_items(transaction)?;
+                applied.queued = queued;
+                applied.aliased = aliased;
+                if queued != 0 {
+                    resources.extend(["ingest", "tasks"].map(str::to_owned));
+                }
                 record_entries(transaction, EntryKind::Item, EntryState::Add, &added_again)?;
                 if !deleted_items.is_empty() {
                     // A status entry of an item that these entries delete
@@ -1467,6 +1660,100 @@ impl Library {
         Ok(())
     }
 
+    /// Puts the items that the library's entries add and that are not here
+    /// into the ingest queue ([`queue_waiting_items`]). The cloud worker
+    /// calls it in every round. Returns the number of new jobs.
+    pub fn queue_waiting_items(&self) -> Result<u64> {
+        self.database
+            .maintenance_write(WorkPriority::Cloud, |transaction| {
+                Ok(queue_waiting_items(transaction)?.0)
+            })
+    }
+
+    /// Returns the jobs of items of other devices that the library no
+    /// longer waits for: the entry of the item is not an `add` entry with a
+    /// record any more, because the item was deleted or is here. A job that
+    /// runs is left out.
+    pub fn unwanted_shared_imports(&self) -> Result<Vec<AwaitedImport>> {
+        self.database.read(WorkPriority::Cloud, |connection| {
+            let mut statement = connection.prepare_cached(
+                "SELECT job.ingest_job_id, job.payload_json FROM ingest_job job
+                 WHERE job.source_kind = ?1 AND job.status IN ('pending', 'failed')
+                   AND NOT EXISTS (
+                       SELECT 1 FROM shared_entry entry
+                       WHERE entry.kind = 'item' AND entry.state = 'add'
+                         AND entry.value IS NOT NULL
+                         AND 'cloud:' || entry.key = job.job_key)",
+            )?;
+            let rows = statement
+                .query_map([SHARED_JOB_KIND], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows
+                .into_iter()
+                .filter_map(|(ingest_job_id, payload)| {
+                    match serde_json::from_str(&payload).ok()? {
+                        crate::model::PreparedIngestPayload::Shared(import) => Some(AwaitedImport {
+                            ingest_job_id,
+                            import,
+                        }),
+                        _ => None,
+                    }
+                })
+                .collect())
+        })
+    }
+
+    /// Removes the jobs `ingest_job_ids` of items of other devices.
+    pub fn remove_shared_imports(&self, ingest_job_ids: &[i64]) -> Result<()> {
+        if ingest_job_ids.is_empty() {
+            return Ok(());
+        }
+        self.database
+            .maintenance_write(WorkPriority::Cloud, |transaction| {
+                transaction.execute(
+                    "DELETE FROM ingest_job
+                     WHERE source_kind = ?2 AND status != 'running'
+                       AND ingest_job_id IN (SELECT value FROM json_each(?1))",
+                    rusqlite::params![serde_json::to_string(ingest_job_ids)?, SHARED_JOB_KIND],
+                )?;
+                Ok(())
+            })
+    }
+
+    /// Returns whether the library holds a file with the content hash
+    /// `hash`.
+    pub fn holds_file(&self, hash: &str) -> Result<bool> {
+        self.database.read(WorkPriority::Cloud, |connection| {
+            Ok(connection
+                .prepare_cached("SELECT EXISTS(SELECT 1 FROM media_file WHERE content_hash = ?1)")?
+                .query_row([hash], |row| row.get(0))?)
+        })
+    }
+
+    /// Makes the job of an item of another device wait again after its
+    /// import failed with `error`: the cloud worker looks at it at
+    /// `available_at`, and the ingest worker imports it after that.
+    pub fn retry_shared_import(
+        &self,
+        ingest_job_id: i64,
+        error: &str,
+        available_at: &str,
+    ) -> Result<()> {
+        self.database
+            .maintenance_write(WorkPriority::Cloud, |transaction| {
+                transaction.execute(
+                    "UPDATE ingest_job
+                     SET status = 'pending', prepared = 0, last_error = ?2, available_at = ?3,
+                         updated_at = ?3
+                     WHERE ingest_job_id = ?1 AND source_kind = ?4",
+                    rusqlite::params![ingest_job_id, error, available_at, SHARED_JOB_KIND],
+                )?;
+                Ok(())
+            })
+    }
+
     /// Fails the job of a waiting item whose files cannot be imported, with
     /// the reason `error`.
     pub fn fail_shared_import(&self, ingest_job_id: i64, error: &str, now: &str) -> Result<()> {
@@ -1572,9 +1859,25 @@ impl Library {
         }
         let tags = self.database.read(WorkPriority::CanonicalIngest, |connection| {
             use rusqlite::OptionalExtension;
-            record
-                .tags
-                .iter()
+            let mut kept = Vec::with_capacity(record.tags.len());
+            for tag in &record.tags {
+                // A tag that was deleted after the record was made is not
+                // created again from the record.
+                let deleted_later: bool = connection
+                    .prepare_cached(
+                        "SELECT EXISTS(SELECT 1 FROM shared_entry
+                         WHERE kind = 'tag' AND key = ?1 AND state = 'delete'
+                           AND (clock_ms, clock_counter) > (?2, ?3))",
+                    )?
+                    .query_row(
+                        rusqlite::params![tag.key, record.made_at.0, record.made_at.1],
+                        |row| row.get(0),
+                    )?;
+                if !deleted_later {
+                    kept.push(tag);
+                }
+            }
+            kept.into_iter()
                 .map(|tag| {
                     let held = connection
                         .prepare_cached(
@@ -1690,8 +1993,9 @@ impl Library {
 }
 
 /// The clock time (milliseconds and counter) and the device of the entries
-/// that the library holds, by kind and key.
-type HeldEntries<'a> = HashMap<(EntryKind, &'a str), (i64, i64, String)>;
+/// that the library holds, and whether each is stored with a value, by kind
+/// and key.
+type HeldEntries<'a> = HashMap<(EntryKind, &'a str), (i64, i64, String, bool)>;
 
 /// Returns the clock time and the device of the entry that the library holds
 /// for each key of `entries`.
@@ -1705,7 +2009,7 @@ fn held_entries<'a>(
         .collect::<Vec<_>>();
     let mut statement = transaction.prepare_cached(
         "SELECT stored.kind, stored.key, stored.clock_ms, stored.clock_counter,
-                stored.device_id
+                stored.device_id, stored.value IS NOT NULL
          FROM json_each(?1) wanted
          CROSS JOIN shared_entry stored
            ON stored.kind = json_extract(wanted.value, '$[0]')
@@ -1716,7 +2020,12 @@ fn held_entries<'a>(
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                (row.get::<_, i64>(2)?, row.get::<_, i64>(3)?, row.get::<_, String>(4)?),
+                (
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, bool>(5)?,
+                ),
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1753,11 +2062,13 @@ fn store_entries(
                 entry.state.as_str(),
                 entry.at_ms,
                 entry.logical,
-                // The record of an added item is not kept: the job in the
-                // ingest queue holds it until the item is imported.
-                entry
-                    .deleted_file()
-                    .map(|file| serde_json::json!({ "file": file }).to_string())
+                // An entry of the kind `item` is stored with what it
+                // carries: the hashes of a deletion, or the record of an
+                // item that was added. The record is removed once the
+                // library holds the item.
+                (entry.kind == EntryKind::Item)
+                    .then(|| entry.value.as_ref().map(|value| value.to_string()))
+                    .flatten()
             ])
         })
         .collect::<Vec<_>>();
@@ -1781,7 +2092,7 @@ fn store_entries(
 type LocalRoot = (u32, i64, Option<String>);
 
 /// Returns, for each of `keys` that is the stable key of an item or a
-/// collection of this library, or an alias of one, that root.
+/// collection of this library, that root.
 fn local_roots<'a>(
     transaction: &rusqlite::Transaction<'_>,
     keys: &BTreeSet<&'a str>,
@@ -1790,33 +2101,81 @@ fn local_roots<'a>(
     if keys.is_empty() {
         return Ok(roots);
     }
-    let wanted = serde_json::to_string(keys)?;
-    // The two tables are read one after the other: a join on their union
-    // would read both of them whole.
-    for names in ["library_item_alias", "library_item"] {
-        let mut statement = transaction.prepare_cached(&format!(
-            "SELECT keys.value, root.root_id, root.imported_at_ms, file.content_hash
-             FROM json_each(?1) keys
-             CROSS JOIN {names} named ON named.stable_key = keys.value
-             JOIN library_root root ON root.root_id = named.local_id
-             LEFT JOIN media_item media ON media.media_id = root.root_id
-             LEFT JOIN media_file file ON file.file_id = media.file_id"
-        ))?;
-        let rows = statement
-            .query_map([&wanted], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    (row.get::<_, u32>(1)?, row.get::<_, i64>(2)?, row.get(3)?),
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<(String, LocalRoot)>>>()?;
-        for (key, root) in rows {
-            if let Some(key) = keys.get(key.as_str()) {
-                roots.insert(*key, root);
-            }
+    let mut statement = transaction.prepare_cached(
+        "SELECT keys.value, root.root_id, root.imported_at_ms, file.content_hash
+         FROM json_each(?1) keys
+         CROSS JOIN library_item item ON item.stable_key = keys.value
+         JOIN library_root root ON root.root_id = item.local_id
+         LEFT JOIN media_item media ON media.media_id = root.root_id
+         LEFT JOIN media_file file ON file.file_id = media.file_id",
+    )?;
+    let rows = statement
+        .query_map([serde_json::to_string(keys)?], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                (row.get::<_, u32>(1)?, row.get::<_, i64>(2)?, row.get(3)?),
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<(String, LocalRoot)>>>()?;
+    for (key, root) in rows {
+        if let Some(key) = keys.get(key.as_str()) {
+            roots.insert(*key, root);
         }
     }
     Ok(roots)
+}
+
+/// Returns the item that stands alone as a root and whose file has the
+/// content hash `hash`, with the time of its import.
+fn root_of_file(transaction: &rusqlite::Transaction<'_>, hash: &str) -> Result<Option<(u32, i64)>> {
+    use rusqlite::OptionalExtension;
+    Ok(transaction
+        .prepare_cached(
+            "SELECT root.root_id, root.imported_at_ms FROM media_file file
+             JOIN media_item media ON media.file_id = file.file_id
+             JOIN library_root root ON root.root_id = media.media_id
+             WHERE file.content_hash = ?1",
+        )?
+        .query_row([hash], |row| Ok((row.get(0)?, row.get(1)?)))
+        .optional()?)
+}
+
+/// Returns `entries` with the key of every entry of the kinds `item` and
+/// `status` that names an item by an alias replaced by the item's stable
+/// key. An alias with a task number and without the id of a device is not
+/// used: another device can hold something else under it.
+fn with_stable_keys(
+    transaction: &rusqlite::Transaction<'_>,
+    entries: &[SharedEntry],
+) -> Result<Vec<SharedEntry>> {
+    let keys = entries
+        .iter()
+        .filter(|entry| matches!(entry.kind, EntryKind::Item | EntryKind::Status))
+        .map(|entry| entry.key.as_str())
+        .filter(|key| !has_local_number(key))
+        .collect::<BTreeSet<_>>();
+    let mut statement = transaction.prepare_cached(
+        "SELECT keys.value, item.stable_key FROM json_each(?1) keys
+         CROSS JOIN library_item_alias alias ON alias.stable_key = keys.value
+         JOIN library_item item ON item.local_id = alias.local_id",
+    )?;
+    let stable = statement
+        .query_map([serde_json::to_string(&keys)?], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<HashMap<_, _>>>()?;
+    Ok(entries
+        .iter()
+        .map(|entry| {
+            let mut entry = entry.clone();
+            if matches!(entry.kind, EntryKind::Item | EntryKind::Status) {
+                if let Some(key) = stable.get(&entry.key) {
+                    entry.key.clone_from(key);
+                }
+            }
+            entry
+        })
+        .collect())
 }
 
 /// Returns which of `keys` are the stable key of an item of this library or
@@ -1840,91 +2199,144 @@ fn held_item_keys(
     Ok(held)
 }
 
-/// Handles the records of the items that another device imported, each with
-/// the key of its entry. A record whose keys the library holds needs nothing.
-/// A record of one file that the library holds under another key makes its
-/// key an alias of that item. Every other record is put into the ingest
-/// queue as a job that is not prepared: the cloud worker copies its files
-/// from the cloud folder first. Returns the number of jobs and of aliases.
-fn queue_shared_items(
+/// Gives the item `local_id` the stable key `key`, which is smaller than its
+/// own. Two devices that imported one file under two keys both end with the
+/// smaller key for the item. The key that the item had becomes an alias, the
+/// `status` entry of the old key becomes the entry of the new key when it is
+/// the later one, and the `item` entry of the old key goes: the entry of the
+/// new key stands for the item.
+fn take_smaller_key(
     transaction: &rusqlite::Transaction<'_>,
-    records: &[(&str, SharedItem)],
-) -> Result<(u64, u64)> {
+    local_id: u32,
+    old: &str,
+    key: &str,
+) -> Result<()> {
+    transaction.execute(
+        "UPDATE library_item SET stable_key = ?2 WHERE local_id = ?1",
+        rusqlite::params![local_id, key],
+    )?;
+    transaction.execute(
+        "INSERT INTO library_item_alias(stable_key, local_id) VALUES (?1, ?2)
+         ON CONFLICT(stable_key) DO UPDATE SET local_id = excluded.local_id",
+        rusqlite::params![old, local_id],
+    )?;
+    transaction.execute(
+        "INSERT INTO shared_entry (kind, key, state, value, clock_ms, clock_counter, device_id)
+         SELECT kind, ?2, state, value, clock_ms, clock_counter, device_id
+         FROM shared_entry WHERE kind = 'status' AND key = ?1
+         ON CONFLICT(kind, key) DO UPDATE SET
+             state = excluded.state, value = excluded.value,
+             clock_ms = excluded.clock_ms, clock_counter = excluded.clock_counter,
+             device_id = excluded.device_id
+         WHERE (excluded.clock_ms, excluded.clock_counter, excluded.device_id)
+             > (shared_entry.clock_ms, shared_entry.clock_counter, shared_entry.device_id)",
+        [old, key],
+    )?;
+    transaction.execute(
+        "DELETE FROM shared_entry WHERE kind IN ('status', 'item') AND key = ?1",
+        [old],
+    )?;
+    Ok(())
+}
+
+/// Looks at every `add` entry that the library stores with a record: these
+/// are the items that another device added and that were not here when the
+/// entry was stored. An item that is here now needs nothing more, and its
+/// entry loses the record. A record of one file that the library holds under
+/// another key makes the two keys one item: the item keeps the smaller key
+/// and the other becomes its alias. Every other item gets a job in the
+/// ingest queue, not prepared, unless it has one: the cloud worker copies its
+/// files from the cloud folder first. Returns the number of new jobs and of
+/// items that were found under another key.
+///
+/// What waits is read from the entries each time, and not taken from the
+/// event that an entry won, so an item is queued again after its job was
+/// lost, for example with a database that came from a snapshot.
+pub(super) fn queue_waiting_items(transaction: &rusqlite::Transaction<'_>) -> Result<(u64, u64)> {
     use rusqlite::OptionalExtension;
-    if records.is_empty() {
-        return Ok((0, 0));
-    }
-    let keys = records
-        .iter()
-        .flat_map(|(key, record)| {
-            std::iter::once(*key).chain(record.files.iter().map(|file| file.key.as_str()))
-        })
-        .collect::<Vec<_>>();
-    let held = held_item_keys(transaction, &keys)?;
+    let mut statement = transaction.prepare_cached(
+        "SELECT key, value FROM shared_entry
+         WHERE kind = 'item' AND state = 'add' AND value IS NOT NULL",
+    )?;
+    let waiting = statement
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
     let now = chrono::Utc::now().to_rfc3339();
     let (mut queued, mut aliased) = (0, 0);
-    for (key, record) in records {
+    for (key, value) in waiting {
+        let here = |transaction: &rusqlite::Transaction<'_>| {
+            transaction.execute(
+                "UPDATE shared_entry SET value = NULL
+                 WHERE kind = 'item' AND state = 'add' AND key = ?1",
+                [&key],
+            )
+        };
+        let Ok(record) = serde_json::from_str::<SharedItem>(&value) else {
+            continue;
+        };
         if record.files.is_empty() {
             continue;
         }
         let collection = record.cover.is_some();
-        let complete = if collection {
-            held.contains(*key) && record.files.iter().all(|file| held.contains(&file.key))
-        } else {
-            held.contains(*key)
-        };
-        if complete {
+        let keys = std::iter::once(key.as_str())
+            .chain(record.files.iter().map(|file| file.key.as_str()))
+            .collect::<Vec<_>>();
+        let held = held_item_keys(transaction, &keys)?;
+        if held.contains(&key)
+            && (!collection || record.files.iter().all(|file| held.contains(&file.key)))
+        {
+            here(transaction)?;
             continue;
         }
         if !collection {
             let same_file = transaction
                 .prepare_cached(
-                    "SELECT media.media_id FROM media_file file
+                    "SELECT media.media_id, item.stable_key FROM media_file file
                      JOIN media_item media ON media.file_id = file.file_id
+                     JOIN library_item item ON item.local_id = media.media_id
                      WHERE file.content_hash = ?1 ORDER BY media.media_id LIMIT 1",
                 )?
                 .query_row([&record.files[0].facts.content_hash], |row| {
-                    row.get::<_, u32>(0)
+                    Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
                 })
                 .optional()?;
-            if let Some(media_id) = same_file {
-                transaction
-                    .prepare_cached(
-                        "INSERT OR IGNORE INTO library_item_alias(stable_key, local_id)
-                         VALUES (?1, ?2)",
-                    )?
-                    .execute(rusqlite::params![key, media_id])?;
+            if let Some((media_id, own)) = same_file {
+                if key < own && !has_local_number(&key) {
+                    take_smaller_key(transaction, media_id, &own, &key)?;
+                } else {
+                    transaction
+                        .prepare_cached(
+                            "INSERT OR IGNORE INTO library_item_alias(stable_key, local_id)
+                             VALUES (?1, ?2)",
+                        )?
+                        .execute(rusqlite::params![key, media_id])?;
+                }
+                here(transaction)?;
                 aliased += 1;
                 continue;
             }
         }
         let payload = crate::model::PreparedIngestPayload::Shared(SharedImport {
-            key: (*key).to_owned(),
-            record: record.clone(),
+            key: key.clone(),
+            record,
             paths: Vec::new(),
         });
-        // A job that is running is left alone. Its import finds the item
-        // by its key, and the next entry for the key queues it again.
-        transaction
+        queued += transaction
             .prepare_cached(
                 "INSERT INTO ingest_job
                      (job_key, source_kind, source_path, payload_json, delete_after_ingest,
                       status, attempt_count, available_at, created_at, updated_at, units,
                       prepared)
                  VALUES (?1, ?2, '', ?3, 0, 'pending', 0, ?4, ?4, ?4, 1, 0)
-                 ON CONFLICT(job_key) DO UPDATE SET
-                     payload_json = excluded.payload_json, status = 'pending', prepared = 0,
-                     attempt_count = 0, available_at = excluded.available_at,
-                     last_error = NULL, updated_at = excluded.updated_at
-                 WHERE ingest_job.status != 'running'",
+                 ON CONFLICT(job_key) DO NOTHING",
             )?
             .execute(rusqlite::params![
-                shared_job_key(key),
+                shared_job_key(&key),
                 SHARED_JOB_KIND,
                 serde_json::to_string(&payload)?,
                 now
-            ])?;
-        queued += 1;
+            ])? as u64;
     }
     Ok((queued, aliased))
 }

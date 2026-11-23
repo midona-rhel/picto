@@ -209,11 +209,15 @@ pub(super) async fn publish_library(
     library_id: &str,
 ) -> Result<(), String> {
     let library = application.library();
+    // The clock is read before the pending moves are turned into entries.
+    // Every entry that is made later has a later time, and every entry with
+    // an earlier time is stored when the loop below ends, so the time is the
+    // one up to which this run writes the device's entries.
+    let clock = library.entry_clock().map_err(|error| error.to_string())?;
     while library
         .settle_trash_moves(SETTLE_LIMIT)
         .map_err(|error| error.to_string())?
     {}
-    let clock = library.entry_clock().map_err(|error| error.to_string())?;
     remove_earlier_folder(provider, library_id, &clock.device_id).await?;
     let mut changed = BTreeSet::new();
     library
@@ -224,25 +228,32 @@ pub(super) async fn publish_library(
     if changed.is_empty() {
         return Ok(());
     }
+    let mut written = Vec::new();
+    library
+        .visit_own_entries(None, &mut |entry| {
+            if changed.contains(&shard_of(&entry)) {
+                written.push(entry);
+            }
+        })
+        .map_err(|error| error.to_string())?;
+    // An entry that adds an item gets the record of the item as the library
+    // holds it now. The records of all files are made by one call, which
+    // asks each tag and each folder once.
+    library
+        .attach_records(&mut written)
+        .map_err(|error| error.to_string())?;
     let mut files = changed
         .into_iter()
         .map(|shard| (shard, Vec::new()))
         .collect::<BTreeMap<_, _>>();
-    library
-        .visit_own_entries(None, &mut |entry| {
-            if let Some(entries) = files.get_mut(&shard_of(&entry)) {
-                entries.push(entry);
-            }
-        })
-        .map_err(|error| error.to_string())?;
+    for entry in written {
+        if let Some(entries) = files.get_mut(&shard_of(&entry)) {
+            entries.push(entry);
+        }
+    }
     let folder = format!("{}/{}", directory(library_id), clock.device_id);
     let existing = provider.list(&folder).await?;
-    for (shard, mut entries) in files {
-        // An entry that adds an item gets the record of the item as the
-        // library holds it now.
-        library
-            .attach_records(&mut entries)
-            .map_err(|error| error.to_string())?;
+    for (shard, entries) in files {
         let (name, bytes) = encode(library_id, &clock.device_id, &shard, &entries)?;
         let path = format!("{folder}/{name}");
         if !provider.exists(&path).await? {
@@ -304,7 +315,10 @@ pub(super) async fn unmerged_files(
         .library()
         .merged_entry_files()
         .map_err(|error| error.to_string())?;
-    let mut devices = provider.children(&directory(library_id)).await?;
+    // A folder that cannot be listed now is listed again by the next round.
+    let Ok(mut devices) = provider.children(&directory(library_id)).await else {
+        return Ok(Vec::new());
+    };
     devices.sort();
     let mut files = Vec::new();
     for device_id in devices {
@@ -314,7 +328,10 @@ pub(super) async fn unmerged_files(
             continue;
         }
         let folder = format!("{}/{device_id}", directory(library_id));
-        for object in provider.list(&folder).await? {
+        let Ok(objects) = provider.list(&folder).await else {
+            continue;
+        };
+        for object in objects {
             let Some(name) = object
                 .path
                 .strip_prefix(&folder)
@@ -444,6 +461,22 @@ pub(super) async fn fetch_awaited(
     library_id: &str,
 ) -> Result<u64, String> {
     let library = application.library();
+    // What waits is read from the library's entries in every round: an item
+    // that an entry adds and that is not here gets its job, and a job whose
+    // item was deleted or is here goes, with the originals that were copied
+    // for it and that no item of the library uses.
+    library
+        .queue_waiting_items()
+        .map_err(|error| error.to_string())?;
+    let unwanted = library
+        .unwanted_shared_imports()
+        .map_err(|error| error.to_string())?;
+    for item in &unwanted {
+        discard_unreferenced_originals(application, &item.import);
+    }
+    library
+        .remove_shared_imports(&unwanted.iter().map(|item| item.ingest_job_id).collect::<Vec<_>>())
+        .map_err(|error| error.to_string())?;
     let now = chrono::Utc::now();
     let awaited = library
         .awaited_shared_imports(AWAITED_PER_ROUND, &now.to_rfc3339())
@@ -479,9 +512,29 @@ pub(super) async fn fetch_awaited(
     Ok(fetched)
 }
 
+/// Removes from the library's blob store the originals of `import` that no
+/// item of the library uses. They were copied for an item of another device
+/// that is not imported after all, because it was deleted meanwhile.
+pub(crate) fn discard_unreferenced_originals(
+    application: &LibraryApplication,
+    import: &picto_library::SharedImport,
+) {
+    for file in &import.record.files {
+        let hash = file.facts.content_hash.as_str();
+        if application.library().holds_file(hash).unwrap_or(true) {
+            continue;
+        }
+        let extension = crate::blob_store::mime_to_extension(&file.facts.mime);
+        if let Ok(stored) = application.blobs().original_path_with_ext(hash, Some(extension)) {
+            let _ = std::fs::remove_file(stored);
+        }
+    }
+}
+
 /// Makes sure that every original of the waiting item is in the library. An
-/// original that the library already holds is not copied. The error is the
-/// reason why the item cannot be imported at all.
+/// original that the library already holds is not copied. The only error is
+/// an original whose content does not match its hash; everything else that
+/// goes wrong is tried again by a later round.
 async fn fetch_item(
     application: &LibraryApplication,
     provider: &dyn CloudProvider,
@@ -515,7 +568,8 @@ async fn fetch_item(
             let prefix = format!("{folder}/{hash}.");
             let Some(remote) = provider
                 .list(&folder)
-                .await?
+                .await
+                .unwrap_or_default()
                 .into_iter()
                 .find(|object| object.path.starts_with(&prefix))
             else {
@@ -526,10 +580,19 @@ async fn fetch_item(
                 .fetch_file(&remote.path, download.clone(), file.facts.size_bytes, hash)
                 .await;
             let written = match fetched {
-                Ok(CloudRead::Read(())) => application
-                    .blobs()
-                    .write_original_from_path(hash, &download, Some(extension))
-                    .map_err(|error| format!("Failed to store cloud original: {error}")),
+                Ok(CloudRead::Read(())) => {
+                    let stored = application
+                        .blobs()
+                        .write_original_from_path(hash, &download, Some(extension));
+                    if let Err(error) = stored {
+                        // The copy could not be stored now, for example
+                        // because the disk is full.
+                        let _ = std::fs::remove_file(&download);
+                        tracing::debug!(%error, "A cloud original could not be stored yet");
+                        return Ok(Fetched::Waiting);
+                    }
+                    Ok(())
+                }
                 Ok(CloudRead::Missing) => {
                     return Ok(Fetched::Waiting);
                 }

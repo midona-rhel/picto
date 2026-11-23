@@ -40,7 +40,8 @@ appears on your other computers with the same file. It has the name, the notes, 
 the rating, the tags and the folders that it had when the first computer synced it, and it is in
 the Inbox or in All as it was there. A collection arrives with its files in the same order and
 with the same cover. A tag or a folder that the other computer does not have yet is created there;
-a new folder appears at the top level.
+a new folder appears at the top level. An import that you stop and undo is removed from the other
+computers too.
 
 The computer that imported the item writes its original and its entry at its next sync. Another
 computer takes the entry in at its own next sync, or within about 30 seconds while Picto is open
@@ -52,7 +53,9 @@ imports the item.
   running, the item waits. Picto looks for the original again every minute and shows no error.
 - **Undo.** An item that arrives from another computer is not in **Edit → Undo** on this computer.
 - **The same file on two computers.** If you import the same file on two computers, each keeps one
-  item for it, and what you delete on one is deleted on the other.
+  item for it, and what you delete on one is deleted on the other. A collection on one computer
+  that holds more files than the collection that was deleted on the other loses only the deleted
+  files.
 - **Deleted before it arrived.** An item that was deleted on the first computer before its
   original reached this one is not imported here.
 - **What was there before.** The items that a library has when you first enable sync reach another

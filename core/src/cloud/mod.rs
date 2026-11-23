@@ -41,7 +41,7 @@ use crate::library_application::LibraryApplication;
 
 pub mod provider;
 pub mod snapshot;
-pub mod entries;
+pub(crate) mod entries;
 
 pub const CLOUD_SCHEMA_GENERATION: i64 = 1;
 
@@ -602,13 +602,16 @@ pub async fn delete_cloud_data_library(
 }
 
 /// Returns whether the worker should merge the entries in the cloud folder
-/// now: cloud sync is on, not paused, and no sync runs or failed.
+/// now: cloud sync is on, not paused, and no sync runs. After a round that
+/// failed, the next round tries again, so that an error which has gone, for
+/// example a file that the provider's app has replaced, does not stop the
+/// sync until the user acts.
 pub fn receive_due_library(application: &LibraryApplication) -> Result<bool, String> {
     application
         .library()
         .auxiliary_read(picto_library::database::WorkPriority::Cloud, |connection| {
             Ok(connection.query_row(
-                "SELECT provider IS NOT NULL AND paused = 0 AND state = 'idle'
+                "SELECT provider IS NOT NULL AND paused = 0 AND state IN ('idle', 'error')
                  FROM cloud_state WHERE singleton = 1",
                 [],
                 |row| row.get::<_, bool>(0),
@@ -632,8 +635,15 @@ pub async fn receive_library(
     let library_id = configuration_library(application)?.library_id;
     stop_if_cloud_data_removed(application, provider, &library_id).await?;
     let merged = entries::receive_library(application, provider, &library_id).await;
-    if let Err(error) = &merged {
-        let _ = snapshot::set_sync_state(application, "error", "idle", error);
+    match &merged {
+        Err(error) => {
+            let _ = snapshot::set_sync_state(application, "error", "idle", error);
+        }
+        // A round that succeeds after one that failed ends the error state.
+        Ok(_) if status_library(application)?.state == "error" => {
+            snapshot::set_sync_state(application, "idle", "idle", "")?;
+        }
+        Ok(_) => {}
     }
     merged
 }

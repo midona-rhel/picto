@@ -432,7 +432,7 @@ device.
 | Kind | Key | State | Written by |
 | --- | --- | --- | --- |
 | `item` | stable key of an item or a collection | `add` | an import that creates the item or the collection, in a library that records items (`record_imported_items`); and everything that removes a tombstone: an import of the item that is later than the deletion, a subscription run or reset, the undo of the deletion (`remove_item_tombstones`) |
-| `item` | stable key of an item, a collection or a collection's file, and every alias of it | `delete`, with the content hash of the item's file; a collection has no file and its entry no hash | Delete Permanently, Empty Trash, a rejected Inbox item with "Delete permanently" (`delete_roots`) |
+| `item` | stable key of an item, a collection or a collection's file | `delete`, with the content hash of the item's file, or for a collection the content hashes of all its files | Delete Permanently, Empty Trash, a rejected Inbox item with "Delete permanently", and the removal of what an import added when the import is undone or a merge of libraries fails (`delete_roots`). No entry is written for an alias. |
 | `status` | stable key of an item or a collection | `trash`, `active`, `inbox` | a move into or out of the Trash, also by undo and redo |
 | `tag`, `folder`, `smart_folder` | stable key | `delete`, and `add` after an undo | the deletion of a tag, a folder with the folders below it, or a smart folder |
 
@@ -441,8 +441,13 @@ record of the item as the library holds it then (`Library::attach_records`, `Sha
 file, or the files of a collection in their order with the cover, each with its stable key, name,
 note, source and the facts that are stored for it (content hash, type, size, dimensions, duration,
 perceptual hash, colours), and the item's name, notes, source links, rating, status, dates, tags
-and folders. A tag and a folder are named by stable key and name. An entry whose item the library
-does not hold, because it only removed a tombstone, has no record.
+and folders, and the time of the library's clock at which the record was made. A tag and a folder
+are named by stable key and name. A device that merges such an entry stores the record with it
+until it holds the item, and a device that writes an entry of its own whose item it does not hold,
+as after a restore, writes the record that it stores. So an entry of an item that a device held or
+received is never written without its record. An entry whose item no device held, because it only
+removed a tombstone, has no record. An entry of the same clock time and device as the stored one
+replaces it when it carries the record that the stored one lacks.
 
 **Which library records items.** Every library records deletions. A library records the items
 that it imports from its first sync on: from the moment it is connected to a cloud folder or made
@@ -460,8 +465,11 @@ task also holds the id of the device: `task:<device id>:<task>:<path>` for an im
 to two files. The key of a new tag or tag namespace is made from its name (`ingest::name_key`), so
 two devices that create the same tag by an import hold it under one key. Keys that exist are not
 changed. One file is one item: when a device merges an item whose file it holds under another key,
-it records that key as an alias of its item (`library_item_alias`), and entries that name either
-key reach the item.
+its item takes the smaller of the two keys and the other key becomes an alias
+(`library_item_alias`, `take_smaller_key`), so both devices end with one key for the item. An
+entry that names the item by the alias is merged as an entry for the item's stable key, so the
+item has one entry of each kind. An alias that holds a task number without the id of a device, as
+an earlier version made them, is never used to find the item of a merged entry.
 
 The clock's time is the later of the device's wall clock and the latest time that the library has
 seen, with a counter for one millisecond. Merging an entry moves the clock to that entry's time.
@@ -481,20 +489,22 @@ merged, no file depends on another, and a file that has not arrived is merged wh
 device also merges every 30 seconds while the library is idle (`cloud::receive_library`). A winning
 entry is stored and applied in one publication, with no history entry:
 
-- `item`, `add`: the item's tombstone is removed. An entry with a record does nothing more when
-  the library holds an item with the entry's key, or, for a collection, items with the keys of all
-  its files. When the library holds the record's one file under another key, the entry's key
-  becomes an alias of that item. Otherwise the item is put into the ingest queue (see below).
-- `item`, `delete`: the item gets its tombstone, and if the library holds it as an item or a
-  collection, under the entry's key or under an alias, it is deleted through `delete_roots`,
-  whatever its status is. A job that waits to import the item is removed. Two cases are different.
-  An entry that names the content hash of a file deletes the item only when the item's file in
-  that library has the same hash: keys of imported files that were made before they held the
-  device's id can name different files on two devices. An item with another file stays, and the
-  entry is handled as if the library held no item with that key. And when the library holds no
-  entry for the item, and the item was imported there after the time of the deletion, the item was
-  added again: it stays and gets an `add` entry of that device. This is the rule of an import,
-  which removes a tombstone that is earlier than the import.
+- `item`, `add`: the item's tombstone is removed, and with a record also the earlier tombstones of
+  the record's files and the pending removal of their originals from the cloud folder. The record
+  is stored with the entry. Every merge round then reads the entries that are stored with a record
+  (`queue_waiting_items`): an item that the library holds needs nothing and its entry loses the
+  record; a record of one file that the library holds under another key makes the two keys one
+  item; every other item gets a job in the ingest queue unless it has one (see below).
+- `item`, `delete`: the item gets its tombstone. What is deleted is what the other device deleted,
+  found by content: an entry with the hash of a file deletes the item with the entry's key when its
+  file has that hash, or else the item that holds that file under another key when it was not
+  imported after the deletion. An entry of a collection names the hashes of the collection's
+  files: the collection with the entry's key is deleted when all its files are named, and
+  otherwise only the named files are taken out of it and deleted. An entry without a hash deletes
+  nothing. And when the library holds no entry for the item, and the item was imported there after
+  the time of the deletion, the item was added again: it stays and gets an `add` entry of that
+  device. This is the rule of an import, which removes a tombstone that is earlier than the
+  import.
 - `status`: an item of the library is moved to the Trash, or out of it when it is in the Trash. An
   entry for an item that the library does not hold is stored, and the import of the item gives the
   item that status. An entry that is earlier than the `item` entry of the same key is dropped.
@@ -502,17 +512,25 @@ entry is stored and applied in one publication, with no history entry:
 - `folder` and `smart_folder`, `delete`: a folder with such an entry is deleted once every folder
   below it has one too. So a merge deletes no folder that the other device did not delete.
 
-**Importing a merged item.** A merged `add` puts a job into `ingest_job` with the source kind
-`cloud` and the record as its payload, not prepared, so the ingest worker does not claim it.
-`entries::fetch_awaited`, which every merge round runs, looks for the originals of the waiting
-jobs in `blobs/`, copies them into the library's blob store after checking their size and content
-hash, and marks the job prepared. The ingest worker then imports the item
+**Importing a merged item.** An item that waits gets a job in `ingest_job` with the source kind
+`cloud` and the record as its payload, not prepared, so the ingest worker does not claim it. What
+waits is read from the entries in every round and not taken from the moment an entry was merged,
+so a job that is lost is made again: a database that comes from a snapshot or a restore has its
+`cloud` jobs removed, because they hold the paths of the device that made the snapshot.
+`entries::fetch_awaited`, which every merge round runs, first removes the jobs of items that are
+no longer waited for, with the originals that were copied for them and that no item uses. It then
+looks for the originals of the waiting jobs in `blobs/`, copies them into the library's blob store
+after checking their size and content hash, and marks the job prepared. A listing, a read or a
+copy that fails is tried again by a later round, and an import that fails is tried again after
+five minutes; only an original of the whole size whose content does not match its hash fails the
+job. The ingest worker then imports the item
 (`Library::ingest_shared`, in groups of at most 48 for items of one file): under the record's
 stable key, with its name, notes, source links, rating, dates, tags and folders, and with the
-status of the `status` entry that the library holds for the key when there is one. A tag or a
-folder that the library does not hold under the record's key is looked for by its name, and a
-missing folder is created at the top level. A collection that the import creates gets the record's
-key. Nothing of it is recorded in the undo history, and the import records no entry, so the item
+status of the `status` entry that the library holds for the key when there is one. A tag that the
+library does not hold under the record's key is looked for by its name and created when there is
+none, unless it was deleted after the record was made. A folder is looked for by its stable key
+only, and one that the library does not hold is created at the top level with the record's name.
+A collection that the import creates gets the record's key. Nothing of it is recorded in the undo history, and the import records no entry, so the item
 is not written back by the device that merged it.
 
 **Files that are not on the device yet.** The desktop app of the provider lists a file before it
@@ -522,7 +540,8 @@ of the cloud folder treat that as "not delivered yet" (`provider::CloudRead`):
 
 | Read | A file that is listed and cannot be read |
 | --- | --- |
-| an entry file (`entries::merge_files`) | The round stops reading at that file, merges nothing in that round, and leaves every unread file for the next round. No error state. |
+| an entry file (`entries::merge_files`) | The round stops reading at that file, merges the files that it read before it, and leaves that file and every file after it for the next round. No error state. |
+| the list of the entry files and of the folder of an original | A folder that cannot be listed holds nothing for this round, and the next round lists it again. No error state. |
 | an original of a waiting item (`entries::fetch_awaited`) | The item waits and is looked at again a minute later, and the round looks for no further original. An original that is missing or has not its whole size also waits. No error state, and the job does not fail. An original of the whole size whose content does not match its hash fails the job with that reason. |
 | `library.json`, to see whether the cloud data is still there and whether the folder holds the library | Only the file's metadata is read, which is answered without the content. |
 | an original that a library opened from the cloud or a restored library lacks (`sync_blobs`) | The sync ends with the state `error` and the reason, and the next sync tries the file again. |
@@ -561,6 +580,15 @@ whose name and place are those of a file that the sync writes, in `snapshots/`, 
 `entries/`, and in `tombstones/` when a device left its folder there. A file of any other name
 stays, and so does every folder that still holds something. A sync, the merge of the entries and
 the removal hold one lock, so the data is not removed while a sync writes into it.
+
+**Tags.** The key of a tag that an import creates is made from its name, so a tag that is deleted
+and created again by a later import has the key that it had. Creating a tag records an `add` entry
+for it, in a library that records items and in every library that holds a `delete` entry for the
+key. A `delete` entry of an earlier time then loses against it and does not take the tag from the
+items that have it now.
+
+**After a round that failed.** The state `error` does not stop the worker: it runs the next merge
+round as it does in the state `idle`, and a round that succeeds ends the error state.
 
 A device whose library has synced with the folder before and no longer finds `library.json` there
 treats the cloud data as removed: it switches its sync off, leaves the message "The cloud data of

@@ -790,7 +790,7 @@ impl Library {
             } else {
                 let (deleted, cleanup, receipt) = super::structure::delete_roots(
                     transaction, revision, &next, &created, now_ms, &protected_cleanup_files,
-                    crate::history::DeletionOrigin::Library,
+                    crate::history::DeletionOrigin::ImportUndone,
                 )?;
                 resources.extend(receipt.resources);
                 next = deleted;

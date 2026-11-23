@@ -208,10 +208,14 @@ pub enum DeletionOrigin {
     /// Trash, or a rejected Inbox item with the setting "Delete
     /// permanently"). Cloud sync sends the deletion to the other devices.
     User,
-    /// The library removed the roots itself: an item merged into another,
-    /// or the items of an import that was stopped and undone. Cloud sync
-    /// does not send it.
+    /// The library removed the roots itself, because it merged an item
+    /// into another. Cloud sync does not send it: the file stays in the
+    /// library.
     Library,
+    /// The library removed what an import added: the import was stopped and
+    /// undone, or a merge of another library failed. Cloud sync sends the
+    /// deletion, so that the items do not stay on the other devices.
+    ImportUndone,
     /// Another device deleted the items and cloud sync brought the deletion
     /// here. It is not sent again, and the device that made the deletion
     /// removes the originals from the cloud folder.

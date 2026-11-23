@@ -694,6 +694,12 @@ pub(crate) fn initialize_joined_database(
     transaction
         .execute("DELETE FROM cloud_journal", [])
         .map_err(|error| format!("Failed to clear the joined change journal: {error}"))?;
+    // The jobs that import the items of other devices hold the paths of
+    // the device that made the snapshot. The first merge round queues the
+    // items again from the entries.
+    transaction
+        .execute("DELETE FROM ingest_job WHERE source_kind = 'cloud'", [])
+        .map_err(|error| format!("Failed to clear the joined import queue: {error}"))?;
     // From now on the library records the items that it imports. It has
     // written no entry and merged no file as this device.
     picto_library::reset_published_entries(&transaction)
@@ -738,8 +744,13 @@ fn initialize_restored_database(
     // made the snapshot has settled them. The clock does not go back: the
     // device has given out the times up to the one it had before the
     // restore.
+    // The jobs that import the items of other devices hold paths of the
+    // time of the snapshot, and the first merge round queues the items again
+    // from the entries.
     connection
-        .execute_batch("DELETE FROM cloud_journal;")
+        .execute_batch(
+            "DELETE FROM cloud_journal; DELETE FROM ingest_job WHERE source_kind = 'cloud';",
+        )
         .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;
     connection
         .execute(

@@ -13,6 +13,8 @@
 //! Add `--tag-pages-only` to measure paging/search with 200k tag definitions after ingest.
 //! Use `--sync-only` to import `roots` items with cloud sync off and on, and to merge and
 //! import the entries of the second import in another library.
+//! Use `--sync-publish-only` to measure what a sync reads to write the entries of an import
+//! of 5,000 items in a library with `roots` tags.
 use std::time::Instant;
 
 use picto_library::predicate::{
@@ -43,6 +45,9 @@ fn main() -> R<()> {
     let at = |n: usize| n * roots / 1_000_000;
     if std::env::args().any(|arg| arg == "--sync-only") {
         return sync::run(roots);
+    }
+    if std::env::args().any(|arg| arg == "--sync-publish-only") {
+        return sync::run_publish(roots);
     }
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("audit.sqlite");
