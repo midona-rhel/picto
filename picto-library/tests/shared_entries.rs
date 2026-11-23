@@ -1132,6 +1132,50 @@ fn a_picture_in_a_collection_is_left_alone() {
     assert!(grouped.library.wanted_files(None, 10).unwrap().is_empty());
 }
 
+#[test]
+fn deleting_a_collection_writes_no_delete_for_its_pictures() {
+    let (_directory, template) = template();
+    let mut log = Vec::new();
+    let mut loose = Computer::new(&template);
+    let mut grouped = Computer::new(&template);
+    loose.start(&mut log);
+    grouped.start(&mut log);
+    loose.import(&hash(1), "loose", Vec::new(), Vec::new());
+    let members = vec![
+        grouped.prepared(&hash(1), "member", Vec::new(), Vec::new()),
+        grouped.prepared(&hash(2), "other member", Vec::new(), Vec::new()),
+    ];
+    grouped
+        .library
+        .ingest_collection(&PreparedCollectionImport {
+            members,
+            cover_index: 0,
+            existing_root_id: None,
+            name: Some("set".into()),
+            modified_at_ms: now_ms(),
+        })
+        .unwrap();
+    let collection = grouped.rows(
+        "SELECT root.root_id FROM library_root root
+         WHERE NOT EXISTS (SELECT 1 FROM media_item media WHERE media.media_id = root.root_id)",
+        |row| row.get::<_, u32>(0),
+    );
+    assert_eq!(collection.len(), 1, "the import made one collection");
+    let target = grouped.target(RootId(collection[0]));
+    grouped.library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
+    grouped.library.permanently_delete(&target, now_ms(), 500, false).unwrap();
+    grouped.settle();
+
+    let deletes: Vec<_> = grouped
+        .own_entries()
+        .into_iter()
+        .filter(|entry| entry.kind.as_str() == "delete")
+        .collect();
+    assert!(deletes.is_empty(), "a picture in a collection wrote a delete: {deletes:?}");
+    loose.library.merge_entries(&grouped.own_entries()).unwrap();
+    assert!(loose.roots().contains_key(&hash(1)), "the other computer lost its picture");
+}
+
 /// Two computers that both hold `hash(1)`, named "first", and have synced.
 fn two_synced(template: &std::path::Path) -> (Computer, Computer) {
     let mut log = Vec::new();
