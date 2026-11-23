@@ -1874,3 +1874,27 @@ fn an_edit_just_before_a_deletion_comes_back_with_the_undo() {
     }
     assert_eq!(one.pictures()[&hash(1)].rating, "4");
 }
+
+/// An undo that arrives after compaction brings the picture back with the
+/// undoing computer's record. A tag in that record that another computer
+/// deleted after the undo stays off.
+#[test]
+fn a_tag_deleted_after_a_late_undo_stays_off() {
+    let (_directory, template) = template();
+    let (one, two) = two_synced(&template);
+    two.delete(&hash(1));
+    one.library.merge_entries(&two.publish()).unwrap();
+    one.library.compact_entries(now_ms() + EIGHT_DAYS_MS).unwrap();
+    two.library.undo().unwrap();
+    pause();
+    let cat = one.tag_ids()["cat"];
+    one.library.delete_tag(cat, now_ms()).unwrap();
+    for _ in 0..2 {
+        two.library.merge_entries(&one.publish()).unwrap();
+        one.library.merge_entries(&two.publish()).unwrap();
+    }
+    for computer in [&one, &two] {
+        assert_eq!(computer.views()[&hash(1)].tags, BTreeSet::new());
+    }
+    assert_eq!(two.pictures()[&hash(1)].tags, BTreeSet::new());
+}

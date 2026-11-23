@@ -160,7 +160,8 @@ pub(super) fn view_of(
     // folders that the entries name are looked up first.
     for entry in &entries {
         match entry {
-            HeldEntry::Add { record, .. } => {
+            HeldEntry::Add { record, .. }
+            | HeldEntry::Delete { undo: Some(UndoRecord { record, .. }), .. } => {
                 for tag in &record.tags {
                     deleted.tag(connection, tag)?;
                 }
