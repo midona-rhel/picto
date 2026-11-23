@@ -733,7 +733,7 @@ impl Library {
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let protected = self.history.protected_cleanup_files();
-        let (applied, _, ()) = self.database.published_write(
+        let ((removed, applied), _, ()) = self.database.published_write(
             WorkPriority::Cloud,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
@@ -810,6 +810,7 @@ impl Library {
                     |row| row.get(0),
                 )?;
                 let changed_library = !affected.is_empty() || resources.len() > 1;
+                let removed = files.deleted > 0 || resources.contains("navigation");
                 if changed_library {
                     // The row makes the next snapshot due, so that this
                     // device's copy in the cloud folder holds the change.
@@ -829,12 +830,12 @@ impl Library {
                     affected.iter().map(RootId),
                 );
                 Ok((
-                    AppliedMerge {
+                    (removed, AppliedMerge {
                         more,
                         changed: files.changed,
                         deleted: files.deleted,
                         receipt: changed_library.then(|| receipt.clone()),
-                    },
+                    }),
                     UnrecordedDelta(PublishedDelta { snapshot: next, receipt, history: None }),
                 ))
             },
@@ -842,6 +843,12 @@ impl Library {
                 publish_delta(&projections, &publication, delta.0);
             },
         )?;
+        // The undo history can't be replayed over pictures, tags or folders
+        // that another computer deleted: an undo would put pictures back
+        // into a folder that no longer exists.
+        if removed {
+            self.history.clear();
+        }
         Ok(applied)
     }
 
