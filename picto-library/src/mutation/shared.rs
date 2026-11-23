@@ -802,6 +802,32 @@ pub(super) fn record_replaced_file(
     Ok(())
 }
 
+/// Returns those of `roots` whose file has an `add` entry of this computer,
+/// which other computers may already have received.
+pub(super) fn recorded_roots(
+    transaction: &rusqlite::Transaction<'_>,
+    roots: &RoaringBitmap,
+) -> Result<RoaringBitmap> {
+    if roots.is_empty() || !recording(transaction)? {
+        return Ok(RoaringBitmap::new());
+    }
+    let mut statement = transaction.prepare_cached(
+        "SELECT ids.value FROM json_each(?1) ids
+         CROSS JOIN media_item media ON media.media_id = ids.value
+         JOIN media_file file ON file.file_id = media.file_id
+         WHERE EXISTS (
+             SELECT 1 FROM shared_entry entry
+             WHERE entry.subject_key = file.content_hash AND entry.kind = 'add'
+               AND entry.second_key = (SELECT device_id FROM cloud_state WHERE singleton = 1))",
+    )?;
+    let recorded = statement
+        .query_map([serde_json::to_string(&roots.iter().collect::<Vec<_>>())?], |row| {
+            row.get::<_, u32>(0)
+        })?
+        .collect::<rusqlite::Result<RoaringBitmap>>()?;
+    Ok(recorded)
+}
+
 /// Removes the tombstones of the items `keys`, inside the caller's
 /// transaction. A tombstone is a row of `deletion_tombstone`; it stops an
 /// import from bringing back an item that was deleted after the import was

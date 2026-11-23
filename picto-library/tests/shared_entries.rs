@@ -911,3 +911,23 @@ fn an_add_with_a_record_from_a_newer_version_still_counts() {
     let picture = one.pictures().remove(&hash(1)).expect("the picture is kept");
     assert_eq!(picture.status, "active");
 }
+
+/// Undoing an import task after its pictures were recorded moves them to the
+/// Trash, so the other computers see it too.
+#[test]
+fn undoing_an_import_task_after_its_pictures_were_recorded_trashes_them() {
+    let (_directory, template) = template();
+    let (mut one, two) = two_synced(&template);
+    let task = one.library.create_task("import", "Import", "{}", true, false, now_ms()).unwrap();
+    let input = one.prepared(&hash(2), "from a task", Vec::new(), Vec::new());
+    one.library.ingest_batch_for_task(&[input], task, false).unwrap();
+    two.library.merge_entries(&one.own_entries()).unwrap();
+    one.library.stop_task(task, true, now_ms()).unwrap();
+    one.library.revert_task(task, now_ms()).unwrap();
+    assert_eq!(one.pictures()[&hash(2)].status, "trash");
+    two.library.merge_entries(&one.own_entries()).unwrap();
+    assert_eq!(
+        two.library.entry_view(&hash(2)).unwrap().map(|view| view.status),
+        Some(Lifecycle::Trash)
+    );
+}
