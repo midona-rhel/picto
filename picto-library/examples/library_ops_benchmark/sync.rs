@@ -9,9 +9,10 @@
 //! - A merge of the 100,000 `add` entries of that import, into a library that
 //!   holds the same files and into an empty one, and the same merge when the
 //!   entries arrive as 16 files, the way a sync reads them.
-//! - Deleting the 100,000 imported items permanently, which first turns the
-//!   items' pending changes into entries, and compacting their entries as
-//!   if 8 days had passed.
+//! - Deleting 100,000 items permanently whose changes are entries already,
+//!   and 100,000 items with a pending tag and status change each, which the
+//!   deletion turns into entries first. Then compacting the entries of the
+//!   second 100,000 as if 8 days had passed.
 
 use std::time::Instant;
 
@@ -83,12 +84,15 @@ pub fn run(library: Library, ids: &[RootId], directory: &std::path::Path) -> R<(
     let wanted = empty.wanted_files(None, IMPORT + 1)?.len();
     println!("ROW|merge add entries into an empty library|{adds}|{:.1}|-|n=1 wanted={wanted}", ms(started));
 
-    let imported = on.auxiliary_read(WorkPriority::Maintenance, |connection| {
-        let mut statement = connection.prepare("SELECT root_id FROM library_root")?;
-        let rows = statement.query_map([], |row| row.get::<_, u32>(0))?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    })?;
-    let imported = imported.into_iter().map(RootId).collect::<Vec<_>>();
+    let held = all_roots(&off)?;
+    off.add_tag(&explicit(&held), "synced:before-deletion")?;
+    off.set_lifecycle(&explicit(&held), picto_library::Lifecycle::Trash)?;
+    settle(&off)?;
+    let started = Instant::now();
+    off.permanently_delete(&explicit(&held), 0, 0, false)?;
+    println!("ROW|delete permanently, changes already entries|{IMPORT}|{:.1}|-|n=1", ms(started));
+
+    let imported = all_roots(&on)?;
     on.add_tag(&explicit(&imported), "synced:before-deletion")?;
     on.set_lifecycle(&explicit(&imported), picto_library::Lifecycle::Trash)?;
     let started = Instant::now();
@@ -108,6 +112,15 @@ pub fn run(library: Library, ids: &[RootId], directory: &std::path::Path) -> R<(
         entry_count(&on)?
     );
     Ok(())
+}
+
+fn all_roots(library: &Library) -> R<Vec<RootId>> {
+    let roots = library.auxiliary_read(WorkPriority::Maintenance, |connection| {
+        let mut statement = connection.prepare("SELECT root_id FROM library_root")?;
+        let rows = statement.query_map([], |row| row.get::<_, u32>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    })?;
+    Ok(roots.into_iter().map(RootId).collect())
 }
 
 fn entry_count(library: &Library) -> R<i64> {
