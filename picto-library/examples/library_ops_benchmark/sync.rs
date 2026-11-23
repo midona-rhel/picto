@@ -7,7 +7,8 @@
 //! - An import of 100,000 items into an empty library, with recording off and
 //!   with it on.
 //! - A merge of the 100,000 `add` entries of that import, into a library that
-//!   holds the same files and into an empty one.
+//!   holds the same files and into an empty one, and the same merge when the
+//!   entries arrive as 16 files, the way a sync reads them.
 
 use std::time::Instant;
 
@@ -61,6 +62,17 @@ pub fn run(library: Library, ids: &[RootId], directory: &std::path::Path) -> R<(
     let started = Instant::now();
     off.merge_entries(&entries)?;
     println!("ROW|merge add entries into a library with the same files|{adds}|{:.1}|-|n=1", ms(started));
+
+    let split = Library::create(directory.join("merge-split.sqlite"))?;
+    import(&split)?;
+    split.start_recording()?;
+    settle(&split)?;
+    let started = Instant::now();
+    for file in entries.chunks(adds.div_ceil(16)) {
+        split.store_entries(file)?;
+    }
+    split.apply_stored(false)?;
+    println!("ROW|merge add entries as 16 files into a library with the same files|{adds}|{:.1}|-|n=1", ms(started));
 
     let empty = Library::create(directory.join("merge-empty.sqlite"))?;
     let started = Instant::now();
