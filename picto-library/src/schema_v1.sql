@@ -397,7 +397,8 @@ CREATE TABLE cloud_device_frontier (
 -- The entries that the computers of a library send each other through cloud
 -- sync. An entry says what one computer did to one picture, tag or folder,
 -- and when, by the time of that computer's clock. Only the latest entry per
--- key is kept; `picto-library/src/mutation/shared.rs` explains the kinds.
+-- key is kept, and for `compacted` the one with the latest time in its value;
+-- `picto-library/src/mutation/shared.rs` explains the kinds.
 -- `subject_key` is the content hash of a file, except for `tag_delete`,
 -- where it's the tag's name, and `folder_delete`, where it's the folder's
 -- stable key. `second_key` is the computer's id for `add`, the tag's name for
@@ -478,6 +479,27 @@ CREATE TABLE kept_deleted_file (
 ) STRICT;
 
 CREATE INDEX idx_kept_deleted_file_remove_after ON kept_deleted_file(remove_after_ms);
+
+-- Files with a `delete` entry whose obsolete entries `Library::compact_entries`
+-- hasn't dropped yet. `due_ms` is when it looks at the file next: 7 days
+-- after the time of the entry, or after the cut that an undo went back to.
+-- A trigger of the writing connection adds the rows.
+CREATE TABLE entry_compaction_due (
+    content_hash TEXT PRIMARY KEY,
+    due_ms INTEGER NOT NULL
+) WITHOUT ROWID, STRICT;
+
+CREATE INDEX idx_entry_compaction_due_ms ON entry_compaction_due(due_ms);
+
+-- Keys of this computer's entries that compaction dropped. The files in the
+-- cloud folder that hold them are written again at the next sync, and the
+-- rows are removed then.
+CREATE TABLE removed_own_entry (
+    subject_key TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    second_key TEXT NOT NULL,
+    PRIMARY KEY(subject_key, kind, second_key)
+) WITHOUT ROWID, STRICT;
 
 -- Original files in the cloud folder whose picture this computer deleted.
 -- `file_name` is the content hash, a dot and the extension. The original is

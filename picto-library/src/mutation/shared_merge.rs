@@ -33,10 +33,16 @@
 //! Before storing anything, all of this computer's pending changes become
 //! entries (`settle_in`), so that a merge never works from an incomplete
 //! picture of what this computer did.
+//!
+//! An entry of a file at or before the file's floor (its `compacted` entry)
+//! isn't stored, and a stored floor drops the entries at or before it, as
+//! `compact_in` does on the computer that wrote it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::shared_view::{file_view, EntryTime, FileRecord, FileView, HeldEntry};
+use super::shared_view::{
+    file_view, parse_time_text, EntryTime, FileRecord, FileView, HeldEntry, UndoRecord,
+};
 use super::*;
 
 /// How many roots become entries in one transaction before a merge, and how
@@ -57,7 +63,10 @@ pub struct AppliedMerge {
 }
 
 /// Reads all stored entries of the file `content_hash`.
-fn held_entries(connection: &rusqlite::Connection, content_hash: &str) -> Result<Vec<HeldEntry>> {
+pub(super) fn held_entries(
+    connection: &rusqlite::Connection,
+    content_hash: &str,
+) -> Result<Vec<HeldEntry>> {
     let mut statement = connection.prepare_cached(
         "SELECT kind, second_key, value, clock_ms, clock_counter, device_id
          FROM shared_entry WHERE subject_key = ?1",
@@ -71,7 +80,10 @@ fn held_entries(connection: &rusqlite::Connection, content_hash: &str) -> Result
         let kind: String = row.get(0)?;
         let entry = match EntryKind::parse(&kind) {
             Some(EntryKind::Add) => HeldEntry::Add { time, record: FileRecord::parse(&value) },
-            Some(EntryKind::Delete) => HeldEntry::Delete { time },
+            Some(EntryKind::Delete) => {
+                HeldEntry::Delete { time, undo: UndoRecord::parse(&value) }
+            }
+            Some(EntryKind::Compacted) => HeldEntry::Compacted { through: parse_time_text(&value) },
             Some(EntryKind::Name) => HeldEntry::Name { time, value },
             Some(EntryKind::Notes) => HeldEntry::Notes { time, value },
             Some(EntryKind::Rating) => HeldEntry::Rating {
@@ -99,7 +111,7 @@ fn held_entries(connection: &rusqlite::Connection, content_hash: &str) -> Result
 /// The `tag_delete` and `folder_delete` entries that a batch has looked up,
 /// so each is read only once.
 #[derive(Default)]
-struct DeletedDefinitions {
+pub(super) struct DeletedDefinitions {
     tags: HashMap<String, Option<EntryTime>>,
     folders: HashMap<String, bool>,
 }
@@ -138,7 +150,7 @@ impl DeletedDefinitions {
 
 /// Returns the picture that the stored entries of `content_hash` describe,
 /// or `None` when it doesn't exist.
-fn view_of(
+pub(super) fn view_of(
     connection: &rusqlite::Connection,
     deleted: &mut DeletedDefinitions,
     content_hash: &str,
@@ -197,9 +209,15 @@ fn touch_files_of_roots(
 /// Stores those of `entries` that are later than the stored ones, moves the
 /// clock up to the latest of them, and notes what they're about in
 /// `merge_touched`. Returns how many were stored.
+///
+/// An entry of a file at or before the file's floor isn't stored, because
+/// it never counts again; a computer that was away for weeks sends such
+/// entries. A stored `compacted` entry drops the entries at or before its
+/// floor, as on the computer that wrote it.
 fn store_in(transaction: &rusqlite::Transaction<'_>, entries: &[SharedEntry]) -> Result<u64> {
     let mut stored = 0;
     let mut latest = None::<(i64, i64)>;
+    let mut floors = BTreeMap::<String, String>::new();
     for chunk in entries.chunks(BATCH) {
         let rows = chunk
             .iter()
@@ -223,9 +241,18 @@ fn store_in(transaction: &rusqlite::Transaction<'_>, entries: &[SharedEntry]) ->
                     json_extract(row.value, '$[2]'), json_extract(row.value, '$[3]'),
                     json_extract(row.value, '$[4]'), json_extract(row.value, '$[5]'),
                     json_extract(row.value, '$[6]')
-             FROM json_each(?1) row WHERE true
+             FROM json_each(?1) row
+             WHERE NOT (json_extract(row.value, '$[1]') IN {DROPPED_KINDS}
+                        AND EXISTS (
+                            SELECT 1 FROM shared_entry floor
+                            WHERE floor.subject_key = json_extract(row.value, '$[0]')
+                              AND floor.kind = 'compacted' AND floor.second_key = ''
+                              AND floor.value >= printf('%016d:%010d:%s',
+                                  json_extract(row.value, '$[4]'),
+                                  json_extract(row.value, '$[5]'),
+                                  json_extract(row.value, '$[6]'))))
              {KEEP_LATER}
-             RETURNING subject_key, kind, clock_ms, clock_counter"
+             RETURNING subject_key, kind, clock_ms, clock_counter, value"
         ))?;
         let mut won = statement.query([serde_json::to_string(&rows)?])?;
         let mut touched = BTreeSet::new();
@@ -235,6 +262,11 @@ fn store_in(transaction: &rusqlite::Transaction<'_>, entries: &[SharedEntry]) ->
             let kind = match EntryKind::parse(&kind) {
                 Some(EntryKind::TagDelete) => "tag",
                 Some(EntryKind::FolderDelete) => "folder",
+                Some(EntryKind::Compacted) => {
+                    let through = row.get::<_, Option<String>>(4)?.unwrap_or_default();
+                    floors.insert(subject_key.clone(), through);
+                    "file"
+                }
                 _ => "file",
             };
             latest = latest.max(Some((row.get(2)?, row.get(3)?)));
@@ -250,6 +282,9 @@ fn store_in(transaction: &rusqlite::Transaction<'_>, entries: &[SharedEntry]) ->
                 [serde_json::to_string(&touched)?],
             )?;
         }
+    }
+    for (content_hash, through) in floors {
+        drop_below(transaction, &content_hash, &through)?;
     }
     if let Some(latest) = latest {
         observe(transaction, latest)?;

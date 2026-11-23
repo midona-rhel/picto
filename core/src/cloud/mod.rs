@@ -278,7 +278,12 @@ pub fn snapshot_due_library(
 }
 
 pub fn recover_interrupted_sync_library(application: &LibraryApplication) -> Result<(), String> {
-    entries::forget_merged();
+    let device_id = application
+        .library()
+        .entry_clock()
+        .map_err(|error| error.to_string())?
+        .device_id;
+    entries::forget_merged(&device_id);
     application
         .library()
         .database()

@@ -9,6 +9,9 @@
 //! - A merge of the 100,000 `add` entries of that import, into a library that
 //!   holds the same files and into an empty one, and the same merge when the
 //!   entries arrive as 16 files, the way a sync reads them.
+//! - Deleting the 100,000 imported items permanently, which first turns the
+//!   items' pending changes into entries, and compacting their entries as
+//!   if 8 days had passed.
 
 use std::time::Instant;
 
@@ -79,7 +82,38 @@ pub fn run(library: Library, ids: &[RootId], directory: &std::path::Path) -> R<(
     empty.merge_entries(&entries)?;
     let wanted = empty.wanted_files(None, IMPORT + 1)?.len();
     println!("ROW|merge add entries into an empty library|{adds}|{:.1}|-|n=1 wanted={wanted}", ms(started));
+
+    let imported = on.auxiliary_read(WorkPriority::Maintenance, |connection| {
+        let mut statement = connection.prepare("SELECT root_id FROM library_root")?;
+        let rows = statement.query_map([], |row| row.get::<_, u32>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    })?;
+    let imported = imported.into_iter().map(RootId).collect::<Vec<_>>();
+    on.add_tag(&explicit(&imported), "synced:before-deletion")?;
+    on.set_lifecycle(&explicit(&imported), picto_library::Lifecycle::Trash)?;
+    let started = Instant::now();
+    on.permanently_delete(&explicit(&imported), 0, 0, false)?;
+    println!("ROW|delete permanently with pending tag and status changes|{IMPORT}|{:.1}|-|n=1", ms(started));
+    on.set_entries_published(on.entry_clock()?.now)?;
+    let before = entry_count(&on)?;
+    let eight_days_later = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64
+        + 8 * 24 * 60 * 60 * 1_000;
+    let started = Instant::now();
+    on.compact_entries(eight_days_later)?;
+    println!(
+        "ROW|compact the entries of the deleted items|{IMPORT}|{:.1}|-|n=1 entries_before={before} entries_after={}",
+        ms(started),
+        entry_count(&on)?
+    );
     Ok(())
+}
+
+fn entry_count(library: &Library) -> R<i64> {
+    Ok(library.auxiliary_read(WorkPriority::Maintenance, |connection| {
+        Ok(connection.query_row("SELECT COUNT(*) FROM shared_entry", [], |row| row.get(0))?)
+    })?)
 }
 
 fn import(library: &Library) -> R<()> {

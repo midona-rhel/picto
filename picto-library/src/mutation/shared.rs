@@ -21,7 +21,16 @@
 //! turns the rows into entries later, a batch at a time.
 //!
 //! Deletions of files, tags and folders are written as entries straight away,
-//! because the hash or name is gone once the rows are deleted.
+//! because the hash or name is gone once the rows are deleted. The pending
+//! changes of a deleted picture become entries just before, for the same
+//! reason (`settle_roots`).
+//!
+//! The undo of a deleted file is written into the file's `delete` entry
+//! (`write_undos`). It moves the file's cut back to where it was before the
+//! deletion, so every entry that the deletion had made obsolete counts again
+//! (`shared_view.rs`). Seven days after a cut, `compact_in` drops the entries
+//! before it and writes a `compacted` entry, so that every computer drops the
+//! same ones and no later undo can bring them back on one computer only.
 //!
 //! When recording starts, every file the library already holds gets an `add`
 //! entry. Those are written in batches by `Library::settle_entries` too, and
@@ -36,7 +45,7 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use super::shared_view::{EntryTime, FileRecord};
+use super::shared_view::{cut_of, time_text, Cut, EntryTime, FileRecord, HeldEntry};
 use super::*;
 
 /// What an entry says.
@@ -45,7 +54,8 @@ use super::*;
 pub enum EntryKind {
     /// A computer holds the file. The value is the picture's record.
     Add,
-    /// The file was deleted.
+    /// The file was deleted. When the value is set, the deletion was undone:
+    /// the value is an `UndoRecord`.
     Delete,
     Name,
     Notes,
@@ -59,10 +69,14 @@ pub enum EntryKind {
     TagDelete,
     /// A folder was deleted.
     FolderDelete,
+    /// The entries of the file at or before the time in the value were
+    /// dropped by the computer that wrote it, and no computer counts them
+    /// again (`compact_in`).
+    Compacted,
 }
 
 impl EntryKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Add,
         Self::Delete,
         Self::Name,
@@ -73,6 +87,7 @@ impl EntryKind {
         Self::FolderItem,
         Self::TagDelete,
         Self::FolderDelete,
+        Self::Compacted,
     ];
 
     /// The value of `shared_entry.kind`.
@@ -88,6 +103,7 @@ impl EntryKind {
             Self::FolderItem => "folder_item",
             Self::TagDelete => "tag_delete",
             Self::FolderDelete => "folder_delete",
+            Self::Compacted => "compacted",
         }
     }
 
@@ -110,7 +126,9 @@ pub struct SharedEntry {
     pub second_key: String,
     /// The picture's record as JSON for `add`, the text for `name` and
     /// `notes`, the stars for `rating`, `inbox`, `active` or `trash` for
-    /// `status`, and `add` or `remove` for `item_tag` and `folder_item`.
+    /// `status`, `add` or `remove` for `item_tag` and `folder_item`, an
+    /// `UndoRecord` as JSON for a `delete` that undoes a deletion, and a time
+    /// as `time_text` writes it for `compacted`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
     pub clock_ms: i64,
@@ -142,25 +160,70 @@ pub struct EntryClock {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WantedFile {
     pub content_hash: String,
-    /// The record of the earliest `add` entry that still counts.
+    /// The record of the earliest `add` entry that counts, or of the undo
+    /// when no add counts.
     pub record: FileRecord,
 }
 
 const NOW_SQL: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
+/// How many files one write of `Library::compact_entries` compacts.
+const COMPACT_BATCH: usize = 5_000;
+
 /// The end of every statement that stores an entry. The new entry replaces
 /// the stored one only when it is later, so storing the same entries again or
-/// in another order gives the same table.
+/// in another order gives the same table. A `compacted` entry replaces the
+/// stored one when its time value is later, because the later floor is the
+/// one every computer has to keep.
 pub(super) const KEEP_LATER: &str = "ON CONFLICT(subject_key, kind, second_key) DO UPDATE SET
      value = excluded.value,
      clock_ms = excluded.clock_ms,
      clock_counter = excluded.clock_counter,
      device_id = excluded.device_id
- WHERE (excluded.clock_ms, excluded.clock_counter, excluded.device_id)
-     > (shared_entry.clock_ms, shared_entry.clock_counter, shared_entry.device_id)";
+ WHERE CASE WHEN excluded.kind = 'compacted'
+     THEN (excluded.value, excluded.clock_ms, excluded.clock_counter, excluded.device_id)
+          > (shared_entry.value, shared_entry.clock_ms, shared_entry.clock_counter,
+             shared_entry.device_id)
+     ELSE (excluded.clock_ms, excluded.clock_counter, excluded.device_id)
+          > (shared_entry.clock_ms, shared_entry.clock_counter, shared_entry.device_id)
+     END";
 
-/// Creates the temporary tables that a write fills for `record_changes` on
-/// the connection that writes the library.
+/// How long the entries that a deletion made obsolete are kept before
+/// `compact_in` drops them, in milliseconds. It's the default of "Keep
+/// deleted files", 7 days.
+pub(super) const COMPACT_AFTER_MS: i64 = 7 * 24 * 60 * 60 * 1_000;
+
+/// The SQL expression for the time of an entry in the table `entry` as
+/// `time_text` writes it.
+macro_rules! time_text_sql {
+    ($entry:literal) => {
+        concat!(
+            "printf('%016d:%010d:%s', ", $entry, ".clock_ms, ", $entry, ".clock_counter, ",
+            $entry, ".device_id)"
+        )
+    };
+}
+
+/// The SQL expression for the cut of the file `?hash` as `time_text` writes
+/// it, the same cut that `cut_of` returns, and the empty text for none.
+fn cut_sql(hash: &str) -> String {
+    format!(
+        "MAX(
+             COALESCE((SELECT floor.value FROM shared_entry floor
+                       WHERE floor.subject_key = {hash} AND floor.kind = 'compacted'
+                         AND floor.second_key = ''), ''),
+             COALESCE((SELECT CASE WHEN json_extract(deleted.value, '$.record') IS NULL
+                                   THEN {deleted_time}
+                                   ELSE COALESCE(json_extract(deleted.value, '$.before'), '') END
+                       FROM shared_entry deleted
+                       WHERE deleted.subject_key = {hash} AND deleted.kind = 'delete'
+                         AND deleted.second_key = ''), ''))",
+        deleted_time = time_text_sql!("deleted"),
+    )
+}
+
+/// Creates the temporary tables and triggers that the writes of the library
+/// fill, on the connection that writes the library.
 ///
 /// `entry_text_change` is filled by a trigger. Names and notes aren't in the
 /// resident projection, so a trigger is the cheap way to learn which pictures
@@ -169,9 +232,37 @@ pub(super) const KEEP_LATER: &str = "ON CONFLICT(subject_key, kind, second_key) 
 ///
 /// `entry_restored_root` holds the pictures that an undo brought back
 /// (`mark_restored_files`).
+///
+/// `entry_deletion_cut` holds, for each file this computer deleted since the
+/// library was opened, the cut the file had just before the deletion, as
+/// `time_text` writes it. The undo of the deletion moves the cut back to it.
+/// The undo history lasts as long as the library is open, and so does this
+/// table.
+///
+/// The two `entry_compaction_due_on_` triggers note the file of every
+/// `delete` entry that is stored or replaced in `entry_compaction_due`, so
+/// that `compact_in` looks at the file 7 days after the time of the entry.
 pub(crate) fn install_recording_triggers(connection: &rusqlite::Connection) -> Result<()> {
-    connection.execute_batch(
+    connection.execute_batch(&format!(
         "CREATE TEMP TABLE IF NOT EXISTS entry_restored_root (root_id INTEGER PRIMARY KEY);
+         CREATE TEMP TABLE IF NOT EXISTS entry_deletion_cut (
+             content_hash TEXT PRIMARY KEY,
+             cut TEXT NOT NULL
+         );
+         CREATE TEMP TRIGGER IF NOT EXISTS entry_compaction_due_on_insert
+         AFTER INSERT ON main.shared_entry WHEN NEW.kind = 'delete'
+         BEGIN
+             INSERT INTO main.entry_compaction_due (content_hash, due_ms)
+             VALUES (NEW.subject_key, NEW.clock_ms + {COMPACT_AFTER_MS})
+             ON CONFLICT(content_hash) DO UPDATE SET due_ms = MAX(due_ms, excluded.due_ms);
+         END;
+         CREATE TEMP TRIGGER IF NOT EXISTS entry_compaction_due_on_update
+         AFTER UPDATE ON main.shared_entry WHEN NEW.kind = 'delete'
+         BEGIN
+             INSERT INTO main.entry_compaction_due (content_hash, due_ms)
+             VALUES (NEW.subject_key, NEW.clock_ms + {COMPACT_AFTER_MS})
+             ON CONFLICT(content_hash) DO UPDATE SET due_ms = MAX(due_ms, excluded.due_ms);
+         END;
          CREATE TEMP TABLE IF NOT EXISTS entry_text_change (
              root_id INTEGER PRIMARY KEY,
              name INTEGER NOT NULL,
@@ -188,8 +279,8 @@ pub(crate) fn install_recording_triggers(connection: &rusqlite::Connection) -> R
              ON CONFLICT(root_id) DO UPDATE SET
                  name = MAX(name, excluded.name),
                  notes = MAX(notes, excluded.notes);
-         END;",
-    )?;
+         END;"
+    ))?;
     Ok(())
 }
 
@@ -439,16 +530,16 @@ pub(super) fn record_changes(
         file_roots(before)
     };
     let in_both = &files_after & &files_before;
-    // An import adds a file only when no computer has added it yet, but an
-    // undo of a deletion always adds it again. The value `always` marks the
-    // rows of the second kind for `settle_in`.
+    // An import adds a file only when no computer has added it yet. The
+    // undo of a deletion writes its own entry whatever other computers did;
+    // the value `undo` marks its rows for `settle_in`.
     let restored = transaction
         .prepare_cached("SELECT root_id FROM temp.entry_restored_root")?
         .query_map([], |row| row.get::<_, u32>(0))?
         .collect::<rusqlite::Result<RoaringBitmap>>()?;
     transaction.execute("DELETE FROM temp.entry_restored_root", [])?;
     let added = &files_after - &files_before;
-    rows.push((EntryKind::Add, String::new(), Some("always".into()), &added & &restored));
+    rows.push((EntryKind::Add, String::new(), Some("undo".into()), &added & &restored));
     rows.push((EntryKind::Add, String::new(), None, &added - &restored));
 
     if !Arc::ptr_eq(&before.lifecycle, &after.lifecycle) {
@@ -553,9 +644,8 @@ pub(super) fn discard_changes(transaction: &rusqlite::Transaction<'_>) -> Result
 }
 
 /// Notes the pictures that are in `after` and not in `before`, for an undo or
-/// redo that brings deleted pictures back. Their `add` entries are written
-/// even when another computer has added the file, as an undo of a deletion
-/// should.
+/// redo that brings deleted pictures back. `settle_in` writes the undo of the
+/// deletion for them (`write_undos`).
 pub(super) fn mark_restored_files(
     transaction: &rusqlite::Transaction<'_>,
     before: &ProjectionSnapshot,
@@ -734,9 +824,9 @@ pub(super) fn record_deleted_tags(
 /// Called by `delete_roots` while the deleted media are listed in
 /// `temp.delete_media` and their rows still exist. When the user deleted the
 /// pictures, or the library merged a duplicate away, it stores a `delete`
-/// entry for each file that no other picture in the library still uses. A
-/// deletion that came from another computer, or the undo of an import, stores
-/// nothing.
+/// entry for each file that no other picture in the library still uses, and
+/// notes the cut the file had before in `entry_deletion_cut`. A deletion that
+/// came from another computer, or the undo of an import, stores nothing.
 pub(super) fn record_deleted_files(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
@@ -748,6 +838,17 @@ pub(super) fn record_deleted_files(
     let Some((clock_ms, clock_counter)) = action_time(transaction, revision)? else {
         return Ok(());
     };
+    transaction.execute(
+        &format!(
+            "INSERT OR REPLACE INTO temp.entry_deletion_cut (content_hash, cut)
+             SELECT DISTINCT file.content_hash, {cut}
+             FROM temp.delete_media selected
+             CROSS JOIN media_item media ON media.media_id = selected.local_id
+             JOIN media_file file ON file.file_id = media.file_id",
+            cut = cut_sql("file.content_hash")
+        ),
+        [],
+    )?;
     transaction.execute(
         &format!(
             "INSERT INTO shared_entry
@@ -770,7 +871,8 @@ pub(super) fn record_deleted_files(
 
 /// Records that a repair replaced the file of the media `media_id`, whose old
 /// content hash was `old_hash`: the old file is deleted, and the picture gets
-/// an `add` entry for the new file when it isn't in a collection.
+/// an `add` entry for the new file when it isn't in a collection. The cut of
+/// the old file goes to `entry_deletion_cut`, for the undo of the repair.
 pub(super) fn record_replaced_file(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
@@ -781,6 +883,14 @@ pub(super) fn record_replaced_file(
     let Some(time) = action_time(transaction, revision)? else {
         return Ok(());
     };
+    transaction.execute(
+        &format!(
+            "INSERT OR REPLACE INTO temp.entry_deletion_cut (content_hash, cut)
+             VALUES (?1, {cut})",
+            cut = cut_sql("?1")
+        ),
+        [old_hash],
+    )?;
     transaction
         .prepare_cached(&format!(
             "INSERT INTO shared_entry
@@ -828,8 +938,9 @@ pub(super) fn recorded_roots(
     Ok(recorded)
 }
 
-/// Returns those of `roots` whose file exists by an `add` entry of another
-/// computer.
+/// Returns those of `roots` whose file exists by the stored entries. The
+/// caller passes roots that have no `add` entry of this computer, so their
+/// file exists by what another computer did.
 pub(super) fn roots_added_elsewhere(
     transaction: &rusqlite::Transaction<'_>,
     roots: &RoaringBitmap,
@@ -837,26 +948,25 @@ pub(super) fn roots_added_elsewhere(
     if roots.is_empty() || !recording(transaction)? {
         return Ok(RoaringBitmap::new());
     }
-    let mut statement = transaction.prepare_cached(
-        "SELECT ids.value FROM json_each(?1) ids
-         CROSS JOIN media_item media ON media.media_id = ids.value
-         JOIN media_file file ON file.file_id = media.file_id
-         WHERE EXISTS (
-             SELECT 1 FROM shared_entry added
-             WHERE added.subject_key = file.content_hash AND added.kind = 'add'
-               AND added.second_key <> (SELECT device_id FROM cloud_state WHERE singleton = 1)
-               AND NOT EXISTS (
-                   SELECT 1 FROM shared_entry deleted
-                   WHERE deleted.subject_key = added.subject_key AND deleted.kind = 'delete'
-                     AND (deleted.clock_ms, deleted.clock_counter, deleted.device_id)
-                         >= (added.clock_ms, added.clock_counter, added.device_id)))",
-    )?;
-    let found = statement
+    let files = transaction
+        .prepare_cached(
+            "SELECT ids.value, file.content_hash FROM json_each(?1) ids
+             CROSS JOIN media_item media ON media.media_id = ids.value
+             JOIN media_file file ON file.file_id = media.file_id",
+        )?
         .query_map([serde_json::to_string(&roots.iter().collect::<Vec<_>>())?], |row| {
-            row.get::<_, u32>(0)
+            Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
         })?
-        .collect::<rusqlite::Result<RoaringBitmap>>()?;
-    Ok(found)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let existing = existing_files(
+        transaction,
+        &files.iter().map(|(_, hash)| hash.as_str()).collect::<Vec<_>>(),
+    )?;
+    Ok(files
+        .into_iter()
+        .filter(|(_, hash)| existing.contains(hash))
+        .map(|(root, _)| root)
+        .collect())
 }
 
 /// Removes the tombstones of the items `keys`, inside the caller's
@@ -889,8 +999,9 @@ pub fn reset_published_entries(transaction: &rusqlite::Transaction<'_>) -> Resul
     Ok(())
 }
 
-/// Returns those of `hashes` whose file exists by the stored entries: an
-/// `add` entry is later than the `delete` entry, or there's no `delete`.
+/// Returns those of `hashes` whose file exists by the stored entries
+/// (`file_view`). Only files with an `add` or `delete` entry can exist, so
+/// the others are left out with one query.
 pub(super) fn existing_files(
     connection: &rusqlite::Connection,
     hashes: &[&str],
@@ -898,20 +1009,21 @@ pub(super) fn existing_files(
     if hashes.is_empty() {
         return Ok(HashSet::new());
     }
-    let mut statement = connection.prepare_cached(
-        "SELECT DISTINCT hashes.value FROM json_each(?1) hashes
-         CROSS JOIN shared_entry added
-             ON added.subject_key = hashes.value AND added.kind = 'add'
-         WHERE NOT EXISTS (
-             SELECT 1 FROM shared_entry deleted
-             WHERE deleted.subject_key = hashes.value AND deleted.kind = 'delete'
-               AND deleted.second_key = ''
-               AND (deleted.clock_ms, deleted.clock_counter, deleted.device_id)
-                   >= (added.clock_ms, added.clock_counter, added.device_id))",
-    )?;
-    let existing = statement
+    let candidates = connection
+        .prepare_cached(
+            "SELECT DISTINCT hashes.value FROM json_each(?1) hashes
+             CROSS JOIN shared_entry entry ON entry.subject_key = hashes.value
+             WHERE entry.kind IN ('add', 'delete')",
+        )?
         .query_map([serde_json::to_string(hashes)?], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<HashSet<_>>>()?;
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut deleted = super::shared_merge::DeletedDefinitions::default();
+    let mut existing = HashSet::new();
+    for hash in candidates {
+        if super::shared_merge::view_of(connection, &mut deleted, &hash)?.is_some() {
+            existing.insert(hash);
+        }
+    }
     Ok(existing)
 }
 
@@ -1006,6 +1118,66 @@ pub(super) fn file_records(
     Ok(files)
 }
 
+/// Returns those of `hashes` that have a `delete` entry.
+fn deleted_files(connection: &rusqlite::Connection, hashes: &[&str]) -> Result<HashSet<String>> {
+    if hashes.is_empty() {
+        return Ok(HashSet::new());
+    }
+    Ok(connection
+        .prepare_cached(
+            "SELECT hashes.value FROM json_each(?1) hashes
+             CROSS JOIN shared_entry entry
+                 ON entry.subject_key = hashes.value AND entry.kind = 'delete'
+                    AND entry.second_key = ''",
+        )?
+        .query_map([serde_json::to_string(hashes)?], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<HashSet<_>>>()?)
+}
+
+/// Stores the undo of the deletion of each of `files` at `time`, in the
+/// `delete` entry of the file. The undo moves the cut back to the one in
+/// `entry_deletion_cut`, so every entry that the deletion had made obsolete
+/// counts again, also those of other computers that hadn't arrived here.
+/// When the library was closed after the undo and before its row of
+/// `pending_entry` became an entry, the table has no row, and the cut stays
+/// where it is: the picture comes back with the record of the undo. The next
+/// merge makes the picture look the way the entries say.
+fn write_undos(
+    transaction: &rusqlite::Transaction<'_>,
+    files: &[HeldFile],
+    time: (i64, i64),
+    device_id: &str,
+) -> Result<()> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    let mut statement = transaction.prepare_cached(&format!(
+        "INSERT INTO shared_entry
+             (subject_key, kind, second_key, value, clock_ms, clock_counter, device_id)
+         VALUES (?1, 'delete', '', json_object('before', COALESCE(
+                     (SELECT cut FROM temp.entry_deletion_cut WHERE content_hash = ?1), {cut}),
+                     'record', json(?2)),
+                 ?3, ?4, ?5)
+         {KEEP_LATER}",
+        cut = cut_sql("?1")
+    ))?;
+    for file in files {
+        statement.execute(rusqlite::params![
+            file.content_hash,
+            serde_json::to_string(&file.record)?,
+            time.0,
+            time.1,
+            device_id
+        ])?;
+    }
+    transaction.execute(
+        "INSERT OR IGNORE INTO merge_touched (subject_kind, subject_key)
+         SELECT 'file', value FROM json_each(?1)",
+        [serde_json::to_string(&files.iter().map(|file| &file.content_hash).collect::<Vec<_>>())?],
+    )?;
+    Ok(())
+}
+
 /// Stores an `add` entry of this computer for each of `files` at `time`.
 fn write_adds(
     transaction: &rusqlite::Transaction<'_>,
@@ -1081,6 +1253,202 @@ fn settle_start(
     Ok((roots.len() as usize).max(1))
 }
 
+/// Turns the roots `taken` of one row of `pending_entry` into entries.
+/// Returns `false` for a kind that is never stored as a row.
+#[allow(clippy::too_many_arguments)]
+fn settle_row(
+    transaction: &rusqlite::Transaction<'_>,
+    snapshot: &ProjectionSnapshot,
+    kind: &str,
+    second_key: &str,
+    value: Option<&str>,
+    time: (i64, i64),
+    taken: &RoaringBitmap,
+    device_id: &str,
+) -> Result<bool> {
+    match EntryKind::parse(kind) {
+        Some(EntryKind::Add) => {
+            // An import of a file that already exists by the entries
+            // writes nothing. The picture is changed to look the way the
+            // entries say instead, by the next merge. A repair (`always`)
+            // writes its `add` in any case. An undo (`undo`) of a deletion
+            // that has a `delete` entry writes the undo into that entry,
+            // and otherwise an `add` like a repair.
+            let files = file_records(transaction, snapshot, taken, false)?;
+            let (undone, files): (Vec<_>, Vec<_>) = if value == Some("undo") {
+                let deleted = deleted_files(
+                    transaction,
+                    &files.iter().map(|file| file.content_hash.as_str()).collect::<Vec<_>>(),
+                )?;
+                files.into_iter().partition(|file| deleted.contains(&file.content_hash))
+            } else {
+                (Vec::new(), files)
+            };
+            write_undos(transaction, &undone, time, device_id)?;
+            let existing = if matches!(value, Some("always" | "undo")) {
+                HashSet::new()
+            } else {
+                existing_files(
+                    transaction,
+                    &files.iter().map(|file| file.content_hash.as_str()).collect::<Vec<_>>(),
+                )?
+            };
+            let (known, new): (Vec<_>, Vec<_>) =
+                files.into_iter().partition(|file| existing.contains(&file.content_hash));
+            // Other entries of the file can win over the new record: a
+            // rename on another computer after a deletion, or an earlier
+            // add when an undo or a repair brings the file back. The
+            // next merge brings the picture in line with them.
+            transaction.execute(
+                "INSERT OR IGNORE INTO merge_touched (subject_kind, subject_key)
+                 SELECT 'file', hashes.value FROM json_each(?1) hashes
+                 WHERE EXISTS (SELECT 1 FROM shared_entry entry
+                               WHERE entry.subject_key = hashes.value
+                                 AND (entry.kind <> 'add' OR entry.second_key <> ?2))",
+                rusqlite::params![
+                    serde_json::to_string(
+                        &new.iter().map(|file| &file.content_hash).collect::<Vec<_>>(),
+                    )?,
+                    device_id
+                ],
+            )?;
+            write_adds(transaction, &new, time, device_id)?;
+            if !known.is_empty() {
+                transaction.execute(
+                    "INSERT OR IGNORE INTO merge_touched (subject_kind, subject_key)
+                     SELECT 'file', value FROM json_each(?1)",
+                    [serde_json::to_string(
+                        &known.iter().map(|file| &file.content_hash).collect::<Vec<_>>(),
+                    )?],
+                )?;
+            }
+        }
+        Some(kind @ (EntryKind::Name | EntryKind::Notes)) => {
+            // The rows hold no text: the text is read now. A later change
+            // of the same text has its own, later row, so the last entry
+            // always carries the text the picture has.
+            let column = if kind == EntryKind::Name {
+                "root.name"
+            } else {
+                "COALESCE(root.notes, '')"
+            };
+            transaction.execute(
+                &format!(
+                    "INSERT INTO shared_entry
+                         (subject_key, kind, second_key, value, clock_ms, clock_counter,
+                          device_id)
+                     SELECT file.content_hash, ?2, '', {column}, ?3, ?4, ?5
+                     FROM json_each(?1) ids
+                     CROSS JOIN library_root root ON root.root_id = ids.value
+                     JOIN media_item media ON media.media_id = root.root_id
+                     JOIN media_file file ON file.file_id = media.file_id
+                     WHERE true
+                     {KEEP_LATER}"
+                ),
+                rusqlite::params![
+                    serde_json::to_string(&taken.iter().collect::<Vec<_>>())?,
+                    kind.as_str(),
+                    time.0,
+                    time.1,
+                    device_id
+                ],
+            )?;
+        }
+        Some(
+            kind @ (EntryKind::Rating
+            | EntryKind::Status
+            | EntryKind::ItemTag
+            | EntryKind::FolderItem),
+        ) => {
+            transaction.execute(
+                &format!(
+                    "INSERT INTO shared_entry
+                         (subject_key, kind, second_key, value, clock_ms, clock_counter,
+                          device_id)
+                     SELECT file.content_hash, ?2, ?3, ?4, ?5, ?6, ?7
+                     FROM json_each(?1) ids
+                     CROSS JOIN library_root root ON root.root_id = ids.value
+                     JOIN media_item media ON media.media_id = root.root_id
+                     JOIN media_file file ON file.file_id = media.file_id
+                     WHERE true
+                     {KEEP_LATER}"
+                ),
+                rusqlite::params![
+                    serde_json::to_string(&taken.iter().collect::<Vec<_>>())?,
+                    kind.as_str(),
+                    second_key,
+                    value,
+                    time.0,
+                    time.1,
+                    device_id
+                ],
+            )?;
+        }
+        // No other kind is stored as a row.
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// Turns the pending changes of `roots` into entries now, before a deletion
+/// removes the roots. Pending changes name a picture by its root and get the
+/// file's hash when they become entries, so after the deletion they would be
+/// lost. The undo of the deletion brings them back, as it brings back the
+/// entries of the other computers.
+pub(super) fn settle_roots(
+    transaction: &rusqlite::Transaction<'_>,
+    snapshot: &ProjectionSnapshot,
+    roots: &RoaringBitmap,
+) -> Result<()> {
+    if roots.is_empty() || !recording(transaction)? {
+        return Ok(());
+    }
+    let device_id = own_device_id(transaction)?;
+    let rows = transaction
+        .prepare_cached(
+            "SELECT pending_id, kind, second_key, value, clock_ms, clock_counter, root_bitmap
+             FROM pending_entry ORDER BY pending_id",
+        )?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                (row.get::<_, i64>(4)?, row.get::<_, i64>(5)?),
+                row.get::<_, Vec<u8>>(6)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (pending_id, kind, second_key, value, time, bitmap) in rows {
+        let mut pending = RoaringBitmap::deserialize_from(&mut std::io::Cursor::new(bitmap))?;
+        let taken = &pending & roots;
+        if taken.is_empty() {
+            continue;
+        }
+        settle_row(
+            transaction,
+            snapshot,
+            &kind,
+            &second_key,
+            value.as_deref(),
+            time,
+            &taken,
+            &device_id,
+        )?;
+        pending -= &taken;
+        if pending.is_empty() {
+            transaction.execute("DELETE FROM pending_entry WHERE pending_id = ?1", [pending_id])?;
+        } else {
+            transaction.execute(
+                "UPDATE pending_entry SET root_bitmap = ?2 WHERE pending_id = ?1",
+                rusqlite::params![pending_id, crate::bitmap::encode(&pending)?],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Turns this computer's pending changes into entries, at most `limit` roots,
 /// and returns whether work is left. The `add` entries of the start of
 /// recording come first, then the rows of `pending_entry` in the order they
@@ -1135,114 +1503,17 @@ pub(super) fn settle_in(
         let mut roots = RoaringBitmap::deserialize_from(&mut std::io::Cursor::new(roots))?;
         let taken = roots.iter().take(room).collect::<RoaringBitmap>();
         room -= taken.len() as usize;
-        match EntryKind::parse(&kind) {
-            Some(EntryKind::Add) => {
-                // An import of a file that already exists by the entries
-                // writes nothing. The picture is changed to look the way the
-                // entries say instead, by the next merge. An undo or a
-                // repair (`always`) writes its entry in any case.
-                let files = file_records(transaction, snapshot, &taken, false)?;
-                let existing = if value.as_deref() == Some("always") {
-                    HashSet::new()
-                } else {
-                    existing_files(
-                        transaction,
-                        &files.iter().map(|file| file.content_hash.as_str()).collect::<Vec<_>>(),
-                    )?
-                };
-                let (known, new): (Vec<_>, Vec<_>) =
-                    files.into_iter().partition(|file| existing.contains(&file.content_hash));
-                // Other entries of the file can win over the new record: a
-                // rename on another computer after a deletion, or an earlier
-                // add when an undo or a repair brings the file back. The
-                // next merge brings the picture in line with them.
-                transaction.execute(
-                    "INSERT OR IGNORE INTO merge_touched (subject_kind, subject_key)
-                     SELECT 'file', hashes.value FROM json_each(?1) hashes
-                     WHERE EXISTS (SELECT 1 FROM shared_entry entry
-                                   WHERE entry.subject_key = hashes.value
-                                     AND (entry.kind <> 'add' OR entry.second_key <> ?2))",
-                    rusqlite::params![
-                        serde_json::to_string(
-                            &new.iter().map(|file| &file.content_hash).collect::<Vec<_>>(),
-                        )?,
-                        device_id
-                    ],
-                )?;
-                write_adds(transaction, &new, time, &device_id)?;
-                if !known.is_empty() {
-                    transaction.execute(
-                        "INSERT OR IGNORE INTO merge_touched (subject_kind, subject_key)
-                         SELECT 'file', value FROM json_each(?1)",
-                        [serde_json::to_string(
-                            &known.iter().map(|file| &file.content_hash).collect::<Vec<_>>(),
-                        )?],
-                    )?;
-                }
-            }
-            Some(kind @ (EntryKind::Name | EntryKind::Notes)) => {
-                // The rows hold no text: the text is read now. A later change
-                // of the same text has its own, later row, so the last entry
-                // always carries the text the picture has.
-                let column = if kind == EntryKind::Name {
-                    "root.name"
-                } else {
-                    "COALESCE(root.notes, '')"
-                };
-                transaction.execute(
-                    &format!(
-                        "INSERT INTO shared_entry
-                             (subject_key, kind, second_key, value, clock_ms, clock_counter,
-                              device_id)
-                         SELECT file.content_hash, ?2, '', {column}, ?3, ?4, ?5
-                         FROM json_each(?1) ids
-                         CROSS JOIN library_root root ON root.root_id = ids.value
-                         JOIN media_item media ON media.media_id = root.root_id
-                         JOIN media_file file ON file.file_id = media.file_id
-                         WHERE true
-                         {KEEP_LATER}"
-                    ),
-                    rusqlite::params![
-                        serde_json::to_string(&taken.iter().collect::<Vec<_>>())?,
-                        kind.as_str(),
-                        time.0,
-                        time.1,
-                        device_id
-                    ],
-                )?;
-            }
-            Some(
-                kind @ (EntryKind::Rating
-                | EntryKind::Status
-                | EntryKind::ItemTag
-                | EntryKind::FolderItem),
-            ) => {
-                transaction.execute(
-                    &format!(
-                        "INSERT INTO shared_entry
-                             (subject_key, kind, second_key, value, clock_ms, clock_counter,
-                              device_id)
-                         SELECT file.content_hash, ?2, ?3, ?4, ?5, ?6, ?7
-                         FROM json_each(?1) ids
-                         CROSS JOIN library_root root ON root.root_id = ids.value
-                         JOIN media_item media ON media.media_id = root.root_id
-                         JOIN media_file file ON file.file_id = media.file_id
-                         WHERE true
-                         {KEEP_LATER}"
-                    ),
-                    rusqlite::params![
-                        serde_json::to_string(&taken.iter().collect::<Vec<_>>())?,
-                        kind.as_str(),
-                        second_key,
-                        value,
-                        time.0,
-                        time.1,
-                        device_id
-                    ],
-                )?;
-            }
-            // No other kind is stored as a row.
-            _ => roots.clear(),
+        if !settle_row(
+            transaction,
+            snapshot,
+            &kind,
+            &second_key,
+            value.as_deref(),
+            time,
+            &taken,
+            &device_id,
+        )? {
+            roots.clear();
         }
         roots -= &taken;
         if roots.is_empty() {
@@ -1254,6 +1525,131 @@ pub(super) fn settle_in(
             )?;
         }
     }
+}
+
+/// The kinds of entries of a file that its cut makes obsolete. `compact_in`
+/// drops them, and a merge doesn't store them, once they are at or before
+/// the file's floor.
+pub(super) const DROPPED_KINDS: &str =
+    "('add', 'name', 'notes', 'rating', 'status', 'item_tag', 'folder_item')";
+
+/// Drops the entries of the file `content_hash` whose kind is one of
+/// `DROPPED_KINDS` and whose time is at or before `through`, which is a time
+/// as `time_text` writes it. Those of this computer are noted in
+/// `removed_own_entry`, so the next sync writes their files in the cloud
+/// folder again without them.
+pub(super) fn drop_below(
+    transaction: &rusqlite::Transaction<'_>,
+    content_hash: &str,
+    through: &str,
+) -> Result<()> {
+    let old = format!(
+        "subject_key = ?1 AND kind IN {DROPPED_KINDS} AND {time} <= ?2",
+        time = time_text_sql!("shared_entry")
+    );
+    transaction
+        .prepare_cached(&format!(
+            "INSERT OR IGNORE INTO removed_own_entry (subject_key, kind, second_key)
+             SELECT subject_key, kind, second_key FROM shared_entry
+             WHERE {old}
+               AND device_id = (SELECT device_id FROM cloud_state WHERE singleton = 1)"
+        ))?
+        .execute([content_hash, through])?;
+    transaction
+        .prepare_cached(&format!("DELETE FROM shared_entry WHERE {old}"))?
+        .execute([content_hash, through])?;
+    Ok(())
+}
+
+/// Compacts the entries of at most `limit` files of `entry_compaction_due`
+/// whose time has come by `now_ms`, and returns whether more are due.
+///
+/// When the cut of a file is later than its floor and at least 7 days old,
+/// this computer stores the cut as the file's floor in a `compacted` entry
+/// first, and then drops the entries at or before it. The `compacted` entry
+/// reaches every other computer, which drops the same entries. An undo of the
+/// deletion that arrives later can't bring them back on any computer: the cut
+/// never goes below the floor, and the undo's record is the picture instead.
+/// Without the floor, a computer that had dropped them would show the picture
+/// differently from one that still had them.
+///
+/// The floor is stored only once the `delete` entry that sets the cut is in
+/// the cloud folder: it came from another computer, or this computer has
+/// written it there. Otherwise a restore or a lost disk could lose the
+/// deletion while the floor is already in the cloud folder, and the picture
+/// would be gone on every computer although the deletion never reached them.
+/// Such a file is looked at again at the next call after `now_ms`, which is
+/// after the sync has written the entry.
+///
+/// A cut that is less than 7 days old is looked at again when it is. The
+/// `delete` entries stay.
+pub(super) fn compact_in(
+    transaction: &rusqlite::Transaction<'_>,
+    now_ms: i64,
+    limit: usize,
+) -> Result<bool> {
+    use rusqlite::OptionalExtension;
+    let device_id = own_device_id(transaction)?;
+    let published = transaction
+        .query_row(
+            "SELECT hlc_physical_ms, hlc_logical FROM cloud_device_frontier WHERE device_id = ?1",
+            [&device_id],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    let due = transaction
+        .prepare_cached(
+            "SELECT content_hash FROM entry_compaction_due WHERE due_ms <= ?1
+             ORDER BY due_ms LIMIT ?2",
+        )?
+        .query_map(rusqlite::params![now_ms, limit.min(i64::MAX as usize) as i64], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut time = None;
+    for content_hash in &due {
+        let entries = super::shared_merge::held_entries(transaction, content_hash)?;
+        let Cut { cut, floor } = cut_of(&entries);
+        if cut > floor && cut.0.saturating_add(COMPACT_AFTER_MS) > now_ms {
+            transaction.execute(
+                "UPDATE entry_compaction_due SET due_ms = ?2 WHERE content_hash = ?1",
+                rusqlite::params![content_hash, cut.0.saturating_add(COMPACT_AFTER_MS)],
+            )?;
+            continue;
+        }
+        let unpublished = entries.iter().any(|entry| match entry {
+            HeldEntry::Delete { time, .. } => {
+                time.2 == device_id && published.is_none_or(|through| (time.0, time.1) > through)
+            }
+            _ => false,
+        });
+        if cut > floor && unpublished {
+            transaction.execute(
+                "UPDATE entry_compaction_due SET due_ms = ?2 WHERE content_hash = ?1",
+                rusqlite::params![content_hash, now_ms.saturating_add(1)],
+            )?;
+            continue;
+        }
+        if cut > floor {
+            let (clock_ms, clock_counter) = match time {
+                Some(time) => time,
+                None => *time.insert(tick(transaction)?),
+            };
+            transaction
+                .prepare_cached(&format!(
+                    "INSERT INTO shared_entry
+                         (subject_key, kind, second_key, value, clock_ms, clock_counter, device_id)
+                     SELECT ?1, 'compacted', '', ?2, ?3, ?4, device_id
+                     FROM cloud_state WHERE singleton = 1
+                     {KEEP_LATER}"
+                ))?
+                .execute(rusqlite::params![content_hash, time_text(&cut), clock_ms, clock_counter])?;
+        }
+        drop_below(transaction, content_hash, &time_text(&cut))?;
+        transaction
+            .execute("DELETE FROM entry_compaction_due WHERE content_hash = ?1", [content_hash])?;
+    }
+    Ok(due.len() == limit)
 }
 
 impl Library {
@@ -1355,6 +1751,56 @@ impl Library {
             }
             Ok(())
         })
+    }
+
+    /// Drops the entries that a deletion made obsolete at least 7 days before
+    /// `now_ms`, in short writes (`compact_in`).
+    pub fn compact_entries(&self, now_ms: i64) -> Result<()> {
+        while self
+            .database
+            .maintenance_write(WorkPriority::Cloud, |transaction| {
+                compact_in(transaction, now_ms, COMPACT_BATCH)
+            })?
+        {}
+        Ok(())
+    }
+
+    /// Returns the keys of this computer's entries that compaction dropped
+    /// and whose files in the cloud folder haven't been written again since.
+    /// Each key is the kind, the subject key and the second key.
+    pub fn removed_own_entries(&self) -> Result<Vec<(EntryKind, String, String)>> {
+        self.database.read(WorkPriority::Cloud, |connection| {
+            let mut statement = connection.prepare_cached(
+                "SELECT kind, subject_key, second_key FROM removed_own_entry",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows
+                .into_iter()
+                .filter_map(|(kind, subject_key, second_key)| {
+                    Some((EntryKind::parse(&kind)?, subject_key, second_key))
+                })
+                .collect())
+        })
+    }
+
+    /// Forgets `keys` from `removed_own_entries`, once the files that held
+    /// them have been written again.
+    pub fn forget_removed_own_entries(&self, keys: &[(EntryKind, String, String)]) -> Result<()> {
+        self.database
+            .maintenance_write(WorkPriority::Cloud, |transaction| {
+                let mut statement = transaction.prepare_cached(
+                    "DELETE FROM removed_own_entry
+                     WHERE subject_key = ?1 AND kind = ?2 AND second_key = ?3",
+                )?;
+                for (kind, subject_key, second_key) in keys {
+                    statement.execute(rusqlite::params![subject_key, kind.as_str(), second_key])?;
+                }
+                Ok(())
+            })
     }
 
     /// Records that this computer's entries up to the clock time `through`

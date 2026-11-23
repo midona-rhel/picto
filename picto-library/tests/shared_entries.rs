@@ -7,18 +7,28 @@
 //! In between, random sets of one computer's entries reach another, split
 //! into files as the cloud folder holds them, in any order, some twice and
 //! some files not readable yet. The receiving computer sometimes makes changes
-//! of its own between storing the files and applying them. "Keep deleted
-//! files" is 0 days, and the cleanup worker removes queued files at random
-//! moments. At the end every entry is delivered. Files aren't fetched, as in
-//! the app today. A computer gets a picture's file when it imports the file
-//! itself, and it keeps the file of a picture that a merge deleted, which
-//! brings the picture back when the entries add it again.
+//! of its own between storing the files and applying them. A computer can be
+//! offline for many rounds: it sends and receives nothing and goes on making
+//! changes. In half of the runs the computers compact their entries at random
+//! moments as if 8 days had passed, so every deletion that is in the cloud
+//! folder is old enough. "Keep deleted files" is 0 days, and the cleanup
+//! worker removes queued files at random moments. At the end every entry is
+//! delivered. Files aren't fetched, as in the app today. A computer gets a
+//! picture's file when it imports the file itself, and it keeps the file of a
+//! picture that a merge deleted, which brings the picture back when the
+//! entries add it again.
 //!
 //! The test logs what each computer did and when, by that computer's clock,
 //! and then checks:
 //!
 //! - The entries say the same on all three computers, and every picture a
 //!   computer holds looks the way its entries say.
+//! - What compaction dropped changes nothing: a new library that merges every
+//!   entry any computer ever sent says the same as the three.
+//! - The undo of a deletion brings back what any computer had done before the
+//!   deletion, unless a `compacted` entry ended it: for each field, tag and
+//!   folder, the latest change counts when it's earlier than the undone
+//!   deletion, later than the floor, and no other deletion lies between.
 //! - Nothing is lost that no action removed. A picture nobody deleted exists
 //!   by the entries and at least one computer still holds its file, and a tag
 //!   nobody took off is still on it. A computer that held a picture and
@@ -92,10 +102,13 @@ fn now_ms() -> i64 {
 /// What a computer did, as the test logs it.
 #[derive(Debug, Clone)]
 enum Action {
-    /// The computer wrote an `add` entry: an import of a new file, the undo
-    /// of a deletion, or a file it held when it started recording.
+    /// The computer wrote an `add` entry: an import of a new file, or a file
+    /// it held when it started recording.
     Add { hash: String, time: Time, start: bool, tags: BTreeSet<String>, folders: BTreeSet<String> },
     Delete { hash: String, time: Time },
+    /// The undo of the deletion at `deleted`, with the picture's tags and
+    /// folders as the undo brought it back.
+    Undo { hash: String, time: Time, deleted: Time, tags: BTreeSet<String>, folders: BTreeSet<String> },
     Edit { hash: String, field: Field, value: String, time: Time },
     Tag { hash: String, tag: String, on: bool, time: Time },
     File { hash: String, folder: String, on: bool, time: Time },
@@ -151,12 +164,15 @@ struct Computer {
     id: String,
     recording: bool,
     imports: u64,
-    /// The picture this computer deleted with its last action, which an
-    /// undo brings back.
-    deleted_last: Option<String>,
+    /// The picture this computer deleted with its last action, and the time
+    /// of the deletion, which an undo brings back.
+    deleted_last: Option<(String, Time)>,
     /// The picture whose deletion the last action undid, which a redo
     /// deletes again.
     undone_last: Option<String>,
+    /// The step of the run up to which this computer sends and receives
+    /// nothing.
+    offline_until: u64,
     /// The pictures this computer has held, without those that an action on
     /// this computer deleted afterwards.
     held_files: BTreeSet<String>,
@@ -188,6 +204,7 @@ impl Computer {
             imports: 0,
             deleted_last: None,
             undone_last: None,
+            offline_until: 0,
             held_files: BTreeSet::new(),
         }
     }
@@ -353,6 +370,33 @@ impl Computer {
         entries
     }
 
+    /// Returns all of this computer's entries and records them as written to
+    /// the cloud folder, as a sync does.
+    fn publish(&self) -> Vec<SharedEntry> {
+        let entries = self.own_entries();
+        let now = self.clock();
+        self.library.set_entries_published(now).unwrap();
+        entries
+    }
+
+    /// Deletes the picture `hash` permanently, from the Trash.
+    fn delete(&self, hash: &str) {
+        let target = self.target(self.roots()[hash]);
+        self.library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
+        self.library.permanently_delete(&target, now_ms(), 500, false).unwrap();
+    }
+
+    /// The kinds of the entries of `hash` that this computer stores.
+    fn entry_kinds(&self, hash: &str) -> Vec<String> {
+        self.rows(
+            &format!(
+                "SELECT kind || CASE WHEN second_key = '' THEN '' ELSE ' ' || second_key END
+                 FROM shared_entry WHERE subject_key = '{hash}' ORDER BY 1"
+            ),
+            |row| row.get::<_, String>(0),
+        )
+    }
+
     /// Starts recording and logs an `add` for every picture held now.
     fn start(&mut self, log: &mut Vec<Action>) {
         let before = self.clock();
@@ -423,21 +467,21 @@ fn act(random: &mut Random, computer: &mut Computer, log: &mut Vec<Action>) {
             computer.held_files.remove(&hash);
         }
         if let Some(time) = computer.action_time(before) {
-            computer.deleted_last = Some(hash.clone());
+            computer.deleted_last = Some((hash.clone(), time.clone()));
             log.push(Action::Delete { hash, time });
         }
         return;
     }
-    if let (Some(hash), true) = (undo, choice < 10) {
+    if let (Some((hash, deleted)), true) = (undo, choice < 10) {
         let before = computer.clock();
         computer.library.undo().unwrap();
         if let Some(time) = computer.action_time(before) {
             computer.undone_last = Some(hash.clone());
             let picture = computer.pictures().remove(&hash).unwrap();
-            log.push(Action::Add {
+            log.push(Action::Undo {
                 hash,
                 time,
-                start: false,
+                deleted,
                 tags: picture.tags,
                 folders: picture.folders,
             });
@@ -489,7 +533,7 @@ fn act(random: &mut Random, computer: &mut Computer, log: &mut Vec<Action>) {
             computer.held_files.remove(&hash);
             let time = computer.action_time(before);
             // Only an undo of a recorded deletion is an action of the rules.
-            computer.deleted_last = time.is_some().then(|| hash.clone());
+            computer.deleted_last = time.clone().map(|time| (hash.clone(), time));
             time.map(|time| Action::Delete { hash: hash.clone(), time })
         }
         38..=45 => {
@@ -767,9 +811,13 @@ fn deliver(
     from: usize,
     to: usize,
     log: &mut Vec<Action>,
+    sent: &mut Vec<SharedEntry>,
 ) {
-    let mut entries = computers[from]
-        .own_entries()
+    // All of the sender's entries are in the cloud folder; a random part of
+    // them has reached the receiver.
+    let published = computers[from].publish();
+    sent.extend(published.iter().cloned());
+    let mut entries = published
         .into_iter()
         .filter(|_| random.chance(50))
         .collect::<Vec<_>>();
@@ -808,16 +856,27 @@ fn run(seed: u64, template: &std::path::Path) {
         set_keep_days(computer, 0);
     }
     let mut log = Vec::new();
+    let mut sent = Vec::new();
+    let compacting = random.chance(50);
     let steps = 15 + random.below(25);
-    for _ in 0..steps {
+    for step in 0..steps {
         let index = random.below(3) as usize;
         if !computers[index].recording && random.chance(25) {
             computers[index].start(&mut log);
         } else if computers[index].recording && random.chance(20) {
             let from = random.below(3) as usize;
-            if from != index && computers[from].recording {
-                deliver(&mut random, &mut computers, from, index, &mut log);
+            let online = |computer: &Computer| computer.offline_until <= step;
+            if from != index
+                && computers[from].recording
+                && online(&computers[from])
+                && online(&computers[index])
+            {
+                deliver(&mut random, &mut computers, from, index, &mut log, &mut sent);
             }
+        } else if random.chance(4) {
+            computers[index].offline_until = step + 5 + random.below(20);
+        } else if compacting && computers[index].recording && random.chance(15) {
+            computers[index].library.compact_entries(now_ms() + EIGHT_DAYS_MS).unwrap();
         } else {
             act(&mut random, &mut computers[index], &mut log);
         }
@@ -833,11 +892,19 @@ fn run(seed: u64, template: &std::path::Path) {
             computer.start(&mut log);
         }
     }
-    for _ in 0..3 {
+    for round in 0..4 {
+        // In the last round every computer compacts as well, and what that
+        // drops is delivered too.
+        if compacting && round == 3 {
+            for computer in &computers {
+                computer.library.compact_entries(now_ms() + EIGHT_DAYS_MS).unwrap();
+            }
+        }
         for to in 0..3 {
             for from in 0..3 {
                 if from != to {
-                    let entries = computers[from].own_entries();
+                    let entries = computers[from].publish();
+                    sent.extend(entries.iter().cloned());
                     computers[to].library.merge_entries(&entries).unwrap();
                 }
             }
@@ -847,7 +914,12 @@ fn run(seed: u64, template: &std::path::Path) {
             computer.library.merge_entries(&[]).unwrap();
         }
     }
-    let problems = check(&computers, &log);
+    let mut problems = check(&computers, &log);
+    let witness = Computer::new(template);
+    witness.library.merge_entries(&sent).unwrap();
+    if witness.views() != computers[0].views() {
+        problems.push("what compaction dropped changed the library".to_owned());
+    }
     assert!(
         problems.is_empty(),
         "seed {seed}: {problems:?}\nlog: {log:#?}\nviews: {:#?}\nlibraries: {:#?}",
@@ -885,11 +957,16 @@ fn check(computers: &[Computer], log: &[Action]) -> Vec<String> {
     let zero: Time = (0, 0, String::new());
     for number in 1..=HASHES {
         let hash = hash(number);
+        // An undo makes the picture exist and puts its tags and folders on, as
+        // an add does.
         let adds = log
             .iter()
             .filter_map(|action| match action {
                 Action::Add { hash: of, time, start, tags, folders } if *of == hash => {
                     Some((time.clone(), *start, tags, folders))
+                }
+                Action::Undo { hash: of, time, tags, folders, .. } if *of == hash => {
+                    Some((time.clone(), false, tags, folders))
                 }
                 _ => None,
             })
@@ -917,6 +994,7 @@ fn check(computers: &[Computer], log: &[Action]) -> Vec<String> {
             }
         }
         let shown = shown.into_iter().flatten().collect::<Vec<_>>();
+        check_revival(computers, log, &hash, &deletes, &shown, &mut problems);
         for field in [Field::Name, Field::Notes, Field::Rating, Field::Status] {
             let last = log
                 .iter()
@@ -1018,6 +1096,115 @@ fn check(computers: &[Computer], log: &[Action]) -> Vec<String> {
         }
     }
     problems
+}
+
+/// The time below which the entries of `hash` were dropped on any computer,
+/// from the `compacted` entries the computers hold.
+fn floor_of(computers: &[Computer], hash: &str) -> Time {
+    computers
+        .iter()
+        .flat_map(|computer| {
+            computer.rows(
+                &format!(
+                    "SELECT value FROM shared_entry
+                     WHERE subject_key = '{hash}' AND kind = 'compacted'"
+                ),
+                |row| row.get::<_, String>(0),
+            )
+        })
+        .map(|text| {
+            let mut parts = text.splitn(3, ':');
+            (
+                parts.next().unwrap().parse::<i64>().unwrap(),
+                parts.next().unwrap().parse::<i64>().unwrap(),
+                parts.next().unwrap().to_owned(),
+            )
+        })
+        .max()
+        .unwrap_or((0, 0, String::new()))
+}
+
+/// Checks that the latest undo of a deletion of `hash` brought back what any
+/// computer had done before the deletion. For each field, tag and folder,
+/// the latest change counts when it's earlier than the undone deletion,
+/// later than the floor, and no other deletion lies between the two.
+fn check_revival(
+    computers: &[Computer],
+    log: &[Action],
+    hash: &str,
+    deletes: &[Time],
+    shown: &[&Picture],
+    problems: &mut Vec<String>,
+) {
+    let latest_undo = log
+        .iter()
+        .filter_map(|action| match action {
+            Action::Undo { hash: of, time, deleted, .. } if of == hash => Some((time, deleted)),
+            _ => None,
+        })
+        .max();
+    let Some((undone_at, deleted)) = latest_undo else {
+        return;
+    };
+    if deletes.iter().any(|time| time > undone_at) {
+        return;
+    }
+    let floor = floor_of(computers, hash);
+    let counts = |time: &Time| {
+        time < deleted && *time > floor && !deletes.iter().any(|other| time < other && other < deleted)
+    };
+    for field in [Field::Name, Field::Notes, Field::Rating, Field::Status] {
+        let last = log
+            .iter()
+            .filter_map(|action| match action {
+                Action::Edit { hash: of, field: edited, value, time } if of == hash && *edited == field => {
+                    Some((time, value))
+                }
+                _ => None,
+            })
+            .max();
+        if let Some((time, value)) = last {
+            if counts(time) && shown.iter().any(|picture| picture.field(field) != value) {
+                problems.push(format!("{hash}: the undo didn't bring back the {field:?} edit"));
+            }
+        }
+    }
+    for (is_tag, names) in [(true, &TAGS[..]), (false, &FOLDERS[..])] {
+        for name in names {
+            let last = log
+                .iter()
+                .filter_map(|action| match action {
+                    Action::Tag { hash: of, tag, on, time } if is_tag && of == hash && tag == name => {
+                        Some((time, *on))
+                    }
+                    Action::File { hash: of, folder, on, time }
+                        if !is_tag && of == hash && folder == name =>
+                    {
+                        Some((time, *on))
+                    }
+                    _ => None,
+                })
+                .max();
+            let Some((time, on)) = last else {
+                continue;
+            };
+            if !counts(time) {
+                continue;
+            }
+            let removed = log.iter().any(|action| match action {
+                Action::DeleteTag { tag, time: at } => is_tag && tag == name && at >= time,
+                Action::DeleteFolder { folder, .. } => !is_tag && folder == name,
+                _ => false,
+            });
+            let want = on && !removed;
+            let has = |picture: &Picture| {
+                if is_tag { picture.tags.contains(*name) } else { picture.folders.contains(*name) }
+            };
+            if shown.iter().any(|picture| has(picture) != want) {
+                problems.push(format!("{hash}: the undo didn't bring back {name}"));
+            }
+        }
+    }
 }
 
 fn template() -> (TempDir, std::path::PathBuf) {
@@ -1358,10 +1545,10 @@ fn file_on_disk(computer: &Computer, hash: &str) -> Option<(String, bool)> {
 }
 
 /// Another computer deletes a picture and then adds it again, and this
-/// computer gets the file of entries with the deletion first. The deletion
-/// removes the picture here, and the add brings it back with the file this
-/// computer had, without fetching it. The add is either the undo of the
-/// deletion or an import on a third computer.
+/// computer merges the deletion first. The deletion removes the picture here,
+/// and the later entries bring it back with the file this computer had,
+/// without fetching it. They are either the undo of the deletion or an import
+/// on a third computer.
 #[test]
 fn a_picture_that_a_merge_deleted_comes_back_with_its_file() {
     for undo in [true, false] {
@@ -1376,10 +1563,15 @@ fn a_picture_that_a_merge_deleted_comes_back_with_its_file() {
         two.library.set_lifecycle(&two.target(root), Lifecycle::Trash).unwrap();
         two.library.permanently_delete(&two.target(root), now_ms(), 500, false).unwrap();
         let (deletion, rest): (Vec<_>, Vec<_>) = if undo {
-            two.library.undo().unwrap();
-            two.own_entries()
+            // The undo replaces the deletion in the same entry, so the
+            // deletion is taken before the undo.
+            let deletion = two
+                .own_entries()
                 .into_iter()
-                .partition(|entry| entry.kind == picto_library::EntryKind::Delete)
+                .filter(|entry| entry.kind == picto_library::EntryKind::Delete)
+                .collect();
+            two.library.undo().unwrap();
+            (deletion, two.own_entries())
         } else {
             // The third computer has the deletion and imports the file again.
             let entries = two.own_entries();
@@ -1523,4 +1715,162 @@ fn a_kept_file_is_not_a_duplicate_candidate() {
         .duplicate_pairs(Some(picto_library::DuplicateStatus::Detected), 10)
         .unwrap()
         .is_empty());
+}
+
+/// Lets the wall clock move on, so that the next action is later than the
+/// last one on every computer.
+fn pause() {
+    std::thread::sleep(std::time::Duration::from_millis(3));
+}
+
+const EIGHT_DAYS_MS: i64 = 8 * 24 * 60 * 60 * 1_000;
+
+/// One computer gives a picture 5 stars. Before that reaches the other
+/// computer, the other deletes the picture and undoes the deletion. The
+/// picture comes back with the 5 stars on both.
+#[test]
+fn undoing_a_deletion_brings_back_a_change_that_had_not_arrived() {
+    let (_directory, template) = template();
+    let (one, two) = two_synced(&template);
+    one.library.set_rating(&one.target(one.roots()[&hash(1)]), Rating::Five).unwrap();
+    pause();
+    two.delete(&hash(1));
+    two.library.undo().unwrap();
+    two.library.merge_entries(&one.own_entries()).unwrap();
+    one.library.merge_entries(&two.own_entries()).unwrap();
+    for computer in [&one, &two] {
+        assert_eq!(computer.pictures()[&hash(1)].rating, "5");
+        assert_eq!(computer.views()[&hash(1)].rating, "5");
+    }
+}
+
+/// One computer deletes a picture, the other deletes it later without having
+/// seen that, and the first undoes its deletion after both. The undo is the
+/// later action, so the picture comes back on both.
+#[test]
+fn an_undo_wins_over_an_earlier_deletion_on_another_computer() {
+    let (_directory, template) = template();
+    let (one, two) = two_synced(&template);
+    two.delete(&hash(1));
+    pause();
+    one.delete(&hash(1));
+    pause();
+    two.library.undo().unwrap();
+    two.library.merge_entries(&one.own_entries()).unwrap();
+    one.library.merge_entries(&two.own_entries()).unwrap();
+    assert!(two.roots().contains_key(&hash(1)));
+    assert_eq!(one.views(), two.views());
+    assert!(one.views().contains_key(&hash(1)));
+}
+
+/// 7 days after a deletion, the computer that deleted the picture drops the
+/// picture's other entries and writes a `compacted` entry, and the other
+/// computer drops the same entries when it merges that entry. An old entry
+/// that arrives afterwards isn't stored.
+#[test]
+fn compaction_drops_what_a_deletion_made_obsolete_on_every_computer() {
+    let (_directory, template) = template();
+    let (one, two) = two_synced(&template);
+    let root = one.roots()[&hash(1)];
+    one.library.set_rating(&one.target(root), Rating::Four).unwrap();
+    one.library.rename_root(root, "renamed", now_ms()).unwrap();
+    let old = one.own_entries();
+    one.delete(&hash(1));
+    two.library.merge_entries(&one.publish()).unwrap();
+    assert!(two.entry_kinds(&hash(1)).len() > 2);
+
+    // Less than 7 days: nothing is dropped.
+    one.library.compact_entries(now_ms()).unwrap();
+    assert!(one.entry_kinds(&hash(1)).len() > 2);
+    one.library.compact_entries(now_ms() + EIGHT_DAYS_MS).unwrap();
+    assert_eq!(one.entry_kinds(&hash(1)), ["compacted", "delete"]);
+    let removed = one.library.removed_own_entries().unwrap();
+    assert!(removed.iter().any(|(kind, _, _)| *kind == picto_library::EntryKind::Rating));
+    assert!(removed.iter().all(|(_, subject_key, _)| *subject_key == hash(1)));
+
+    two.library.merge_entries(&one.publish()).unwrap();
+    assert_eq!(two.entry_kinds(&hash(1)), ["compacted", "delete"]);
+    // The entries from before the deletion come again, as from a computer
+    // that was away for weeks.
+    two.library.merge_entries(&old).unwrap();
+    assert_eq!(two.entry_kinds(&hash(1)), ["compacted", "delete"]);
+    assert_eq!(one.views(), two.views());
+    assert!(two.views().is_empty());
+}
+
+/// A computer doesn't compact behind its own deletion before it has written
+/// that deletion to the cloud folder.
+#[test]
+fn compaction_waits_until_the_deletion_is_in_the_cloud_folder() {
+    let (_directory, template) = template();
+    let (one, _two) = two_synced(&template);
+    one.delete(&hash(1));
+    one.library.compact_entries(now_ms() + EIGHT_DAYS_MS).unwrap();
+    assert!(one.entry_kinds(&hash(1)).iter().any(|kind| kind.starts_with("add ")));
+    one.publish();
+    one.library.compact_entries(now_ms() + EIGHT_DAYS_MS).unwrap();
+    assert_eq!(one.entry_kinds(&hash(1)), ["compacted", "delete"]);
+}
+
+/// One computer gives a picture 5 stars, a second deletes it without having
+/// seen that and undoes the deletion, but its undo reaches the others only
+/// after the first has compacted. The third computer never compacted and
+/// still has the 5 stars. All three end with the same picture: the one the
+/// undoing computer had, without the 5 stars.
+#[test]
+fn an_undo_that_arrives_after_compaction_gives_the_same_picture_everywhere() {
+    let (_directory, template) = template();
+    let (one, two) = two_synced(&template);
+    let mut log = Vec::new();
+    let mut three = Computer::new(&template);
+    three.start(&mut log);
+    three.library.merge_entries(&one.publish()).unwrap();
+    one.library.set_rating(&one.target(one.roots()[&hash(1)]), Rating::Five).unwrap();
+    pause();
+    two.delete(&hash(1));
+    let deletion = two.publish();
+    two.library.undo().unwrap();
+    for computer in [&one, &three] {
+        computer.library.merge_entries(&deletion).unwrap();
+    }
+    three.library.merge_entries(&one.publish()).unwrap();
+    one.library.compact_entries(now_ms() + EIGHT_DAYS_MS).unwrap();
+    assert_eq!(one.entry_kinds(&hash(1)), ["compacted", "delete"]);
+
+    for _ in 0..2 {
+        for (to, from) in [
+            (&one, &two),
+            (&one, &three),
+            (&two, &one),
+            (&two, &three),
+            (&three, &one),
+            (&three, &two),
+        ] {
+            to.library.merge_entries(&from.publish()).unwrap();
+        }
+    }
+    let views = [one.views(), two.views(), three.views()];
+    assert_eq!(views[0], views[1]);
+    assert_eq!(views[0], views[2]);
+    assert_eq!(views[0][&hash(1)].rating, "0");
+    assert_eq!(two.pictures()[&hash(1)], views[0][&hash(1)]);
+}
+
+/// A rating that isn't an entry yet when the picture is deleted becomes one
+/// before the deletion, so the undo of the deletion brings it back, here and
+/// on the other computer.
+#[test]
+fn an_edit_just_before_a_deletion_comes_back_with_the_undo() {
+    let (_directory, template) = template();
+    let (one, two) = two_synced(&template);
+    one.library.set_rating(&one.target(one.roots()[&hash(1)]), Rating::Four).unwrap();
+    one.delete(&hash(1));
+    one.settle();
+    one.library.undo().unwrap();
+    one.library.merge_entries(&[]).unwrap();
+    two.library.merge_entries(&one.own_entries()).unwrap();
+    for computer in [&one, &two] {
+        assert_eq!(computer.views()[&hash(1)].rating, "4");
+    }
+    assert_eq!(one.pictures()[&hash(1)].rating, "4");
 }

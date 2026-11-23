@@ -28,10 +28,10 @@
 //! yet is merged when it arrives. A file that doesn't match its checksum
 //! isn't merged, and no file is merged in the round that finds it.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
-use picto_library::SharedEntry;
+use picto_library::{EntryKind, SharedEntry};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -89,11 +89,15 @@ fn set_merged(device_id: &str, path: &str) {
         .insert((device_id.to_owned(), path.to_owned()));
 }
 
-/// Forgets which files were merged. It is called when a library is opened,
-/// because the library can be another one, or one whose database was
-/// replaced by a snapshot.
-pub(super) fn forget_merged() {
-    MERGED.lock().unwrap_or_else(|held| held.into_inner()).clear();
+/// Forgets which files the device `device_id` merged. It is called when a
+/// library is opened, because its database can have been replaced by a
+/// snapshot. What other devices merged stays, so that tests that run several
+/// libraries in one process don't change each other's state.
+pub(super) fn forget_merged(device_id: &str) {
+    MERGED
+        .lock()
+        .unwrap_or_else(|held| held.into_inner())
+        .retain(|(merged_by, _)| merged_by != device_id);
 }
 
 fn directory(library_id: &str) -> String {
@@ -102,12 +106,18 @@ fn directory(library_id: &str) -> String {
 
 /// Returns the two hexadecimal digits of the file that holds `entry`.
 pub(super) fn shard_of(entry: &SharedEntry) -> String {
+    shard_of_key(entry.kind, &entry.subject_key, &entry.second_key)
+}
+
+/// Returns the two hexadecimal digits of the file that holds the entry with
+/// the key `kind`, `subject_key` and `second_key`.
+fn shard_of_key(kind: EntryKind, subject_key: &str, second_key: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(entry.kind.as_str().as_bytes());
+    hasher.update(kind.as_str().as_bytes());
     hasher.update(b"\n");
-    hasher.update(entry.subject_key.as_bytes());
+    hasher.update(subject_key.as_bytes());
     hasher.update(b"\n");
-    hasher.update(entry.second_key.as_bytes());
+    hasher.update(second_key.as_bytes());
     hex::encode(&hasher.finalize()[..1])
 }
 
@@ -199,12 +209,19 @@ fn decode(
 /// Writes the entries that this computer made into the cloud folder.
 ///
 /// The first sync starts recording, which gives every picture the library
-/// already holds an `add` entry. Then the computer's pending changes are
-/// turned into entries. Then it rewrites the files of every key whose entry is later
-/// than the clock time up to which the device's entries were written before,
-/// removes the files that the new ones replace, and records the new clock
-/// time. A run that stops in the middle is repeated by the next one and
-/// writes the same files.
+/// already holds an `add` entry. Then the entries that deletions made
+/// obsolete at least 7 days ago are dropped (`Library::compact_entries`), and
+/// the computer's pending changes are turned into entries. Then it rewrites
+/// the files of every key whose entry is later than the clock time up to
+/// which the computer's entries were written before, and of every key whose
+/// entry compaction dropped. It removes the files that the new ones replace,
+/// and records the new clock time. A run that stops in the middle is
+/// repeated by the next one and writes the same files.
+///
+/// The files that only lose entries are written last. Compaction drops
+/// entries only behind a `compacted` entry, which is in one of the files
+/// written first, so a run that stops in between never leaves a file
+/// without the entries while the `compacted` entry is missing.
 pub(super) async fn publish_library(
     application: &LibraryApplication,
     provider: &dyn CloudProvider,
@@ -212,6 +229,9 @@ pub(super) async fn publish_library(
 ) -> Result<(), String> {
     let library = application.library();
     library.start_recording().map_err(|error| error.to_string())?;
+    library
+        .compact_entries(chrono::Utc::now().timestamp_millis())
+        .map_err(|error| error.to_string())?;
     // The clock is read before the pending changes are settled. A change
     // made after this point gets a later time, so the next sync writes it.
     let clock = library.entry_clock().map_err(|error| error.to_string())?;
@@ -219,30 +239,45 @@ pub(super) async fn publish_library(
         .settle_entries(SETTLE_LIMIT)
         .map_err(|error| error.to_string())?
     {}
+    let removed = library.removed_own_entries().map_err(|error| error.to_string())?;
     let mut changed = BTreeSet::new();
     library
         .visit_own_entries(clock.published, &mut |entry| {
             changed.insert(shard_of(&entry));
         })
         .map_err(|error| error.to_string())?;
-    if changed.is_empty() {
+    let emptied = removed
+        .iter()
+        .map(|(kind, subject_key, second_key)| shard_of_key(*kind, subject_key, second_key))
+        .filter(|shard| !changed.contains(shard))
+        .collect::<BTreeSet<_>>();
+    if changed.is_empty() && emptied.is_empty() {
         return Ok(());
     }
+    // The files with new entries come first; `BTreeMap` orders by the flag.
     let mut files = changed
         .into_iter()
-        .map(|shard| (shard, Vec::new()))
+        .map(|shard| ((false, shard), Vec::new()))
+        .chain(emptied.into_iter().map(|shard| ((true, shard), Vec::new())))
         .collect::<BTreeMap<_, _>>();
+    let place = files
+        .keys()
+        .map(|(emptied, shard)| (shard.clone(), *emptied))
+        .collect::<HashMap<_, _>>();
     library
         .visit_own_entries(None, &mut |entry| {
-            if let Some(entries) = files.get_mut(&shard_of(&entry)) {
-                entries.push(entry);
+            let shard = shard_of(&entry);
+            if let Some(emptied) = place.get(&shard) {
+                if let Some(entries) = files.get_mut(&(*emptied, shard)) {
+                    entries.push(entry);
+                }
             }
         })
         .map_err(|error| error.to_string())?;
     let folder = format!("{}/{}", directory(library_id), clock.device_id);
     let existing = provider.list(&folder).await?;
     let mut skipped = false;
-    for (shard, entries) in files {
+    for ((_, shard), entries) in files {
         let (name, bytes) = encode(library_id, &clock.device_id, &shard, &entries)?;
         let path = format!("{folder}/{name}");
         let replaced = format!("{folder}/{shard}.");
@@ -269,6 +304,9 @@ pub(super) async fn publish_library(
     if skipped {
         return Ok(());
     }
+    library
+        .forget_removed_own_entries(&removed)
+        .map_err(|error| error.to_string())?;
     library
         .set_entries_published(clock.now)
         .map_err(|error| error.to_string())

@@ -632,7 +632,9 @@ const MIN_KEPT_DELETED_FILE_DAYS: i64 = 7;
 /// `origin` says what cloud sync does with the deletion. A deletion that the
 /// user made gets a `delete` entry for each file (`shared.rs`), so that the
 /// other computers delete the same pictures, and its originals in the cloud
-/// folder are noted for removal. A deletion that came from another computer
+/// folder are noted for removal. The pending changes of its pictures become
+/// entries first, because the undo of the deletion brings them back
+/// (`settle_roots`). A deletion that came from another computer
 /// gets neither, because the computer that made the deletion removes the
 /// originals. Its files stay on this computer for "Keep deleted files", and
 /// for at least `MIN_KEPT_DELETED_FILE_DAYS`, and are noted in
@@ -647,6 +649,9 @@ pub(super) fn delete_roots(
     origin: DeletionOrigin,
 ) -> Result<(ProjectionSnapshot, Vec<crate::PendingBlobCleanup>, MutationReceipt)> {
     let roots = roots.clone();
+    if matches!(origin, DeletionOrigin::User | DeletionOrigin::MergedDuplicate) {
+        settle_roots(transaction, snapshot, &roots)?;
+    }
     let mut media_ids = RoaringBitmap::new();
     let mut collection_ids = Vec::new();
     for root_id in &roots {

@@ -428,23 +428,46 @@ stable key.
 
 The entry kinds are `add` (one per file and computer, with a record of the picture's name, notes,
 rating, status, tags and folders), `delete`, `name`, `notes`, `rating`, `status`, `item_tag`,
-`folder_item`, `tag_delete` and `folder_delete`. For each kind and key the library keeps only the
-latest entry, so the same entries give the same library in any order. If one computer sets 3 stars
+`folder_item`, `tag_delete`, `folder_delete` and `compacted`. For each kind and key the library
+keeps only the latest entry, and for `compacted` the one with the latest time in its value, so the
+same entries give the same library in any order. If one computer sets 3 stars
 at 10:00 and another sets 5 stars at 10:05, both end with 5 stars. The clock is the later of the
 wall clock and the latest time the computer has seen (`cloud_state.hlc_physical_ms`,
 `hlc_logical`), and all entries of one action share one time.
 
-`shared_view.rs` works out a picture from its entries. It exists when an `add` is later than its
-`delete`. A field comes from its latest entry after the deletion, or else from the earliest `add`
-that counts. A tag is on the picture when its latest `item_tag` says so, or else when an `add`
+`shared_view.rs` works out a picture from its entries. Only entries later than the file's cut
+count. The cut is the time of the `delete` entry, or, when that entry is an undo, the cut that the
+undoing computer had just before it deleted the picture; it is never earlier than the time in the
+`compacted` entry. The picture exists when an `add` counts or the `delete` entry is an undo. A
+field comes from its latest entry that counts, or else from the earliest `add` that counts. A tag is on the picture when its latest `item_tag` says so, or else when an `add`
 record has it, and it goes when the tag was deleted after it was put on: a tag put on at 9:00 and
 deleted at 10:00 is off, one put on again at 10:05 is on. A deleted folder never holds anything
 again.
 
 An import writes an `add` only when no computer has added the file yet; otherwise the picture is
-changed to look the way the entries say. Undoing a permanent deletion always writes an `add`, and
-so does a repaired video for its new file. Deleting a picture, merging a duplicate away and
-repairing a video write `delete` for the file that goes.
+changed to look the way the entries say. A repaired video writes an `add` for its new file.
+Deleting a picture, merging a duplicate away and repairing a video write `delete` for the file that
+goes, and turn the pending changes of the picture into entries first (`settle_roots`). The deleting
+computer notes the cut the file had in the temporary table `entry_deletion_cut`, which lives as
+long as the undo history. Undoing the deletion writes the undo into the file's `delete` entry: the
+value holds that cut and the picture's record. So the entries that the deletion had made obsolete
+count again, including those of other computers that hadn't arrived yet: if one computer gives a
+picture 5 stars and another deletes it before the stars arrive and undoes the deletion, the picture
+has 5 stars on both. The undo is later than any deletion before it, so a deletion that another
+computer made in between doesn't keep the picture away.
+
+Seven days after the cut of a deleted file (`COMPACT_AFTER_MS`), a sync drops the file's entries
+that the cut made obsolete (`Library::compact_entries`, `compact_in`). It first stores the cut in a
+`compacted` entry, the file's floor. A merge that stores a floor drops the same entries, and a
+merge doesn't store an entry at or before the floor, which is what a computer that was away for
+weeks sends. The `delete` entries stay, so such a computer still learns of the deletion. Without
+the floor, an undo that arrives after one computer compacted and before another did would bring
+back different entries on the two; with it the cut never goes below the floor, and the undo's
+record is the picture. A computer stores a floor only once its own `delete` entry for the file is
+in the cloud folder, because a restore or a lost disk could otherwise lose the deletion while the
+floor is already there. `entry_compaction_due` holds the files with a `delete` entry that haven't
+been compacted, filled by a trigger, and `removed_own_entry` holds the keys of this computer's
+dropped entries, whose files the next sync writes again after the files with new entries.
 
 A library starts recording at its first sync (`Library::start_recording`), and every file it holds
 then gets an `add` marked as written at the start, so its tags count as older than any deletion of
@@ -464,9 +487,9 @@ built yet. Pictures in collections, and collections, get no entries and are left
 A merge that deletes a picture keeps its file on this computer for the "Keep deleted files" time,
 counted from the merge and at least 7 days, and notes it in `kept_deleted_file` instead of queuing
 it in `blob_cleanup_queue`. The setting is about the originals in the cloud folder, and this file is
-the copy on this computer, so a setting of 0 days still keeps it for 7. The entries of one action can arrive in two files, for example the deletion
-in one and its undo in another, and a provider's desktop app can download the file with the
-deletion first. When a later merge says that the picture exists again, `Library::apply_stored`
+the copy on this computer, so a setting of 0 days still keeps it for 7. A deletion and its undo
+can arrive in two files, or the other computer can merge the deletion before the undo was made,
+and a provider's desktop app can download the file with the deletion first. When a later merge says that the picture exists again, `Library::apply_stored`
 imports it from the kept file through `Library::ingest_batch`, without fetching it. The file
 exists by the entries, so the import writes no `add`, and the next apply gives the picture its
 tags and folders. Once the time is over, `Library::clean_pending_blobs`
@@ -495,7 +518,9 @@ parts that aren't built yet (collections, import tasks, snapshots, Restore and o
 `model2.py` runs three to five computers that act and sync in random order and checks that they end
 with the same library, that nothing is lost that nobody removed, and that the later action wins.
 `round2_runs.sh` and `final_runs.sh` are the searches that were run, and `replay2.py` replays one
-run. Run it with `python3 -I` before changing a rule. `picto-library/tests/shared_entries.rs`
+run. `round3_runs.sh` checks the undo of a deletion (`undo_revive`) and compaction (`compact`)
+with computers that are offline for a long time; it also runs compaction without a floor
+(`compact_nofloor`), which makes computers end with different libraries. Run it with `python3 -I` before changing a rule. `picto-library/tests/shared_entries.rs`
 checks the same properties on three real libraries.
 
 `cloud.data.delete` (Delete Cloud Data… in the Library Manager)

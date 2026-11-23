@@ -9,7 +9,10 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-11-23-kept-deleted-files";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-11-23-entry-compaction";
+/// The schema before `entry_compaction_due` and `removed_own_entry` were
+/// added. Everything else is the same.
+const KEPT_DELETED_FILES_PREDECESSOR: &str = "picto-library-schema-1-2026-11-23-kept-deleted-files";
 const TOMBSTONE_ENTRIES_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-task-rollback-aliases";
 const COMBINED_IMPORT_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-media-aliases-import-tasks";
 const TASK_ROLLBACK_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-task-rollback";
@@ -132,7 +135,8 @@ pub fn migrate_for_open(
     if generation != SCHEMA_GENERATION
         || !matches!(
             fingerprint.as_str(),
-            TOMBSTONE_ENTRIES_PREDECESSOR
+            KEPT_DELETED_FILES_PREDECESSOR
+                | TOMBSTONE_ENTRIES_PREDECESSOR
                 | COMBINED_IMPORT_PREDECESSOR
                 | TASK_ROLLBACK_PREDECESSOR
                 | MEDIA_ALIASES_PREDECESSOR
@@ -171,6 +175,22 @@ pub fn migrate_for_open(
                 return Err(LibraryError::OpenCancelled);
             }
             connection.execute_batch("PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE;")?;
+            if fingerprint == KEPT_DELETED_FILES_PREDECESSOR {
+                connection.execute_batch(&schema_statements(&[
+                    "entry_compaction_due",
+                    "removed_own_entry",
+                ]))?;
+                connection.execute(
+                    "UPDATE projection_checkpoint SET schema_fingerprint = ?1
+                     WHERE schema_fingerprint = ?2",
+                    rusqlite::params![SCHEMA_FINGERPRINT, fingerprint],
+                )?;
+                connection.execute(
+                    "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
+                    [SCHEMA_FINGERPRINT],
+                )?;
+                return Ok(());
+            }
             if fingerprint == LEGACY_SCHEMA_FINGERPRINT {
                 connection.execute_batch(
             "CREATE TABLE IF NOT EXISTS source_post_attempt (
@@ -450,6 +470,21 @@ pub fn migrate_for_open(
     }
 }
 
+/// Returns the statements of `schema_v1.sql` that create `tables` and their
+/// indexes.
+fn schema_statements(tables: &[&str]) -> String {
+    SCHEMA
+        .split(";\n")
+        .filter(|statement| {
+            tables.iter().any(|table| {
+                statement.contains(&format!("CREATE TABLE {table} ("))
+                    || statement.contains(&format!("CREATE INDEX idx_{table}_"))
+            })
+        })
+        .map(|statement| format!("{statement};"))
+        .collect()
+}
+
 /// Replaces `cloud_tombstone` with the tables of the shared entries.
 ///
 /// The `blob` rows of `cloud_tombstone` are originals in the cloud folder
@@ -459,20 +494,17 @@ pub fn migrate_for_open(
 /// the new entries has been written to a cloud folder. The library records
 /// nothing until `Library::start_recording` is called.
 fn migrate_shared_entries(connection: &Connection) -> Result<()> {
-    let tables = SCHEMA
-        .split(";\n")
-        .filter(|statement| {
-            ["shared_entry", "entry_recording", "pending_entry", "merge_touched", "wanted_file",
-             "kept_deleted_file", "cloud_deleted_original"]
-                .iter()
-                .any(|table| {
-                    statement.contains(&format!("CREATE TABLE {table} ("))
-                        || statement.contains(&format!("CREATE INDEX idx_{table}_"))
-                })
-        })
-        .map(|statement| format!("{statement};"))
-        .collect::<String>();
-    connection.execute_batch(&tables)?;
+    connection.execute_batch(&schema_statements(&[
+        "shared_entry",
+        "entry_recording",
+        "pending_entry",
+        "merge_touched",
+        "wanted_file",
+        "kept_deleted_file",
+        "entry_compaction_due",
+        "removed_own_entry",
+        "cloud_deleted_original",
+    ]))?;
     connection.execute_batch(
         "INSERT INTO cloud_deleted_original (file_name, deleted_at, purge_after)
          SELECT object_key, deleted_at, purge_after
@@ -825,13 +857,15 @@ mod tests {
 
     #[test]
     fn the_entry_tables_replace_the_tombstone_table_and_the_library_opens_again() {
-        const TABLES: [&str; 7] = [
+        const TABLES: [&str; 9] = [
             "shared_entry",
             "entry_recording",
             "pending_entry",
             "merge_touched",
             "wanted_file",
             "kept_deleted_file",
+            "entry_compaction_due",
+            "removed_own_entry",
             "cloud_deleted_original",
         ];
         let directory = tempfile::tempdir().unwrap();
@@ -849,6 +883,8 @@ mod tests {
                  DROP TABLE merge_touched;
                  DROP TABLE wanted_file;
                  DROP TABLE kept_deleted_file;
+                 DROP TABLE entry_compaction_due;
+                 DROP TABLE removed_own_entry;
                  DROP TABLE cloud_deleted_original;
                  CREATE TABLE cloud_tombstone (
                      object_kind TEXT NOT NULL,
@@ -1381,6 +1417,42 @@ mod tests {
                 .unwrap(),
             1,
         );
+    }
+
+    /// A library from before entry compaction gets the two tables of it, a
+    /// backup, and the new fingerprint, keeps its entries, and opens again.
+    #[test]
+    fn open_adds_the_compaction_tables_to_the_kept_deleted_files_schema() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&database_path).unwrap());
+        let connection = Connection::open(&database_path).unwrap();
+        connection
+            .execute_batch(
+                "DROP TABLE entry_compaction_due;
+                 DROP TABLE removed_own_entry;
+                 INSERT INTO shared_entry
+                     (subject_key, kind, second_key, value, clock_ms, clock_counter, device_id)
+                 VALUES ('kept', 'delete', '', NULL, 5, 0, 'device');",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
+                [super::KEPT_DELETED_FILES_PREDECESSOR],
+            )
+            .unwrap();
+        drop(connection);
+
+        for _ in 0..2 {
+            drop(LibraryDatabase::open(&database_path).unwrap());
+        }
+        let migrated = Connection::open(&database_path).unwrap();
+        assert_eq!(fingerprint_of(&database_path), SCHEMA_FINGERPRINT);
+        assert!(super::has_table(&migrated, "entry_compaction_due").unwrap());
+        assert!(super::has_table(&migrated, "removed_own_entry").unwrap());
+        assert_eq!(count(&migrated, "SELECT COUNT(*) FROM shared_entry"), 1);
+        assert_eq!(backups_in(directory.path()), 1);
     }
 
     #[test]

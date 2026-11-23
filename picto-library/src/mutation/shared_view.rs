@@ -92,11 +92,61 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Writes `time` as text whose order is the order of the times: the
+/// milliseconds and the counter with leading zeros, and the computer id,
+/// separated by colons. `compacted` entries and undo records hold times this
+/// way, so that SQL can compare them as text.
+pub fn time_text(time: &EntryTime) -> String {
+    format!("{:016}:{:010}:{}", time.0, time.1, time.2)
+}
+
+/// Reads a time that `time_text` wrote. The empty text, and text that isn't
+/// such a time, is the zero time.
+pub fn parse_time_text(text: &str) -> EntryTime {
+    let mut parts = text.splitn(3, ':');
+    match (
+        parts.next().and_then(|ms| ms.parse().ok()),
+        parts.next().and_then(|counter| counter.parse().ok()),
+        parts.next(),
+    ) {
+        (Some(ms), Some(counter), Some(device)) => (ms, counter, device.to_owned()),
+        _ => zero(),
+    }
+}
+
+/// The value of a `delete` entry that undoes a deletion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UndoRecord {
+    /// The cut that the undoing computer had just before it deleted the
+    /// picture, as `time_text` writes it, and empty for none. Entries later
+    /// than it count again.
+    pub before: String,
+    /// The picture as the undoing computer had it before the deletion.
+    pub record: FileRecord,
+}
+
+impl UndoRecord {
+    /// Reads the value of a `delete` entry, which is empty for a deletion
+    /// and an `UndoRecord` for an undo.
+    pub fn parse(value: &str) -> Option<Self> {
+        let value = serde_json::from_str::<serde_json::Value>(value).ok()?;
+        let record = value.get("record")?;
+        Some(Self {
+            before: value.get("before").and_then(|v| v.as_str()).unwrap_or("").to_owned(),
+            record: FileRecord::parse(&record.to_string()),
+        })
+    }
+}
+
 /// One stored entry of a picture, as `file_view` reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HeldEntry {
     Add { time: EntryTime, record: FileRecord },
-    Delete { time: EntryTime },
+    /// A deletion, or with `undo` the undo of one.
+    Delete { time: EntryTime, undo: Option<UndoRecord> },
+    /// The `compacted` entry: no entry of the picture at or before `through`
+    /// counts.
+    Compacted { through: EntryTime },
     Name { time: EntryTime, value: String },
     Notes { time: EntryTime, value: String },
     Rating { time: EntryTime, value: u8 },
@@ -115,8 +165,8 @@ pub struct FileView {
     pub status: Lifecycle,
     pub tags: BTreeSet<String>,
     pub folders: BTreeSet<String>,
-    /// The record of the earliest `add` entry that still counts, which is the
-    /// earliest one after the picture's last deletion.
+    /// The record of the earliest `add` entry that counts, or of the undo
+    /// when no add counts (`file_view`).
     pub earliest: FileRecord,
 }
 
@@ -125,37 +175,62 @@ fn zero() -> EntryTime {
     (0, 0, String::new())
 }
 
+/// The cut of a file and its floor. An entry of the file counts only when
+/// it's later than the cut. The floor is the time in its `compacted` entry:
+/// entries at or before it were dropped and never count again, so the cut is
+/// never earlier than the floor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cut {
+    pub cut: EntryTime,
+    pub floor: EntryTime,
+}
+
+/// Returns the cut of the file whose entries are `entries`. After a
+/// deletion, the cut is the time of the deletion. After the undo of a
+/// deletion, it's the cut that the undoing computer had just before it
+/// deleted the picture, so the entries that the deletion had made obsolete
+/// count again. Without either, it's the zero time.
+pub fn cut_of(entries: &[HeldEntry]) -> Cut {
+    let mut cut = zero();
+    let mut floor = zero();
+    for entry in entries {
+        match entry {
+            HeldEntry::Delete { time, undo: None } => cut = time.clone(),
+            HeldEntry::Delete { undo: Some(undo), .. } => cut = parse_time_text(&undo.before),
+            HeldEntry::Compacted { through } => floor = through.clone(),
+            _ => {}
+        }
+    }
+    Cut { cut: cut.max(floor.clone()), floor }
+}
+
 /// Returns the picture that `entries` describe, or `None` when it doesn't
 /// exist. `entries` are all stored entries of one file. `tag_deleted` returns
 /// the time of a tag's `tag_delete` entry, and `folder_deleted` whether a
 /// folder has a `folder_delete` entry.
 ///
-/// A picture exists when one of its `add` entries is later than its `delete`
-/// entry; only those adds count. A field entry counts when it's later than
-/// the deletion. Without one, the name and status come from the earliest
-/// counting add, and the notes and rating from the first counting add that
-/// has them.
+/// Only entries later than the cut count (`cut_of`). A picture exists when
+/// one of its `add` entries counts, or when its `delete` entry is an undo.
+/// When no add counts, the record of the undo counts as an add at the time of
+/// the undo; that's the case after a floor has ended the entries the undo
+/// would have brought back. A field entry counts when it's later than the
+/// cut. Without one, the name and status come from the earliest counting add,
+/// and the notes and rating from the first counting add that has them.
 ///
-/// A tag is on the picture when its latest `item_tag` entry says `add`. When
-/// there's no such entry after the deletion, the tag is on when a counting
-/// add has it in its record. The tag still goes when it was deleted at or
-/// after the time it was put on: the time of the `item_tag` entry, or the
-/// latest add that has it, where an add written at the start of recording
-/// counts as time zero. For example, a tag put on at 9:00 and deleted at
-/// 10:00 is off, and one put on again at 10:05 is on. Folders follow the same
-/// rule, except that a deleted folder never holds anything.
+/// A tag is on the picture when its latest counting `item_tag` entry says
+/// `add`. When there's no such entry, the tag is on when a counting add has
+/// it in its record. The tag still goes when it was deleted at or after the
+/// time it was put on: the time of the `item_tag` entry, or the latest add
+/// that has it, where an add written at the start of recording counts as time
+/// zero. For example, a tag put on at 9:00 and deleted at 10:00 is off, and
+/// one put on again at 10:05 is on. Folders follow the same rule, except that
+/// a deleted folder never holds anything.
 pub fn file_view(
     entries: &[HeldEntry],
     tag_deleted: &mut dyn FnMut(&str) -> Option<EntryTime>,
     folder_deleted: &mut dyn FnMut(&str) -> bool,
 ) -> Option<FileView> {
-    let deleted = entries
-        .iter()
-        .find_map(|entry| match entry {
-            HeldEntry::Delete { time } => Some(time.clone()),
-            _ => None,
-        })
-        .unwrap_or_else(zero);
+    let deleted = cut_of(entries).cut;
     let mut counting = entries
         .iter()
         .filter_map(|entry| match entry {
@@ -163,6 +238,12 @@ pub fn file_view(
             _ => None,
         })
         .collect::<Vec<_>>();
+    if counting.is_empty() {
+        counting.extend(entries.iter().filter_map(|entry| match entry {
+            HeldEntry::Delete { time, undo: Some(undo) } => Some((time, &undo.record)),
+            _ => None,
+        }));
+    }
     counting.sort_by(|left, right| left.0.cmp(right.0));
     let earliest = counting.first()?.1;
 
@@ -271,8 +352,8 @@ mod tests {
     fn a_file_exists_when_an_add_is_later_than_the_delete() {
         let add = HeldEntry::Add { time: at(5, "a"), record: record("one", &[]) };
         assert!(view(std::slice::from_ref(&add), &[]).is_some());
-        assert!(view(&[add.clone(), HeldEntry::Delete { time: at(6, "b") }], &[]).is_none());
-        assert!(view(&[add, HeldEntry::Delete { time: at(4, "b") }], &[]).is_some());
+        assert!(view(&[add.clone(), HeldEntry::Delete { time: at(6, "b"), undo: None }], &[]).is_none());
+        assert!(view(&[add, HeldEntry::Delete { time: at(4, "b"), undo: None }], &[]).is_some());
         assert!(view(&[HeldEntry::Name { time: at(9, "a"), value: "x".into() }], &[]).is_none());
     }
 
@@ -286,7 +367,7 @@ mod tests {
         let shown = view(&[late.clone(), early.clone()], &[]).unwrap();
         assert_eq!((shown.name.as_str(), shown.notes.as_str(), shown.rating), ("early", "note", 4));
         // After a deletion at 6 only the add at 7 counts.
-        let shown = view(&[late, early, HeldEntry::Delete { time: at(6, "a") }], &[]).unwrap();
+        let shown = view(&[late, early, HeldEntry::Delete { time: at(6, "a"), undo: None }], &[]).unwrap();
         assert_eq!(shown.name, "late");
     }
 
@@ -294,7 +375,7 @@ mod tests {
     fn an_entry_of_a_field_counts_only_when_it_is_later_than_the_delete() {
         let entries = [
             HeldEntry::Add { time: at(8, "a"), record: record("again", &["kept"]) },
-            HeldEntry::Delete { time: at(6, "a") },
+            HeldEntry::Delete { time: at(6, "a"), undo: None },
             HeldEntry::Name { time: at(5, "a"), value: "before".into() },
             HeldEntry::Rating { time: at(9, "a"), value: 3 },
             HeldEntry::ItemTag { time: at(5, "a"), tag: "kept".into(), on: false },
@@ -341,5 +422,73 @@ mod tests {
             HeldEntry::FolderItem { time: at(9, "a"), folder: "other".into(), on: true },
         ];
         assert_eq!(view(&entries, &[]).unwrap().folders, BTreeSet::from(["other".to_owned()]));
+    }
+
+    fn undo(at_ms: i64, before: Option<i64>, name: &str) -> HeldEntry {
+        HeldEntry::Delete {
+            time: at(at_ms, "b"),
+            undo: Some(UndoRecord {
+                before: before.map(|ms| time_text(&at(ms, "z"))).unwrap_or_default(),
+                record: record(name, &["kept"]),
+            }),
+        }
+    }
+
+    #[test]
+    fn a_time_is_read_back_as_it_was_written_and_its_text_sorts_like_the_time() {
+        let times = [at(5, "a"), at(5, "b"), (5, 1, "a".to_owned()), at(40, "a"), at(1_700_000_000_000, "a")];
+        for pair in times.windows(2) {
+            assert!(time_text(&pair[0]) < time_text(&pair[1]));
+        }
+        for time in times {
+            assert_eq!(parse_time_text(&time_text(&time)), time);
+        }
+        assert_eq!(parse_time_text(""), zero());
+    }
+
+    /// The undo of a deletion at 6 brings back what the entries said before
+    /// it, including the rating at 3 that the undoing computer hadn't seen.
+    #[test]
+    fn an_undo_brings_back_the_entries_that_the_deletion_had_made_obsolete() {
+        let entries = [
+            HeldEntry::Add { time: at(1, "a"), record: record("first", &[]) },
+            HeldEntry::Rating { time: at(3, "a"), value: 5 },
+            undo(8, None, "as the undoing computer had it"),
+        ];
+        let shown = view(&entries, &[]).unwrap();
+        assert_eq!((shown.name.as_str(), shown.rating), ("first", 5));
+
+        // The cut goes back only to the one before the deletion.
+        let entries = [
+            HeldEntry::Add { time: at(1, "a"), record: record("first", &[]) },
+            HeldEntry::Rating { time: at(3, "a"), value: 5 },
+            HeldEntry::Add { time: at(5, "c"), record: record("imported again", &[]) },
+            undo(8, Some(4), "as the undoing computer had it"),
+        ];
+        let shown = view(&entries, &[]).unwrap();
+        assert_eq!((shown.name.as_str(), shown.rating), ("imported again", 0));
+    }
+
+    /// After a floor, the entries before it don't count, and the record of the
+    /// undo is the picture.
+    #[test]
+    fn behind_a_floor_the_undo_brings_back_its_own_record() {
+        let entries = [
+            HeldEntry::Rating { time: at(3, "a"), value: 5 },
+            undo(8, None, "as the undoing computer had it"),
+            HeldEntry::Compacted { through: at(6, "b") },
+        ];
+        assert_eq!(cut_of(&entries), Cut { cut: at(6, "b"), floor: at(6, "b") });
+        let shown = view(&entries, &[]).unwrap();
+        assert_eq!((shown.name.as_str(), shown.rating), ("as the undoing computer had it", 0));
+        assert_eq!(shown.tags, BTreeSet::from(["kept".to_owned()]));
+        // A floor earlier than the deletion leaves a deleted picture deleted.
+        let entries = [
+            HeldEntry::Add { time: at(1, "a"), record: record("first", &[]) },
+            HeldEntry::Delete { time: at(6, "b"), undo: None },
+            HeldEntry::Compacted { through: at(2, "b") },
+        ];
+        assert_eq!(cut_of(&entries).cut, at(6, "b"));
+        assert!(view(&entries, &[]).is_none());
     }
 }

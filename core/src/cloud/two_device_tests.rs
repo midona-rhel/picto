@@ -347,7 +347,8 @@ async fn a_deletion_on_one_device_arrives_on_the_other_and_a_restore_comes_back(
 
     // Merging every file again, as after a restart, changes nothing.
     let before = [rows(&first, &["cloud_state", "library_meta"]), rows(&second, &["cloud_state", "library_meta"])];
-    entries::forget_merged();
+    entries::forget_merged(&configuration_library(&first).unwrap().device_id);
+    entries::forget_merged(&configuration_library(&second).unwrap().device_id);
     receive_library(&first, &provider).await.unwrap();
     receive_library(&second, &provider).await.unwrap();
     assert_eq!(rows(&first, &["cloud_state", "library_meta"]), before[0]);
@@ -401,11 +402,11 @@ async fn an_item_that_is_imported_again_after_its_deletion_stays_and_its_tombsto
         .entry_view(&hash(&second, 1))
         .unwrap()
         .is_some());
-    entries::forget_merged();
+    entries::forget_merged(&configuration_library(&second).unwrap().device_id);
     receive_library(&second, &provider).await.unwrap();
     assert_eq!(status(&second, 1), Some(Lifecycle::Inbox));
     snapshot::publish_library(&first, &provider).await.unwrap();
-    entries::forget_merged();
+    entries::forget_merged(&configuration_library(&second).unwrap().device_id);
     snapshot::publish_library(&second, &provider).await.unwrap();
     assert_eq!(status(&second, 1), Some(Lifecycle::Inbox));
     assert!(!tombstoned(&second, 1));
@@ -900,7 +901,7 @@ async fn an_unread_own_file_is_not_replaced() {
         &[],
     );
     write(&first, "DELETE FROM cloud_device_frontier", &[]);
-    entries::forget_merged();
+    entries::forget_merged(&configuration_library(&first).unwrap().device_id);
     set_readable(&file, false);
     let result = snapshot::publish_library(&first, &provider).await;
     let kept = file.exists();
@@ -1064,4 +1065,57 @@ async fn a_restore_keeps_only_the_kept_files_that_are_on_this_disk() {
         .unwrap()
         .is_file());
     drop(second);
+}
+
+/// The kinds of the entries about `subject_key` in the entry files that
+/// `application`'s computer wrote.
+fn kinds_in_files(cloud: &Path, application: &LibraryApplication, subject_key: &str) -> Vec<String> {
+    let mut kinds = Vec::new();
+    for file in entry_files(cloud, application) {
+        let text = zstd::stream::decode_all(std::fs::read(file).unwrap().as_slice()).unwrap();
+        for line in String::from_utf8(text).unwrap().lines().skip(1) {
+            let entry: serde_json::Value = serde_json::from_str(line).unwrap();
+            if entry["subject_key"] == subject_key {
+                kinds.push(entry["kind"].as_str().unwrap().to_owned());
+            }
+        }
+    }
+    kinds.sort();
+    kinds
+}
+
+/// 7 days after a deletion, compaction drops the entries that the deletion
+/// made obsolete, and the next sync writes the files that held them again
+/// without them. The other computer drops them as well, and its next sync
+/// writes its own files again.
+#[tokio::test]
+async fn a_sync_writes_the_entry_files_again_without_what_compaction_dropped() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, _folders) = two_devices(cloud.path()).await;
+    let deleted = hash(&first, 0);
+    first.set_lifecycle(&target(&first, &[0]), Lifecycle::Trash).unwrap();
+    first.delete_items(&target(&first, &[0]), false).unwrap();
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    receive_library(&second, &provider).await.unwrap();
+    snapshot::publish_library(&second, &provider).await.unwrap();
+    assert_eq!(kinds_in_files(cloud.path(), &first, &deleted), ["add", "delete", "status"]);
+    assert_eq!(kinds_in_files(cloud.path(), &second, &deleted), ["add"]);
+
+    let eight_days_later = chrono::Utc::now().timestamp_millis() + 8 * 24 * 60 * 60 * 1_000;
+    first.library().compact_entries(eight_days_later).unwrap();
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    assert_eq!(kinds_in_files(cloud.path(), &first, &deleted), ["compacted", "delete"]);
+    snapshot::publish_library(&second, &provider).await.unwrap();
+    assert_eq!(
+        count(
+            &second,
+            &format!(
+                "SELECT COUNT(*) FROM shared_entry
+                 WHERE subject_key = '{deleted}' AND kind NOT IN ('delete', 'compacted')"
+            ),
+        ),
+        0
+    );
+    assert!(kinds_in_files(cloud.path(), &second, &deleted).is_empty());
+    assert!(status(&second, 0).is_none());
 }
