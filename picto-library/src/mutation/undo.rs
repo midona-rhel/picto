@@ -79,6 +79,9 @@ impl Library {
             // entries that the deletion was taken back, and its redo, as
             // entries that they are deleted.
             journal_trash_moves(transaction, revision, &snapshot, &next, changed_at_ms)?;
+            // They also get the names, notes, source links, ratings, tags
+            // and folders of items that the replay changed.
+            journal_shared_changes(transaction, revision, &change, use_after)?;
             if matches!(
                 entry.command.as_str(),
                 "tags.delete" | "tags.delete_unused" | "folders.delete" | "smart_folders.delete"

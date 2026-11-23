@@ -181,12 +181,12 @@ impl Device {
     /// Returns every entry that this device made, as a sync writes them
     /// into the cloud folder.
     fn take(&self) -> Vec<SharedEntry> {
-        while self.library.settle_trash_moves(2).unwrap() {}
+        while self.library.settle_journal(2).unwrap() {}
         let mut entries = Vec::new();
         self.library
             .visit_own_entries(None, &mut |entry| entries.push(entry))
             .unwrap();
-        self.library.attach_records(&mut entries).unwrap();
+        self.library.attach_values(&mut entries).unwrap();
         // The entries cross between the devices as JSON.
         serde_json::from_str(&serde_json::to_string(&entries).unwrap()).unwrap()
     }
@@ -882,6 +882,9 @@ impl Device {
                     ),
                 )
                 .remove(0)
+                .trim_start_matches("Text(\"")
+                .trim_end_matches("\")")
+                .to_owned()
             })
             .collect::<Vec<_>>();
         tags.sort();
@@ -898,6 +901,9 @@ impl Device {
                     ),
                 )
                 .remove(0)
+                .trim_start_matches("Text(\"")
+                .trim_end_matches("\")")
+                .to_owned()
             })
             .collect::<Vec<_>>();
         folders.sort();
@@ -1202,4 +1208,292 @@ fn additions_and_deletions_give_the_same_library_in_every_order() {
     assert_eq!(b.status("y"), None);
     assert_eq!(b.status("one"), Some(Lifecycle::Active));
     assert_eq!(scalar(&c.library, "SELECT COUNT(*) FROM ingest_job"), 0);
+}
+
+impl Device {
+    /// What the tests compare of one item: its name, notes, source links,
+    /// rating and status, and the names of its tags and folders.
+    fn fields(&self, key: &str) -> String {
+        let details = self.library.details(self.root(key).unwrap()).unwrap();
+        let (tags, folders) = self.tags_and_folders(key);
+        format!(
+            "{} | {:?} | {:?} | {:?} | {:?} | {tags:?} | {folders:?}",
+            details.root.name,
+            details.root.notes,
+            details.root.source_urls,
+            details.rating,
+            details.lifecycle,
+        )
+    }
+
+    /// The number of journal rows that wait to be turned into entries.
+    fn waiting_rows(&self) -> i64 {
+        scalar(
+            &self.library,
+            "SELECT COUNT(*) FROM cloud_journal WHERE operation_kind = 'entry.roots'",
+        )
+    }
+}
+
+/// Changes on the device `a`: a name, notes, a source link and a rating for
+/// `one`, a new tag on `one` and `two`, the tag `keep:tag` taken from `one`,
+/// `three` put into the folder `Folder` and `two` taken out of it, and `two`
+/// moved from All into the Inbox.
+fn edit(a: &Device) {
+    let now = IMPORTED_AT_MS + 1_000;
+    let folder = folder(a, "Folder").unwrap();
+    a.library
+        .rename_root(a.root("one").unwrap(), "First", now)
+        .unwrap();
+    a.library
+        .set_notes(&a.target(&["one"]), Some("A note".into()), now)
+        .unwrap();
+    a.library
+        .set_source_urls(&a.target(&["one"]), vec!["https://example.com/one".into()], now)
+        .unwrap();
+    a.library
+        .set_rating(&a.target(&["one"]), Rating::Four)
+        .unwrap();
+    a.library
+        .apply_tags(&a.target(&["one", "two"]), &["new:tag".into()], true)
+        .unwrap();
+    a.library
+        .apply_tags(&a.target(&["one"]), &["keep:tag".into()], false)
+        .unwrap();
+    a.library.add_to_folder(&a.target(&["three"]), folder).unwrap();
+    a.library
+        .remove_from_folder(&a.target(&["two"]), folder)
+        .unwrap();
+    a.library
+        .set_lifecycle(&a.target(&["two"]), Lifecycle::Inbox)
+        .unwrap();
+}
+
+#[test]
+fn edits_of_items_reach_the_other_devices_in_every_order() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    edit(&a);
+    // Each change wrote journal rows and no entry.
+    assert_eq!(a.waiting_rows(), 8);
+    assert_eq!(scalar(&a.library, "SELECT COUNT(*) FROM shared_entry"), 0);
+    let entries = a.take();
+    assert_eq!(a.waiting_rows(), 0);
+    assert_eq!(entries.len(), 10);
+
+    // The second device merges them in one call. The third merges them one
+    // at a time, in the reverse order, and each twice.
+    let applied = b.receive(&a, &entries);
+    assert!(applied.edited > 0);
+    for entry in entries.iter().rev() {
+        c.receive(&a, std::slice::from_ref(entry));
+        c.receive(&a, std::slice::from_ref(entry));
+    }
+
+    assert_eq!(
+        a.fields("one"),
+        "First | Some(\"A note\") | [\"https://example.com/one\"] | Four | Active \
+         | [\"new:tag\"] | []"
+    );
+    for device in [&b, &c] {
+        for key in ["one", "two", "three"] {
+            assert_eq!(device.fields(key), a.fields(key), "{key} on {}", device.id);
+        }
+        // Nothing of it can be undone there, and the device made no entry
+        // of its own.
+        assert!(!device.library.history().state().can_undo);
+        assert!(device.take().is_empty());
+        assert_eq!(device.waiting_rows(), 0);
+    }
+    assert_eq!(b.status("two"), Some(Lifecycle::Inbox));
+    assert!(a.fields("three").contains("Folder"));
+    assert!(!a.fields("two").contains("Folder"));
+    // Merging everything again changes nothing.
+    assert_eq!(b.receive(&a, &entries).won, 0);
+}
+
+#[test]
+fn a_library_that_never_synced_records_no_edit() {
+    let (_directory, a, _b, _c) = devices();
+    edit(&a);
+    assert_eq!(a.waiting_rows(), 0);
+    assert!(a.take().is_empty());
+}
+
+#[test]
+fn a_change_of_many_items_writes_one_row_when_it_is_made() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    a.library
+        .apply_tags(&a.target(&["one", "two", "three"]), &["bulk:tag".into()], true)
+        .unwrap();
+    assert_eq!(a.waiting_rows(), 1);
+    assert_eq!(scalar(&a.library, "SELECT COUNT(*) FROM shared_entry"), 0);
+    // The rows are turned into entries a part at a time.
+    assert!(a.library.settle_journal(2).unwrap());
+    assert_eq!(scalar(&a.library, "SELECT COUNT(*) FROM shared_entry"), 2);
+    assert!(!a.library.settle_journal(2).unwrap());
+    assert_eq!(scalar(&a.library, "SELECT COUNT(*) FROM shared_entry"), 3);
+    assert_eq!(sync(&a, &b).edited, 1);
+    for key in ["one", "two", "three"] {
+        assert!(b.fields(key).contains("bulk:tag"));
+    }
+}
+
+#[test]
+fn the_later_change_of_one_field_wins_and_changes_of_other_fields_are_kept() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    let now = IMPORTED_AT_MS + 1_000;
+    // Both devices rename the item, the second one later. The first also
+    // gives it a rating, and the second a tag.
+    a.library
+        .rename_root(a.root("one").unwrap(), "Name on A", now)
+        .unwrap();
+    a.library
+        .set_rating(&a.target(&["one"]), Rating::Two)
+        .unwrap();
+    let from_a = a.take();
+    b.clock_ahead();
+    b.library
+        .rename_root(b.root("one").unwrap(), "Name on B", now)
+        .unwrap();
+    b.library
+        .apply_tags(&b.target(&["one"]), &["from:b".into()], true)
+        .unwrap();
+    let from_b = b.take();
+
+    a.receive(&b, &from_b);
+    b.receive(&a, &from_a);
+    c.receive(&a, &from_a);
+    c.receive(&b, &from_b);
+    for device in [&a, &b, &c] {
+        let fields = device.fields("one");
+        assert!(fields.starts_with("Name on B |"), "{fields}");
+        assert!(fields.contains("Two") && fields.contains("from:b"), "{fields}");
+    }
+    assert_eq!(a.fields("one"), b.fields("one"));
+    assert_eq!(a.fields("one"), c.fields("one"));
+}
+
+#[test]
+fn an_undo_and_a_redo_of_an_edit_reach_the_other_device() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    let before = a.fields("one");
+    edit(&a);
+    sync(&a, &b);
+    let edited = a.fields("one");
+    assert_eq!(b.fields("one"), edited);
+
+    // Every change is undone, and the other device takes that over.
+    while a.library.undo().unwrap().is_some() {}
+    assert_eq!(a.fields("one"), before);
+    sync(&a, &b);
+    for key in ["one", "two", "three"] {
+        assert_eq!(b.fields(key), a.fields(key), "{key}");
+    }
+
+    while a.library.redo().unwrap().is_some() {}
+    assert_eq!(a.fields("one"), edited);
+    sync(&a, &b);
+    for key in ["one", "two", "three"] {
+        assert_eq!(b.fields(key), a.fields(key), "{key}");
+    }
+}
+
+#[test]
+fn an_edit_that_arrives_before_its_item_is_given_to_the_item_at_its_import() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    let folder_id = folder(&a, "Folder").unwrap();
+    a.library.ingest(&rich_import(folder_id)).unwrap();
+    // The entry that adds the item, with the record of the item as it was
+    // imported.
+    let added = a.take();
+    let now = IMPORTED_AT_MS + 1_000;
+    a.library
+        .rename_root(a.root("new").unwrap(), "Morning.png", now)
+        .unwrap();
+    a.library
+        .set_notes(&a.target(&["new"]), None, now)
+        .unwrap();
+    a.library
+        .set_rating(&a.target(&["new"]), Rating::One)
+        .unwrap();
+    a.library
+        .apply_tags(&a.target(&["new"]), &["late:tag".into()], true)
+        .unwrap();
+    a.library
+        .apply_tags(&a.target(&["new"]), &["place:lake".into()], false)
+        .unwrap();
+    a.library
+        .remove_from_folder(&a.target(&["new"]), folder_id)
+        .unwrap();
+    let edits = a
+        .take()
+        .into_iter()
+        .filter(|entry| entry.kind != EntryKind::Item)
+        .collect::<Vec<_>>();
+    assert_eq!(edits.len(), 6);
+
+    // The second device gets the edits first. They change nothing, because
+    // the item is not there. Then it gets the item and imports it.
+    assert_eq!(b.receive(&a, &edits).edited, 0);
+    assert_eq!(b.receive(&a, &added).queued, 1);
+    assert_eq!(b.import_awaited(), 1);
+    assert_eq!(b.fields("new"), a.fields("new"));
+    assert!(b.fields("new").starts_with("Morning.png | None |"));
+
+    // The third device gets them in the other order.
+    c.receive(&a, &added);
+    c.receive(&a, &edits);
+    assert_eq!(c.import_awaited(), 1);
+    assert_eq!(c.fields("new"), a.fields("new"));
+}
+
+#[test]
+fn an_import_that_changes_an_item_the_library_holds_shares_what_it_gave() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    // A subscription brings `one` again, with a tag that it did not have.
+    let mut again = imported("one", "hash-one");
+    again.tags = vec!["from:source".into()];
+    a.library.ingest(&again).unwrap();
+    let entries = a.take();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].kind, EntryKind::ItemTag);
+    assert_eq!(sync(&a, &b).edited, 1);
+    assert_eq!(b.fields("one"), a.fields("one"));
+    assert!(b.fields("one").contains("from:source"));
+}
+
+#[test]
+fn an_edit_of_a_deleted_item_and_a_tag_of_a_deleted_tag_bring_nothing_back() {
+    let (_directory, a, b, c) = devices();
+    start_recording([&a, &b, &c]);
+    let now = IMPORTED_AT_MS + 1_000;
+    // The second device edits an item and uses a tag that the first device
+    // deletes at the same time.
+    b.library
+        .rename_root(b.root("one").unwrap(), "Renamed", now)
+        .unwrap();
+    b.library
+        .apply_tags(&b.target(&["two"]), &["keep:tag".into()], true)
+        .unwrap();
+    let edits = b.take();
+    let tag = a.library.projections().snapshot().tag_ids_by_name["keep:tag"];
+    a.library.delete_tag(tag, DELETED_AT_MS).unwrap();
+    a.delete(&["one"]);
+
+    sync(&a, &b);
+    a.receive(&b, &edits);
+    // The third device gets the deletions first and the edits afterwards.
+    sync(&a, &c);
+    c.receive(&b, &edits);
+    for device in [&a, &b, &c] {
+        assert_eq!(device.status("one"), None, "{}", device.id);
+        assert!(!has_tag(device, "keep:tag"), "{}", device.id);
+        assert!(!device.fields("two").contains("keep:tag"), "{}", device.id);
+    }
 }

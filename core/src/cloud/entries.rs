@@ -68,8 +68,8 @@ use crate::library_application::LibraryApplication;
 
 /// The number of the file format that this version reads and writes.
 const FORMAT: u32 = 2;
-/// The number of roots whose moves into and out of the Trash are turned
-/// into entries in one write transaction.
+/// The number of roots whose changes are turned into entries in one write
+/// transaction.
 const SETTLE_LIMIT: usize = 20_000;
 /// The number of waiting items whose originals one round looks for.
 const AWAITED_PER_ROUND: usize = 2_000;
@@ -196,7 +196,7 @@ fn decode(
 
 /// Writes the entries that this device made into the cloud folder.
 ///
-/// It first turns the device's pending moves into and out of the Trash into
+/// It first turns the device's changes that wait in the journal into
 /// entries. Then it rewrites the files of every key whose entry is later
 /// than the clock time up to which the device's entries were written before,
 /// removes the files that the new ones replace, and records the new clock
@@ -210,7 +210,7 @@ pub(super) async fn publish_library(
 ) -> Result<(), String> {
     let library = application.library();
     while library
-        .settle_trash_moves(SETTLE_LIMIT)
+        .settle_journal(SETTLE_LIMIT)
         .map_err(|error| error.to_string())?
     {}
     let clock = library.entry_clock().map_err(|error| error.to_string())?;
@@ -238,10 +238,11 @@ pub(super) async fn publish_library(
     let folder = format!("{}/{}", directory(library_id), clock.device_id);
     let existing = provider.list(&folder).await?;
     for (shard, mut entries) in files {
-        // An entry that adds an item gets the record of the item as the
-        // library holds it now.
+        // An entry that adds an item gets the record of the item, and an
+        // entry for a field of an item its value, as the library holds them
+        // now.
         library
-            .attach_records(&mut entries)
+            .attach_values(&mut entries)
             .map_err(|error| error.to_string())?;
         let (name, bytes) = encode(library_id, &clock.device_id, &shard, &entries)?;
         let path = format!("{folder}/{name}");

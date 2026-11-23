@@ -114,6 +114,8 @@ impl Library {
             let mut affected = RoaringBitmap::new();
             let mut placed = Vec::new();
             let mut rated = Vec::new();
+            let mut tagged = Vec::new();
+            let mut texts = Vec::new();
             for (index, input) in inputs.iter().enumerate() {
                 let output =
                     ingest::insert_one(transaction, revision, next, input, task, held(index))?;
@@ -121,6 +123,8 @@ impl Library {
                 root_ids.push(output.root_id);
                 placed.extend(output.placed);
                 rated.extend(output.rated);
+                tagged.extend(output.added_tags.iter().copied());
+                texts.extend(output.text);
                 if let Some(task) = task {
                     crate::mutation::tasks::record_task_ingest(
                         transaction,
@@ -192,6 +196,8 @@ impl Library {
                     .unwrap_or_else(now_ms),
             )?;
             record_imported_items(transaction, &created)?;
+            // What the import gave to items that the library already held.
+            journal_import_changes(transaction, revision, &tagged, &placed, &rated, &texts)?;
             let receipt = PublicationCoordinator::receipt(
                 revision,
                 resources,
@@ -339,9 +345,15 @@ impl Library {
             let mut folder_ids = HashSet::new();
             let mut ingest_affected = RoaringBitmap::new();
             let mut outputs = Vec::with_capacity(input.members.len());
+            let (mut tagged, mut placed, mut rated, mut texts) =
+                (Vec::new(), Vec::new(), Vec::new(), Vec::new());
             for member in &input.members {
                 let output = ingest::insert_one(transaction, revision, next, member, task, held)?;
                 next = output.snapshot;
+                tagged.extend(output.added_tags.iter().copied());
+                placed.extend(output.placed.iter().copied());
+                rated.extend(output.rated);
+                texts.extend(output.text.clone());
                 if output.created_root {
                     created_root_ids.push(output.root_id);
                 }
@@ -535,6 +547,11 @@ impl Library {
                     wholly_created.then_some(published_root),
                 )?;
                 resources.insert("tasks".to_owned());
+            }
+            if shared.is_none() && !creates_collection {
+                // What the import gave to items that the library already
+                // held and that are roots after it.
+                journal_import_changes(transaction, revision, &tagged, &placed, &rated, &texts)?;
             }
             if shared.is_none() && (!created_root_ids.is_empty() || creates_collection) {
                 let key = transaction.query_row(

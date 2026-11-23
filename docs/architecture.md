@@ -421,8 +421,10 @@ never sees a file in part.
 library's database, gives the library a device id of its own and copies the originals. Restore
 replaces the database with one snapshot. Neither runs by itself. What the devices share by
 themselves is the entries: an item or a collection that was imported, a permanent deletion, a move
-into or out of the Trash, and the deletion of a tag, a folder or a smart folder. Any other change
-to an item that the devices already hold does not reach another device.
+into or out of the Trash or between the Inbox and All, a change of an item's name, notes, source
+links, rating, tags or folders, and the deletion of a tag, a folder or a smart folder. The order of
+the items in a folder, the definitions of tags, folders and smart folders, and changes of
+collections do not reach another device.
 
 **Entries.** For every key that a shared change touched, the library keeps one row in
 `shared_entry` (`picto-library/src/mutation/shared.rs`): the kind and the key, the state, the time
@@ -433,11 +435,14 @@ device.
 | --- | --- | --- | --- |
 | `item` | stable key of an item or a collection | `add` | an import that creates the item or the collection, in a library that records items (`record_imported_items`); and everything that removes a tombstone: an import of the item that is later than the deletion, a subscription run or reset, the undo of the deletion (`remove_item_tombstones`) |
 | `item` | stable key of an item, a collection or a collection's file, and every alias of it | `delete`, with the content hash of the item's file; a collection has no file and its entry no hash | Delete Permanently, Empty Trash, a rejected Inbox item with "Delete permanently" (`delete_roots`) |
-| `status` | stable key of an item or a collection | `trash`, `active`, `inbox` | a move into or out of the Trash, also by undo and redo |
+| `status` | stable key of an item or a collection | `trash`, `active`, `inbox` | a move into or out of the Trash, also by undo and redo; in a library that records items, every change of status |
+| `name`, `notes`, `urls`, `rating` | stable key of an item or a collection | `set` | a change of that field, in a library that records items |
+| `item_tag` | stable key of the item, a tab, stable key of the tag | `add`, `remove` | a tag that is given to or taken from the item, in a library that records items |
+| `folder_item` | stable key of the item, a tab, stable key of the folder | `add`, `remove` | an item that is put into or taken out of the folder, in a library that records items |
 | `tag`, `folder`, `smart_folder` | stable key | `delete`, and `add` after an undo | the deletion of a tag, a folder with the folders below it, or a smart folder |
 
 An `add` entry is stored without a value. When a sync writes it into the cloud folder, it gets the
-record of the item as the library holds it then (`Library::attach_records`, `SharedItem`): the
+record of the item as the library holds it then (`Library::attach_values`, `SharedItem`): the
 file, or the files of a collection in their order with the cover, each with its stable key, name,
 note, source and the facts that are stored for it (content hash, type, size, dimensions, duration,
 perceptual hash, colours), and the item's name, notes, source links, rating, status, dates, tags
@@ -468,9 +473,20 @@ seen, with a counter for one millisecond. Merging an entry moves the clock to th
 What the user does after a merge is therefore later than everything that was merged, whatever the
 device's wall clock says.
 
-A move into or out of the Trash writes one `cloud_journal` row with the moved roots and the clock
-time, so that it costs the same for one root and for a million. The sync, and the worker every five
-minutes, turn those rows into `status` entries in batches (`Library::settle_trash_moves`).
+**Changes to items.** A change of status writes one `cloud_journal` row of the kind `root.trash`
+with the moved roots and the clock time. In a library that records items, the publication of every
+write that has a history entry writes one row of the kind `entry.roots` for each kind of change in
+that entry, with the roots that changed, the kind and state of the entries, and the clock time
+(`shared_fields.rs`, `journal_shared_changes`, called by `Library::publish`). The history entry
+holds exactly what the write changed, so the rows name only roots that changed, and a change of a
+million roots costs one row when it is made. Undo and Redo, the automatic tagging and an import
+that changes an item which the library holds write the same rows. The sync, and the worker every
+five minutes, turn the rows into entries, 20,000 roots in one transaction
+(`Library::settle_journal`). A row that waits is kept when the journal is trimmed.
+
+An entry for a field is stored without a value, like an `add` entry of an item. When a sync writes
+it, it gets the value that the library holds then (`attach_field_values`): the entry is the
+device's own, so the library holds the value that the entry stands for.
 
 **One merge rule.** A sync writes the entries that the device made into the device's folder and
 merges the entries in the folders of all devices (`core/src/cloud/entries.rs`,
@@ -495,9 +511,18 @@ entry is stored and applied in one publication, with no history entry:
   entry for the item, and the item was imported there after the time of the deletion, the item was
   added again: it stays and gets an `add` entry of that device. This is the rule of an import,
   which removes a tombstone that is earlier than the import.
-- `status`: an item of the library is moved to the Trash, or out of it when it is in the Trash. An
-  entry for an item that the library does not hold is stored, and the import of the item gives the
-  item that status. An entry that is earlier than the `item` entry of the same key is dropped.
+- `status`: an item of the library is moved to that status. An entry for an item that the library
+  does not hold is stored, and the import of the item gives the item that status. An entry that is
+  earlier than the `item` entry of the same key is dropped.
+- `name`, `notes`, `urls`, `rating`, `item_tag`, `folder_item`: the item gets the value, the tag or
+  the folder, or loses the tag or the folder (`apply_field_entries`). The change is made by the
+  code that Undo and Redo use for the same kinds of change (`apply_semantic_change`), and a rating
+  by `move_to_partition`. A tag that the library does not hold under the entry's key is looked for
+  by the name that the entry carries and created, and a folder is created at the top level with
+  the name that the entry carries; a tag or a folder for whose key the library holds a `delete`
+  entry is not created again. An item that is added to a folder stands at the end of the folder.
+  An entry for an item that the library does not hold is stored with its value, and the import of
+  the item gives the item what the stored entries say (`held_fields`).
 - `tag`, `delete`: the tag is deleted.
 - `folder` and `smart_folder`, `delete`: a folder with such an entry is deleted once every folder
   below it has one too. So a merge deletes no folder that the other device did not delete.
@@ -552,7 +577,9 @@ removal.
 items into a library that never synced and into one that records items, and merges and imports
 the entries of the second in a third library. An imported item costs one row of `shared_entry`
 without a value. A sync that has nothing to write reads the device's entries that are later than
-the clock time of its last sync.
+the clock time of its last sync. With `--sync-tag-only` it gives every item one tag with cloud sync
+on and merges the entries in a copy of the library; a tag on an item costs one row of `shared_entry`
+without a value.
 
 **Removing the cloud data.** `cloud.data.delete` (Delete Cloud Data… in the Library Manager)
 removes the library's folder from the cloud folder and then switches sync off

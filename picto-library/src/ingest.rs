@@ -34,6 +34,11 @@ pub(crate) struct IngestResult {
     /// The rating that a merge of another library gave a root that already
     /// existed and had no rating.
     pub rated: Option<(RootId, Rating)>,
+    /// The name, the notes and the source links of a root that already
+    /// existed, before and after this import, when the import changed one
+    /// of them. It is filled in for a task and in a library that records
+    /// items.
+    pub text: Option<crate::history::SemanticChange>,
 }
 
 /// What an import gives an item that the library already holds.
@@ -95,18 +100,27 @@ pub(crate) fn insert_one(
                 added_tags: Vec::new(),
                 placed: Vec::new(),
                 rated: None,
+                text: None,
             });
         }
-        let before = task.map(|_| reused_text(transaction, existing)).transpose()?;
+        let recording = crate::mutation::records_items(transaction)?;
+        let before = (task.is_some() || recording)
+            .then(|| reused_text(transaction, existing))
+            .transpose()?;
         let mut affected_roots =
             refresh_existing_file(transaction, &mut snapshot, existing.media_id, input, held)?;
-        if let (Some(task), Some((root_before, media_before))) = (task, before) {
+        let mut text = None;
+        if let Some((root_before, media_before)) = before {
             let (root_after, media_after) = reused_text(transaction, existing)?;
             use crate::mutation::tasks::{record_task_undo, TaskUndo};
             if root_before != root_after {
-                record_task_undo(transaction, task, TaskUndo::RootText { before: Arc::new(root_before), after: Arc::new(root_after) })?;
+                let (before, after) = (Arc::new(root_before), Arc::new(root_after));
+                if let Some(task) = task {
+                    record_task_undo(transaction, task, TaskUndo::RootText { before: before.clone(), after: after.clone() })?;
+                }
+                text = Some(crate::history::SemanticChange::RootText { before, after });
             }
-            if media_before != media_after {
+            if let (Some(task), true) = (task, media_before != media_after) {
                 record_task_undo(transaction, task, TaskUndo::MediaText { media_id: existing.media_id, before: media_before, after: media_after })?;
             }
         }
@@ -221,6 +235,7 @@ pub(crate) fn insert_one(
             added_tags,
             placed,
             rated,
+            text,
         });
     }
     if let Some(deleted_at_ms) = transaction
@@ -503,6 +518,7 @@ pub(crate) fn insert_one(
         added_tags: Vec::new(),
         placed: Vec::new(),
         rated: None,
+        text: None,
     })
 }
 

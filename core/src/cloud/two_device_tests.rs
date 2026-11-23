@@ -1177,3 +1177,94 @@ async fn a_device_removes_the_folder_that_an_earlier_version_wrote_its_entries_i
     snapshot::publish_library(&second, &provider).await.unwrap();
     assert!(!earlier.exists());
 }
+
+#[tokio::test]
+async fn edits_of_items_on_one_device_appear_on_the_other() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, _folders) = two_devices(cloud.path()).await;
+    let folder = first.library().folders().unwrap()[0].folder_id;
+    let now = chrono::Utc::now().timestamp_millis();
+    let library = first.library();
+    library
+        .rename_root(root(&first, 0).unwrap(), "Renamed", now)
+        .unwrap();
+    library
+        .set_notes(&target(&first, &[0]), Some("A note".into()), now)
+        .unwrap();
+    library
+        .set_source_urls(&target(&first, &[0]), vec!["https://example.com/a".into()], now)
+        .unwrap();
+    library
+        .set_rating(&target(&first, &[0, 2]), picto_library::Rating::Four)
+        .unwrap();
+    library
+        .apply_tags(&target(&first, &[1, 2]), &["new:tag".to_string()], true)
+        .unwrap();
+    library
+        .apply_tags(&target(&first, &[0]), &["sync:tag".to_string()], false)
+        .unwrap();
+    library.add_to_folder(&target(&first, &[2]), folder).unwrap();
+    library
+        .remove_from_folder(&target(&first, &[1]), folder)
+        .unwrap();
+    library
+        .set_lifecycle(&target(&first, &[1]), Lifecycle::Inbox)
+        .unwrap();
+    // Each change wrote journal rows, and the entries are written by the
+    // sync.
+    assert_eq!(count(&first, "SELECT COUNT(*) FROM shared_entry"), 0);
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    assert!(count(&first, "SELECT COUNT(*) FROM shared_entry") >= 10);
+
+    assert!(receive_library(&second, &provider).await.unwrap() > 0);
+    assert_eq!(sync_state(&second), ("idle".to_string(), String::new()));
+    let fields = |application: &LibraryApplication, index: u8| {
+        let details = application.details(root(application, index).unwrap()).unwrap();
+        let snapshot = application.library().projections().snapshot();
+        let mut tags = snapshot
+            .tag_ids_by_name
+            .iter()
+            .filter(|(_, tag)| details.tag_ids.contains(tag))
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        tags.sort();
+        (
+            details.root.name.clone(),
+            details.root.notes.clone(),
+            details.root.source_urls.clone(),
+            details.rating,
+            details.lifecycle,
+            tags,
+            details.folder_ids.len(),
+        )
+    };
+    for index in 0..3 {
+        assert_eq!(fields(&second, index), fields(&first, index), "item {index}");
+    }
+    assert_eq!(
+        fields(&second, 0),
+        (
+            "Renamed".to_string(),
+            Some("A note".to_string()),
+            vec!["https://example.com/a".to_string()],
+            picto_library::Rating::Four,
+            Lifecycle::Active,
+            Vec::new(),
+            0
+        )
+    );
+    assert_eq!(fields(&second, 1).4, Lifecycle::Inbox);
+    assert_eq!(fields(&second, 2).6, 1);
+    // Nothing of it is on the second device's undo stack, and the second
+    // device writes no entry of its own for it.
+    assert!(!second.library().history().state().can_undo);
+    snapshot::publish_library(&second, &provider).await.unwrap();
+    assert!(entry_files(cloud.path(), &second).is_empty());
+
+    // The first device undoes its last change, and the second takes that
+    // over.
+    first.library().undo().unwrap().unwrap();
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    receive_library(&second, &provider).await.unwrap();
+    assert_eq!(status(&second, 1), Some(Lifecycle::Active));
+}

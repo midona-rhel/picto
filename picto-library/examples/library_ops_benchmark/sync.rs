@@ -86,7 +86,7 @@ pub fn run(roots: usize) -> R<()> {
         started.elapsed().as_secs_f64()
     );
     let started = Instant::now();
-    syncing.attach_records(&mut entries)?;
+    syncing.attach_values(&mut entries)?;
     let read_seconds = started.elapsed().as_secs_f64();
     if let Ok(path) = std::env::var("PICTO_BENCHMARK_ENTRIES") {
         // The entries are written to the file that PICTO_BENCHMARK_ENTRIES
@@ -159,6 +159,92 @@ pub fn run(roots: usize) -> R<()> {
     println!(
         "ROW|import merged items|{imported}|{seconds:.2} s|{:.1} microseconds per item",
         seconds * 1e6 / imported.max(1) as f64
+    );
+    Ok(())
+}
+
+/// Measures what one tag on every item of a library of `roots` items costs
+/// with cloud sync on: the change itself, turning its journal row into
+/// entries, the rows in the database, the entries as the cloud files hold
+/// them, and merging them in a copy of the library.
+pub fn run_tag(roots: usize) -> R<()> {
+    let directory = tempfile::tempdir()?;
+    // The items are imported before the library syncs, so that no entry is
+    // written for them.
+    let path = directory.path().join("tagged.sqlite");
+    let tagged = library(directory.path(), "tagged.sqlite", false)?;
+    let mut ids = Vec::with_capacity(roots);
+    for start in (0..roots).step_by(picto_library::ingest::MAX_INGEST_BATCH) {
+        let end = (start + picto_library::ingest::MAX_INGEST_BATCH).min(roots);
+        let batch = (start..end).map(prepared).collect::<Vec<_>>();
+        ids.extend(tagged.ingest_batch(&batch)?.into_iter().map(|(id, _)| id));
+    }
+    let before_bytes = database_bytes(&tagged, &path)?;
+    // The other device is a copy of the library as it is now.
+    drop(tagged);
+    std::fs::copy(&path, directory.path().join("other.sqlite"))?;
+    let tagged = Library::open(&path)?;
+    let other = Library::open(directory.path().join("other.sqlite"))?;
+    for library in [&tagged, &other] {
+        library
+            .database()
+            .maintenance_write(WorkPriority::Cloud, |transaction| {
+                picto_library::reset_published_entries(transaction)
+            })?;
+    }
+
+    let target = picto_library::selection::SelectionTarget::Explicit { root_ids: ids };
+    let started = Instant::now();
+    tagged.apply_tags(&target, &["bulk:tag".to_owned()], true)?;
+    println!(
+        "ROW|tag every item, sync on|{roots}|{:.3} s|one journal row",
+        started.elapsed().as_secs_f64()
+    );
+
+    let started = Instant::now();
+    while tagged.settle_journal(20_000)? {}
+    let settle_seconds = started.elapsed().as_secs_f64();
+    let after_bytes = database_bytes(&tagged, &path)?;
+    println!(
+        "ROW|turn the row into entries|{roots}|{settle_seconds:.2} s|{:.0} bytes of database per entry",
+        (after_bytes as f64 - before_bytes as f64) / roots as f64
+    );
+
+    let started = Instant::now();
+    let mut entries = Vec::<SharedEntry>::with_capacity(roots);
+    tagged.visit_own_entries(None, &mut |entry| entries.push(entry))?;
+    tagged.attach_values(&mut entries)?;
+    let json_bytes = entries
+        .iter()
+        .map(|entry| serde_json::to_vec(entry).map(|line| line.len() + 1))
+        .sum::<Result<usize, _>>()?;
+    println!(
+        "ROW|read the entries with their values|{}|{:.2} s|{:.0} bytes of JSON per entry",
+        entries.len(),
+        started.elapsed().as_secs_f64(),
+        json_bytes as f64 / entries.len().max(1) as f64,
+    );
+    if let Ok(path) = std::env::var("PICTO_BENCHMARK_ENTRIES") {
+        // The entries are written to the file that PICTO_BENCHMARK_ENTRIES
+        // names, as the lines of the cloud files, so that they can be
+        // compressed and measured outside this program.
+        let mut lines = Vec::new();
+        for entry in &entries {
+            serde_json::to_writer(&mut lines, entry)?;
+            lines.push(b'\n');
+        }
+        std::fs::write(path, lines)?;
+    }
+
+    let started = Instant::now();
+    let mut edited = 0;
+    for file in entries.chunks(FILE_ENTRIES) {
+        edited += other.apply_shared_entries("benchmark-device", file)?.edited;
+    }
+    println!(
+        "ROW|merge the entries on another device|{}|{:.2} s|{edited} changes of a tag",
+        entries.len(),
+        started.elapsed().as_secs_f64()
     );
     Ok(())
 }

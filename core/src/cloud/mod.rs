@@ -7,16 +7,16 @@
 //!   manifest (`snapshot.rs`). A device writes a new one when the library
 //!   has changed and has been idle for 30 seconds.
 //! - `entries/<device id>/`, the entries that the device made: what it
-//!   imported, deleted, moved into or out of the Trash, or added again
-//!   (`entries.rs`).
+//!   imported, edited, deleted or added again (`entries.rs`).
 //!
 //! Another device gets the library by taking the newest snapshot as its
 //! database (Open from Cloud…) and copying the originals. After that, the
 //! devices share the entries by themselves: an item or a collection that
-//! was imported, with its file and what it was given at the import, an item
-//! that was deleted permanently, moved to the Trash or restored, a deleted
-//! tag, folder or smart folder, and the removal of a tombstone. A change to
-//! an item that the devices already hold, other than those, reaches another
+//! was imported, with its file; a change of an item's status, name, notes,
+//! source links, rating, tags or folders; an item that was deleted
+//! permanently; a deleted tag, folder or smart folder; and the removal of a
+//! tombstone. The order of the items in a folder, the definitions of tags,
+//! folders and smart folders, and changes of collections reach another
 //! device only when a snapshot is restored there.
 //!
 //! A library records the items that it imports from its first sync on

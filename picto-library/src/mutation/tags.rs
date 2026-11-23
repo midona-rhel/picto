@@ -283,6 +283,13 @@ impl Library {
                         serde_json::json!({"assignment_count": assignments.len()}),
                         changed_at_ms,
                     )?;
+                    // The other devices of the library get the tags.
+                    journal_shared_changes(
+                        transaction,
+                        revision,
+                        &SemanticChange::Compound(changes.clone()),
+                        true,
+                    )?;
                 }
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(

@@ -21,17 +21,19 @@ Picto stores three things in the cloud folder, under `picto/<library id>/`:
 A second computer gets the library with **Open from Cloud…**. It then has the items, tags and
 folders that the library had at that moment.
 
-After that, each computer keeps its own copy, and two kinds of change are carried from one
-computer to the others by themselves:
+After that, each computer keeps its own copy, and these changes are carried from one computer to
+the others by themselves:
 
-- an **import**: an item or a collection that you add on one computer appears on the others, as
-  described in the next section;
-- a **deletion**, which is described in the section after it.
+- an **import**: an item or a collection that you add on one computer appears on the others;
+- an **edit** of an item or a collection: its name, its notes, its source links, its rating, the
+  tags you give it or take from it, the folders you put it into or take it out of, and a move
+  between the Inbox and All;
+- a **deletion**.
 
-A change to an item that the computers already have does not travel yet: a tag, a rating, a new
-name, notes, or a move into a folder that you give an item on one computer does not appear on the
-others. To take over everything that another computer has, restore one of its snapshots (see
-[Restore a snapshot](#restore-a-snapshot)).
+The next three sections describe them. These changes do not travel yet: the order in which you
+arrange the items of a folder; a tag, a folder or a smart folder that you rename, move or change;
+and items that you group into a collection or take out of one. To take over everything that
+another computer has, restore one of its snapshots (see [Restore a snapshot](#restore-a-snapshot)).
 
 ## Imports
 
@@ -58,6 +60,34 @@ imports the item.
 - **What was there before.** The items that a library has when you first enable sync reach another
   computer through **Open from Cloud…**, and Picto writes no entry for them. From the first sync
   on, every import is recorded, also while sync is paused or off.
+
+## Edits
+
+When you change an item on one computer, the other computers make the same change: a new name,
+notes, source links, a rating, a tag that you add or remove, a folder that you put the item into
+or take it out of, and a move between the Inbox and All. This holds for one item and for a
+selection of any size. A tag or a folder that another computer does not have yet is created there;
+a new folder appears at the top level. An item that is added to a folder on another computer
+stands at the end of that folder.
+
+The computer on which you made the change writes it at its next sync, and another computer takes
+it in at its own next sync, or within about 30 seconds while Picto is open with the library and
+the library is idle.
+
+- **Two computers change different things of one item.** Both changes are kept: a name from one
+  computer and a rating from the other are both on both computers.
+- **Two computers change the same thing of one item.** The later change is on both. Picto does not
+  rely on the computers' clocks alone for that: what you do on a computer after it has taken in a
+  change is always later than that change.
+- **Undo.** A change that arrives from another computer is not in **Edit → Undo** on this
+  computer. If you undo a change on the computer where you made it, the other computers take the
+  undo over.
+- **An item that has not arrived.** A change to an item whose original is not on this computer yet
+  is kept, and the item is imported with it.
+- **A deleted item.** A change to an item that was deleted permanently on another computer brings
+  nothing back. The item ends deleted on both.
+- **What was changed before.** Picto records these changes from the library's first sync on, also
+  while sync is paused or off. What two computers changed differently before that stays different.
 
 ## Deletions
 
@@ -94,8 +124,8 @@ you do on a computer after it has taken in a change is always later than that ch
 - **Moved to the Trash on one computer, restored on another.** The later move wins on both.
 - **Deleted permanently on one computer, edited or moved on another.** A permanent deletion is not
   undone by an edit or by a move into or out of the Trash. The item ends deleted on both.
-- **In the Trash on one computer, edited on another.** The item is in the Trash on both. The edit
-  stays on the computer where it was made.
+- **In the Trash on one computer, edited on another.** The item is in the Trash on both, with the
+  edit.
 - **Undo.** If you undo a deletion, the tombstone is removed like after an import. An item that
   another computer has already deleted is imported there again, as long as its original is still
   in the cloud folder (see **Keep deleted files** under [Retention](#retention)). A tag or a folder

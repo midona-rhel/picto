@@ -11,7 +11,10 @@
 //! | Kind | Key | States |
 //! | --- | --- | --- |
 //! | `item` | stable key of an item or a collection | `add`: the item was imported, or its tombstone was removed by a subscription or by the undo of a deletion. In the cloud folder the entry carries the record of the item ([`SharedItem`]) when the device that made it holds the item: its file or, for a collection, its files, with their names and stored facts, and its name, notes, source links, rating, status, dates, tags and folders. `delete`: deleted permanently; the value is `{"file": "<content hash>"}` for an item with a file, and there is none for a collection. |
-//! | `status` | stable key of an item or a collection | `trash`, `active`, `inbox`: where the last move into or out of the Trash put it. |
+//! | `status` | stable key of an item or a collection | `trash`, `active`, `inbox`: where the last change of its status put it. A library that does not record items writes the entry only for a move into or out of the Trash. |
+//! | `name`, `notes`, `urls`, `rating` | stable key of an item or a collection | `set`: the field was changed. In the cloud folder the entry carries the value: the name, the notes (the empty text for none), the list of source links, or the number of the rating. |
+//! | `item_tag` | stable key of the item, a tab and the stable key of the tag | `add`, which in the cloud folder carries the tag's whole name, and `remove`. |
+//! | `folder_item` | stable key of the item, a tab and the stable key of the folder | `add`, which in the cloud folder carries the folder's name, and `remove`. |
 //! | `tag`, `folder`, `smart_folder` | stable key | `delete`, and `add` when the deletion was undone. |
 //!
 //! One rule merges everything: per key, the entry with the later clock time
@@ -40,9 +43,12 @@
 //!
 //! The library stores an `add` entry without the record. The record is made
 //! when the entry is written into the cloud folder
-//! ([`Library::attach_records`]), from the item as the library holds it
+//! ([`Library::attach_values`]), from the item as the library holds it
 //! then, so an imported item costs one short row and not a copy of what the
 //! library already holds.
+//!
+//! The entries for the fields of an item, and how they are recorded and
+//! applied, are in `shared_fields.rs`.
 //!
 //! # Merged additions
 //!
@@ -82,6 +88,12 @@ use super::*;
 pub enum EntryKind {
     Item,
     Status,
+    Name,
+    Notes,
+    Urls,
+    Rating,
+    ItemTag,
+    FolderItem,
     Tag,
     Folder,
     SmartFolder,
@@ -93,16 +105,34 @@ impl EntryKind {
         match self {
             Self::Item => "item",
             Self::Status => "status",
+            Self::Name => "name",
+            Self::Notes => "notes",
+            Self::Urls => "urls",
+            Self::Rating => "rating",
+            Self::ItemTag => "item_tag",
+            Self::FolderItem => "folder_item",
             Self::Tag => "tag",
             Self::Folder => "folder",
             Self::SmartFolder => "smart_folder",
         }
     }
 
-    fn parse(text: &str) -> Option<Self> {
-        [Self::Item, Self::Status, Self::Tag, Self::Folder, Self::SmartFolder]
-            .into_iter()
-            .find(|kind| kind.as_str() == text)
+    pub(super) fn parse(text: &str) -> Option<Self> {
+        [
+            Self::Item,
+            Self::Status,
+            Self::Name,
+            Self::Notes,
+            Self::Urls,
+            Self::Rating,
+            Self::ItemTag,
+            Self::FolderItem,
+            Self::Tag,
+            Self::Folder,
+            Self::SmartFolder,
+        ]
+        .into_iter()
+        .find(|kind| kind.as_str() == text)
     }
 }
 
@@ -117,10 +147,14 @@ pub enum EntryState {
     Add,
     /// Moved to the Trash.
     Trash,
-    /// Taken out of the Trash into All.
+    /// Moved into All.
     Active,
-    /// Taken out of the Trash into the Inbox.
+    /// Moved into the Inbox.
     Inbox,
+    /// A field of an item was given the value that the entry carries.
+    Set,
+    /// A tag was taken from an item, or an item out of a folder.
+    Remove,
 }
 
 impl EntryState {
@@ -132,13 +166,23 @@ impl EntryState {
             Self::Trash => "trash",
             Self::Active => "active",
             Self::Inbox => "inbox",
+            Self::Set => "set",
+            Self::Remove => "remove",
         }
     }
 
-    fn parse(text: &str) -> Option<Self> {
-        [Self::Delete, Self::Add, Self::Trash, Self::Active, Self::Inbox]
-            .into_iter()
-            .find(|state| state.as_str() == text)
+    pub(super) fn parse(text: &str) -> Option<Self> {
+        [
+            Self::Delete,
+            Self::Add,
+            Self::Trash,
+            Self::Active,
+            Self::Inbox,
+            Self::Set,
+            Self::Remove,
+        ]
+        .into_iter()
+        .find(|state| state.as_str() == text)
     }
 
     fn lifecycle(self) -> Option<Lifecycle> {
@@ -146,7 +190,7 @@ impl EntryState {
             Self::Trash => Some(Lifecycle::Trash),
             Self::Active => Some(Lifecycle::Active),
             Self::Inbox => Some(Lifecycle::Inbox),
-            Self::Delete | Self::Add => None,
+            Self::Delete | Self::Add | Self::Set | Self::Remove => None,
         }
     }
 }
@@ -279,6 +323,9 @@ pub struct EntryClock {
 pub struct AppliedEntries {
     /// The number of entries that were later than what the library held.
     pub won: u64,
+    /// The number of entries that changed a name, notes, source links, a
+    /// rating, a tag or a folder of an item.
+    pub edited: u64,
     pub trashed: u64,
     pub restored: u64,
     pub deleted: u64,
@@ -346,7 +393,7 @@ fn observe(transaction: &rusqlite::Transaction<'_>, time: (i64, i64)) -> Result<
     Ok(())
 }
 
-fn own_device_id(transaction: &rusqlite::Transaction<'_>) -> Result<String> {
+pub(super) fn own_device_id(transaction: &rusqlite::Transaction<'_>) -> Result<String> {
     Ok(transaction.query_row(
         "SELECT device_id FROM cloud_state WHERE singleton = 1",
         [],
@@ -667,7 +714,7 @@ fn item_record(
 /// The whole name of a tag, as an import names it: the name alone for a tag
 /// of the namespace without a name, and otherwise the namespace, a colon and
 /// the name.
-fn whole_tag_name(namespace: &str, subname: &str) -> String {
+pub(super) fn whole_tag_name(namespace: &str, subname: &str) -> String {
     if namespace.is_empty() {
         subname.to_owned()
     } else {
@@ -679,7 +726,7 @@ fn whole_tag_name(namespace: &str, subname: &str) -> String {
 /// stable keys `keys` now, in a library that records items
 /// ([`records_items`]): each gets an `add` entry. The entry is stored without
 /// a value. The record of the item is made when the entry is written into
-/// the cloud folder ([`Library::attach_records`]), from the item as the
+/// the cloud folder ([`Library::attach_values`]), from the item as the
 /// library holds it then.
 pub(super) fn record_imported_items(
     transaction: &rusqlite::Transaction<'_>,
@@ -739,100 +786,14 @@ pub(super) fn held_statuses(
         .collect())
 }
 
-/// Turns the roots of pending `root.trash` journal rows into `status`
-/// entries of this device, at most `limit` roots, and returns whether rows
-/// are left. A row holds the roots that one change moved into the Trash or
-/// out of it, and the clock time of the change. The rows are written by the
-/// change itself, which stays as fast as it was for any number of roots;
-/// the entries are written here, on the cloud queue. An entry is not stored
-/// over a later one.
-fn settle_trash_moves_in(transaction: &rusqlite::Transaction<'_>, limit: usize) -> Result<bool> {
-    use rusqlite::OptionalExtension;
-    let device_id = own_device_id(transaction)?;
-    let mut room = limit;
-    loop {
-        let row = transaction
-            .prepare_cached(
-                "SELECT journal_id, target_bitmap, payload_json, created_at_ms
-                 FROM cloud_journal WHERE operation_kind = 'root.trash'
-                 ORDER BY journal_id LIMIT 1",
-            )?
-            .query_row([], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, Option<Vec<u8>>>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                ))
-            })
-            .optional()?;
-        let Some((journal_id, targets, payload, created_at_ms)) = row else {
-            return Ok(false);
-        };
-        if room == 0 {
-            return Ok(true);
-        }
-        let payload: serde_json::Value = serde_json::from_str(&payload)?;
-        let state = match payload["lifecycle"].as_u64() {
-            Some(key) if key == u64::from(Lifecycle::Trash.bitmap_key()) => EntryState::Trash,
-            Some(key) if key == u64::from(Lifecycle::Inbox.bitmap_key()) => EntryState::Inbox,
-            _ => EntryState::Active,
-        };
-        let at_ms = payload["at_ms"].as_i64().unwrap_or(created_at_ms);
-        let logical = payload["logical"].as_i64().unwrap_or(0);
-        let mut roots = targets
-            .map(|bytes| RoaringBitmap::deserialize_from(&mut std::io::Cursor::new(bytes)))
-            .transpose()?
-            .unwrap_or_default();
-        let taken = roots.iter().take(room).collect::<Vec<_>>();
-        room -= taken.len();
-        transaction.execute(
-            "INSERT INTO shared_entry
-                 (kind, key, state, value, clock_ms, clock_counter, device_id)
-             SELECT 'status', item.stable_key, ?2, NULL, ?3, ?4, ?5
-             FROM json_each(?1) ids
-             CROSS JOIN library_item item ON item.local_id = ids.value
-             JOIN library_root root ON root.root_id = item.local_id
-             WHERE true
-             ON CONFLICT(kind, key) DO UPDATE SET
-                 state = excluded.state,
-                 value = excluded.value,
-                 clock_ms = excluded.clock_ms,
-                 clock_counter = excluded.clock_counter,
-                 device_id = excluded.device_id
-             WHERE (excluded.clock_ms, excluded.clock_counter, excluded.device_id)
-                 > (shared_entry.clock_ms, shared_entry.clock_counter,
-                    shared_entry.device_id)",
-            rusqlite::params![
-                serde_json::to_string(&taken)?,
-                state.as_str(),
-                at_ms,
-                logical,
-                device_id
-            ],
-        )?;
-        for root in &taken {
-            roots.remove(*root);
-        }
-        if roots.is_empty() {
-            transaction.execute("DELETE FROM cloud_journal WHERE journal_id = ?1", [journal_id])?;
-        } else {
-            transaction.execute(
-                "UPDATE cloud_journal SET target_bitmap = ?2 WHERE journal_id = ?1",
-                rusqlite::params![journal_id, crate::bitmap::encode(&roots)?],
-            )?;
-        }
-    }
-}
-
 impl Library {
-    /// Writes the `status` entries of the moves into and out of the Trash
-    /// that this device made since the last call, for at most `limit` roots
-    /// ([`settle_trash_moves_in`]). Returns whether moves are left.
-    pub fn settle_trash_moves(&self, limit: usize) -> Result<bool> {
+    /// Writes the entries of the changes that this device made since the
+    /// last call and that wait in the journal, for at most `limit` roots
+    /// ([`settle_journal_in`]). Returns whether changes are left.
+    pub fn settle_journal(&self, limit: usize) -> Result<bool> {
         self.database
             .maintenance_write(WorkPriority::Cloud, |transaction| {
-                settle_trash_moves_in(transaction, limit)
+                settle_journal_in(transaction, limit)
             })
     }
 
@@ -863,13 +824,16 @@ impl Library {
         })
     }
 
-    /// Fills in the record of every `add` entry of the kind `item` among
-    /// `entries` whose item or collection the library holds, from the item
-    /// as the library holds it now. The entries are entries of this device
-    /// as [`Self::visit_own_entries`] returns them.
-    pub fn attach_records(&self, entries: &mut [SharedEntry]) -> Result<()> {
+    /// Fills in what the entries among `entries` carry and the library does
+    /// not store with them, from the library as it is now: the record of
+    /// every `add` entry of the kind `item` whose item or collection the
+    /// library holds, and the values of the entries for the fields of an
+    /// item ([`attach_field_values`]). The entries are entries of this
+    /// device as [`Self::visit_own_entries`] returns them.
+    pub fn attach_values(&self, entries: &mut [SharedEntry]) -> Result<()> {
         let snapshot = self.projections.snapshot();
         self.database.read(WorkPriority::Cloud, |connection| {
+            attach_field_values(connection, &snapshot, entries)?;
             let added = entries
                 .iter()
                 .enumerate()
@@ -931,7 +895,8 @@ impl Library {
     /// Calls `visit` with every entry that this device made, in the order of
     /// the kinds and keys. With `later_than`, only with the entries whose
     /// clock time is later than that time. An `add` entry of an item comes
-    /// without the item's record ([`Self::attach_records`]).
+    /// without the item's record, and an entry for a field of an item
+    /// without its value ([`Self::attach_values`]).
     pub fn visit_own_entries(
         &self,
         later_than: Option<(i64, i64)>,
@@ -1024,14 +989,26 @@ impl Library {
     ///   `delete` entry is deleted once every folder below it has one too.
     ///   The items in a deleted folder stay in the library.
     ///
-    /// The moves into and out of the Trash that this device made and has not
-    /// turned into entries yet are settled first, so that an earlier entry
-    /// of another device does not win over them.
+    /// - `name`, `notes`, `urls`, `rating`, `item_tag`, `folder_item`: the
+    ///   item gets the value, the tag or the folder, or loses the tag or the
+    ///   folder ([`apply_field_entries`]). An entry for an item that this
+    ///   library does not hold is stored with its value, and the import of
+    ///   the item reads it.
+    ///
+    /// The changes that this device made and has not turned into entries
+    /// yet are settled first, so that an earlier entry of another device
+    /// does not win over them.
     pub fn apply_shared_entries(
         &self,
         device_id: &str,
         entries: &[SharedEntry],
     ) -> Result<AppliedEntries> {
+        // A folder that an entry puts an item into and that the library
+        // does not hold is created first, with the name that the entry
+        // carries. A folder that was deleted is not created again.
+        for folder in named_folders(entries) {
+            self.shared_folder(&folder)?;
+        }
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let protected = self.history.protected_cleanup_files();
@@ -1039,7 +1016,7 @@ impl Library {
             WorkPriority::Cloud,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
-                settle_trash_moves_in(transaction, usize::MAX)?;
+                settle_journal_in(transaction, usize::MAX)?;
                 let held = held_entries(transaction, entries)?;
                 let mut winners = entries
                     .iter()
@@ -1068,12 +1045,15 @@ impl Library {
                         .collect::<Vec<_>>()
                 };
 
-                // The roots of this library that the item and status
-                // entries name.
+                // The roots of this library that the entries about items
+                // name.
                 let root_keys = winners
                     .iter()
-                    .filter(|entry| matches!(entry.kind, EntryKind::Item | EntryKind::Status))
-                    .map(|entry| entry.key.as_str())
+                    .filter(|entry| {
+                        matches!(entry.kind, EntryKind::Item | EntryKind::Status)
+                            || is_field(entry.kind)
+                    })
+                    .map(|entry| item_key(entry))
                     .collect::<BTreeSet<_>>();
                 let roots = local_roots(transaction, &root_keys)?;
                 // The keys under which this library holds an item with
@@ -1154,12 +1134,7 @@ impl Library {
                         })
                         .filter_map(|entry| roots.get(entry.key.as_str()).map(|(root, _, _)| *root))
                         .collect::<RoaringBitmap>();
-                    if destination == Lifecycle::Trash {
-                        moved -= next.lifecycle(Lifecycle::Trash);
-                    } else {
-                        // A restore moves only an item that is in the Trash.
-                        moved &= next.lifecycle(Lifecycle::Trash);
-                    }
+                    moved -= next.lifecycle(destination);
                     if moved.is_empty() {
                         continue;
                     }
@@ -1264,7 +1239,7 @@ impl Library {
                 // The winning entries are stored before the folders are
                 // looked at, because a folder is deleted by the entries that
                 // the library holds and not by this call's entries alone.
-                store_entries(transaction, device_id, &winners)?;
+                store_entries(transaction, device_id, &winners, &roots)?;
                 record_entries(transaction, EntryKind::Item, EntryState::Add, &added_again)?;
                 if !deleted_items.is_empty() {
                     // A status entry of an item that these entries delete
@@ -1346,8 +1321,26 @@ impl Library {
                     }
                 }
 
+                // The fields of the items that the library holds. The
+                // deletions above have removed the roots that they deleted.
+                let held_roots = roots
+                    .iter()
+                    .filter(|(_, (root, _, _))| !deleted.contains(*root))
+                    .map(|(key, (root, _, _))| (*key, *root))
+                    .collect::<HashMap<_, _>>();
+                applied.edited = apply_field_entries(
+                    transaction,
+                    revision,
+                    &mut next,
+                    &winners,
+                    &held_roots,
+                    &mut affected,
+                    &mut resources,
+                )?;
+
                 applied.won = (winners.len() + added_again.len()) as u64;
-                if applied.trashed
+                if applied.edited
+                    + applied.trashed
                     + applied.restored
                     + applied.deleted
                     + applied.tags
@@ -1566,9 +1559,38 @@ impl Library {
                 "a shared item needs a path for each of its files".into(),
             ));
         }
+        // The entries that were merged before the item was here change
+        // what the record gives it.
+        let held = self
+            .database
+            .read(WorkPriority::CanonicalIngest, |connection| {
+                held_fields(connection, &import.key)
+            })?;
+        let mut record = record.clone();
+        if let Some(name) = held.name {
+            record.name = name;
+        }
+        if let Some(notes) = held.notes {
+            record.notes = notes;
+        }
+        if let Some(urls) = held.urls {
+            record.urls = urls;
+        }
+        if let Some(rating) = held.rating {
+            record.rating = rating;
+        }
+        for (named, added) in [(&mut record.tags, held.tags), (&mut record.folders, held.folders)] {
+            for other in added {
+                if !named.iter().any(|held| held.key == other.key) {
+                    named.push(other);
+                }
+            }
+            named.retain(|other| !held.without.contains(&other.key));
+        }
+        let record = &record;
         let mut folders = Vec::with_capacity(record.folders.len());
         for folder in &record.folders {
-            folders.push(self.shared_folder(folder)?);
+            folders.extend(self.shared_folder(folder)?);
         }
         let tags = self.database.read(WorkPriority::CanonicalIngest, |connection| {
             use rusqlite::OptionalExtension;
@@ -1637,28 +1659,39 @@ impl Library {
 
     /// Returns the folder of this library with the stable key of `folder`,
     /// and creates it at the top level with the name of `folder` when the
-    /// library does not hold it.
-    fn shared_folder(&self, folder: &SharedName) -> Result<FolderId> {
+    /// library does not hold it. A folder for whose key the library holds a
+    /// `delete` entry was deleted: it is not created again, and `None` is
+    /// returned.
+    fn shared_folder(&self, folder: &SharedName) -> Result<Option<FolderId>> {
         let held = |library: &Self| {
             library.database.read(WorkPriority::CanonicalIngest, |connection| {
                 use rusqlite::OptionalExtension;
-                Ok(connection
+                let folder_id = connection
                     .prepare_cached("SELECT folder_id FROM folder_definition WHERE stable_key = ?1")?
                     .query_row([&folder.key], |row| row.get::<_, u32>(0))
                     .optional()?
-                    .map(FolderId))
+                    .map(FolderId);
+                let deleted = connection
+                    .prepare_cached(
+                        "SELECT EXISTS(SELECT 1 FROM shared_entry
+                         WHERE kind = 'folder' AND key = ?1 AND state = 'delete')",
+                    )?
+                    .query_row([&folder.key], |row| row.get::<_, bool>(0))?;
+                Ok((folder_id, deleted))
             })
         };
-        if let Some(folder_id) = held(self)? {
-            return Ok(folder_id);
+        match held(self)? {
+            (Some(folder_id), _) => return Ok(Some(folder_id)),
+            (None, true) => return Ok(None),
+            (None, false) => {}
         }
         let created = self.history.without_recording(|| {
             self.create_folder_with_stable_key(&folder.name, None, folder.key.clone())
         });
         match created {
-            Ok((folder_id, _)) => Ok(folder_id),
+            Ok((folder_id, _)) => Ok(Some(folder_id)),
             // Another import created the folder meanwhile.
-            Err(error) => held(self)?.ok_or(error),
+            Err(error) => held(self)?.0.map(Some).ok_or(error),
         }
     }
 
@@ -1740,6 +1773,7 @@ fn store_entries(
     transaction: &rusqlite::Transaction<'_>,
     device_id: &str,
     entries: &[&SharedEntry],
+    roots: &HashMap<&str, LocalRoot>,
 ) -> Result<()> {
     if entries.is_empty() {
         return Ok(());
@@ -1754,10 +1788,16 @@ fn store_entries(
                 entry.at_ms,
                 entry.logical,
                 // The record of an added item is not kept: the job in the
-                // ingest queue holds it until the item is imported.
-                entry
-                    .deleted_file()
-                    .map(|file| serde_json::json!({ "file": file }).to_string())
+                // ingest queue holds it until the item is imported. The
+                // value of an entry for a field of an item is kept while the
+                // library does not hold the item, for the import of the item.
+                if is_field(entry.kind) && !roots.contains_key(item_key(entry)) {
+                    entry.value.as_ref().map(|value| value.to_string())
+                } else {
+                    entry
+                        .deleted_file()
+                        .map(|file| serde_json::json!({ "file": file }).to_string())
+                }
             ])
         })
         .collect::<Vec<_>>();
@@ -1930,7 +1970,7 @@ fn queue_shared_items(
 }
 
 /// Returns the ids of the rows of `table` whose stable key is in `keys`.
-fn definition_ids(
+pub(super) fn definition_ids(
     transaction: &rusqlite::Transaction<'_>,
     table: &'static str,
     id_column: &'static str,

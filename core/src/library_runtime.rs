@@ -356,10 +356,10 @@ fn start_checkpoint_worker(
                     let result = tokio::task::spawn_blocking(move || {
                         if projection {
                             library.write_projection_checkpoint()?;
-                            // The moves into and out of the Trash become
+                            // The changes that wait in the journal become
                             // shared entries here as well, so that they are
                             // kept while the library does not sync.
-                            while library.settle_trash_moves(20_000)? {}
+                            while library.settle_journal(20_000)? {}
                             // While the library does not sync, no snapshot
                             // removes the rows of the change journal, so
                             // they are removed here. A row with a clock time

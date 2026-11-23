@@ -41,6 +41,7 @@ mod merge;
 mod library_merge;
 mod undo;
 mod shared;
+mod shared_fields;
 pub(crate) mod tasks;
 use tags::*;
 use folders::*;
@@ -55,6 +56,7 @@ pub use shared::{
     remove_item_tombstones, reset_published_entries,
 };
 use shared::*;
+use shared_fields::*;
 use undo::*;
 
 struct PublishedDelta {
@@ -1891,7 +1893,16 @@ impl Library {
         let (output, _, ()) = self.database.published_write(
             priority,
             |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| operation(transaction, revision, snapshot),
+            |transaction, _, revision, snapshot| {
+                let (output, delta) = operation(transaction, revision, snapshot)?;
+                // The history entry holds exactly what the write changed.
+                // The other devices of the library get the changes to items
+                // among it.
+                if let Some(history) = &delta.history {
+                    journal_shared_changes(transaction, revision, &history.change, true)?;
+                }
+                Ok((output, delta))
+            },
             |_, delta| {
                 // The cleanup of files waits for this writer. So the files
                 // that the history entry keeps are registered as protected
@@ -1963,10 +1974,12 @@ fn move_to_partition(
 /// and which it took out of it, by comparing the Trash of `before` with the
 /// Trash of `after`. One row of the kind `root.trash` is written for the
 /// roots that entered the Trash, and one for each lifecycle that restored
-/// roots now have. Each row holds the time of the library's hybrid logical
-/// clock at the change. Cloud sync turns the rows into the `status` entries
-/// that the devices share (`shared.rs`). A change that moved nothing into or
-/// out of the Trash writes no row and does not advance the clock.
+/// roots now have. A library that records items also records the roots that
+/// the change moved between the Inbox and All, in the same rows. Each row
+/// holds the time of the library's hybrid logical clock at the change. Cloud
+/// sync turns the rows into the `status` entries that the devices share
+/// (`shared.rs`). A change that moved none of these roots writes no row and
+/// does not advance the clock.
 fn journal_trash_moves(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
@@ -1983,10 +1996,20 @@ fn journal_trash_moves(
     );
     let entered = now - was;
     let left = was - now;
+    let recording = records_items(transaction)?;
+    // The roots that the change moved into `lifecycle`: all of them in a
+    // library that records items, and otherwise those that left the Trash.
+    let moved_into = |lifecycle: Lifecycle| {
+        if recording {
+            after.lifecycle(lifecycle) - before.lifecycle(lifecycle)
+        } else {
+            &left & after.lifecycle(lifecycle)
+        }
+    };
     let moves = [
         (Lifecycle::Trash, entered),
-        (Lifecycle::Active, &left & after.lifecycle(Lifecycle::Active)),
-        (Lifecycle::Inbox, &left & after.lifecycle(Lifecycle::Inbox)),
+        (Lifecycle::Active, moved_into(Lifecycle::Active)),
+        (Lifecycle::Inbox, moved_into(Lifecycle::Inbox)),
     ];
     if moves.iter().all(|(_, roots)| roots.is_empty()) {
         return Ok(());
