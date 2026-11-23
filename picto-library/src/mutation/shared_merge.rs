@@ -257,17 +257,22 @@ fn store_in(transaction: &rusqlite::Transaction<'_>, entries: &[SharedEntry]) ->
 struct Applied {
     changed: u64,
     deleted: u64,
+    /// Files that the entries delete and that were kept for a later round.
+    kept: Vec<String>,
 }
 
 /// Changes the library to match the entries of the files `hashes`. The top
 /// of this file says what happens to each. `tags_to_check` gets the tags that
-/// lost a picture.
+/// lost a picture. With `keep_held_files`, a picture that the entries delete
+/// is kept and returned in `kept`, because a file of entries that couldn't
+/// be read yet may add it again.
 #[allow(clippy::too_many_arguments)]
 fn apply_files(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
     next: &mut ProjectionSnapshot,
     hashes: &[String],
+    keep_held_files: bool,
     protected: &BTreeSet<crate::FileId>,
     affected: &mut RoaringBitmap,
     resources: &mut BTreeSet<String>,
@@ -278,6 +283,7 @@ fn apply_files(
     let mut wanted = Vec::new();
     let mut not_wanted = Vec::new();
     let mut to_delete = RoaringBitmap::new();
+    let mut kept_files = Vec::new();
     let mut views = BTreeMap::<u32, FileView>::new();
     for hash in hashes {
         let view = view_of(transaction, &mut deleted_definitions, hash)?;
@@ -300,6 +306,7 @@ fn apply_files(
                 not_wanted.push(hash);
                 views.insert(root, view);
             }
+            (None, Some((_, true))) if keep_held_files => kept_files.push(hash.clone()),
             (None, Some((root, true))) => {
                 not_wanted.push(hash);
                 to_delete.insert(root);
@@ -526,7 +533,7 @@ fn apply_files(
         *affected |= &to_delete;
         resources.extend(receipt.resources);
     }
-    Ok(Applied { changed: changed.len(), deleted: to_delete.len() })
+    Ok(Applied { changed: changed.len(), deleted: to_delete.len(), kept: kept_files })
 }
 
 /// Handles a deleted tag from `merge_touched`: every picture that has the tag
@@ -716,6 +723,32 @@ impl Library {
     /// stored, for at most `limit` pictures, in one published write without an
     /// undo step. The caller repeats the call while `more` is set.
     pub fn apply_merged(&self, limit: usize) -> Result<AppliedMerge> {
+        Ok(self.apply_batch(limit, None, false)?.0)
+    }
+
+    /// Changes the library to match all stored entries, a batch of pictures
+    /// per write. With `keep_held_files`, which a sync sets while a file of
+    /// entries couldn't be read, no picture whose file this computer holds is
+    /// deleted; those pictures are checked again by the next merge.
+    pub fn apply_stored(&self, keep_held_files: bool) -> Result<()> {
+        let mut after = None;
+        loop {
+            let (applied, last) = self.apply_batch(BATCH, after, keep_held_files)?;
+            if !applied.more {
+                return Ok(());
+            }
+            after = last;
+        }
+    }
+
+    /// One write of `apply_stored`: the pictures after `after` in
+    /// `merge_touched`, at most `limit`. Returns the last one it looked at.
+    fn apply_batch(
+        &self,
+        limit: usize,
+        after: Option<String>,
+        keep_held_files: bool,
+    ) -> Result<(AppliedMerge, Option<String>)> {
         let waiting: bool = self.database.read(WorkPriority::Cloud, |connection| {
             Ok(connection.query_row(
                 "SELECT EXISTS (SELECT 1 FROM merge_touched)",
@@ -724,12 +757,12 @@ impl Library {
             )?)
         })?;
         if !waiting {
-            return Ok(AppliedMerge::default());
+            return Ok((AppliedMerge::default(), None));
         }
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let protected = self.history.protected_cleanup_files();
-        let ((removed, applied), _, ()) = self.database.published_write(
+        let ((removed, last, applied), _, ()) = self.database.published_write(
             WorkPriority::Cloud,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
@@ -773,27 +806,35 @@ impl Library {
 
                 let hashes = transaction
                     .prepare_cached(
-                        "SELECT subject_key FROM merge_touched WHERE subject_kind = 'file'
+                        "SELECT subject_key FROM merge_touched
+                         WHERE subject_kind = 'file' AND subject_key > ?2
                          ORDER BY subject_key LIMIT ?1",
                     )?
-                    .query_map([limit.min(i64::MAX as usize) as i64], |row| {
-                        row.get::<_, String>(0)
-                    })?
+                    .query_map(
+                        rusqlite::params![
+                            limit.min(i64::MAX as usize) as i64,
+                            after.as_deref().unwrap_or("")
+                        ],
+                        |row| row.get::<_, String>(0),
+                    )?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
+                let last = hashes.last().cloned().or(after.clone());
                 let files = apply_files(
                     transaction,
                     revision,
                     &mut next,
                     &hashes,
+                    keep_held_files,
                     &protected,
                     &mut affected,
                     &mut resources,
                     &mut tags_to_check,
                 )?;
+                let done = hashes.iter().filter(|hash| !files.kept.contains(hash)).collect::<Vec<_>>();
                 transaction.execute(
                     "DELETE FROM merge_touched
                      WHERE subject_kind = 'file' AND subject_key IN (SELECT value FROM json_each(?1))",
-                    [serde_json::to_string(&hashes)?],
+                    [serde_json::to_string(&done)?],
                 )?;
                 remove_emptied_tags(
                     transaction,
@@ -804,8 +845,9 @@ impl Library {
                     &mut resources,
                 )?;
                 let more: bool = transaction.query_row(
-                    "SELECT EXISTS (SELECT 1 FROM merge_touched)",
-                    [],
+                    "SELECT EXISTS (SELECT 1 FROM merge_touched
+                                    WHERE subject_kind <> 'file' OR subject_key > ?1)",
+                    [last.as_deref().unwrap_or("")],
                     |row| row.get(0),
                 )?;
                 let changed_library = !affected.is_empty() || resources.len() > 1;
@@ -829,7 +871,7 @@ impl Library {
                     affected.iter().map(RootId),
                 );
                 Ok((
-                    (removed, AppliedMerge {
+                    (removed, last, AppliedMerge {
                         more,
                         changed: files.changed,
                         deleted: files.deleted,
@@ -848,7 +890,7 @@ impl Library {
         if removed {
             self.history.clear();
         }
-        Ok(applied)
+        Ok((applied, last))
     }
 
     /// Merges `entries`: stores those that are later than the stored ones and
@@ -856,7 +898,7 @@ impl Library {
     /// how many entries were stored.
     pub fn merge_entries(&self, entries: &[SharedEntry]) -> Result<u64> {
         let stored = self.store_entries(entries)?;
-        while self.apply_merged(BATCH)?.more {}
+        self.apply_stored(false)?;
         Ok(stored)
     }
 

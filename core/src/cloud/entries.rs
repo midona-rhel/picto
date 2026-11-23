@@ -101,7 +101,7 @@ fn directory(library_id: &str) -> String {
 }
 
 /// Returns the two hexadecimal digits of the file that holds `entry`.
-fn shard_of(entry: &SharedEntry) -> String {
+pub(super) fn shard_of(entry: &SharedEntry) -> String {
     let mut hasher = Sha256::new();
     hasher.update(entry.kind.as_str().as_bytes());
     hasher.update(b"\n");
@@ -212,11 +212,13 @@ pub(super) async fn publish_library(
 ) -> Result<(), String> {
     let library = application.library();
     library.start_recording().map_err(|error| error.to_string())?;
+    // The clock is read before the pending changes are settled. A change
+    // made after this point gets a later time, so the next sync writes it.
+    let clock = library.entry_clock().map_err(|error| error.to_string())?;
     while library
         .settle_entries(SETTLE_LIMIT)
         .map_err(|error| error.to_string())?
     {}
-    let clock = library.entry_clock().map_err(|error| error.to_string())?;
     let mut changed = BTreeSet::new();
     library
         .visit_own_entries(clock.published, &mut |entry| {
@@ -239,24 +241,33 @@ pub(super) async fn publish_library(
         .map_err(|error| error.to_string())?;
     let folder = format!("{}/{}", directory(library_id), clock.device_id);
     let existing = provider.list(&folder).await?;
+    let mut skipped = false;
     for (shard, entries) in files {
         let (name, bytes) = encode(library_id, &clock.device_id, &shard, &entries)?;
         let path = format!("{folder}/{name}");
+        let replaced = format!("{folder}/{shard}.");
+        let old = existing
+            .iter()
+            .filter(|object| object.path.starts_with(&replaced) && object.path != path)
+            .collect::<Vec<_>>();
+        // An own file that wasn't merged, for example one that couldn't be
+        // read after a restore, can hold newer entries than the library. It
+        // stays until it has been merged.
+        if old.iter().any(|object| !is_merged(&clock.device_id, &object.path)) {
+            skipped = true;
+            continue;
+        }
         if !provider.exists(&path).await? {
             let checksum = hex::encode(Sha256::digest(&bytes));
             provider.upload(&path, bytes, &checksum).await?;
         }
-        let replaced = format!("{folder}/{shard}.");
-        for object in &existing {
-            if object.path.starts_with(&replaced) && object.path != path {
-                provider.delete(&object.path).await?;
-            }
+        set_merged(&clock.device_id, &path);
+        for object in old {
+            provider.delete(&object.path).await?;
         }
     }
-    // The files that were just written hold what the library holds, so
-    // they do not have to be merged.
-    for object in provider.list(&folder).await? {
-        set_merged(&clock.device_id, &object.path);
+    if skipped {
+        return Ok(());
     }
     library
         .set_entries_published(clock.now)
@@ -347,18 +358,27 @@ pub(super) async fn merge_files(
         .entry_clock()
         .map_err(|error| error.to_string())?
         .device_id;
+    // All readable files are stored before anything is applied, because a
+    // deletion in one file can be undone by an add in another. While a file
+    // can't be read yet, no picture that this computer holds is deleted.
     let mut merged = 0;
+    let mut unread = false;
     for file in files {
         let Some(entries) = read(provider, library_id, file).await? else {
+            unread = true;
             continue;
         };
         application
             .library()
-            .merge_entries(&entries)
+            .store_entries(&entries)
             .map_err(|error| error.to_string())?;
         set_merged(&own_device, &file.path);
         merged += 1;
     }
+    application
+        .library()
+        .apply_stored(unread)
+        .map_err(|error| error.to_string())?;
     Ok(merged)
 }
 

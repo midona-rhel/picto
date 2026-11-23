@@ -311,7 +311,14 @@ async fn purge_expired_cloud_blobs(
                     .map_err(Into::into)
             })
             .map_err(|error| error.to_string())?;
-        if !still_due {
+        // The original stays while the picture exists by the entries, for
+        // example after another computer imported the file again.
+        let exists = application
+            .library()
+            .entry_view(hash)
+            .map_err(|error| error.to_string())?
+            .is_some();
+        if !still_due || exists {
             continue;
         }
         let remote_path = format!(
@@ -1068,6 +1075,77 @@ mod tests {
             )
             .unwrap();
         assert_eq!(purge_after, None);
+    }
+
+    #[tokio::test]
+    async fn an_expired_original_stays_while_its_picture_exists_by_the_entries() {
+        let library_root = tempfile::tempdir().unwrap();
+        let cloud_root = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(library_root.path()).unwrap();
+        let provider = DirectoryProvider::open(cloud_root.path()).unwrap();
+        let hash = "a".repeat(64);
+        let library_id = application
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    connection
+                        .query_row(
+                            "SELECT library_id FROM cloud_state WHERE singleton = 1",
+                            [],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .map_err(Into::into)
+                },
+            )
+            .unwrap();
+        let object_key = format!("{hash}.png");
+        let remote_path = format!(
+            "picto/{library_id}/blobs/f/{}/{}/{}",
+            &hash[..2],
+            &hash[2..4],
+            object_key
+        );
+        let bytes = b"retained cloud original".to_vec();
+        let checksum = hex::encode(Sha256::digest(&bytes));
+        provider
+            .upload(&remote_path, bytes, &checksum)
+            .await
+            .unwrap();
+        application
+            .library()
+            .database()
+            .maintenance_write(
+                picto_library::database::WorkPriority::Cloud,
+                |transaction| {
+                    transaction.execute(
+                        "INSERT INTO cloud_deleted_original (file_name, deleted_at, purge_after)
+                         VALUES (?1, '2026-08-01T00:00:00Z', '2026-08-08T00:00:00Z')",
+                        [&object_key],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        // Another computer added the file again after the deletion.
+        application
+            .library()
+            .merge_entries(&[picto_library::SharedEntry {
+                kind: picto_library::EntryKind::Add,
+                subject_key: hash.clone(),
+                second_key: "ffffffff-0000-4000-8000-000000000001".into(),
+                value: Some(r#"{"name":"again","status":"active"}"#.into()),
+                clock_ms: 5_000_000_000_000,
+                clock_counter: 0,
+                device_id: "ffffffff-0000-4000-8000-000000000001".into(),
+            }])
+            .unwrap();
+        purge_expired_cloud_blobs(&application, &provider, &library_id)
+            .await
+            .unwrap();
+
+        assert!(provider.exists(&remote_path).await.unwrap());
     }
 
     #[tokio::test]

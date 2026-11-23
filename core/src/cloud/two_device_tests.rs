@@ -801,3 +801,91 @@ async fn sync_that_is_enabled_again_starts_from_new_cloud_data() {
     );
     assert!(!entry_files(cloud.path(), &application).is_empty());
 }
+
+/// Makes `path` readable or unreadable, the way a file that the provider's
+/// desktop app lists but hasn't downloaded can't be read.
+#[cfg(unix)]
+fn set_readable(path: &Path, readable: bool) {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = if readable { 0o644 } else { 0o000 };
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// The entry file of `application`'s computer that holds `entry`'s key.
+fn file_holding(cloud: &Path, application: &LibraryApplication, entry: &picto_library::SharedEntry) -> PathBuf {
+    let shard = entries::shard_of(entry);
+    entry_files(cloud, application)
+        .into_iter()
+        .find(|file| file.file_name().unwrap().to_string_lossy().starts_with(&format!("{shard}.")))
+        .unwrap()
+}
+
+/// The first computer deletes a picture and imports it again. While the file
+/// with the new `add` can't be read on the second computer, the deletion
+/// alone must not remove the picture there.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_deletion_waits_while_a_file_of_the_round_cannot_be_read() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, folders) = two_devices(cloud.path()).await;
+    first.set_lifecycle(&target(&first, &[1]), Lifecycle::Trash).unwrap();
+    first.delete_items(&target(&first, &[1]), false).unwrap();
+    import_later(&first, folders[0].path(), 1);
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    let device_id = configuration_library(&first).unwrap().device_id;
+    let add = picto_library::SharedEntry {
+        kind: picto_library::EntryKind::Add,
+        subject_key: hash(&first, 1),
+        second_key: device_id.clone(),
+        value: None,
+        clock_ms: 0,
+        clock_counter: 0,
+        device_id,
+    };
+    let file = file_holding(cloud.path(), &first, &add);
+    set_readable(&file, false);
+    receive_library(&second, &provider).await.unwrap();
+    let kept = status(&second, 1);
+    set_readable(&file, true);
+    assert!(kept.is_some(), "the picture was deleted on the second computer");
+    receive_library(&second, &provider).await.unwrap();
+    assert!(status(&second, 1).is_some());
+}
+
+/// After a restore, a computer's own newer entry file that it couldn't read
+/// stays in the cloud folder instead of being replaced by older entries.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unread_own_file_is_not_replaced() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, _second, provider, _folders) = two_devices(cloud.path()).await;
+    first.library().set_rating(&target(&first, &[2]), picto_library::Rating::Four).unwrap();
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    let device_id = configuration_library(&first).unwrap().device_id;
+    let rating = picto_library::SharedEntry {
+        kind: picto_library::EntryKind::Rating,
+        subject_key: hash(&first, 2),
+        second_key: String::new(),
+        value: None,
+        clock_ms: 0,
+        clock_counter: 0,
+        device_id,
+    };
+    let file = file_holding(cloud.path(), &first, &rating);
+    // The database goes back to an older state, as after a restore.
+    write(
+        &first,
+        "UPDATE shared_entry SET value = '1', clock_ms = clock_ms - 1000 WHERE kind = 'rating'",
+        &[],
+    );
+    write(&first, "DELETE FROM cloud_device_frontier", &[]);
+    entries::forget_merged();
+    set_readable(&file, false);
+    let result = snapshot::publish_library(&first, &provider).await;
+    let kept = file.exists();
+    if kept {
+        set_readable(&file, true);
+    }
+    result.unwrap();
+    assert!(kept, "the newer own entry file was removed");
+}
