@@ -186,6 +186,7 @@ impl Device {
         self.library
             .visit_own_entries(None, &mut |entry| entries.push(entry))
             .unwrap();
+        self.library.attach_records(&mut entries).unwrap();
         // The entries cross between the devices as JSON.
         serde_json::from_str(&serde_json::to_string(&entries).unwrap()).unwrap()
     }

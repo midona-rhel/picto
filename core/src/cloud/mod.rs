@@ -188,7 +188,7 @@ pub fn configuration_library(
 
 /// The error of [`configure_library`] for a copy of a library that has
 /// never synced and a cloud folder that already holds the same library.
-pub const CLOUD_HOLDS_LIBRARY: &str = "This cloud folder already holds this library from     another computer, and this copy has never synced with it. Open the library on this     computer with Open from Cloud…. To bring in what only this copy holds, merge this     copy into the opened library with Merge Library….";
+pub const CLOUD_HOLDS_LIBRARY: &str = "This cloud folder already holds this library from     another computer, and this copy has never synced with it. Open the library on this     computer with Open from Cloud…. To bring in what only this copy holds, merge this     copy into the opened library with Merge Libraries….";
 
 /// Connects the library to the cloud folder `input.root_path` of a provider.
 ///

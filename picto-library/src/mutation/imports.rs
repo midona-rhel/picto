@@ -71,8 +71,8 @@ impl Library {
     /// Imports `inputs` in one publication. `held` says, for the input at an
     /// index, what an item gets that the library already holds.
     ///
-    /// A library that records items writes an `add` entry with the record of
-    /// every item that the import creates. The inputs of
+    /// A library that records items writes an `add` entry for every item
+    /// that the import creates. The inputs of
     /// [`ingest::Held::Shared`] are items that another device imported. No
     /// entry is recorded for them, and each gets the status of the `status`
     /// entry that the library holds for its key.
@@ -148,15 +148,7 @@ impl Library {
                     }
                 }
                 if output.created_root && !shared {
-                    // The tag bitmaps that the import of a new item changed
-                    // are the item's tags.
-                    let tags = output
-                        .bitmap_keys
-                        .iter()
-                        .filter(|key| key.domain == BitmapDomain::Tag)
-                        .map(|key| crate::TagId(key.key_id))
-                        .collect::<BTreeSet<_>>();
-                    created.push((output.root_id, Some(tags.into_iter().collect())));
+                    created.push(input.stable_key.clone());
                 }
                 resources.extend(output.resources);
                 bitmap_keys.extend(output.bitmap_keys);
@@ -199,7 +191,7 @@ impl Library {
                     .max()
                     .unwrap_or_else(now_ms),
             )?;
-            record_imported_roots(transaction, &next, &created)?;
+            record_imported_items(transaction, &created)?;
             let receipt = PublicationCoordinator::receipt(
                 revision,
                 resources,
@@ -274,8 +266,7 @@ impl Library {
     /// collection that the import creates gets that key, and a collection
     /// that the library already holds for the files gets it as an alias. The
     /// files get what [`ingest::Held::Shared`] names. Without `shared`, a
-    /// library that records items writes an `add` entry with the record of
-    /// the collection.
+    /// library that records items writes an `add` entry for the collection.
     pub(super) fn ingest_collection_with(
         &self,
         input: &PreparedCollectionImport,
@@ -546,7 +537,12 @@ impl Library {
                 resources.insert("tasks".to_owned());
             }
             if shared.is_none() && (!created_root_ids.is_empty() || creates_collection) {
-                record_imported_roots(transaction, &next, &[(published_root, None)])?;
+                let key = transaction.query_row(
+                    "SELECT stable_key FROM library_item WHERE local_id = ?1",
+                    [published_root.0],
+                    |row| row.get::<_, String>(0),
+                )?;
+                record_imported_items(transaction, &[key])?;
             }
             resources.extend(["tags".to_owned(), "folders".to_owned()]);
             let receipt = PublicationCoordinator::receipt(

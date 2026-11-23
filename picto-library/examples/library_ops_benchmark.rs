@@ -1,14 +1,18 @@
-//! Cost of library operations on a large synthetic library.
+//! This example measures the cost of library operations on a large synthetic
+//! library.
 //!
 //! `cargo run --release -p picto_library --example library_ops_benchmark -- [roots] [runs] [smart_folders]`
-//! (defaults: 1,000,000 roots, 5 runs, 100 smart folders; up to 1,000 smart folders).
-//! Prints `ROW|operation|size|median ms|p95 ms|samples`. Local measurement only:
-//! never commit its output.
+//! The defaults are 1,000,000 roots, 5 runs and 100 smart folders, and at most
+//! 1,000 smart folders are allowed. It prints `ROW|operation|size|median
+//! ms|p95 ms|samples`. The output is a local measurement and must never be
+//! committed.
 //! Add `--membership-only` after the numeric arguments to stop after the focused membership rows.
 //! Add `--subscriptions-only` for the catalog SQL with 10 then 100 runs of
 //! growing retained outcomes (unique and successful redownloads), and tags on 20% of roots.
 //! Use `--delete-only` for bounded permanent-delete and undo rows.
 //! Add `--tag-pages-only` to measure paging/search with 200k tag definitions after ingest.
+//! Use `--sync-only` to import `roots` items with cloud sync off and on, and to merge and
+//! import the entries of the second import in another library.
 use std::time::Instant;
 
 use picto_library::predicate::{
@@ -28,20 +32,25 @@ const BASE_MS: u64 = 1_700_000_000_000;
 
 #[path = "library_ops_benchmark/subscriptions.rs"]
 mod subscriptions;
+#[path = "library_ops_benchmark/sync.rs"]
+mod sync;
 
 fn main() -> R<()> {
     let roots = arg(1, 1_000_000);
     let runs = arg(2, 5);
-    // Leave room for the folders the smart-folder benches create.
+    // Room is left for the folders that the smart-folder benchmarks create.
     let smart_total = arg(3, 100).clamp(10, picto_library::smart::MAX_SMART_FOLDERS - 20);
     let at = |n: usize| n * roots / 1_000_000;
+    if std::env::args().any(|arg| arg == "--sync-only") {
+        return sync::run(roots);
+    }
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("audit.sqlite");
     let mut library = Library::create(&path)?;
     let fixture_started = Instant::now();
     let subscriptions_only = std::env::args().any(|arg| arg == "--subscriptions-only");
 
-    // --- fixture: ingest ---
+    // The items of the test library are imported.
     let t = Instant::now();
     let mut ids: Vec<RootId> = Vec::with_capacity(roots);
     for start in (0..roots).step_by(picto_library::ingest::MAX_INGEST_BATCH) {
@@ -63,7 +72,8 @@ fn main() -> R<()> {
         return subscriptions::run(library, roots, runs);
     }
 
-    // --- fixture: settle FTS so name text filters see every root ---
+    // The full-text search index is brought up to date, so that name text
+    // filters see every root.
     let t = Instant::now();
     while library.settle_fts(20_000)?.is_some() {}
     println!("FIXTURE settle_fts_s={:.1}", t.elapsed().as_secs_f64());
@@ -117,7 +127,10 @@ fn main() -> R<()> {
     assert_eq!(library.query_statistics().order_builds, before.order_builds);
     library.set_lifecycle(&target, Lifecycle::Active)?;
     if std::env::args().any(|arg| arg == "--membership-only") {
-        // Populate only the closed synthetic fixture, then rebuild its projection normally.
+        // The library is closed, and every item of the test library is written
+        // directly into the table of recently viewed items. The library is
+        // then opened again, so it builds its projections from that table as
+        // it normally does.
         drop(library);
         let connection = rusqlite::Connection::open(&path)?;
         connection.execute(
@@ -137,7 +150,8 @@ fn main() -> R<()> {
         return Ok(());
     }
 
-    // --- fixture: folders ---
+    // The folders of the test library are created: 300 folders of random size
+    // and one folder with 200,000 items.
     let t = Instant::now();
     let mut rng = 0x5049_4354_4f5fu64;
     let mut memberships = 0usize;
@@ -156,7 +170,8 @@ fn main() -> R<()> {
         t.elapsed().as_secs_f64()
     );
 
-    // --- fixture: smart folders, every rule kind, every tenth nested ---
+    // The smart folders of the test library are created. They use every kind
+    // of rule, and every tenth smart folder is nested.
     let t = Instant::now();
     let snap = library.projections().snapshot();
     let vocab_ids: Vec<_> = (0..61)
@@ -188,7 +203,7 @@ fn main() -> R<()> {
     }
     println!("FIXTURE smart_folders={smart_total} s={:.1}", t.elapsed().as_secs_f64());
 
-    // --- fixture: collections of 10 ---
+    // The test library gets 20 collections of 10 items each.
     let t = Instant::now();
     let collections = 20;
     for c in 0..collections {
@@ -200,7 +215,7 @@ fn main() -> R<()> {
     println!("FIXTURE total_s={:.1}", fixture_started.elapsed().as_secs_f64());
     print_memory(&library, "after_fixture");
 
-    // --- selections ---
+    // The selections that the benchmarks below use are defined here.
     let range_query = |scope: ItemScope, lo: usize, n: usize| SelectionTarget::Query {
         query: RootQuery {
             scope,
@@ -222,14 +237,15 @@ fn main() -> R<()> {
     );
     let one = explicit(&ids[at(500_000)..at(500_000) + 1]);
 
-    // --- mutations ---
+    // The benchmarks below measure changes to the library.
     let mut k = 0usize;
     bench("apply_tags add 200k", "200000", runs, || {
         k += 1;
         library.apply_tags(&sel_200k, &[format!("audit:a{k}")], true)?;
         Ok(())
     }, Some(|| Ok(())))?;
-    // remove the tags just added, timed separately
+    // The tags that were just added are removed again, and the removal is
+    // timed separately.
     let mut kr = 0usize;
     bench("apply_tags remove 200k", "200000", runs, || {
         kr += 1;
@@ -266,7 +282,8 @@ fn main() -> R<()> {
     emit("set_lifecycle Trash 200k", "200000", &mut trash_ms);
     emit("set_lifecycle restore Trash->Active 200k", "200000", &mut restore_ms);
 
-    // folder (200k members) operations; root 600_000 is outside it
+    // The benchmarks below add an item to and remove it from the folder with
+    // 200,000 items. The root at position 600,000 is not in that folder.
     let outsider = explicit(&ids[at(600_000)..at(600_000) + 1]);
     bench("add_to_folder 1 -> 200k folder", "1", runs * 2, || {
         library.add_to_folder(&outsider, big_folder)?;
@@ -277,7 +294,8 @@ fn main() -> R<()> {
         Ok(())
     }, Some(|| { library.add_to_folder(&outsider, big_folder)?; Ok(()) }))?;
     library.remove_from_folder(&outsider, big_folder)?;
-    // move one item inside a loaded 1,500-item window (send the window with one item moved)
+    // This moves one item inside a loaded window of 1,500 items. The request
+    // sends the whole window with the one item in its new place.
     let order = library.projections().snapshot().folder_orders[&big_folder].clone();
     let window: Vec<RootId> = order[1_000..2_500].to_vec();
     let mut flip = false;
@@ -328,7 +346,8 @@ fn main() -> R<()> {
         last_collection = Some(cid);
         Ok(())
     }, None::<fn() -> R<()>>)?;
-    // ungroup the collections just created (each sample a fresh one)
+    // This ungroups collections that were just created. Each sample ungroups a
+    // collection that was not ungrouped before.
     let mut fresh = Vec::new();
     for c in 0..runs {
         let start = at(960_000) + c * 10;
@@ -341,7 +360,7 @@ fn main() -> R<()> {
     }, None::<fn() -> R<()>>)?;
     let _ = last_collection;
 
-    // undo / redo of a 200k tag op
+    // This measures undo and redo of a tag change on 200,000 roots.
     let mut undo_ms = Vec::new();
     let mut redo_ms = Vec::new();
     for i in 0..runs {
@@ -378,7 +397,7 @@ fn main() -> R<()> {
     emit("permanently_delete 1k (from Trash)", "1000", &mut del_ms);
     while library.settle_fts(20_000)?.is_some() {}
 
-    // --- reads ---
+    // The benchmarks below measure reads.
     bench("sidebar_counts", "-", runs * 4, || { library.sidebar_counts()?; Ok(()) }, None::<fn() -> R<()>>)?;
     bench("counts", "-", runs * 4, || { library.counts()?; Ok(()) }, None::<fn() -> R<()>>)?;
     let tag_count = library.tags()?.len();
@@ -405,11 +424,13 @@ fn main() -> R<()> {
     for (label, query) in &windows {
         let first = library.query_window(query, &WindowRequest::at(0, 500))?;
         let total = first.page.total as usize;
-        // warm: same revision, cache hit
+        // The library has not changed since the first query, so this query is
+        // answered from the cache.
         bench(&format!("window first 500 warm: {label}"), &total.to_string(), runs * 4, || {
             library.query_window(query, &WindowRequest::at(0, 500))?; Ok(())
         }, None::<fn() -> R<()>>)?;
-        // after an unrelated 1-root tag edit (new revision)
+        // Before each sample, a tag is changed on one unrelated root, which
+        // makes a new revision of the library.
         let mut b = false;
         bench(&format!("window first 500 after 1-root edit: {label}"), &total.to_string(), runs * 2, || {
             library.query_window(query, &WindowRequest::at(0, 500))?; Ok(())
@@ -421,8 +442,9 @@ fn main() -> R<()> {
         bench(&format!("window jump middle 1500 warm: {label}"), &total.to_string(), runs * 4, || {
             library.query_window(query, &WindowRequest::at(total / 2, 1_500))?; Ok(())
         }, None::<fn() -> R<()>>)?;
-        // Back to the bottom of a view: the request the grid sends when it
-        // restores a saved scroll fraction of 1.0, after an unrelated edit.
+        // This measures a return to the bottom of a view after an unrelated
+        // edit. It is the request that the grid sends when it restores a saved
+        // scroll fraction of 1.0.
         let bottom = WindowRequest { position: WindowPosition::Fraction(1.0), limit: 1_500 };
         let landed = library.query_window(query, &bottom)?;
         let end = landed.start + landed.page.items.len();
@@ -434,7 +456,8 @@ fn main() -> R<()> {
             library.query_window(query, &bottom)?; Ok(())
         }, Some(|| { b3 = !b3; library.apply_tags(&bump, &["audit:bump".into()], b3)?; Ok(()) }))?;
     }
-    // --- search and filters: every run uses a fresh query, so no cache helps ---
+    // The benchmarks below measure search and filters. Every run uses a new
+    // query, so no cache can answer it.
     let all = |filter: FilterExpr| RootQuery { scope: ItemScope::All, view: ViewQuerySpec { filter, sort: ItemSort::default() } };
     let text = |q: String| FilterExpr::Clause(FilterClause::Text { field: TextField::Global, query: q });
     let clause = FilterExpr::Clause;
@@ -471,7 +494,8 @@ fn main() -> R<()> {
         clause(FilterClause::Width { minimum: Some(800 + i as u64), maximum: None }),
         text(format!("image-0{}", i % 10)),
     ])))?;
-    // What typing feels like: each keystroke of a growing query, end to end.
+    // This measures typing in the search field: one query for each keystroke
+    // of a growing word, and the total time for the whole word.
     let mut typed = Vec::new();
     for word in ["image-000", "scene 12", "example.test/post/77"] {
         let t = Instant::now();
@@ -498,7 +522,8 @@ fn main() -> R<()> {
     emit("trash select-all of a search (rating 5 + text)", "-", &mut trash);
     emit("restore all of Trash", "-", &mut back);
     bench("selection summary of a search select-all", "-", runs, || { library.selection_summary(&found)?; Ok(()) }, None::<fn() -> R<()>>)?;
-    // Shift-click range selection across 50k items of the main view.
+    // This measures a shift-click range selection across 50,000 items of the
+    // main view.
     let first_page = library.query_window(&all(FilterExpr::All(Vec::new())), &WindowRequest::at(at(100_000), 1))?;
     let far_page = library.query_window(&all(FilterExpr::All(Vec::new())), &WindowRequest::at(at(150_000), 1))?;
     let span = |positions: bool| RangeSpan {
@@ -515,7 +540,8 @@ fn main() -> R<()> {
     };
     let range = range_with(false);
     bench("selection summary of a 50k shift-click range", "50000", runs, || { library.selection_summary(&range)?; Ok(()) }, None::<fn() -> R<()>>)?;
-    // The first range after an edit, by ids only and with the grid's positions.
+    // This measures the first range selection after an edit, once with root
+    // ids only and once with the grid's positions.
     let positioned = range_with(true);
     let touch = SelectionTarget::Explicit { root_ids: vec![first_page.page.items[0].root_id] };
     for (label, target) in [("first 50k range after an edit (ids only)", &range), ("first 50k range after an edit (grid positions)", &positioned)] {
@@ -529,7 +555,8 @@ fn main() -> R<()> {
         }
         emit(label, "50000", &mut samples);
     }
-    // Typing into the tag picker: one tag search per keystroke.
+    // This measures typing into the tag picker, which runs one tag search for
+    // each keystroke.
     let mut picked = Vec::new();
     for word in ["vocab:12", "vocab:4"] {
         let t = Instant::now();
@@ -547,8 +574,8 @@ fn main() -> R<()> {
         Ok(())
     }, None::<fn() -> R<()>>)?;
 
-    // The first window after an import: new roots change the date index the
-    // default sort reads.
+    // This measures the first window after an import. The new roots change the
+    // date index that the default sort reads.
     let mut import_index = roots + 1_000_000;
     let newest = RootQuery { scope: ItemScope::All, view: ViewQuerySpec::default() };
     bench("window first 500 after a 48-item import: All imported desc", "-", runs * 2, || {
@@ -562,7 +589,8 @@ fn main() -> R<()> {
 
     print_memory(&library, "before_reopen");
 
-    // --- close / reopen ---
+    // The benchmarks below write the projection checkpoint, close the library
+    // and open it again.
     let t = Instant::now();
     let checkpoint_bytes = library.write_projection_checkpoint()?;
     println!("ROW|write_projection_checkpoint|-|{:.1}|-|1 run; {checkpoint_bytes} bytes", ms(t));

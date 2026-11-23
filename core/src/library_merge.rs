@@ -552,9 +552,9 @@ fn job(
     })
 }
 
-/// Keeps the promise that a merge either brings everything or changes
-/// nothing, and removes the backup when it is no longer needed. The ingest
-/// worker calls this before it undoes the tasks that are marked for undo.
+/// Makes sure that a merge either imports every item or changes nothing, and
+/// removes the backup when it is no longer needed. The ingest worker calls
+/// this before it undoes the tasks that are marked for undo.
 ///
 /// - A merge with a file that could not be imported is marked for undo with
 ///   that file's error, whether it is still running or has just finished.

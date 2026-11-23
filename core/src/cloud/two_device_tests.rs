@@ -954,6 +954,90 @@ async fn an_item_imported_on_one_device_appears_on_the_other_with_its_file() {
 }
 
 #[tokio::test]
+async fn a_collection_imported_on_one_device_appears_on_the_other_with_its_files() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, folders) = two_devices(cloud.path()).await;
+    // The first device imports a post of three files as one collection.
+    let members = [5, 6, 7]
+        .map(|index| {
+            let job = super::tests::image_job(folders[0].path(), index);
+            let picto_library::PreparedIngestPayload::Item(mut import) = job.payload else {
+                unreachable!("an image job holds one item");
+            };
+            import.imported_at_ms = chrono::Utc::now().timestamp_millis() + 60_000;
+            import
+        })
+        .to_vec();
+    first
+        .library()
+        .enqueue_ingest_job(
+            &picto_library::PreparedIngestJob {
+                job_key: "manual:post".into(),
+                source_kind: "manual".into(),
+                source_path: members[0].file_path.clone(),
+                source_item_id: None,
+                delete_after_ingest: false,
+                payload: picto_library::PreparedIngestPayload::Collection(
+                    picto_library::PreparedCollectionImport {
+                        members,
+                        cover_index: 2,
+                        existing_root_id: None,
+                        name: Some("Post".into()),
+                        modified_at_ms: chrono::Utc::now().timestamp_millis(),
+                    },
+                ),
+            },
+            "2026-08-29T12:00:00Z",
+        )
+        .unwrap();
+    let report = crate::library_ingest_runtime::run_batch(&first, 64).unwrap();
+    assert_eq!(report.ingested, 1);
+    let collection = first.details(report.root_ids[0]).unwrap();
+    assert_eq!(collection.media.len(), 3);
+    snapshot::publish_library(&first, &provider).await.unwrap();
+
+    assert_eq!(receive_and_import(&second, &provider).await, 1);
+    let key = collection.root.stable_key.clone();
+    let root = text(
+        &second,
+        &format!(
+            "SELECT CAST(root.root_id AS TEXT) FROM library_root root
+             JOIN library_item item ON item.local_id = root.root_id
+             WHERE item.stable_key = '{key}'"
+        ),
+    )
+    .unwrap();
+    let arrived = second
+        .details(RootId(root.parse().unwrap()))
+        .unwrap();
+    assert_eq!(arrived.root.name, "Post");
+    let files = |details: &picto_library::RootDetails| {
+        details
+            .media
+            .iter()
+            .map(|media| (media.media_name.clone(), media.facts.content_hash.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(files(&arrived), files(&collection));
+    let cover = |details: &picto_library::RootDetails| {
+        details
+            .media
+            .iter()
+            .position(|media| media.media_id == details.root.cover_media_id)
+    };
+    assert_eq!(cover(&arrived), Some(2));
+    for media in &arrived.media {
+        let original = second
+            .blobs()
+            .original_path_with_ext(&media.facts.content_hash, Some("png"))
+            .unwrap();
+        assert!(original.is_file());
+    }
+    assert_eq!(count(&second, "SELECT COUNT(*) FROM library_root"), 4);
+    assert!(!second.library().history().state().can_undo);
+}
+
+#[tokio::test]
 async fn an_item_waits_without_an_error_until_its_original_is_in_the_cloud_folder() {
     let cloud = tempfile::tempdir().unwrap();
     let (first, second, provider, folders) = two_devices(cloud.path()).await;

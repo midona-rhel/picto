@@ -237,7 +237,12 @@ pub(super) async fn publish_library(
         .map_err(|error| error.to_string())?;
     let folder = format!("{}/{}", directory(library_id), clock.device_id);
     let existing = provider.list(&folder).await?;
-    for (shard, entries) in files {
+    for (shard, mut entries) in files {
+        // An entry that adds an item gets the record of the item as the
+        // library holds it now.
+        library
+            .attach_records(&mut entries)
+            .map_err(|error| error.to_string())?;
         let (name, bytes) = encode(library_id, &clock.device_id, &shard, &entries)?;
         let path = format!("{folder}/{name}");
         if !provider.exists(&path).await? {

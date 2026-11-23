@@ -1169,7 +1169,8 @@ pub(super) fn restore_deleted_roots(
         [&items_json],
     )?;
     // The delete's tombstones and queued file removals no longer apply.
-    // The removal of the tombstones is recorded for the other devices.
+    // The removal of the tombstones is recorded for the other devices, which
+    // import the items again from the records that the entries carry.
     remove_item_tombstones(
         transaction,
         &state
@@ -1206,13 +1207,6 @@ pub(super) fn restore_deleted_roots(
     *Arc::make_mut(&mut snapshot.image_media) |= state.image_media.as_ref();
     crate::group::refresh_structural_projections(transaction, snapshot, roots)?;
     snapshot.revision = revision;
-    // The other devices deleted the roots when they merged the deletion.
-    // They import them again from these records.
-    record_imported_roots(
-        transaction,
-        snapshot,
-        &roots.iter().map(|root| (RootId(root), None)).collect::<Vec<_>>(),
-    )?;
     Ok(())
 }
 

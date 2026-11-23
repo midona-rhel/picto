@@ -400,8 +400,8 @@ pub fn migrate_for_open(
             // merge itself, and the one-item-per-file index after it, run
             // once the library is open (`Library::merge_shared_files`).
             connection.execute_batch(ALIAS_SCHEMA)?;
-            // The per-field CRDT design was replaced by snapshot sync; nothing
-            // ever wrote these tables.
+            // No version of the application ever wrote these cloud tables, so
+            // they are dropped.
             connection.execute_batch(
                 "DROP INDEX IF EXISTS idx_cloud_outbox_pending;
                  DROP TABLE IF EXISTS cloud_outbox;

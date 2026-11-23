@@ -90,6 +90,8 @@ fn settle_claimed(
     // per item. A group is flushed when it is full or has waited long enough
     // that the first items should already be visible.
     let mut pending = PendingItems::default();
+    // The items of other devices are written together in the same way.
+    let mut shared = Vec::new();
     for mut job in claimed {
         if release_inactive_task(application, job.task_id, &[job.ingest_job_id], &now)? {
             continue;
@@ -146,8 +148,14 @@ fn settle_claimed(
                         report,
                     )?;
                 }
-                PreparedIngestPayload::Shared(import) => {
+                PreparedIngestPayload::Shared(import) if import.record.cover.is_some() => {
                     settle_shared(application, job.ingest_job_id, &import, &now, report)?;
+                }
+                PreparedIngestPayload::Shared(import) => {
+                    shared.push((job.ingest_job_id, import));
+                    if shared.len() >= picto_library::ingest::MAX_INGEST_BATCH {
+                        settle_shared_items(application, std::mem::take(&mut shared), &now, report)?;
+                    }
                 }
                 PreparedIngestPayload::Pending(_) | PreparedIngestPayload::PendingCollection(_) => {
                     unreachable!("prepare_job rejects unread task files")
@@ -167,6 +175,7 @@ fn settle_claimed(
         }
     }
     pending.flush(application, &now, auto_tag, report)?;
+    settle_shared_items(application, shared, &now, report)?;
     crate::library_subscription_state::settle_ingest_runs(application, &now)?;
     Ok(())
 }
@@ -475,6 +484,40 @@ fn settle_collection(
                     .map_err(|failure| failure.to_string())?;
                 mark_failed_sources(application, &input.members, &error.to_string(), now)?;
                 report.failed += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Imports items of one file each that another device imported, in one
+/// publication (`Library::ingest_shared_items`). If the import of the group
+/// fails, each item is imported on its own, so that the others are imported
+/// and the one that fails gets its own error.
+fn settle_shared_items(
+    application: &LibraryApplication,
+    items: Vec<(i64, picto_library::SharedImport)>,
+    now: &str,
+    report: &mut CanonicalIngestRunReport,
+) -> Result<(), String> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    let (jobs, imports): (Vec<_>, Vec<_>) = items.into_iter().unzip();
+    match application.library().ingest_shared_items(&imports) {
+        Ok(outputs) => {
+            application
+                .library()
+                .complete_ingest_jobs(&jobs, now)
+                .map_err(|error| error.to_string())?;
+            report.ingested += outputs.len();
+            report
+                .root_ids
+                .extend(outputs.into_iter().map(|(root_id, _)| root_id));
+        }
+        Err(_) => {
+            for (job_id, import) in jobs.into_iter().zip(&imports) {
+                settle_shared(application, job_id, import, now, report)?;
             }
         }
     }
@@ -1109,7 +1152,8 @@ mod tests {
                 })
                 .unwrap()
         };
-        // Nothing is stranded as running; both wait out the retry delay.
+        // No job is left in the running state; both jobs are pending again and
+        // wait until the retry delay has passed.
         assert_eq!(statuses(), vec![("pending".into(), true), ("pending".into(), true)]);
         assert_eq!(run_batch(&application, 64).unwrap().claimed, 0);
 
@@ -1182,9 +1226,10 @@ mod tests {
                 },
             )
             .unwrap();
-        // Three small files are prepared well inside one flush window, so they
-        // land in one publication. Larger imports still appear progressively,
-        // one group at least every PENDING_FLUSH_AFTER.
+        // Three small files are prepared well within one flush interval, so
+        // they are written in one publication. Larger imports still become
+        // visible in parts, because a group is written at least once every
+        // PENDING_FLUSH_AFTER.
         assert_eq!(journal, (1, 1));
     }
 
@@ -1274,7 +1319,8 @@ mod tests {
             .unwrap();
         let first_root = run_batch(&application, 64).unwrap().root_ids[0];
 
-        // A later post mirrors the first file and adds two new ones.
+        // A later post contains the same file as the first post (the item
+        // `shared`) and adds two new files.
         application
             .library()
             .auxiliary_write(

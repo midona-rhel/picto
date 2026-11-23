@@ -625,7 +625,9 @@ mod tests {
             .push(source.join("0.png").to_string_lossy().into_owned());
         let started = start_manual_import(&application, &request).unwrap();
         let record = task(&application, &started);
-        // Close as soon as the first chunk becomes visible. The tree is not exhausted.
+        // The scan is told that the library is closing as soon as the first
+        // 256 files are queued, so it stops before it has walked the whole
+        // folder tree.
         scan_import_task(&application, &record, &|| {
             task(&application, &started).total_units >= 256
         })
@@ -672,7 +674,9 @@ mod tests {
                         _ => return true,
                     }
                 }
-                // A paused scan must wait without traversing. Close on its next poll.
+                // A paused scan must wait without walking the folders. The
+                // scan is told that the library is closing at the next check
+                // after the pause.
                 action == "pause" && calls.get() > 8
             })
             .unwrap();
@@ -1269,13 +1273,13 @@ mod tests {
             vec![crate::tasks::IMPORT_ACTION.to_owned()]
         );
         assert!(start_manual_import(&application, &second).is_err());
-        // A paused import still holds its place.
+        // A paused import still prevents another import from starting.
         application
             .library()
             .set_task_paused(TaskId(started.task_id), true)
             .unwrap();
         assert!(start_manual_import(&application, &second).is_err());
-        // Seeding never waits.
+        // A background import never waits for another import.
         let mut seeded = second.clone();
         seeded.background = true;
         start_manual_import(&application, &seeded).unwrap();
@@ -1347,7 +1351,8 @@ mod tests {
         assert!(crate::picto_pack::import(&application, &pack).unwrap_err().contains("Picto Pack"));
         drop(pack_guard);
         assert!(crate::picto_pack::import(&application, &pack).is_err());
-        // Failure releases the gate, too.
+        // A failed Picto Pack import also releases the lock on starting an
+        // import, so a manual import can start again.
         start_manual_import(&application, &request).unwrap();
     }
 

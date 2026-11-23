@@ -10,7 +10,7 @@
 //!
 //! | Kind | Key | States |
 //! | --- | --- | --- |
-//! | `item` | stable key of an item or a collection | `add` with a value: the item was imported, and the value is its record ([`SharedItem`]): its file or, for a collection, its files, with their names and stored facts, and its name, notes, source links, rating, status, dates, tags and folders. `add` without a value: the item's tombstone was removed, by a subscription or by the undo of a deletion in a library that records no records. `delete`: deleted permanently; the value is `{"file": "<content hash>"}` for an item with a file, and there is none for a collection. |
+//! | `item` | stable key of an item or a collection | `add`: the item was imported, or its tombstone was removed by a subscription or by the undo of a deletion. In the cloud folder the entry carries the record of the item ([`SharedItem`]) when the device that made it holds the item: its file or, for a collection, its files, with their names and stored facts, and its name, notes, source links, rating, status, dates, tags and folders. `delete`: deleted permanently; the value is `{"file": "<content hash>"}` for an item with a file, and there is none for a collection. |
 //! | `status` | stable key of an item or a collection | `trash`, `active`, `inbox`: where the last move into or out of the Trash put it. |
 //! | `tag`, `folder`, `smart_folder` | stable key | `delete`, and `add` when the deletion was undone. |
 //!
@@ -37,6 +37,12 @@
 //! has no such row. The items that a library holds when it first syncs
 //! reach the other devices in its snapshot, and no entry is written for
 //! them.
+//!
+//! The library stores an `add` entry without the record. The record is made
+//! when the entry is written into the cloud folder
+//! ([`Library::attach_records`]), from the item as the library holds it
+//! then, so an imported item costs one short row and not a copy of what the
+//! library already holds.
 //!
 //! # Merged additions
 //!
@@ -512,34 +518,30 @@ pub fn records_items(connection: &rusqlite::Connection) -> Result<bool> {
         .query_row([], |row| row.get(0))?)
 }
 
-/// Returns the record of the root `root_id`, with its stable key, as the
-/// library holds the root now. `tags` are the root's tags when the caller
-/// knows them; without them every tag of the library is asked whether it
-/// holds the root.
+/// Returns the record of the root `root_id` as the library holds the root
+/// now. `tags` and `folders` are the root's tags and folders.
 fn item_record(
-    transaction: &rusqlite::Transaction<'_>,
+    transaction: &rusqlite::Connection,
     snapshot: &ProjectionSnapshot,
     root_id: RootId,
-    tags: Option<&[crate::TagId]>,
-) -> Result<Option<(String, SharedItem)>> {
+    tags: &[crate::TagId],
+    folders: &[FolderId],
+) -> Result<Option<SharedItem>> {
     use rusqlite::OptionalExtension;
-    let Some((key, name, notes, urls, imported_at_ms, captured_at_ms, cover)) = transaction
+    let Some((name, notes, urls, imported_at_ms, captured_at_ms, cover)) = transaction
         .prepare_cached(
-            "SELECT item.stable_key, root.name, root.notes, root.source_urls_json,
-                    root.imported_at_ms, root.captured_at_ms, root.cover_media_id
-             FROM library_root root
-             JOIN library_item item ON item.local_id = root.root_id
-             WHERE root.root_id = ?1",
+            "SELECT name, notes, source_urls_json, imported_at_ms, captured_at_ms,
+                    cover_media_id
+             FROM library_root WHERE root_id = ?1",
         )?
         .query_row([root_id.0], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, Option<i64>>(5)?,
-                row.get::<_, u32>(6)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+                row.get::<_, u32>(5)?,
             ))
         })
         .optional()?
@@ -600,19 +602,7 @@ fn item_record(
             .optional()?;
         files.push(file);
     }
-    let tag_ids = match tags {
-        Some(tags) => tags.to_vec(),
-        None => {
-            let mut held = snapshot
-                .tags
-                .iter()
-                .filter(|(_, roots)| roots.contains(root_id.0))
-                .map(|(tag, _)| *tag)
-                .collect::<Vec<_>>();
-            held.sort_unstable_by_key(|tag| tag.0);
-            held
-        }
-    };
+    let tag_ids = tags;
     let mut tags = Vec::with_capacity(tag_ids.len());
     for tag_id in tag_ids {
         let named = transaction
@@ -637,13 +627,7 @@ fn item_record(
             });
         }
     }
-    let mut folder_ids = snapshot
-        .folders
-        .iter()
-        .filter(|(_, roots)| roots.contains(root_id.0))
-        .map(|(folder, _)| *folder)
-        .collect::<Vec<_>>();
-    folder_ids.sort_unstable_by_key(|folder| folder.0);
+    let folder_ids = folders;
     let mut folders = Vec::with_capacity(folder_ids.len());
     for folder_id in folder_ids {
         let named = transaction
@@ -665,23 +649,19 @@ fn item_record(
         .into_iter()
         .find(|value| snapshot.rating(*value).contains(root_id.0))
         .unwrap_or(Rating::Unrated);
-    Ok(Some((
-        key,
-        SharedItem {
-            name,
-            notes: notes.filter(|notes| !notes.is_empty()),
-            urls: serde_json::from_str(&urls)?,
-            status,
-            rating,
-            imported_at_ms,
-            captured_at_ms,
-            tags,
-            folders,
-            cover: members
-                .map(|_| media_ids.iter().position(|media| *media == cover).unwrap_or(0)),
-            files,
-        },
-    )))
+    Ok(Some(SharedItem {
+        name,
+        notes: notes.filter(|notes| !notes.is_empty()),
+        urls: serde_json::from_str(&urls)?,
+        status,
+        rating,
+        imported_at_ms,
+        captured_at_ms,
+        tags,
+        folders,
+        cover: members.map(|_| media_ids.iter().position(|media| *media == cover).unwrap_or(0)),
+        files,
+    }))
 }
 
 /// The whole name of a tag, as an import names it: the name alone for a tag
@@ -695,40 +675,20 @@ fn whole_tag_name(namespace: &str, subname: &str) -> String {
     }
 }
 
-/// Records that this device imported `roots` now, for a library that records
-/// items ([`records_items`]): every root gets an `add` entry with its record.
-/// With a root come its tags when the caller knows them ([`item_record`]).
-/// `snapshot` holds the roots as the import leaves them.
-pub(super) fn record_imported_roots(
+/// Records that this device imported the items and collections with the
+/// stable keys `keys` now, in a library that records items
+/// ([`records_items`]): each gets an `add` entry. The entry is stored without
+/// a value. The record of the item is made when the entry is written into
+/// the cloud folder ([`Library::attach_records`]), from the item as the
+/// library holds it then.
+pub(super) fn record_imported_items(
     transaction: &rusqlite::Transaction<'_>,
-    snapshot: &ProjectionSnapshot,
-    roots: &[(RootId, Option<Vec<crate::TagId>>)],
+    keys: &[String],
 ) -> Result<()> {
-    if roots.is_empty() || !records_items(transaction)? {
+    if keys.is_empty() || !records_items(transaction)? {
         return Ok(());
     }
-    let (at_ms, logical) = tick(transaction)?;
-    for (root_id, tags) in roots {
-        let Some((key, record)) = item_record(transaction, snapshot, *root_id, tags.as_deref())?
-        else {
-            continue;
-        };
-        transaction
-            .prepare_cached(&format!(
-                "INSERT INTO shared_entry
-                     (kind, key, state, value, clock_ms, clock_counter, device_id)
-                 VALUES ('item', ?1, 'add', ?2, ?3, ?4,
-                         (SELECT device_id FROM cloud_state WHERE singleton = 1))
-                 {UPSERT}"
-            ))?
-            .execute(rusqlite::params![
-                key,
-                serde_json::to_string(&record)?,
-                at_ms,
-                logical
-            ])?;
-    }
-    Ok(())
+    record_entries(transaction, EntryKind::Item, EntryState::Add, keys)
 }
 
 /// Returns the clock time and the device of the `item` entry that the
@@ -903,9 +863,75 @@ impl Library {
         })
     }
 
+    /// Fills in the record of every `add` entry of the kind `item` among
+    /// `entries` whose item or collection the library holds, from the item
+    /// as the library holds it now. The entries are entries of this device
+    /// as [`Self::visit_own_entries`] returns them.
+    pub fn attach_records(&self, entries: &mut [SharedEntry]) -> Result<()> {
+        let snapshot = self.projections.snapshot();
+        self.database.read(WorkPriority::Cloud, |connection| {
+            let added = entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| {
+                    entry.kind == EntryKind::Item && entry.state == EntryState::Add
+                })
+                .map(|(index, entry)| (index, entry.key.as_str()))
+                .collect::<Vec<_>>();
+            if added.is_empty() {
+                return Ok(());
+            }
+            let keys = added.iter().map(|(_, key)| *key).collect::<Vec<_>>();
+            let mut statement = connection.prepare_cached(
+                "SELECT keys.value, root.root_id FROM json_each(?1) keys
+                 CROSS JOIN library_item item ON item.stable_key = keys.value
+                 JOIN library_root root ON root.root_id = item.local_id",
+            )?;
+            let roots = statement
+                .query_map([serde_json::to_string(&keys)?], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+                })?
+                .collect::<rusqlite::Result<HashMap<_, _>>>()?;
+            // Each tag and each folder is asked once which of these roots it
+            // holds, which is one set operation for each of them.
+            let wanted = roots.values().copied().collect::<RoaringBitmap>();
+            let mut tags_of = HashMap::<u32, Vec<crate::TagId>>::new();
+            for (tag, members) in snapshot.tags.iter() {
+                for root in &members.to_bitmap() & &wanted {
+                    tags_of.entry(root).or_default().push(*tag);
+                }
+            }
+            let mut folders_of = HashMap::<u32, Vec<FolderId>>::new();
+            for (folder, members) in snapshot.folders.iter() {
+                for root in &members.to_bitmap() & &wanted {
+                    folders_of.entry(root).or_default().push(*folder);
+                }
+            }
+            let records = added
+                .iter()
+                .filter_map(|(index, key)| Some((*index, *roots.get(*key)?)))
+                .map(|(index, root)| {
+                    let mut tags = tags_of.remove(&root).unwrap_or_default();
+                    tags.sort_unstable_by_key(|tag| tag.0);
+                    let mut folders = folders_of.remove(&root).unwrap_or_default();
+                    folders.sort_unstable_by_key(|folder| folder.0);
+                    let record = item_record(connection, &snapshot, RootId(root), &tags, &folders)?;
+                    Ok((index, record))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            for (index, record) in records {
+                if let Some(record) = record {
+                    entries[index].value = Some(serde_json::to_value(record)?);
+                }
+            }
+            Ok(())
+        })
+    }
+
     /// Calls `visit` with every entry that this device made, in the order of
     /// the kinds and keys. With `later_than`, only with the entries whose
-    /// clock time is later than that time.
+    /// clock time is later than that time. An `add` entry of an item comes
+    /// without the item's record ([`Self::attach_records`]).
     pub fn visit_own_entries(
         &self,
         later_than: Option<(i64, i64)>,
@@ -1488,6 +1514,53 @@ impl Library {
     /// entry is recorded.
     pub fn ingest_shared(&self, import: &SharedImport) -> Result<(RootId, MutationReceipt)> {
         let record = &import.record;
+        let members = self.shared_members(import)?;
+        if record.cover.is_none() {
+            let mut outputs = self.ingest_batch_with(&members[..1], false, None, &|_| {
+                ingest::Held::Shared
+            })?;
+            return Ok(outputs.remove(0));
+        }
+        self.ingest_collection_with(
+            &PreparedCollectionImport {
+                cover_index: record.cover.unwrap_or(0).min(members.len() - 1),
+                members,
+                existing_root_id: None,
+                name: Some(record.name.clone()),
+                modified_at_ms: record.imported_at_ms,
+            },
+            false,
+            None,
+            Some(&record.notes),
+            Some(&import.key),
+        )
+    }
+
+    /// Imports items of one file each that another device imported, in one
+    /// publication, as [`Self::ingest_shared`] imports one. At most
+    /// [`ingest::MAX_INGEST_BATCH`] items are imported by one call.
+    pub fn ingest_shared_items(
+        &self,
+        imports: &[SharedImport],
+    ) -> Result<Vec<(RootId, MutationReceipt)>> {
+        let mut inputs = Vec::with_capacity(imports.len());
+        for import in imports {
+            if import.record.cover.is_some() {
+                return Err(LibraryError::InvalidInput(
+                    "a collection is imported on its own".into(),
+                ));
+            }
+            inputs.extend(self.shared_members(import)?.into_iter().take(1));
+        }
+        self.ingest_batch_with(&inputs, false, None, &|_| ingest::Held::Shared)
+    }
+
+    /// Returns the imports of the files of `import`, in the order of the
+    /// record's files, with the tags and folders of the record as this
+    /// library names them. A folder that the library does not hold is
+    /// created.
+    fn shared_members(&self, import: &SharedImport) -> Result<Vec<PreparedImport>> {
+        let record = &import.record;
         if record.files.is_empty() || import.paths.len() != record.files.len() {
             return Err(LibraryError::InvalidInput(
                 "a shared item needs a path for each of its files".into(),
@@ -1523,7 +1596,7 @@ impl Library {
                 .collect::<Result<Vec<_>>>()
         })?;
         let collection = record.cover.is_some();
-        let members = record
+        Ok(record
             .files
             .iter()
             .zip(&import.paths)
@@ -1559,26 +1632,7 @@ impl Library {
                 imported_at_ms: record.imported_at_ms,
                 captured_at_ms: record.captured_at_ms,
             })
-            .collect::<Vec<_>>();
-        if !collection {
-            let mut outputs = self.ingest_batch_with(&members[..1], false, None, &|_| {
-                ingest::Held::Shared
-            })?;
-            return Ok(outputs.remove(0));
-        }
-        self.ingest_collection_with(
-            &PreparedCollectionImport {
-                cover_index: record.cover.unwrap_or(0).min(members.len() - 1),
-                members,
-                existing_root_id: None,
-                name: Some(record.name.clone()),
-                modified_at_ms: record.imported_at_ms,
-            },
-            false,
-            None,
-            Some(&record.notes),
-            Some(&import.key),
-        )
+            .collect())
     }
 
     /// Returns the folder of this library with the stable key of `folder`,
@@ -1699,7 +1753,11 @@ fn store_entries(
                 entry.state.as_str(),
                 entry.at_ms,
                 entry.logical,
-                entry.value.as_ref().map(|value| value.to_string())
+                // The record of an added item is not kept: the job in the
+                // ingest queue holds it until the item is imported.
+                entry
+                    .deleted_file()
+                    .map(|file| serde_json::json!({ "file": file }).to_string())
             ])
         })
         .collect::<Vec<_>>();

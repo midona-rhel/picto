@@ -577,7 +577,8 @@ pub struct RootTagAssignment {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct RootMetadataPatch {
     pub rating: Option<Rating>,
-    /// Absent leaves notes unchanged; an explicit `null` clears them.
+    /// When the field is absent, the notes are left unchanged; an explicit
+    /// `null` clears them.
     #[serde(
         default,
         deserialize_with = "present_or_null",
@@ -757,7 +758,8 @@ pub struct MediaFactsUpdate {
     pub palette: Option<Vec<LabColor>>,
 }
 
-/// A validated encoding repair; logical media identity and metadata stay intact.
+/// A media file whose encoding was repaired and checked. The item keeps its
+/// identity and its metadata; only its file, content hash and size change.
 #[derive(Debug, Clone)]
 pub struct RepairedMediaContent {
     pub expected_hash: String,
@@ -807,10 +809,10 @@ pub struct TaskId(pub i64);
 pub enum TaskState {
     Running,
     Paused,
-    /// Stop-and-undo is removing what the task added.
+    /// The task was stopped and undone, and what it added is being removed.
     Reverting,
     Finished,
-    /// Stopped by the user; what it added stays.
+    /// The user stopped the task, and what it added stays in the library.
     Stopped,
     /// The task was stopped, and what it added was removed.
     Reverted,
