@@ -850,3 +850,41 @@ fn duplicate_merge_upgrades_collection_members_without_renaming_the_collection()
         "gelbooru_14583420"
     );
 }
+
+/// Deleting the picture that a duplicate merge kept removes its file from
+/// the disk like any other. The merge's decision names that file and goes
+/// with it.
+#[test]
+fn the_file_of_a_kept_duplicate_is_removed_after_its_picture_is_deleted() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let (loser, _) =
+        library.ingest(&named_import("loser", "loser-file", "Loser", color(20.0))).unwrap();
+    let (winner, _) =
+        library.ingest(&named_import("winner", "winner-file", "Winner", color(30.0))).unwrap();
+    let (loser_file, winner_file) = (file_id(&library, loser), file_id(&library, winner));
+    library.record_duplicate_pair(loser_file, winner_file, 1, 1_700_000_000_100).unwrap();
+    library
+        .resolve_duplicate(
+            loser_file,
+            winner_file,
+            DuplicateResolutionChoice::KeepFile { winner_file_id: winner_file },
+            1_700_000_000_200,
+        )
+        .unwrap();
+    let target = SelectionTarget::Explicit { root_ids: vec![winner] };
+    library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
+    // A deletion that can't be undone frees its files at once.
+    library.permanently_delete(&target, 1_700_000_000_300, 0, false).unwrap();
+
+    let mut removed = Vec::new();
+    library
+        .clean_pending_blobs(10, |pending| {
+            removed.push(pending.content_hash.clone());
+            Ok(())
+        })
+        .unwrap();
+    // The other file stays while the merge can still be undone.
+    assert_eq!(removed, ["winner-file"]);
+}

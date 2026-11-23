@@ -589,6 +589,14 @@ impl Library {
                 let cleanup = crate::duplicate::ready_cleanup(transaction, &protected, limit)?;
                 let mut removed = 0;
                 for pending in cleanup {
+                    // A duplicate merge that kept this file names it as the
+                    // file that stayed. No picture uses the file any more,
+                    // so the decision goes with it. The other pairs of the
+                    // file go with it through their foreign keys.
+                    transaction.execute(
+                        "DELETE FROM duplicate_pair WHERE winner_file_id = ?1",
+                        [pending.file_id.0],
+                    )?;
                     delete(&pending)?;
                     let deleted = transaction.execute(
                         "DELETE FROM media_file
