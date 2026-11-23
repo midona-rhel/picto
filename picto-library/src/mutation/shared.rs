@@ -385,7 +385,16 @@ fn member_changes<K: Copy + Eq + std::hash::Hash>(
     roots: &RoaringBitmap,
     id_of: impl Fn(K) -> u32,
 ) -> Vec<MemberChange> {
-    let mut changes = Vec::new();
+    let mut changes = before
+        .iter()
+        .filter(|(key, _)| !after.contains_key(key))
+        .map(|(key, was)| MemberChange {
+            id: id_of(*key),
+            gained: RoaringBitmap::new(),
+            lost: &**was & roots,
+        })
+        .filter(|change| !change.lost.is_empty())
+        .collect::<Vec<_>>();
     for (key, now) in after {
         let was = before.get(key);
         if was.is_some_and(|was| was.allocation_id() == now.allocation_id()) {
@@ -467,10 +476,25 @@ pub(super) fn record_changes(
         }
     }
     if !Arc::ptr_eq(&before.tags, &after.tags) {
-        for change in member_changes(&before.tags, &after.tags, &in_both, |tag| tag.0) {
-            // A tag that the write deleted has no name any more. Its
-            // deletion is recorded by the code that deleted it.
-            if let Some(name) = tag_name(transaction, change.id)? {
+        let changes = member_changes(&before.tags, &after.tags, &in_both, |tag| tag.0);
+        // A tag that the write removed, for example by merging it into
+        // another, is taken off its pictures under the name it had before.
+        let gone_names = if changes.iter().any(|change| !after.tags.contains_key(&crate::TagId(change.id))) {
+            before
+                .tag_ids_by_name
+                .iter()
+                .filter(|(_, tag_id)| !after.tags.contains_key(tag_id))
+                .map(|(name, tag_id)| (tag_id.0, name.clone()))
+                .collect::<HashMap<_, _>>()
+        } else {
+            HashMap::new()
+        };
+        for change in changes {
+            let name = match gone_names.get(&change.id) {
+                Some(name) => Some(name.clone()),
+                None => tag_name(transaction, change.id)?,
+            };
+            if let Some(name) = name {
                 rows.push((EntryKind::ItemTag, name.clone(), Some("add".into()), change.gained));
                 rows.push((EntryKind::ItemTag, name, Some("remove".into()), change.lost));
             }

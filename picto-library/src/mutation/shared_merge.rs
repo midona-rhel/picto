@@ -66,11 +66,7 @@ fn held_entries(connection: &rusqlite::Connection, content_hash: &str) -> Result
         let time: EntryTime = (row.get(3)?, row.get(4)?, row.get(5)?);
         let kind: String = row.get(0)?;
         let entry = match EntryKind::parse(&kind) {
-            Some(EntryKind::Add) => match serde_json::from_str::<FileRecord>(&value) {
-                Ok(record) => HeldEntry::Add { time, record },
-                // A record that this version cannot read is not an add.
-                Err(_) => continue,
-            },
+            Some(EntryKind::Add) => HeldEntry::Add { time, record: FileRecord::parse(&value) },
             Some(EntryKind::Delete) => HeldEntry::Delete { time },
             Some(EntryKind::Name) => HeldEntry::Name { time, value },
             Some(EntryKind::Notes) => HeldEntry::Notes { time, value },
@@ -737,6 +733,9 @@ impl Library {
             WorkPriority::Cloud,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
+                // Changes made on this computer since the entries were
+                // stored become entries first, so the merge doesn't undo them.
+                settle_in(transaction, &snapshot, usize::MAX)?;
                 let mut next = (*snapshot).clone();
                 let mut resources = BTreeSet::from(["cloud".to_string()]);
                 let mut affected = RoaringBitmap::new();

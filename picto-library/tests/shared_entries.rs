@@ -831,3 +831,83 @@ fn a_picture_in_a_collection_is_left_alone() {
     assert!(grouped.own_entries().is_empty());
     assert!(grouped.library.wanted_files(None, 10).unwrap().is_empty());
 }
+
+/// Two computers that both hold `hash(1)`, named "first", and have synced.
+fn two_synced(template: &std::path::Path) -> (Computer, Computer) {
+    let mut log = Vec::new();
+    let mut one = Computer::new(template);
+    let mut two = Computer::new(template);
+    one.start(&mut log);
+    two.start(&mut log);
+    one.import(&hash(1), "first", vec!["cat".into()], Vec::new());
+    two.library.merge_entries(&one.own_entries()).unwrap();
+    two.fetch_wanted();
+    two.settle();
+    two.library.merge_entries(&[]).unwrap();
+    one.library.merge_entries(&two.own_entries()).unwrap();
+    (one, two)
+}
+
+/// A rename made after another computer's entries were stored and before
+/// they were applied stays.
+#[test]
+fn a_local_edit_between_storing_and_applying_is_kept() {
+    let (_directory, template) = template();
+    let (one, two) = two_synced(&template);
+    let root = one.roots()[&hash(1)];
+    one.library.set_rating(&one.target(root), Rating::Three).unwrap();
+    two.library.store_entries(&one.own_entries()).unwrap();
+    let root = two.roots()[&hash(1)];
+    two.library.rename_root(root, "renamed here", now_ms()).unwrap();
+    while two.library.apply_merged(1_000).unwrap().more {}
+    let picture = two.pictures().remove(&hash(1)).unwrap();
+    assert_eq!((picture.name.as_str(), picture.rating.as_str()), ("renamed here", "3"));
+    one.library.merge_entries(&two.own_entries()).unwrap();
+    assert_eq!(one.pictures()[&hash(1)].name, "renamed here");
+}
+
+/// Merging the tag "cat" into "animal" takes "cat" off the pictures on the
+/// other computers too, and the merge doesn't bring "cat" back.
+#[test]
+fn merging_a_tag_into_another_moves_it_on_every_computer() {
+    let (_directory, template) = template();
+    let (one, two) = two_synced(&template);
+    let root = one.roots()[&hash(1)];
+    one.library.apply_tags(&one.target(root), &["animal".into()], true).unwrap();
+    let ids = one.tag_ids();
+    one.library.merge_tags(ids["cat"], ids["animal"], now_ms()).unwrap();
+    two.library.merge_entries(&one.own_entries()).unwrap();
+    let tags = two.pictures()[&hash(1)].tags.clone();
+    assert_eq!(tags, BTreeSet::from(["animal".to_owned()]));
+}
+
+/// An `add` entry whose record this version can't fully read, for example
+/// one with a status from a newer version, still keeps the picture.
+#[test]
+fn an_add_with_a_record_from_a_newer_version_still_counts() {
+    let (_directory, template) = template();
+    let (one, _two) = two_synced(&template);
+    let later = now_ms() + 600_000;
+    let entry = |kind, second_key: &str, value: Option<&str>, clock_counter| SharedEntry {
+        kind,
+        subject_key: hash(1),
+        second_key: second_key.to_owned(),
+        value: value.map(str::to_owned),
+        clock_ms: later,
+        clock_counter,
+        device_id: "ffffffff-0000-4000-8000-000000000099".into(),
+    };
+    one.library
+        .merge_entries(&[
+            entry(picto_library::EntryKind::Delete, "", None, 0),
+            entry(
+                picto_library::EntryKind::Add,
+                "ffffffff-0000-4000-8000-000000000099",
+                Some(r#"{"name":"from a newer version","status":"archived","stars":{"x":1}}"#),
+                1,
+            ),
+        ])
+        .unwrap();
+    let picture = one.pictures().remove(&hash(1)).expect("the picture is kept");
+    assert_eq!(picture.status, "active");
+}

@@ -39,6 +39,37 @@ pub struct FileRecord {
     pub start: bool,
 }
 
+impl FileRecord {
+    /// Reads a record from the JSON of an `add` entry. A record that a newer
+    /// version wrote can have fields or values this version doesn't know; the
+    /// fields it can read are kept, an unknown status counts as Active, and
+    /// the entry still counts as an add, so the picture isn't deleted.
+    pub fn parse(text: &str) -> Self {
+        let value = serde_json::from_str::<serde_json::Value>(text).unwrap_or_default();
+        let text_of = |key: &str| value.get(key).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+        let list_of = |key: &str| {
+            value
+                .get(key)
+                .and_then(|v| v.as_array())
+                .map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_owned)).collect())
+                .unwrap_or_default()
+        };
+        Self {
+            name: text_of("name"),
+            notes: text_of("notes"),
+            rating: value.get("rating").and_then(|v| v.as_u64()).unwrap_or(0).min(5) as u8,
+            status: match text_of("status").as_str() {
+                "inbox" => Lifecycle::Inbox,
+                "trash" => Lifecycle::Trash,
+                _ => Lifecycle::Active,
+            },
+            tags: list_of("tags"),
+            folders: list_of("folders"),
+            start: value.get("start").and_then(|v| v.as_bool()).unwrap_or(false),
+        }
+    }
+}
+
 impl Default for FileRecord {
     fn default() -> Self {
         Self {
