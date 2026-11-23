@@ -465,6 +465,19 @@ CREATE TABLE wanted_file (
     content_hash TEXT PRIMARY KEY
 ) WITHOUT ROWID, STRICT;
 
+-- Files of pictures that a merge deleted. The file and its `media_file` row
+-- stay on this computer until `remove_after_ms`, which is the time of the
+-- merge plus "Keep deleted files". When the entries say that the picture
+-- exists again in that time, the picture is imported again from this file.
+-- After that time the file goes to `blob_cleanup_queue` unless the picture
+-- exists by the entries.
+CREATE TABLE kept_deleted_file (
+    content_hash TEXT PRIMARY KEY,
+    remove_after_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX idx_kept_deleted_file_remove_after ON kept_deleted_file(remove_after_ms);
+
 -- Original files in the cloud folder whose picture this computer deleted.
 -- `file_name` is the content hash, a dot and the extension. The original is
 -- removed from the cloud folder after `purge_after`; the row then stays with

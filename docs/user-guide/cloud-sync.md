@@ -142,3 +142,7 @@ was deleted, import its file again after the restore. That brings it back on eve
 cloud folder. After that, the computer you deleted it on removes the original at its next sync,
 unless that library has the file again. While the deletion can still be undone on that computer,
 the original stays.
+
+The other computers keep the file of a picture that sync deleted on them for the same number of
+days. If you undo the deletion, or a computer imports the file again in that time, the picture
+comes back on them from that file.

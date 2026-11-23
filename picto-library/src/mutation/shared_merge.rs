@@ -16,9 +16,13 @@
 //!   missing tag is created. A folder this library doesn't have is skipped,
 //!   because folder definitions don't sync yet.
 //! - It exists and the library doesn't have the file: the file is wanted
-//!   (`Library::wanted_files`), and the next step of a sync fetches it.
+//!   (`Library::wanted_files`), and the next step of a sync fetches it. When
+//!   this computer still has the file because a merge deleted the picture
+//!   less than "Keep deleted files" ago, the picture is imported again from
+//!   that file instead.
 //! - It doesn't exist and the library has it outside a collection: it's
-//!   deleted, as a deletion that came from another computer.
+//!   deleted, as a deletion that came from another computer. Its file stays
+//!   on this computer for "Keep deleted files" (`kept_deleted_file`).
 //! - The library has it inside a collection: nothing changes, because
 //!   collections don't sync yet.
 //!
@@ -660,6 +664,65 @@ fn apply_deleted_folders(
     Ok(())
 }
 
+/// Handles at most `limit` files of `kept_deleted_file` whose keep time ended
+/// before `now_ms`. A file that a picture uses again only loses its row. A
+/// file whose picture doesn't exist by the entries goes to
+/// `blob_cleanup_queue`. A file whose picture exists by the entries stays,
+/// because a merge imports the picture again from it.
+pub(super) fn release_kept_files(
+    transaction: &rusqlite::Transaction<'_>,
+    now_ms: i64,
+    limit: usize,
+) -> Result<()> {
+    let ended = transaction
+        .prepare_cached(
+            "SELECT kept.content_hash, file.file_id, file.file_path,
+                    EXISTS (SELECT 1 FROM media_item media WHERE media.file_id = file.file_id)
+             FROM kept_deleted_file kept
+             LEFT JOIN media_file file ON file.content_hash = kept.content_hash
+             WHERE kept.remove_after_ms <= ?1
+               AND NOT EXISTS (SELECT 1 FROM wanted_file wanted
+                               WHERE wanted.content_hash = kept.content_hash)
+             ORDER BY kept.remove_after_ms LIMIT ?2",
+        )?
+        .query_map(
+            rusqlite::params![now_ms, limit.min(i64::MAX as usize) as i64],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<u32>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, bool>(3)?,
+                ))
+            },
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if ended.is_empty() {
+        return Ok(());
+    }
+    let revision: i64 =
+        transaction.query_row("SELECT revision FROM library_meta WHERE singleton = 1", [], |row| {
+            row.get(0)
+        })?;
+    let mut deleted = DeletedDefinitions::default();
+    for (content_hash, file, file_path, used) in ended {
+        if let (Some(file_id), Some(file_path), false) = (file, file_path, used) {
+            if view_of(transaction, &mut deleted, &content_hash)?.is_some() {
+                continue;
+            }
+            transaction.execute(
+                "INSERT INTO blob_cleanup_queue (file_id, file_path, enqueued_revision)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(file_id) DO NOTHING",
+                rusqlite::params![file_id, file_path, revision],
+            )?;
+        }
+        transaction
+            .execute("DELETE FROM kept_deleted_file WHERE content_hash = ?1", [&content_hash])?;
+    }
+    Ok(())
+}
+
 /// Returns the folders among `named` that can be deleted with everything
 /// below them: those whose descendants are all in `named`. `parents` gives
 /// the parent of every folder. Of a subtree that can be deleted, only the
@@ -730,7 +793,20 @@ impl Library {
     /// per write. With `keep_held_files`, which a sync sets while a file of
     /// entries couldn't be read, no picture whose file this computer holds is
     /// deleted; those pictures are checked again by the next merge.
+    ///
+    /// A picture that exists by the entries and whose file this computer kept
+    /// after a merge deleted the picture is then imported again from that
+    /// file, and changed to match its entries like any other picture.
     pub fn apply_stored(&self, keep_held_files: bool) -> Result<()> {
+        self.apply_all(keep_held_files)?;
+        if self.import_kept_files()? {
+            while self.settle_entries(BATCH)? {}
+            self.apply_all(keep_held_files)?;
+        }
+        Ok(())
+    }
+
+    fn apply_all(&self, keep_held_files: bool) -> Result<()> {
         let mut after = None;
         loop {
             let (applied, last) = self.apply_batch(BATCH, after, keep_held_files)?;
@@ -739,6 +815,78 @@ impl Library {
             }
             after = last;
         }
+    }
+
+    /// Imports the files of `wanted_file` that are in `kept_deleted_file`,
+    /// from the file on this computer, and returns whether there were any.
+    /// The new picture gets the name, notes, rating and status that the
+    /// entries say. Its file exists by the entries, so the import writes no
+    /// `add` entry. When its pending row becomes an entry, the file is noted
+    /// in `merge_touched`, and the next apply gives the picture its tags and
+    /// folders.
+    fn import_kept_files(&self) -> Result<bool> {
+        let inputs = self.database.read(WorkPriority::Cloud, |connection| {
+            let mut statement = connection.prepare_cached(
+                "SELECT file.file_path, file.mime, file.size_bytes, file.width, file.height,
+                        file.duration_ms, file.frame_count, file.content_hash,
+                        file.perceptual_hash, file.palette_json
+                 FROM kept_deleted_file kept
+                 JOIN wanted_file wanted ON wanted.content_hash = kept.content_hash
+                 JOIN media_file file ON file.content_hash = kept.content_hash",
+            )?;
+            let files = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        crate::ImmutableMediaFacts {
+                            mime: row.get(1)?,
+                            size_bytes: row.get::<_, i64>(2)?.max(0) as u64,
+                            width: row.get(3)?,
+                            height: row.get(4)?,
+                            duration_ms: row
+                                .get::<_, Option<i64>>(5)?
+                                .map(|value| value.max(0) as u64),
+                            frame_count: row.get(6)?,
+                            content_hash: row.get(7)?,
+                            perceptual_hash: row.get(8)?,
+                            palette: Vec::new(),
+                        },
+                        row.get::<_, String>(9)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut deleted = DeletedDefinitions::default();
+            let mut inputs = Vec::new();
+            for (file_path, mut facts, palette) in files {
+                let Some(view) = view_of(connection, &mut deleted, &facts.content_hash)? else {
+                    continue;
+                };
+                facts.palette = serde_json::from_str(&palette)?;
+                inputs.push(PreparedImport {
+                    stable_key: uuid::Uuid::new_v4().to_string(),
+                    media_name: view.name,
+                    file_path,
+                    facts,
+                    lifecycle: view.status,
+                    rating: Rating::ALL
+                        .into_iter()
+                        .find(|rating| rating.bitmap_key() == u32::from(view.rating))
+                        .unwrap_or(Rating::Unrated),
+                    notes: (!view.notes.is_empty()).then_some(view.notes),
+                    tags: Vec::new(),
+                    folders: Vec::new(),
+                    source_urls: Vec::new(),
+                    source_identity: None,
+                    imported_at_ms: now_ms(),
+                    captured_at_ms: None,
+                });
+            }
+            Ok(inputs)
+        })?;
+        for batch in inputs.chunks(ingest::MAX_INGEST_BATCH) {
+            self.ingest_batch(batch)?;
+        }
+        Ok(!inputs.is_empty())
     }
 
     /// One write of `apply_stored`: the pictures after `after` in

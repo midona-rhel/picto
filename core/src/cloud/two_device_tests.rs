@@ -293,7 +293,7 @@ fn cloud_original(cloud: &Path, application: &LibraryApplication, hash: &str) ->
 #[tokio::test]
 async fn a_deletion_on_one_device_arrives_on_the_other_and_a_restore_comes_back() {
     let cloud = tempfile::tempdir().unwrap();
-    let (first, second, provider, _folders) = two_devices(cloud.path()).await;
+    let (first, second, provider, folders) = two_devices(cloud.path()).await;
     let deleted_hash = hash(&second, 1);
     let tag = first.library().projections().snapshot().tag_ids_by_name["sync:tag"];
     let folder = first.library().folders().unwrap()[0].folder_id;
@@ -323,14 +323,16 @@ async fn a_deletion_on_one_device_arrives_on_the_other_and_a_restore_comes_back(
     assert_eq!(status_library(&second).unwrap().state, "idle");
     // Nothing of it is on the second device's undo stack.
     assert!(!second.library().history().state().can_undo);
-    // The file of the deleted item leaves the second device's library.
+    // The file of the deleted item stays on the second device's disk for
+    // "Keep deleted files", in case another device adds the item again.
     crate::library_media_runtime::drain_blob_cleanup(&second, 8).unwrap();
     let original = second
         .blobs()
         .original_path_with_ext(&deleted_hash, Some("png"))
         .unwrap();
-    assert!(!original.exists());
-    assert_eq!(count(&second, "SELECT COUNT(*) FROM media_file"), 2);
+    assert!(original.exists());
+    assert_eq!(count(&second, "SELECT COUNT(*) FROM media_file"), 3);
+    assert_eq!(count(&second, "SELECT COUNT(*) FROM kept_deleted_file"), 1);
 
     // The second device restores the item, and the first takes that over.
     second
@@ -350,6 +352,25 @@ async fn a_deletion_on_one_device_arrives_on_the_other_and_a_restore_comes_back(
     receive_library(&second, &provider).await.unwrap();
     assert_eq!(rows(&first, &["cloud_state", "library_meta"]), before[0]);
     assert_eq!(rows(&second, &["cloud_state", "library_meta"]), before[1]);
+
+    // The first device imports the deleted item again. The second device
+    // brings it back from the file it kept, without fetching the file.
+    import_later(&first, folders[0].path(), 1);
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    receive_library(&second, &provider).await.unwrap();
+    assert_eq!(
+        count(
+            &second,
+            &format!(
+                "SELECT COUNT(*) FROM media_item media
+                 JOIN media_file file ON file.file_id = media.file_id
+                 WHERE file.content_hash = '{deleted_hash}'"
+            ),
+        ),
+        1
+    );
+    assert!(original.exists());
+    assert_eq!(count(&second, "SELECT COUNT(*) FROM kept_deleted_file"), 0);
 }
 
 #[tokio::test]

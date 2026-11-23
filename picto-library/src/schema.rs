@@ -463,9 +463,12 @@ fn migrate_shared_entries(connection: &Connection) -> Result<()> {
         .split(";\n")
         .filter(|statement| {
             ["shared_entry", "entry_recording", "pending_entry", "merge_touched", "wanted_file",
-             "cloud_deleted_original"]
+             "kept_deleted_file", "cloud_deleted_original"]
                 .iter()
-                .any(|table| statement.contains(&format!("CREATE TABLE {table} (")))
+                .any(|table| {
+                    statement.contains(&format!("CREATE TABLE {table} ("))
+                        || statement.contains(&format!("CREATE INDEX idx_{table}_"))
+                })
         })
         .map(|statement| format!("{statement};"))
         .collect::<String>();
@@ -822,12 +825,13 @@ mod tests {
 
     #[test]
     fn the_entry_tables_replace_the_tombstone_table_and_the_library_opens_again() {
-        const TABLES: [&str; 6] = [
+        const TABLES: [&str; 7] = [
             "shared_entry",
             "entry_recording",
             "pending_entry",
             "merge_touched",
             "wanted_file",
+            "kept_deleted_file",
             "cloud_deleted_original",
         ];
         let directory = tempfile::tempdir().unwrap();
@@ -844,6 +848,7 @@ mod tests {
                  DROP TABLE pending_entry;
                  DROP TABLE merge_touched;
                  DROP TABLE wanted_file;
+                 DROP TABLE kept_deleted_file;
                  DROP TABLE cloud_deleted_original;
                  CREATE TABLE cloud_tombstone (
                      object_kind TEXT NOT NULL,
@@ -884,6 +889,14 @@ mod tests {
         let connection = Connection::open(&path).unwrap();
         super::validate(&connection).unwrap();
         assert_eq!(table_definitions(&connection, &TABLES), created);
+        assert_eq!(
+            count(
+                &connection,
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE name = 'idx_kept_deleted_file_remove_after'"
+            ),
+            1
+        );
         assert_eq!(
             count(
                 &connection,

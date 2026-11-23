@@ -220,6 +220,11 @@ pub(crate) fn insert_one(
              WHERE file_name = ?1 OR file_name LIKE ?1 || '.%'",
         )?
         .execute([&input.facts.content_hash])?;
+    // A file that was kept on this computer after a merge deleted its
+    // picture belongs to a picture again.
+    transaction
+        .prepare_cached("DELETE FROM kept_deleted_file WHERE content_hash = ?1")?
+        .execute([&input.facts.content_hash])?;
 
     let existing_file = transaction
         .prepare_cached(

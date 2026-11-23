@@ -326,7 +326,9 @@ Both pictures follow the same rules outside the library's folder and at deletion
 - A Picto Pack holds only originals (`core/src/picto_pack.rs`). The import of a pack queues
   `thumbnail` work for each file, as every import does.
 - A permanent delete queues the file in `blob_cleanup_queue`, and the cleanup deletes the
-  original, the thumbnail and the first-frame picture together (`BlobStore::delete`).
+  original, the thumbnail and the first-frame picture together (`BlobStore::delete`). A picture
+  that a cloud sync merge deleted keeps its files for "Keep deleted files" first
+  (`kept_deleted_file`).
 
 ## Subscriptions
 
@@ -458,6 +460,16 @@ touch through the functions that Undo and Redo use, in one published write witho
 It writes no entry and doesn't move the clock past the entries it saw. A picture that exists by the
 entries and isn't on this computer is listed by `Library::wanted_files`; fetching those files isn't
 built yet. Pictures in collections, and collections, get no entries and are left alone by a merge.
+
+A merge that deletes a picture keeps its file on this computer for the "Keep deleted files" time,
+counted from the merge, and notes it in `kept_deleted_file` instead of queuing it in
+`blob_cleanup_queue`. The entries of one action can arrive in two files, for example the deletion
+in one and its undo in another, and a provider's desktop app can download the file with the
+deletion first. When a later merge says that the picture exists again, `Library::apply_stored`
+imports it from the kept file through `Library::ingest_batch`, without fetching it. The file
+exists by the entries, so the import writes no `add`, and the next apply gives the picture its
+tags and folders. Once the time is over, `Library::clean_pending_blobs`
+queues a kept file for removal when its picture doesn't exist by the entries.
 
 A computer's entries are spread over 256 files in `entries/<device id>/` by the first byte of the
 SHA-256 of an entry's key (`core/src/cloud/entries.rs`). A sync rewrites only the files whose

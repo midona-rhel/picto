@@ -8,8 +8,10 @@
 //! into files as the cloud folder holds them, in any order, some twice and
 //! some files not readable yet. The receiving computer sometimes makes changes
 //! of its own between storing the files and applying them. At the end every
-//! entry is delivered. Files aren't fetched, as in the app today; a computer
-//! only gets a picture's file when it imports the file itself.
+//! entry is delivered. Files aren't fetched, as in the app today. A computer
+//! gets a picture's file when it imports the file itself, and it keeps the
+//! file of a picture that a merge deleted, which brings the picture back when
+//! the entries add it again.
 //!
 //! The test logs what each computer did and when, by that computer's clock,
 //! and then checks:
@@ -18,7 +20,8 @@
 //!   computer holds looks the way its entries say.
 //! - Nothing is lost that no action removed. A picture nobody deleted exists
 //!   by the entries and at least one computer still holds its file, and a tag
-//!   nobody took off is still on it.
+//!   nobody took off is still on it. A computer that held a picture and
+//!   didn't delete it itself holds it whenever its entries say it exists.
 //! - The later action wins, for deletion against import and for each field.
 //! - An explicit edit isn't undone by an import or by the start of recording
 //!   on another computer, and a deleted tag doesn't come back from a computer
@@ -153,6 +156,9 @@ struct Computer {
     /// The picture whose deletion the last action undid, which a redo
     /// deletes again.
     undone_last: Option<String>,
+    /// The pictures this computer has held, without those that an action on
+    /// this computer deleted afterwards.
+    held_files: BTreeSet<String>,
 }
 
 impl Computer {
@@ -181,7 +187,14 @@ impl Computer {
             imports: 0,
             deleted_last: None,
             undone_last: None,
+            held_files: BTreeSet::new(),
         }
+    }
+
+    /// Adds the pictures this computer holds now to `held_files`.
+    fn note_held(&mut self) {
+        let roots = self.roots();
+        self.held_files.extend(roots.into_keys());
     }
 
     fn clock(&self) -> (i64, i64) {
@@ -396,6 +409,7 @@ fn uuid_like() -> String {
 /// Does one random action on `computer` and logs it when it recorded
 /// something.
 fn act(random: &mut Random, computer: &mut Computer, log: &mut Vec<Action>) {
+    computer.note_held();
     let roots = computer.roots();
     let held = roots.keys().cloned().collect::<Vec<_>>();
     let choice = random.below(115);
@@ -404,6 +418,9 @@ fn act(random: &mut Random, computer: &mut Computer, log: &mut Vec<Action>) {
     if let (Some(hash), true) = (redo, choice < 10) {
         let before = computer.clock();
         computer.library.redo().unwrap();
+        if !computer.roots().contains_key(&hash) {
+            computer.held_files.remove(&hash);
+        }
         if let Some(time) = computer.action_time(before) {
             computer.deleted_last = Some(hash.clone());
             log.push(Action::Delete { hash, time });
@@ -468,6 +485,7 @@ fn act(random: &mut Random, computer: &mut Computer, log: &mut Vec<Action>) {
             }
             let before = computer.clock();
             computer.library.permanently_delete(&target, now_ms(), 500, false).unwrap();
+            computer.held_files.remove(&hash);
             let time = computer.action_time(before);
             // Only an undo of a recorded deletion is an action of the rules.
             computer.deleted_last = time.is_some().then(|| hash.clone());
@@ -644,6 +662,7 @@ fn act(random: &mut Random, computer: &mut Computer, log: &mut Vec<Action>) {
                     now_ms(),
                 )
                 .unwrap();
+            computer.held_files.remove(&hash);
             if let Some(time) = computer.action_time(before) {
                 log.push(Action::Delete { hash: hash.clone(), time: time.clone() });
                 let was = &pictures[&winner];
@@ -675,6 +694,7 @@ fn act(random: &mut Random, computer: &mut Computer, log: &mut Vec<Action>) {
                     now_ms(),
                 )
                 .unwrap();
+            computer.held_files.remove(&hash);
             if let Some(time) = computer.action_time(before) {
                 let picture = computer.pictures().remove(&new_hash).unwrap();
                 log.push(Action::Delete { hash: hash.clone(), time: time.clone() });
@@ -793,6 +813,9 @@ fn run(seed: u64, template: &std::path::Path) {
         } else {
             act(&mut random, &mut computers[index], &mut log);
         }
+        for computer in &mut computers {
+            computer.note_held();
+        }
     }
     for computer in &mut computers {
         if !computer.recording {
@@ -836,6 +859,15 @@ fn check(computers: &[Computer], log: &[Action]) -> Vec<String> {
         for (hash, picture) in pictures {
             if libraries[number].get(hash) != Some(picture) {
                 problems.push(format!("computer {number}: {hash} doesn't match its entries"));
+            }
+        }
+        // A merge that deleted a picture kept its file, so the picture is
+        // back when the entries add it again.
+        for hash in &computers[number].held_files {
+            if libraries[number].contains_key(hash) && !pictures.contains_key(hash) {
+                problems.push(format!(
+                    "computer {number}: {hash} exists by the entries and isn't held"
+                ));
             }
         }
     }
@@ -1296,4 +1328,110 @@ fn undoing_an_import_task_keeps_a_picture_another_computer_added() {
     one.library.stop_task(task, true, now_ms()).unwrap();
     one.library.revert_task(task, now_ms()).unwrap();
     assert!(one.roots().contains_key(&hash(2)));
+}
+
+/// The file of `hash` as `computer` holds it: its path, and whether the
+/// file is waiting to be removed from the disk.
+fn file_on_disk(computer: &Computer, hash: &str) -> Option<(String, bool)> {
+    computer
+        .rows(
+            &format!(
+                "SELECT file.file_path,
+                        EXISTS (SELECT 1 FROM blob_cleanup_queue queue
+                                WHERE queue.file_id = file.file_id)
+                 FROM media_file file WHERE file.content_hash = '{hash}'"
+            ),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
+        )
+        .pop()
+}
+
+/// Another computer deletes a picture and then adds it again, and this
+/// computer gets the file of entries with the deletion first. The deletion
+/// removes the picture here, and the add brings it back with the file this
+/// computer had, without fetching it. The add is either the undo of the
+/// deletion or an import on a third computer.
+#[test]
+fn a_picture_that_a_merge_deleted_comes_back_with_its_file() {
+    for undo in [true, false] {
+        let (_directory, template) = template();
+        let (one, two) = two_synced(&template);
+        let mut log = Vec::new();
+        let mut three = Computer::new(&template);
+        three.start(&mut log);
+        let file = file_on_disk(&one, &hash(1)).unwrap();
+
+        let root = two.roots()[&hash(1)];
+        two.library.set_lifecycle(&two.target(root), Lifecycle::Trash).unwrap();
+        two.library.permanently_delete(&two.target(root), now_ms(), 500, false).unwrap();
+        let (deletion, rest): (Vec<_>, Vec<_>) = if undo {
+            two.library.undo().unwrap();
+            two.own_entries()
+                .into_iter()
+                .partition(|entry| entry.kind == picto_library::EntryKind::Delete)
+        } else {
+            // The third computer has the deletion and imports the file again.
+            let entries = two.own_entries();
+            three.library.merge_entries(&entries).unwrap();
+            three.import(&hash(1), "from three", Vec::new(), Vec::new());
+            (entries, three.own_entries())
+        };
+
+        one.library.store_entries(&deletion).unwrap();
+        one.library.apply_stored(false).unwrap();
+        assert!(!one.roots().contains_key(&hash(1)), "undo {undo}");
+        assert_eq!(file_on_disk(&one, &hash(1)), Some(file.clone()), "undo {undo}");
+        let entries_before = one.own_entries();
+
+        one.library.store_entries(&rest).unwrap();
+        one.library.apply_stored(false).unwrap();
+        assert!(one.roots().contains_key(&hash(1)), "undo {undo}: the picture is not back");
+        assert_eq!(file_on_disk(&one, &hash(1)), Some(file.clone()), "undo {undo}");
+        assert_eq!(one.pictures().get(&hash(1)), one.views().get(&hash(1)), "undo {undo}");
+        assert!(one.library.wanted_files(None, 10).unwrap().is_empty(), "undo {undo}");
+        // Bringing the picture back is part of the merge and writes no entry.
+        assert_eq!(one.own_entries(), entries_before, "undo {undo}");
+    }
+}
+
+/// The file that a merge kept is removed from the disk once "Keep deleted
+/// files" has passed since the merge and the picture doesn't exist by the
+/// entries.
+#[test]
+fn a_kept_file_is_removed_after_the_keep_time() {
+    for days in [7, 0] {
+        let (_directory, template) = template();
+        let (one, two) = two_synced(&template);
+        one.library
+            .database()
+            .maintenance_write(WorkPriority::Maintenance, |transaction| {
+                transaction.execute(
+                    "UPDATE cloud_state
+                     SET retention_json = json_set(retention_json, '$.deleted_blobs_days', ?1)",
+                    [days],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let root = two.roots()[&hash(1)];
+        two.library.set_lifecycle(&two.target(root), Lifecycle::Trash).unwrap();
+        two.library.permanently_delete(&two.target(root), now_ms(), 500, false).unwrap();
+        one.library.merge_entries(&two.own_entries()).unwrap();
+        assert!(one.roots().is_empty());
+
+        let mut removed = Vec::new();
+        one.library
+            .clean_pending_blobs(10, |pending| {
+                removed.push(pending.content_hash.clone());
+                Ok(())
+            })
+            .unwrap();
+        if days == 0 {
+            assert_eq!(removed, [hash(1)]);
+            assert_eq!(file_on_disk(&one, &hash(1)), None);
+        } else {
+            assert!(removed.is_empty());
+            assert!(file_on_disk(&one, &hash(1)).is_some());
+        }
+    }
 }
