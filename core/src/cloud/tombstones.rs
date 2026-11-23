@@ -1,37 +1,32 @@
-//! The files in the cloud folder that hold the tombstones which the devices
-//! of a library share.
+//! The files in the cloud folder that hold the entries the computers of a
+//! library send each other.
 //!
-//! The library keeps one entry per key: what was done last to an item, a
-//! tag, a folder or a smart folder, with the time of the library's hybrid
-//! logical clock and the device that did it
-//! (`picto-library/src/mutation/shared.rs`). A device writes the entries
-//! that it made into its own folder,
-//! `picto/<library id>/tombstones/<device id>/`, and merges the entries in
-//! the folders of all devices. The library decides which entry wins. This
-//! file reads and writes the files.
+//! The library keeps one entry per key: what one computer did to a picture,
+//! a tag or a folder, and when (`picto-library/src/mutation/shared.rs`).
+//! Each computer writes the entries it made into its own folder,
+//! `picto/<library id>/entries/<device id>/`, and merges the entries in the
+//! folders of all computers. The library decides which entry wins; this file
+//! only reads and writes the files.
 //!
-//! A device merges its own folder too. Usually that changes nothing, because
-//! the library holds those entries. After a snapshot was restored, the
-//! library holds older entries than the device wrote, and the merge brings
-//! them back.
+//! A computer merges its own folder too. Usually that changes nothing. After
+//! a snapshot was restored, the library holds older entries than the computer
+//! wrote, and the merge brings them back.
 //!
-//! A device's entries are spread over 256 files by the first byte of the
-//! SHA-256 of an entry's kind and key, so that a change rewrites only the
-//! files of the keys that changed. A file's name is the two hexadecimal
-//! digits of that byte, the first 16 hexadecimal digits of the SHA-256 of its
-//! lines, and `.jsonl.zst`. Its content is compressed with zstd: a JSON
-//! header that names the library, the device and the two digits and holds
-//! the whole SHA-256 of the lines, and then one entry per line. A file is
-//! written whole beside its place and renamed into it, and it is never
-//! changed: a new state of the same keys is a file with another name, and
-//! the file it replaces is removed.
+//! A computer's entries are spread over 256 files by the first byte of the
+//! SHA-256 of an entry's key, so a change rewrites only the files of the keys
+//! that changed. A file is named after those two hexadecimal digits and the
+//! first 16 hexadecimal digits of the SHA-256 of its lines, with the ending
+//! `.jsonl.zst`. It's compressed with zstd and holds a JSON header (library,
+//! computer, the two digits and the whole SHA-256 of the lines) and then one
+//! entry per line. A file is written whole beside its place and renamed into
+//! it, and never changed afterwards: a new state of the same keys is a new
+//! file, and the one it replaces is removed.
 //!
-//! No file depends on another one, and merging entries twice or in another
-//! order gives the same library. So a device merges whatever files are there
-//! and can be read, and a file that the provider's desktop app has not
-//! brought yet is merged when it arrives. A file whose content does not
-//! match its checksum is not merged, and no file is merged in the round
-//! that finds it.
+//! Files don't depend on each other, and merging entries twice or in another
+//! order gives the same library. So a computer merges whatever files are
+//! there and readable, and a file the provider's desktop app hasn't brought
+//! yet is merged when it arrives. A file that doesn't match its checksum
+//! isn't merged, and no file is merged in the round that finds it.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::{LazyLock, Mutex};
@@ -45,11 +40,11 @@ use crate::library_application::LibraryApplication;
 
 /// The number of the file format that this version reads and writes.
 const FORMAT: u32 = 1;
-/// The number of roots whose moves into and out of the Trash are turned
-/// into entries in one write transaction.
+/// The number of roots whose changes are turned into entries in one write
+/// transaction. The library stays usable between the transactions.
 const SETTLE_LIMIT: usize = 20_000;
 
-/// The first line of a tombstone file.
+/// The first line of an entry file.
 #[derive(Debug, Serialize, Deserialize)]
 struct Header {
     format: u32,
@@ -102,7 +97,7 @@ pub(super) fn forget_merged() {
 }
 
 fn directory(library_id: &str) -> String {
-    format!("picto/{library_id}/tombstones")
+    format!("picto/{library_id}/entries")
 }
 
 /// Returns the two hexadecimal digits of the file that holds `entry`.
@@ -110,11 +105,13 @@ fn shard_of(entry: &SharedEntry) -> String {
     let mut hasher = Sha256::new();
     hasher.update(entry.kind.as_str().as_bytes());
     hasher.update(b"\n");
-    hasher.update(entry.key.as_bytes());
+    hasher.update(entry.subject_key.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(entry.second_key.as_bytes());
     hex::encode(&hasher.finalize()[..1])
 }
 
-/// Returns whether `name` is the name of a tombstone file: two hexadecimal
+/// Returns whether `name` is the name of an entry file: two hexadecimal
 /// digits, a dot, 16 hexadecimal digits and `.jsonl.zst`.
 pub(super) fn is_file_name(name: &str) -> bool {
     let hexadecimal = |text: &str| text.bytes().all(|byte| byte.is_ascii_hexdigit());
@@ -152,7 +149,7 @@ fn encode(
     text.push(b'\n');
     text.extend(lines);
     let bytes = zstd::stream::encode_all(text.as_slice(), 9)
-        .map_err(|error| format!("Failed to compress the tombstone file: {error}"))?;
+        .map_err(|error| format!("Failed to compress the entry file: {error}"))?;
     Ok((name, bytes))
 }
 
@@ -193,13 +190,17 @@ fn decode(
     if entries.len() != header.entries {
         return Err("does not hold the number of entries that its header states".into());
     }
+    if entries.iter().any(|entry| entry.device_id != device_id) {
+        return Err("holds entries of another device".into());
+    }
     Ok(entries)
 }
 
-/// Writes the entries that this device made into the cloud folder.
+/// Writes the entries that this computer made into the cloud folder.
 ///
-/// It first turns the device's pending moves into and out of the Trash into
-/// entries. Then it rewrites the files of every key whose entry is later
+/// The first sync starts recording, which gives every picture the library
+/// already holds an `add` entry. Then the computer's pending changes are
+/// turned into entries. Then it rewrites the files of every key whose entry is later
 /// than the clock time up to which the device's entries were written before,
 /// removes the files that the new ones replace, and records the new clock
 /// time. A run that stops in the middle is repeated by the next one and
@@ -210,8 +211,9 @@ pub(super) async fn publish_library(
     library_id: &str,
 ) -> Result<(), String> {
     let library = application.library();
+    library.start_recording().map_err(|error| error.to_string())?;
     while library
-        .settle_trash_moves(SETTLE_LIMIT)
+        .settle_entries(SETTLE_LIMIT)
         .map_err(|error| error.to_string())?
     {}
     let clock = library.entry_clock().map_err(|error| error.to_string())?;
@@ -261,7 +263,7 @@ pub(super) async fn publish_library(
         .map_err(|error| error.to_string())
 }
 
-/// Returns the tombstone files of all devices that this process has not
+/// Returns the entry files of all computers that this process has not
 /// merged yet.
 pub(super) async fn unmerged_files(
     application: &LibraryApplication,
@@ -307,7 +309,7 @@ pub(super) async fn unmerged_files(
 /// cloud folder now, which is the case for a file that the provider's
 /// desktop app lists and has not downloaded, and for a file that its device
 /// has replaced meanwhile. Returns an error when the file was read and is
-/// not a whole tombstone file.
+/// not a whole entry file.
 async fn read(
     provider: &dyn CloudProvider,
     library_id: &str,
@@ -320,8 +322,8 @@ async fn read(
         .map(Some)
         .map_err(|reason| {
             format!(
-                "The tombstone file {} in the cloud folder {reason}. \
-                 Nothing was deleted on this device.",
+                "The entry file {} in the cloud folder {reason}. \
+                 Nothing from the cloud folder was merged on this computer.",
                 file.path
             )
         })
@@ -352,7 +354,7 @@ pub(super) async fn merge_files(
         };
         application
             .library()
-            .apply_shared_entries(&file.device_id, &entries)
+            .merge_entries(&entries)
             .map_err(|error| error.to_string())?;
         set_merged(&own_device, &file.path);
         merged += 1;
@@ -360,7 +362,7 @@ pub(super) async fn merge_files(
     Ok(merged)
 }
 
-/// Merges the tombstone files that this process has not merged yet
+/// Merges the entry files that this process has not merged yet
 /// ([`unmerged_files`], [`merge_files`]).
 pub(super) async fn receive_library(
     application: &LibraryApplication,
@@ -373,18 +375,19 @@ pub(super) async fn receive_library(
 
 #[cfg(test)]
 mod tests {
-    use picto_library::{EntryKind, EntryState};
+    use picto_library::EntryKind;
 
     use super::*;
 
-    fn entry(key: &str) -> SharedEntry {
+    fn entry(subject_key: &str) -> SharedEntry {
         SharedEntry {
-            kind: EntryKind::Item,
-            key: key.into(),
-            state: EntryState::Delete,
-            at_ms: 7,
-            logical: 1,
-            file: Some("0f".repeat(32)),
+            kind: EntryKind::Delete,
+            subject_key: subject_key.into(),
+            second_key: String::new(),
+            value: None,
+            clock_ms: 7,
+            clock_counter: 1,
+            device_id: "device".into(),
         }
     }
 
@@ -394,11 +397,12 @@ mod tests {
             entry("one"),
             SharedEntry {
                 kind: EntryKind::Status,
-                key: "two".into(),
-                state: EntryState::Trash,
-                at_ms: 9,
-                logical: 0,
-                file: None,
+                subject_key: "two".into(),
+                second_key: String::new(),
+                value: Some("trash".into()),
+                clock_ms: 9,
+                clock_counter: 0,
+                device_id: "device".into(),
             },
         ];
         let (name, bytes) = encode("library", "device", "0a", &entries).unwrap();
@@ -416,7 +420,7 @@ mod tests {
         // Cut short, as a file that was written only in part.
         assert!(decode(&bytes[..bytes.len() - 4], "library", "device", &name).is_err());
         assert!(decode(b"", "library", "device", &name).is_err());
-        assert!(decode(b"not a tombstone file", "library", "device", &name).is_err());
+        assert!(decode(b"not an entry file", "library", "device", &name).is_err());
         // The file of another library or device, or under another name.
         assert!(decode(&bytes, "other", "device", &name).is_err());
         assert!(decode(&bytes, "library", "other", &name).is_err());
@@ -431,7 +435,7 @@ mod tests {
             .contains("checksum"));
 
         // An entry of a kind that this version does not know.
-        let line = "{\"kind\":\"later_kind\",\"key\":\"one\",\"state\":\"delete\",\"at_ms\":1,\"logical\":0}\n";
+        let line = "{\"kind\":\"later_kind\",\"subject_key\":\"one\",\"clock_ms\":1,\"clock_counter\":0,\"device_id\":\"device\"}\n";
         let sha256 = hex::encode(Sha256::digest(line.as_bytes()));
         let name = format!("0a.{}.jsonl.zst", &sha256[..16]);
         let header = serde_json::json!({
@@ -446,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_names_of_tombstone_files_are_taken_for_them() {
+    fn only_the_names_of_entry_files_are_taken_for_them() {
         assert!(is_file_name("0a.0123456789abcdef.jsonl.zst"));
         for name in [
             "0a.0123456789abcdef.jsonl",

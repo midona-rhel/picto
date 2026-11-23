@@ -73,17 +73,14 @@ impl Library {
                 serde_json::json!({"label": entry.label}),
                 changed_at_ms,
             )?;
-            // The other devices get what this replay moved into or out of
-            // the Trash, as they do for the first edit. They also get the
-            // undo of a deletion of tags, folders or smart folders, as
-            // entries that the deletion was taken back, and its redo, as
-            // entries that they are deleted.
-            journal_trash_moves(transaction, revision, &snapshot, &next, changed_at_ms)?;
-            if matches!(
-                entry.command.as_str(),
-                "tags.delete" | "tags.delete_unused" | "folders.delete" | "smart_folders.delete"
-            ) {
-                record_replayed_deletions(transaction, &change, use_after)?;
+            // Cloud sync records the replay like any other change, through
+            // the delta. Tag renames, deleted folders and deleted tags are
+            // only visible in the history entry, so they're recorded here.
+            record_definition_changes(transaction, revision, &next, &change, use_after)?;
+            mark_restored_files(transaction, &snapshot, &next)?;
+            if use_after && matches!(entry.command.as_str(), "tags.delete" | "tags.delete_unused") {
+                let names = deleted_tag_names(&change);
+                record_deleted_tags(transaction, revision, &names)?;
             }
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
@@ -104,47 +101,24 @@ impl Library {
     }
 }
 
-/// Records the shared entries of a replayed deletion of tags, folders or
-/// smart folders. `change` holds the deleted definitions before and not
-/// after. The redo deletes them again, so they get `delete` entries. The
-/// undo brings them back, so their `delete` entries become `add` entries.
-fn record_replayed_deletions(
-    transaction: &rusqlite::Transaction<'_>,
-    change: &SemanticChange,
-    redo: bool,
-) -> Result<()> {
-    fn collect(change: &SemanticChange, keys: &mut [Vec<String>; 3]) {
+/// Returns the names of the tags that `change` deletes when it's redone.
+fn deleted_tag_names(change: &SemanticChange) -> Vec<String> {
+    fn collect(change: &SemanticChange, names: &mut Vec<String>) {
         match change {
             SemanticChange::Compound(changes) => {
                 for change in changes {
-                    collect(change, keys);
+                    collect(change, names);
                 }
             }
             SemanticChange::TagDefinition { before: Some(state), after: None, .. } => {
-                keys[0].push(state.stable_key.clone());
-            }
-            SemanticChange::FolderDefinition { before: Some(state), after: None, .. } => {
-                keys[1].push(state.stable_key.clone());
-            }
-            SemanticChange::SmartFolderDefinition { before: Some(state), after: None, .. } => {
-                keys[2].push(state.stable_key.clone());
+                names.push(state.full_name.clone());
             }
             _ => {}
         }
     }
-    let mut keys = [Vec::new(), Vec::new(), Vec::new()];
-    collect(change, &mut keys);
-    for (kind, keys) in [EntryKind::Tag, EntryKind::Folder, EntryKind::SmartFolder]
-        .into_iter()
-        .zip(keys)
-    {
-        if redo {
-            record_entries(transaction, kind, EntryState::Delete, &keys)?;
-        } else {
-            record_added_again(transaction, kind, &keys)?;
-        }
-    }
-    Ok(())
+    let mut names = Vec::new();
+    collect(change, &mut names);
+    names
 }
 
 pub(super) fn history_dependencies(

@@ -9,7 +9,8 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-13-task-rollback-aliases";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-11-23-shared-entries";
+const TOMBSTONE_ENTRIES_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-task-rollback-aliases";
 const COMBINED_IMPORT_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-media-aliases-import-tasks";
 const TASK_ROLLBACK_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-task-rollback";
 const MEDIA_ALIASES_PREDECESSOR: &str = "picto-library-schema-1-2026-10-12-media-aliases";
@@ -131,7 +132,8 @@ pub fn migrate_for_open(
     if generation != SCHEMA_GENERATION
         || !matches!(
             fingerprint.as_str(),
-            COMBINED_IMPORT_PREDECESSOR
+            TOMBSTONE_ENTRIES_PREDECESSOR
+                | COMBINED_IMPORT_PREDECESSOR
                 | TASK_ROLLBACK_PREDECESSOR
                 | MEDIA_ALIASES_PREDECESSOR
                 | IMPORT_TASKS_PREDECESSOR
@@ -211,6 +213,7 @@ pub fn migrate_for_open(
             )?;
             }
             if ![
+                TOMBSTONE_ENTRIES_PREDECESSOR,
                 COMBINED_IMPORT_PREDECESSOR,
                 TASK_ROLLBACK_PREDECESSOR,
                 MEDIA_ALIASES_PREDECESSOR,
@@ -266,6 +269,7 @@ pub fn migrate_for_open(
             // journal of changed roots and its triggers are kept, defined
             // once for every earlier schema.
             if ![
+                TOMBSTONE_ENTRIES_PREDECESSOR,
                 COMBINED_IMPORT_PREDECESSOR,
                 TASK_ROLLBACK_PREDECESSOR,
                 MEDIA_ALIASES_PREDECESSOR,
@@ -303,6 +307,7 @@ pub fn migrate_for_open(
             // These predecessors change only derived storage. Their canonical
             // data and existing checkpoint representation are unchanged.
             if [
+                TOMBSTONE_ENTRIES_PREDECESSOR,
                 COMBINED_IMPORT_PREDECESSOR,
                 TASK_ROLLBACK_PREDECESSOR,
                 MEDIA_ALIASES_PREDECESSOR,
@@ -395,8 +400,8 @@ pub fn migrate_for_open(
             // merge itself, and the one-item-per-file index after it, run
             // once the library is open (`Library::merge_shared_files`).
             connection.execute_batch(ALIAS_SCHEMA)?;
-            // The per-field CRDT design was replaced by snapshot sync; nothing
-            // ever wrote these tables.
+            // No version of the application ever wrote these cloud tables, so
+            // they are dropped.
             connection.execute_batch(
                 "DROP INDEX IF EXISTS idx_cloud_outbox_pending;
                  DROP TABLE IF EXISTS cloud_outbox;
@@ -404,6 +409,11 @@ pub fn migrate_for_open(
                  DROP TABLE IF EXISTS cloud_field_clock;
                  DROP TABLE IF EXISTS cloud_membership_clock;",
             )?;
+            // Every earlier schema keeps shared deletions in
+            // `cloud_tombstone`, which the entry tables replace.
+            if has_table(connection, "cloud_tombstone")? {
+                migrate_shared_entries(connection)?;
+            }
             connection.execute(
                 "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
                 [SCHEMA_FINGERPRINT],
@@ -438,6 +448,36 @@ pub fn migrate_for_open(
             Err(error)
         }
     }
+}
+
+/// Replaces `cloud_tombstone` with the tables of the shared entries.
+///
+/// The `blob` rows of `cloud_tombstone` are originals in the cloud folder
+/// that wait to be removed, and they move into `cloud_deleted_original`. The
+/// other rows were keyed by the stable keys of items, which entries no longer
+/// use, so they're dropped. `cloud_device_frontier` is cleared because none of
+/// the new entries has been written to a cloud folder. The library records
+/// nothing until `Library::start_recording` is called.
+fn migrate_shared_entries(connection: &Connection) -> Result<()> {
+    let tables = SCHEMA
+        .split(";\n")
+        .filter(|statement| {
+            ["shared_entry", "entry_recording", "pending_entry", "merge_touched", "wanted_file",
+             "cloud_deleted_original"]
+                .iter()
+                .any(|table| statement.contains(&format!("CREATE TABLE {table} (")))
+        })
+        .map(|statement| format!("{statement};"))
+        .collect::<String>();
+    connection.execute_batch(&tables)?;
+    connection.execute_batch(
+        "INSERT INTO cloud_deleted_original (file_name, deleted_at, purge_after)
+         SELECT object_key, deleted_at, purge_after
+         FROM cloud_tombstone WHERE object_kind = 'blob';
+         DROP TABLE cloud_tombstone;
+         DELETE FROM cloud_device_frontier;",
+    )?;
+    Ok(())
 }
 
 fn metadata(connection: &Connection) -> Result<(u32, String, u64)> {
@@ -758,6 +798,132 @@ mod tests {
             ),
             2
         );
+    }
+
+    /// Returns the definitions of the tables `names` as SQLite stores them,
+    /// with every run of white space made one space.
+    fn table_definitions(connection: &Connection, names: &[&str]) -> Vec<String> {
+        names
+            .iter()
+            .map(|name| {
+                connection
+                    .query_row(
+                        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                        [name],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_entry_tables_replace_the_tombstone_table_and_the_library_opens_again() {
+        const TABLES: [&str; 6] = [
+            "shared_entry",
+            "entry_recording",
+            "pending_entry",
+            "merge_touched",
+            "wanted_file",
+            "cloud_deleted_original",
+        ];
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        let created = table_definitions(&connection, &TABLES);
+        // The database is made into one of the earlier schema: the new
+        // tables are dropped and the tombstone table is created with rows.
+        connection
+            .execute_batch(
+                "DROP TABLE shared_entry;
+                 DROP TABLE entry_recording;
+                 DROP TABLE pending_entry;
+                 DROP TABLE merge_touched;
+                 DROP TABLE wanted_file;
+                 DROP TABLE cloud_deleted_original;
+                 CREATE TABLE cloud_tombstone (
+                     object_kind TEXT NOT NULL,
+                     object_key TEXT NOT NULL,
+                     mutation_id TEXT NOT NULL,
+                     hlc_physical_ms INTEGER NOT NULL,
+                     hlc_logical INTEGER NOT NULL,
+                     device_id TEXT NOT NULL,
+                     causal_frontier_json TEXT NOT NULL,
+                     deleted_at TEXT NOT NULL,
+                     purge_after TEXT,
+                     PRIMARY KEY(object_kind, object_key)
+                 ) WITHOUT ROWID, STRICT;
+                 INSERT INTO cloud_tombstone VALUES
+                     ('item', 'deleted-item', 'delete', 70, 2, 'device-a',
+                      '{\"file\":\"abc\"}', '2026-11-01T00:00:00Z', NULL),
+                     ('status', 'trashed-item', 'trash', 71, 0, 'device-b',
+                      '{}', '2026-11-01T00:00:00Z', NULL),
+                     ('blob', 'abc.png', 'delete-1', 1, 0, 'device-a',
+                      '{}', '2026-11-01T00:00:00Z', '2026-11-08T00:00:00Z');
+                 UPDATE cloud_state SET provider = 'dropbox', remote_root = 'folder';
+                 INSERT INTO cloud_device_frontier VALUES
+                     ('device-b', 5, 0, '2026-11-01T00:00:00Z');",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE library_meta SET schema_fingerprint=?1",
+                [super::TOMBSTONE_ENTRIES_PREDECESSOR],
+            )
+            .unwrap();
+        drop(connection);
+
+        drop(LibraryDatabase::open(&path).unwrap());
+        // The library opens a second time without another migration.
+        drop(LibraryDatabase::open(&path).unwrap());
+
+        let connection = Connection::open(&path).unwrap();
+        super::validate(&connection).unwrap();
+        assert_eq!(table_definitions(&connection, &TABLES), created);
+        assert_eq!(
+            count(
+                &connection,
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'cloud_tombstone'"
+            ),
+            0
+        );
+        // The tombstones of the earlier keys are not kept, and the library
+        // does not record entries.
+        assert_eq!(count(&connection, "SELECT COUNT(*) FROM shared_entry"), 0);
+        assert_eq!(count(&connection, "SELECT COUNT(*) FROM entry_recording"), 0);
+        assert_eq!(count(&connection, "SELECT COUNT(*) FROM cloud_device_frontier"), 0);
+        let waiting: (String, String, Option<String>) = connection
+            .query_row(
+                "SELECT file_name, deleted_at, purge_after FROM cloud_deleted_original",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            waiting,
+            (
+                "abc.png".into(),
+                "2026-11-01T00:00:00Z".into(),
+                Some("2026-11-08T00:00:00Z".into())
+            )
+        );
+
+        let backups = std::fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "backup"))
+            .collect::<Vec<_>>();
+        assert_eq!(backups.len(), 1);
+        let backup = Connection::open(&backups[0]).unwrap();
+        assert_eq!(
+            super::metadata(&backup).unwrap().1,
+            super::TOMBSTONE_ENTRIES_PREDECESSOR
+        );
+        assert_eq!(count(&backup, "SELECT COUNT(*) FROM cloud_tombstone"), 3);
     }
 
     #[test]

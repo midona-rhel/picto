@@ -9,6 +9,8 @@
 //! growing retained outcomes (unique and successful redownloads), and tags on 20% of roots.
 //! Use `--delete-only` for bounded permanent-delete and undo rows.
 //! Add `--tag-pages-only` to measure paging/search with 200k tag definitions after ingest.
+//! Add `--sync-only` for the cost of recording cloud sync entries: the start of
+//! recording and one tag on every root, then an import and a merge of 100,000 items.
 use std::time::Instant;
 
 use picto_library::predicate::{
@@ -28,6 +30,8 @@ const BASE_MS: u64 = 1_700_000_000_000;
 
 #[path = "library_ops_benchmark/subscriptions.rs"]
 mod subscriptions;
+#[path = "library_ops_benchmark/sync.rs"]
+mod sync;
 
 fn main() -> R<()> {
     let roots = arg(1, 1_000_000);
@@ -61,6 +65,9 @@ fn main() -> R<()> {
 
     if subscriptions_only {
         return subscriptions::run(library, roots, runs);
+    }
+    if std::env::args().any(|arg| arg == "--sync-only") {
+        return sync::run(library, &ids, dir.path());
     }
 
     // --- fixture: settle FTS so name text filters see every root ---

@@ -1,0 +1,833 @@
+//! Randomized test of cloud sync between three computers, for pictures that
+//! aren't in a collection.
+//!
+//! Each run makes three real libraries that stand for three computers. The
+//! computers import, edit, tag, file into folders, delete and undo at random,
+//! and start recording at random moments. In between, random sets of entries
+//! go from one computer to another, in any order and sometimes twice. At the
+//! end everything is delivered, and each computer fetches the files it's
+//! missing by importing them, the way a sync will.
+//!
+//! The test keeps its own log of what each computer did and when, by the
+//! time of that computer's clock, and checks the end state against it:
+//!
+//! - All three libraries are the same.
+//! - Nothing is lost that no action removed. A picture that nobody deleted is
+//!   on every computer, and a tag that nobody took off is still on it.
+//! - The later action wins. If one computer deleted a picture and another
+//!   imported it again later, it exists; if the deletion was later, it's gone.
+//!   The latest rename, rating or status after the last deletion is what all
+//!   computers show.
+//! - An explicit edit isn't undone by an import or by the start of recording
+//!   on another computer. A tag someone took off stays off even when another
+//!   computer still had it, and a deleted tag doesn't come back from a
+//!   computer that starts recording later.
+//!
+//! Every run has a fixed seed, and a failure names it, so it can be replayed
+//! with `SHARED_ENTRIES_SEED=<seed>`. Clock times come from the real clock,
+//! so a replay makes the same actions and checks the same rules, but its
+//! times differ.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use picto_library::database::WorkPriority;
+use picto_library::selection::SelectionTarget;
+use picto_library::{
+    FolderId, ImmutableMediaFacts, Library, Lifecycle, PreparedCollectionImport, PreparedImport,
+    Rating, RootId, SharedEntry, TagId,
+};
+use tempfile::TempDir;
+
+const HASHES: u64 = 5;
+const TAGS: [&str; 3] = ["red", "green", "blue"];
+const FOLDERS: [&str; 2] = ["5d3c0b52-0000-4000-8000-000000000001", "5d3c0b52-0000-4000-8000-000000000002"];
+const RUNS_PER_TEST: u64 = 250;
+
+type Time = (i64, i64, String);
+
+/// A small random number generator, so that a seed gives the same run.
+struct Random(u64);
+
+impl Random {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut value = self.0;
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^ (value >> 31)
+    }
+
+    fn below(&mut self, limit: u64) -> u64 {
+        self.next() % limit
+    }
+
+    fn chance(&mut self, percent: u64) -> bool {
+        self.below(100) < percent
+    }
+
+    fn pick<'a, T>(&mut self, items: &'a [T]) -> &'a T {
+        &items[self.below(items.len() as u64) as usize]
+    }
+}
+
+fn hash(number: u64) -> String {
+    format!("{number:064x}")
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+/// What a computer did, as the test logs it.
+#[derive(Debug, Clone)]
+enum Action {
+    /// The computer wrote an `add` entry: an import of a new file, the undo
+    /// of a deletion, or a file it held when it started recording.
+    Add { hash: String, time: Time, start: bool, tags: BTreeSet<String>, folders: BTreeSet<String> },
+    Delete { hash: String, time: Time },
+    Edit { hash: String, field: Field, value: String, time: Time },
+    Tag { hash: String, tag: String, on: bool, time: Time },
+    File { hash: String, folder: String, on: bool, time: Time },
+    DeleteTag { tag: String, time: Time },
+    DeleteFolder { folder: String, time: Time },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Field {
+    Name,
+    Notes,
+    Rating,
+    Status,
+}
+
+/// A picture as a library shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Picture {
+    name: String,
+    notes: String,
+    rating: String,
+    status: String,
+    tags: BTreeSet<String>,
+    folders: BTreeSet<String>,
+}
+
+impl Picture {
+    fn field(&self, field: Field) -> &str {
+        match field {
+            Field::Name => &self.name,
+            Field::Notes => &self.notes,
+            Field::Rating => &self.rating,
+            Field::Status => &self.status,
+        }
+    }
+}
+
+fn status_name(lifecycle: Lifecycle) -> &'static str {
+    match lifecycle {
+        Lifecycle::Active => "active",
+        Lifecycle::Inbox => "inbox",
+        Lifecycle::Trash => "trash",
+    }
+}
+
+fn rating_of(stars: u64) -> Rating {
+    Rating::ALL[stars as usize]
+}
+
+struct Computer {
+    library: Library,
+    _directory: TempDir,
+    id: String,
+    recording: bool,
+    imports: u64,
+    /// The picture this computer deleted with its last action, which an
+    /// undo brings back.
+    deleted_last: Option<String>,
+}
+
+impl Computer {
+    fn new(template: &std::path::Path) -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("library.sqlite");
+        std::fs::copy(template, &path).unwrap();
+        let id = uuid_like();
+        {
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            connection
+                .execute("UPDATE cloud_state SET device_id = ?1", [&id])
+                .unwrap();
+        }
+        let library = Library::open(&path).unwrap();
+        for (index, key) in FOLDERS.iter().enumerate() {
+            library
+                .create_folder_with_stable_key(&format!("Folder {index}"), None, (*key).to_owned())
+                .unwrap();
+        }
+        Self { library, _directory: directory, id, recording: false, imports: 0, deleted_last: None }
+    }
+
+    fn clock(&self) -> (i64, i64) {
+        self.library.entry_clock().unwrap().now
+    }
+
+    /// Returns the time of the action that moved the clock from `before`,
+    /// or `None` when the action recorded nothing.
+    fn action_time(&self, before: (i64, i64)) -> Option<Time> {
+        let now = self.clock();
+        (self.recording && now != before).then(|| (now.0, now.1, self.id.clone()))
+    }
+
+    fn rows<T>(
+        &self,
+        sql: &str,
+        map: impl Fn(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+    ) -> Vec<T> {
+        self.library
+            .database()
+            .read(WorkPriority::VisibleRead, |connection| {
+                let mut statement = connection.prepare(sql)?;
+                let rows = statement.query_map([], |row| map(row))?;
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .unwrap()
+    }
+
+    /// The roots of the pictures outside collections, by content hash.
+    fn roots(&self) -> BTreeMap<String, RootId> {
+        self.rows(
+            "SELECT file.content_hash, root.root_id FROM library_root root
+             JOIN media_item media ON media.media_id = root.root_id
+             JOIN media_file file ON file.file_id = media.file_id",
+            |row| Ok((row.get::<_, String>(0)?, RootId(row.get(1)?))),
+        )
+        .into_iter()
+        .collect()
+    }
+
+    fn tag_ids(&self) -> BTreeMap<String, TagId> {
+        self.rows(
+            "SELECT tag.tag_id, namespace.display_name, tag.subname FROM tag_definition tag
+             JOIN tag_namespace namespace ON namespace.namespace_id = tag.namespace_id",
+            |row| {
+                let namespace: String = row.get(1)?;
+                let subname: String = row.get(2)?;
+                let name = if namespace.is_empty() { subname } else { format!("{namespace}:{subname}") };
+                Ok((name, TagId(row.get(0)?)))
+            },
+        )
+        .into_iter()
+        .collect()
+    }
+
+    fn folder_ids(&self) -> BTreeMap<String, FolderId> {
+        self.rows("SELECT stable_key, folder_id FROM folder_definition", |row| {
+            Ok((row.get::<_, String>(0)?, FolderId(row.get(1)?)))
+        })
+        .into_iter()
+        .collect()
+    }
+
+    fn pictures(&self) -> BTreeMap<String, Picture> {
+        let tags = self
+            .tag_ids()
+            .into_iter()
+            .map(|(name, id)| (id, name))
+            .collect::<BTreeMap<_, _>>();
+        let folders = self
+            .folder_ids()
+            .into_iter()
+            .map(|(key, id)| (id, key))
+            .collect::<BTreeMap<_, _>>();
+        let texts = self
+            .rows(
+                "SELECT root.root_id, root.name, COALESCE(root.notes, '') FROM library_root root",
+                |row| Ok((row.get::<_, u32>(0)?, (row.get::<_, String>(1)?, row.get::<_, String>(2)?))),
+            )
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        self.roots()
+            .into_iter()
+            .map(|(hash, root)| {
+                let details = self.library.details(root).unwrap();
+                let (name, notes) = texts[&root.0].clone();
+                let picture = Picture {
+                    name,
+                    notes,
+                    rating: details.rating.bitmap_key().to_string(),
+                    status: status_name(details.lifecycle).to_owned(),
+                    tags: details.tag_ids.iter().map(|id| tags[id].clone()).collect(),
+                    folders: details.folder_ids.iter().map(|id| folders[id].clone()).collect(),
+                };
+                (hash, picture)
+            })
+            .collect()
+    }
+
+    fn target(&self, root: RootId) -> SelectionTarget {
+        SelectionTarget::Explicit { root_ids: vec![root] }
+    }
+
+    fn import(&mut self, hash: &str, name: &str, tags: Vec<String>, folders: Vec<FolderId>) {
+        let input = self.prepared(hash, name, tags, folders);
+        self.library.ingest(&input).unwrap();
+    }
+
+    fn prepared(
+        &mut self,
+        hash: &str,
+        name: &str,
+        tags: Vec<String>,
+        folders: Vec<FolderId>,
+    ) -> PreparedImport {
+        self.imports += 1;
+        let key = format!("{}-{}", self.id, self.imports);
+        PreparedImport {
+            stable_key: key.clone(),
+            media_name: name.to_owned(),
+            file_path: format!("/picto-test/{key}.png"),
+            facts: ImmutableMediaFacts {
+                mime: "image/png".into(),
+                size_bytes: 1_024,
+                width: Some(10),
+                height: Some(10),
+                duration_ms: None,
+                frame_count: Some(1),
+                content_hash: hash.to_owned(),
+                perceptual_hash: None,
+                palette: Vec::new(),
+            },
+            lifecycle: Lifecycle::Active,
+            rating: Rating::Unrated,
+            notes: None,
+            tags,
+            folders,
+            source_urls: Vec::new(),
+            source_identity: None,
+            imported_at_ms: now_ms(),
+            captured_at_ms: None,
+        }
+    }
+
+    fn settle(&self) {
+        while self.library.settle_entries(3).unwrap() {}
+    }
+
+    fn own_entries(&self) -> Vec<SharedEntry> {
+        self.settle();
+        let mut entries = Vec::new();
+        self.library
+            .visit_own_entries(None, &mut |entry| entries.push(entry))
+            .unwrap();
+        entries
+    }
+
+    /// Starts recording and logs an `add` for every picture held now.
+    fn start(&mut self, log: &mut Vec<Action>) {
+        let before = self.clock();
+        assert!(self.library.start_recording().unwrap());
+        self.recording = true;
+        self.deleted_last = None;
+        let time = self.action_time(before).unwrap();
+        for (hash, picture) in self.pictures() {
+            log.push(Action::Add {
+                hash,
+                time: time.clone(),
+                start: true,
+                tags: picture.tags,
+                folders: picture.folders,
+            });
+        }
+    }
+
+    /// Imports the files that the entries say exist and that this computer
+    /// doesn't hold, the way a sync fetches them.
+    fn fetch_wanted(&mut self) {
+        for wanted in self.library.wanted_files(None, 1_000).unwrap() {
+            self.import(&wanted.content_hash, &wanted.record.name, Vec::new(), Vec::new());
+        }
+    }
+}
+
+fn uuid_like() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let number = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{:08x}-0000-4000-8000-{:012x}", now_ms() as u32, number)
+}
+
+/// Does one random action on `computer` and logs it when it recorded
+/// something.
+fn act(random: &mut Random, computer: &mut Computer, log: &mut Vec<Action>) {
+    let roots = computer.roots();
+    let held = roots.keys().cloned().collect::<Vec<_>>();
+    let choice = random.below(100);
+    let undo = computer.deleted_last.take();
+    if let (Some(hash), true) = (undo, choice < 10) {
+        let before = computer.clock();
+        computer.library.undo().unwrap();
+        if let Some(time) = computer.action_time(before) {
+            let picture = computer.pictures().remove(&hash).unwrap();
+            log.push(Action::Add {
+                hash,
+                time,
+                start: false,
+                tags: picture.tags,
+                folders: picture.folders,
+            });
+        }
+        return;
+    }
+    if held.is_empty() || choice < 30 {
+        let hash = hash(random.below(HASHES) + 1);
+        if roots.contains_key(&hash) {
+            return;
+        }
+        let exists = computer.library.entry_view(&hash).unwrap().is_some();
+        let name = format!("name-{}", random.below(1_000));
+        let tags = TAGS.iter().filter(|_| random.chance(40)).map(|tag| (*tag).to_owned()).collect::<Vec<_>>();
+        let folder_ids = computer.folder_ids();
+        let folders = folder_ids
+            .iter()
+            .filter(|_| random.chance(30))
+            .map(|(key, id)| (key.clone(), *id))
+            .collect::<Vec<_>>();
+        let before = computer.clock();
+        computer.import(&hash, &name, tags.clone(), folders.iter().map(|(_, id)| *id).collect());
+        // An import of a file that already exists by the entries writes
+        // nothing; it only brings the file to this computer.
+        if let (Some(time), false) = (computer.action_time(before), exists) {
+            log.push(Action::Add {
+                hash,
+                time,
+                start: false,
+                tags: tags.into_iter().collect(),
+                folders: folders.into_iter().map(|(key, _)| key).collect(),
+            });
+        }
+        return;
+    }
+    let hash = random.pick(&held).clone();
+    let root = roots[&hash];
+    let target = computer.target(root);
+    let before = computer.clock();
+    let logged = match choice {
+        30..=37 => {
+            // Delete Permanently, after moving the picture to the Trash.
+            computer.library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
+            if let Some(time) = computer.action_time(before) {
+                log.push(Action::Edit { hash: hash.clone(), field: Field::Status, value: "trash".into(), time });
+            }
+            let before = computer.clock();
+            computer.library.permanently_delete(&target, now_ms(), 500, false).unwrap();
+            let time = computer.action_time(before);
+            // Only an undo of a recorded deletion is an action of the rules.
+            computer.deleted_last = time.is_some().then(|| hash.clone());
+            time.map(|time| Action::Delete { hash: hash.clone(), time })
+        }
+        38..=45 => {
+            let name = format!("renamed-{}", random.below(1_000));
+            computer.library.rename_root(root, &name, now_ms()).unwrap();
+            computer
+                .action_time(before)
+                .map(|time| Action::Edit { hash: hash.clone(), field: Field::Name, value: name, time })
+        }
+        46..=50 => {
+            let notes = format!("notes-{}", random.below(1_000));
+            computer.library.set_notes(&target, Some(notes.clone()), now_ms()).unwrap();
+            computer
+                .action_time(before)
+                .map(|time| Action::Edit { hash: hash.clone(), field: Field::Notes, value: notes, time })
+        }
+        51..=57 => {
+            let stars = random.below(6);
+            computer.library.set_rating(&target, rating_of(stars)).unwrap();
+            computer.action_time(before).map(|time| Action::Edit {
+                hash: hash.clone(),
+                field: Field::Rating,
+                value: stars.to_string(),
+                time,
+            })
+        }
+        58..=63 => {
+            let lifecycle = *random.pick(&Lifecycle::ALL);
+            computer.library.set_lifecycle(&target, lifecycle).unwrap();
+            computer.action_time(before).map(|time| Action::Edit {
+                hash: hash.clone(),
+                field: Field::Status,
+                value: status_name(lifecycle).into(),
+                time,
+            })
+        }
+        64..=79 => {
+            let tag = (*random.pick(&TAGS)).to_owned();
+            let on = random.chance(60);
+            computer.library.apply_tags(&target, std::slice::from_ref(&tag), on).unwrap();
+            computer
+                .action_time(before)
+                .map(|time| Action::Tag { hash: hash.clone(), tag, on, time })
+        }
+        80..=91 => {
+            let folders = computer.folder_ids();
+            let Some((folder, folder_id)) =
+                folders.iter().nth(random.below(FOLDERS.len() as u64) as usize)
+            else {
+                return;
+            };
+            let on = random.chance(60);
+            if on {
+                computer.library.add_to_folder(&target, *folder_id).unwrap();
+            } else {
+                computer.library.remove_from_folder(&target, *folder_id).unwrap();
+            }
+            computer
+                .action_time(before)
+                .map(|time| Action::File { hash: hash.clone(), folder: folder.clone(), on, time })
+        }
+        92..=96 => {
+            let tag = (*random.pick(&TAGS)).to_owned();
+            let Some(tag_id) = computer.tag_ids().get(&tag).copied() else {
+                return;
+            };
+            computer.library.delete_tag(tag_id, now_ms()).unwrap();
+            computer.action_time(before).map(|time| Action::DeleteTag { tag, time })
+        }
+        _ => {
+            // Folder definitions don't sync, so a folder deleted before
+            // recording starts would be missing on this computer only.
+            if !computer.recording {
+                return;
+            }
+            let folders = computer.folder_ids();
+            let Some((folder, folder_id)) =
+                folders.iter().nth(random.below(FOLDERS.len() as u64) as usize)
+            else {
+                return;
+            };
+            computer.library.delete_folders(&[*folder_id]).unwrap();
+            computer
+                .action_time(before)
+                .map(|time| Action::DeleteFolder { folder: folder.clone(), time })
+        }
+    };
+    if choice >= 38 {
+        computer.deleted_last = None;
+    }
+    log.extend(logged);
+}
+
+/// Sends a random part of one computer's entries to another, in random order
+/// and with some entries twice.
+fn deliver(random: &mut Random, from: &Computer, to: &Computer) {
+    let mut entries = from
+        .own_entries()
+        .into_iter()
+        .filter(|_| random.chance(50))
+        .collect::<Vec<_>>();
+    let repeated = entries.iter().filter(|_| random.chance(10)).cloned().collect::<Vec<_>>();
+    entries.extend(repeated);
+    for index in (1..entries.len()).rev() {
+        entries.swap(index, random.below(index as u64 + 1) as usize);
+    }
+    to.library.merge_entries(&entries).unwrap();
+}
+
+fn run(seed: u64, template: &std::path::Path) {
+    let mut random = Random(seed);
+    let mut computers = (0..3).map(|_| Computer::new(template)).collect::<Vec<_>>();
+    let mut log = Vec::new();
+    let steps = 15 + random.below(25);
+    for _ in 0..steps {
+        let index = random.below(3) as usize;
+        if !computers[index].recording && random.chance(25) {
+            computers[index].start(&mut log);
+        } else if computers[index].recording && random.chance(20) {
+            let from = random.below(3) as usize;
+            if from != index && computers[from].recording {
+                deliver(&mut random, &computers[from], &computers[index]);
+            }
+        } else {
+            act(&mut random, &mut computers[index], &mut log);
+        }
+    }
+    for computer in &mut computers {
+        if !computer.recording {
+            computer.start(&mut log);
+        }
+    }
+    for _ in 0..3 {
+        for to in 0..3 {
+            for from in 0..3 {
+                if from != to {
+                    let entries = computers[from].own_entries();
+                    computers[to].library.merge_entries(&entries).unwrap();
+                }
+            }
+        }
+        for computer in &mut computers {
+            computer.fetch_wanted();
+            computer.settle();
+            computer.library.merge_entries(&[]).unwrap();
+        }
+    }
+    let problems = check(&computers, &log);
+    assert!(
+        problems.is_empty(),
+        "seed {seed}: {problems:?}\nlog: {log:#?}\nlibraries: {:#?}",
+        computers.iter().map(Computer::pictures).collect::<Vec<_>>()
+    );
+}
+
+fn check(computers: &[Computer], log: &[Action]) -> Vec<String> {
+    let mut problems = Vec::new();
+    let libraries = computers.iter().map(Computer::pictures).collect::<Vec<_>>();
+    if libraries.iter().any(|library| *library != libraries[0]) {
+        problems.push("the libraries differ".to_owned());
+    }
+    let zero: Time = (0, 0, String::new());
+    for number in 1..=HASHES {
+        let hash = hash(number);
+        let adds = log
+            .iter()
+            .filter_map(|action| match action {
+                Action::Add { hash: of, time, start, tags, folders } if *of == hash => {
+                    Some((time.clone(), *start, tags, folders))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let deletes = log
+            .iter()
+            .filter_map(|action| match action {
+                Action::Delete { hash: of, time } if *of == hash => Some(time.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let deleted = deletes.iter().max().cloned().unwrap_or_else(|| zero.clone());
+        let added = adds.iter().map(|add| add.0.clone()).max().unwrap_or_else(|| zero.clone());
+        let shown = libraries.iter().map(|library| library.get(&hash)).collect::<Vec<_>>();
+        if !adds.is_empty() && deletes.is_empty() && shown.iter().any(Option::is_none) {
+            problems.push(format!("{hash}: lost although nobody deleted it"));
+        }
+        if !adds.is_empty() || !deletes.is_empty() {
+            let exists = added > deleted;
+            if shown.iter().any(|picture| picture.is_some() != exists) {
+                problems.push(format!("{hash}: the later of import and deletion did not win"));
+            }
+        }
+        let shown = shown.into_iter().flatten().collect::<Vec<_>>();
+        for field in [Field::Name, Field::Notes, Field::Rating, Field::Status] {
+            let last = log
+                .iter()
+                .filter_map(|action| match action {
+                    Action::Edit { hash: of, field: edited, value, time }
+                        if *of == hash && *edited == field && *time > deleted =>
+                    {
+                        Some((time, value))
+                    }
+                    _ => None,
+                })
+                .max();
+            if let Some((_, value)) = last {
+                if shown.iter().any(|picture| picture.field(field) != value) {
+                    problems.push(format!("{hash}: the latest {field:?} edit did not win"));
+                }
+            }
+        }
+        for (is_tag, names) in [(true, &TAGS[..]), (false, &FOLDERS[..])] {
+            for name in names.iter() {
+                let explicit = log
+                    .iter()
+                    .filter_map(|action| match action {
+                        Action::Tag { hash: of, tag, on, time } if is_tag && *of == hash && tag == name => {
+                            Some((time.clone(), *on))
+                        }
+                        Action::File { hash: of, folder, on, time }
+                            if !is_tag && *of == hash && folder == name =>
+                        {
+                            Some((time.clone(), *on))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let removals = log
+                    .iter()
+                    .filter_map(|action| match action {
+                        Action::DeleteTag { tag, time } if is_tag && tag == name => Some(time.clone()),
+                        Action::DeleteFolder { folder, time } if !is_tag && folder == name => {
+                            Some(time.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let has = |picture: &Picture| {
+                    if is_tag {
+                        picture.tags.contains(*name)
+                    } else {
+                        picture.folders.contains(*name)
+                    }
+                };
+                let in_record = |tags: &BTreeSet<String>, folders: &BTreeSet<String>| {
+                    if is_tag { tags.contains(*name) } else { folders.contains(*name) }
+                };
+                // Nothing lost: nobody deleted the picture, the tag or the
+                // folder, and nobody took it off the picture.
+                if deletes.is_empty()
+                    && removals.is_empty()
+                    && explicit.iter().all(|(_, on)| *on)
+                    && !adds.is_empty()
+                    && (!explicit.is_empty()
+                        || adds.iter().any(|(_, _, tags, folders)| in_record(tags, folders)))
+                    && shown.iter().any(|picture| !has(picture))
+                {
+                    problems.push(format!("{hash}: {name} was lost"));
+                }
+                // The latest explicit change after the last deletion wins,
+                // unless the tag or folder was deleted after it.
+                if let Some((time, on)) = explicit.iter().filter(|(time, _)| *time > deleted).max() {
+                    if !on {
+                        if shown.iter().any(|picture| has(picture)) {
+                            problems.push(format!("{hash}: {name} came back after it was taken off"));
+                        }
+                    } else {
+                        let removed = if is_tag {
+                            removals.iter().any(|removal| removal >= time)
+                        } else {
+                            !removals.is_empty()
+                        };
+                        if !removed && shown.iter().any(|picture| !has(picture)) {
+                            problems.push(format!("{hash}: {name} was put on and is missing"));
+                        }
+                    }
+                }
+                // A deleted tag stays off unless something put it on again
+                // after the deletion; the start of recording doesn't count.
+                if is_tag {
+                    if let Some(removed) = removals.iter().max() {
+                        let again = explicit.iter().any(|(time, on)| *on && time > removed)
+                            || adds.iter().any(|(time, start, tags, folders)| {
+                                !start && time > removed && in_record(tags, folders)
+                            });
+                        if !again && shown.iter().any(|picture| has(picture)) {
+                            problems.push(format!("{hash}: deleted tag {name} came back"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    problems
+}
+
+fn template() -> (TempDir, std::path::PathBuf) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("template.sqlite");
+    drop(Library::create(&path).unwrap());
+    (directory, path)
+}
+
+fn runs(first: u64) {
+    let (_directory, template) = template();
+    if let Some(seed) = std::env::var("SHARED_ENTRIES_SEED").ok().and_then(|seed| seed.parse().ok()) {
+        if first == 0 {
+            run(seed, &template);
+        }
+        return;
+    }
+    for seed in first..first + RUNS_PER_TEST {
+        let outcome = std::panic::catch_unwind(|| run(seed, &template));
+        assert!(outcome.is_ok(), "seed {seed} failed");
+    }
+}
+
+#[test]
+fn random_runs_0() {
+    runs(0);
+}
+
+#[test]
+fn random_runs_1() {
+    runs(RUNS_PER_TEST);
+}
+
+#[test]
+fn random_runs_2() {
+    runs(2 * RUNS_PER_TEST);
+}
+
+#[test]
+fn random_runs_3() {
+    runs(3 * RUNS_PER_TEST);
+}
+
+#[test]
+fn random_runs_4() {
+    runs(4 * RUNS_PER_TEST);
+}
+
+#[test]
+fn random_runs_5() {
+    runs(5 * RUNS_PER_TEST);
+}
+
+#[test]
+fn random_runs_6() {
+    runs(6 * RUNS_PER_TEST);
+}
+
+#[test]
+fn random_runs_7() {
+    runs(7 * RUNS_PER_TEST);
+}
+
+/// Collections don't sync yet. A picture that is in a collection on one
+/// computer keeps its place there, whatever another computer does to the
+/// same file outside a collection, and it gets no entries of its own.
+#[test]
+fn a_picture_in_a_collection_is_left_alone() {
+    let (_directory, template) = template();
+    let mut log = Vec::new();
+    let mut loose = Computer::new(&template);
+    let mut grouped = Computer::new(&template);
+    loose.start(&mut log);
+    grouped.start(&mut log);
+    loose.import(&hash(1), "loose", vec!["red".into()], Vec::new());
+    let members = vec![
+        grouped.prepared(&hash(1), "member", Vec::new(), Vec::new()),
+        grouped.prepared(&hash(2), "other member", Vec::new(), Vec::new()),
+    ];
+    grouped
+        .library
+        .ingest_collection(&PreparedCollectionImport {
+            members,
+            cover_index: 0,
+            existing_root_id: None,
+            name: Some("set".into()),
+            modified_at_ms: now_ms(),
+        })
+        .unwrap();
+    let held_files = |computer: &Computer| {
+        computer.rows(
+            "SELECT file.content_hash FROM media_item media
+             JOIN media_file file ON file.file_id = media.file_id ORDER BY 1",
+            |row| row.get::<_, String>(0),
+        )
+    };
+    let before = held_files(&grouped);
+
+    // The other computer renames the file, then deletes it.
+    let root = loose.roots()[&hash(1)];
+    loose.library.rename_root(root, "renamed", now_ms()).unwrap();
+    grouped.library.merge_entries(&loose.own_entries()).unwrap();
+    assert_eq!(held_files(&grouped), before);
+    let target = loose.target(root);
+    loose.library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
+    loose.library.permanently_delete(&target, now_ms(), 500, false).unwrap();
+    grouped.library.merge_entries(&loose.own_entries()).unwrap();
+
+    assert_eq!(held_files(&grouped), before);
+    assert!(grouped.roots().is_empty());
+    assert!(grouped.own_entries().is_empty());
+    assert!(grouped.library.wanted_files(None, 10).unwrap().is_empty());
+}

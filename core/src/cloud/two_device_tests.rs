@@ -166,7 +166,8 @@ fn rows(application: &LibraryApplication, left_out: &[&str]) -> BTreeMap<String,
 /// Two devices that sync one library through the folder `cloud`, and that
 /// folder as a provider. Both hold the items 0, 1 and 2 in All, with their
 /// files. Item 0 has the tag `sync:tag`, and item 1 is in the folder
-/// `Folder`. Both have synced, and the cloud folder holds no tombstone file.
+/// `Folder`. Both have synced, so the cloud folder holds the `add` entries
+/// that the first device wrote when it started recording.
 /// The two folders that hold the libraries are returned to keep them.
 async fn two_devices(
     cloud: &Path,
@@ -244,7 +245,7 @@ fn cloud_data(cloud: &Path, application: &LibraryApplication) -> PathBuf {
 fn tombstone_files(cloud: &Path, application: &LibraryApplication) -> Vec<PathBuf> {
     let configuration = configuration_library(application).unwrap();
     let folder = cloud_data(cloud, application)
-        .join("tombstones")
+        .join("entries")
         .join(configuration.device_id);
     let mut files = match std::fs::read_dir(folder) {
         Ok(entries) => entries.map(|entry| entry.unwrap().path()).collect::<Vec<_>>(),
@@ -367,11 +368,16 @@ async fn an_item_that_is_imported_again_after_its_deletion_stays_and_its_tombsto
     assert!(!tombstoned(&second, 1));
     snapshot::publish_library(&second, &provider).await.unwrap();
 
-    // The first device's tombstone goes. Its own files still hold the
-    // deletion until its next sync, and they do not delete the item on the
-    // second device, however often they are merged.
+    // The first device now sees the item again; it is waiting for its file.
+    // The first device's own entries still hold the deletion, and they do
+    // not delete the item on the second device, however often they are
+    // merged.
     receive_library(&first, &provider).await.unwrap();
-    assert!(!tombstoned(&first, 1));
+    assert!(first
+        .library()
+        .entry_view(&hash(&second, 1))
+        .unwrap()
+        .is_some());
     tombstones::forget_merged();
     receive_library(&second, &provider).await.unwrap();
     assert_eq!(status(&second, 1), Some(Lifecycle::Inbox));
@@ -475,9 +481,15 @@ async fn damaged_tombstone_files_delete_nothing_and_missing_ones_hold_nothing_ba
     first
         .set_lifecycle(&target(&first, &[0, 1]), Lifecycle::Trash)
         .unwrap();
+    let before = tombstone_files(cloud.path(), &first);
     first.delete_items(&target(&first, &[0]), false).unwrap();
     snapshot::publish_library(&first, &provider).await.unwrap();
-    let files = tombstone_files(cloud.path(), &first);
+    // Only the files that the deletion and the move to the Trash wrote are
+    // new to the second device.
+    let files = tombstone_files(cloud.path(), &first)
+        .into_iter()
+        .filter(|file| !before.contains(file))
+        .collect::<Vec<_>>();
     assert!(!files.is_empty());
     let whole = files
         .iter()
@@ -497,7 +509,7 @@ async fn damaged_tombstone_files_delete_nothing_and_missing_ones_hold_nothing_ba
         .unwrap_err();
     let name = files[0].file_name().unwrap().to_string_lossy().into_owned();
     assert!(error.contains(&name), "{error}");
-    assert!(error.contains("Nothing was deleted on this device"), "{error}");
+    assert!(error.contains("Nothing from the cloud folder was merged"), "{error}");
     let state = status_library(&second).unwrap();
     assert_eq!((state.state.as_str(), state.message), ("error", error));
     unchanged(&second);
@@ -549,7 +561,7 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
         "snapshots/202611世T101500.12Z-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11.json",
         "snapshots/readme.md",
         "blobs/f/aa/bb/picture.txt",
-        "tombstones/not-a-device/0a.0123456789abcdef.jsonl.zst",
+        "entries/not-a-device/0a.0123456789abcdef.jsonl.zst",
         "extra/file.bin",
     ];
     for name in foreign {
@@ -581,11 +593,11 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
         kept,
         [
             "blobs/f/aa/bb/picture.txt",
+            "entries/not-a-device",
             "extra",
             "notes.txt",
             "snapshots/202611世T101500.12Z-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11.json",
             "snapshots/readme.md",
-            "tombstones/not-a-device",
         ]
     );
     assert_eq!(removal.kept_entries, 6);
@@ -759,7 +771,7 @@ async fn sync_that_is_enabled_again_starts_from_new_cloud_data() {
         .set_lifecycle(&target(&application, &[0]), Lifecycle::Trash)
         .unwrap();
     snapshot::publish_library(&application, &provider).await.unwrap();
-    assert_eq!(tombstone_files(cloud.path(), &application).len(), 1);
+    assert!(!tombstone_files(cloud.path(), &application).is_empty());
     let data = cloud_data(cloud.path(), &application);
 
     delete_cloud_data_library(&application).await.unwrap();
@@ -769,11 +781,21 @@ async fn sync_that_is_enabled_again_starts_from_new_cloud_data() {
         .unwrap();
 
     // The library is connected again. It writes new cloud data, and all of
-    // its tombstones with it: the one that was in the removed cloud data,
-    // and the one that it made while sync was off.
+    // its entries with it, including the one it wrote while sync was off.
     configure_library(&application, &input).unwrap();
     assert_eq!(status_library(&application).unwrap().last_sync_at, None);
     snapshot::publish_library(&application, &provider).await.unwrap();
     assert!(data.join("library.json").is_file());
-    assert_eq!(tombstone_files(cloud.path(), &application).len(), 2);
+    let mut written = Vec::new();
+    application
+        .library()
+        .visit_own_entries(None, &mut |entry| written.push(entry))
+        .unwrap();
+    assert!(written.iter().any(|entry| entry.value.as_deref() == Some("trash")
+        && entry.kind == picto_library::EntryKind::Status));
+    assert_eq!(
+        application.library().entry_clock().unwrap().published,
+        Some(application.library().entry_clock().unwrap().now)
+    );
+    assert!(!tombstone_files(cloud.path(), &application).is_empty());
 }

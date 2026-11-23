@@ -21,14 +21,16 @@ const GATE_HISTOGRAM_BUCKETS: usize = 32;
 
 /// A prepared publication settles its resident derived state in the same
 /// transaction as canonical data, before either becomes visible to readers.
-pub trait PublicationDelta {
-    fn settle(&mut self, transaction: &Transaction<'_>) -> Result<()>;
+/// `captured` is what the write captured before it started, which for a
+/// library write is the library as it was before the write.
+pub trait PublicationDelta<P> {
+    fn settle(&mut self, transaction: &Transaction<'_>, captured: &P) -> Result<()>;
 }
 
 /// Raw canonical writes publish no projection and settle nothing; only
 /// tests use them, against databases no library has open.
-impl PublicationDelta for () {
-    fn settle(&mut self, _transaction: &Transaction<'_>) -> Result<()> {
+impl<P> PublicationDelta<P> for () {
+    fn settle(&mut self, _transaction: &Transaction<'_>, _captured: &P) -> Result<()> {
         Ok(())
     }
 }
@@ -266,6 +268,7 @@ impl LibraryDatabase {
 
     fn from_writer(path: PathBuf, writer: Connection) -> Result<Self> {
         crate::subscription_counts::initialize(&writer)?;
+        crate::mutation::install_recording_triggers(&writer)?;
         Ok(Self {
             path: path.clone(),
             writer: Mutex::new(writer),
@@ -358,7 +361,7 @@ impl LibraryDatabase {
         Ok((output, revision))
     }
 
-    pub fn published_write<P, T, D: PublicationDelta, A>(
+    pub fn published_write<P: Clone, T, D: PublicationDelta<P>, A>(
         &self,
         priority: WorkPriority,
         capture: impl FnOnce(u64) -> Result<P>,
@@ -375,8 +378,9 @@ impl LibraryDatabase {
         )?;
         let revision = base_revision + 1;
         let prepared = capture(base_revision)?;
-        let (output, mut delta) = operation(&transaction, base_revision, revision, prepared)?;
-        delta.settle(&transaction)?;
+        let (output, mut delta) =
+            operation(&transaction, base_revision, revision, prepared.clone())?;
+        delta.settle(&transaction, &prepared)?;
         transaction.execute(
             "UPDATE library_meta SET revision = ?1 WHERE singleton = 1",
             [revision as i64],
@@ -395,7 +399,7 @@ impl LibraryDatabase {
     /// Run a publication only when the prepared operation reports canonical
     /// work. An empty background poll rolls its transaction back and leaves
     /// both the database revision and projection untouched.
-    pub fn published_write_if_changed<P, T, D: PublicationDelta, A>(
+    pub fn published_write_if_changed<P: Clone, T, D: PublicationDelta<P>, A>(
         &self,
         priority: WorkPriority,
         capture: impl FnOnce(u64) -> Result<P>,
@@ -412,12 +416,13 @@ impl LibraryDatabase {
         )?;
         let revision = base_revision + 1;
         let prepared = capture(base_revision)?;
-        let Some((output, mut delta)) = operation(&transaction, base_revision, revision, prepared)?
+        let Some((output, mut delta)) =
+            operation(&transaction, base_revision, revision, prepared.clone())?
         else {
             transaction.rollback()?;
             return Ok(None);
         };
-        delta.settle(&transaction)?;
+        delta.settle(&transaction, &prepared)?;
         transaction.execute(
             "UPDATE library_meta SET revision = ?1 WHERE singleton = 1",
             [revision as i64],

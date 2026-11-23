@@ -265,12 +265,11 @@ async fn purge_expired_cloud_blobs(
         .library()
         .auxiliary_read(picto_library::database::WorkPriority::Cloud, |connection| {
             let mut statement = connection.prepare(
-                "SELECT object_key
-                     FROM cloud_tombstone
-                     WHERE object_kind = 'blob'
-                       AND purge_after IS NOT NULL
+                "SELECT file_name
+                     FROM cloud_deleted_original
+                     WHERE purge_after IS NOT NULL
                        AND purge_after <= ?1
-                     ORDER BY purge_after, object_key
+                     ORDER BY purge_after, file_name
                      LIMIT 128",
             )?;
             let rows = statement
@@ -298,10 +297,9 @@ async fn purge_expired_cloud_blobs(
                 connection
                     .query_row(
                         "SELECT EXISTS(
-                                 SELECT 1 FROM cloud_tombstone tombstone
-                                 WHERE tombstone.object_kind = 'blob'
-                                   AND tombstone.object_key = ?1
-                                   AND tombstone.purge_after IS NOT NULL
+                                 SELECT 1 FROM cloud_deleted_original original
+                                 WHERE original.file_name = ?1
+                                   AND original.purge_after IS NOT NULL
                                    AND NOT EXISTS(
                                        SELECT 1 FROM media_file
                                        WHERE content_hash = ?2
@@ -329,11 +327,11 @@ async fn purge_expired_cloud_blobs(
             .maintenance_write(
                 picto_library::database::WorkPriority::Cloud,
                 |transaction| {
-                    // The row stays and loses the time at which the original
-                    // was to be removed, so the removal is not tried again.
+                    // The row stays without its removal time, so the
+                    // removal isn't tried again.
                     transaction.execute(
-                        "UPDATE cloud_tombstone SET purge_after = NULL
-                         WHERE object_kind = 'blob' AND object_key = ?1",
+                        "UPDATE cloud_deleted_original SET purge_after = NULL
+                         WHERE file_name = ?1",
                         [&object_key],
                     )?;
                     Ok(())
@@ -1039,12 +1037,8 @@ mod tests {
                 picto_library::database::WorkPriority::Cloud,
                 |transaction| {
                     transaction.execute(
-                        "INSERT INTO cloud_tombstone
-                             (object_kind, object_key, mutation_id, hlc_physical_ms,
-                              hlc_logical, device_id, causal_frontier_json,
-                              deleted_at, purge_after)
-                         VALUES ('blob', ?1, 'delete-1', 1, 0, 'device-1', '{}',
-                                 '2026-08-01T00:00:00Z', '2026-08-08T00:00:00Z')",
+                        "INSERT INTO cloud_deleted_original (file_name, deleted_at, purge_after)
+                         VALUES (?1, '2026-08-01T00:00:00Z', '2026-08-08T00:00:00Z')",
                         [&object_key],
                     )?;
                     Ok(())
@@ -1064,8 +1058,8 @@ mod tests {
                 |connection| {
                     connection
                         .query_row(
-                            "SELECT purge_after FROM cloud_tombstone
-                             WHERE object_kind = 'blob' AND object_key = ?1",
+                            "SELECT purge_after FROM cloud_deleted_original
+                             WHERE file_name = ?1",
                             [&object_key],
                             |row| row.get::<_, Option<String>>(0),
                         )

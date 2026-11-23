@@ -6,17 +6,15 @@
 //! - `snapshots/`, compressed copies of the whole database, each with a
 //!   manifest (`snapshot.rs`). A device writes a new one when the library
 //!   has changed and has been idle for 30 seconds.
-//! - `tombstones/<device id>/`, the tombstones that the device made: what it
-//!   deleted, moved into or out of the Trash, or added again
-//!   (`tombstones.rs`).
+//! - `entries/<device id>/`, the entries that the computer wrote: what it
+//!   imported, deleted, renamed, rated, tagged, put into folders or moved
+//!   into or out of the Trash (`tombstones.rs`).
 //!
-//! Another device gets the library by taking the newest snapshot as its
+//! Another computer gets the library by taking the newest snapshot as its
 //! database (Open from Cloud…) and copying the originals. After that, the
-//! only thing that the devices share by themselves is the tombstones: an
-//! item that was deleted permanently, moved to the Trash or restored, a
-//! deleted tag, folder or smart folder, and the removal of a tombstone. An
-//! item that is added or edited on one device reaches another device only
-//! when a snapshot is restored there.
+//! computers send each other entries, and each one changes its library to
+//! match (`picto-library/src/mutation/shared_merge.rs`). Fetching the
+//! originals of pictures that another computer imported isn't built yet.
 //!
 //! This file holds the configuration and the state of the sync
 //! (`cloud_state`), the commands that switch it on and off, and the removal

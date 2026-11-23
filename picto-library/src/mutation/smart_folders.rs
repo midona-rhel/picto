@@ -218,12 +218,6 @@ impl Library {
         let result = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let mut next = (*snapshot).clone();
             let deleted = delete_smart_folder_subtree(transaction, &mut next, smart_folder_id)?;
-            record_entries(
-                transaction,
-                EntryKind::SmartFolder,
-                EntryState::Delete,
-                &deleted.stable_keys,
-            )?;
             insert_cloud_journal(
                 transaction,
                 revision,
@@ -375,8 +369,6 @@ pub(super) struct DeletedSmartFolders {
     /// The deleted smart folder and every smart folder below it, the
     /// deepest first.
     pub smart_folder_ids: Vec<SmartFolderId>,
-    /// Their stable keys, in the order of `smart_folder_ids`.
-    pub stable_keys: Vec<String>,
     /// The group that held the deleted smart folder, for the view to show
     /// next.
     pub fallback_smart_folder_id: Option<SmartFolderId>,
@@ -413,10 +405,6 @@ pub(super) fn delete_smart_folder_subtree(
         smart_folder_ids: definitions
             .iter()
             .map(|(definition, _)| definition.smart_folder_id)
-            .collect(),
-        stable_keys: definitions
-            .iter()
-            .map(|(definition, _)| definition.stable_key.clone())
             .collect(),
         fallback_smart_folder_id,
         changes,

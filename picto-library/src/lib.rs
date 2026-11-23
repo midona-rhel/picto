@@ -38,8 +38,8 @@ pub use database::LibraryDatabase;
 pub use error::{LibraryError, Result};
 pub use model::*;
 pub use mutation::{
-    AppliedEntries, EntryClock, EntryKind, EntryState, Library, MergeTaskInput, SharedEntry,
-    SharedFileMerge, MERGE_BACKUP, MERGE_LIBRARY, merged_notes, remove_item_tombstones,
+    AppliedMerge, EntryClock, EntryKind, EntryTime, FileRecord, FileView, Library,
+    MergeTaskInput, SharedEntry, SharedFileMerge, WantedFile, MERGE_BACKUP, MERGE_LIBRARY, merged_notes, remove_item_tombstones,
     reset_published_entries, translate_view,
 };
 
