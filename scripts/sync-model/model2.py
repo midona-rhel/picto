@@ -3,7 +3,12 @@
 
 Entry keys:
   ('add', H, d)  value = record (name, notes, rating, status, tags, folders)
-  ('del', H)     value = None
+  ('del', H)     value = None for a deletion, or with the rule undo_revive
+                 ('u', before, rec) for the undo of a deletion: the cut goes back
+                 to `before`, the cut that the undoing device had just before its
+                 deletion, and `rec` is the item as that device had it
+  ('floor', H)   value = a time (rule compact). Entries of H that are not later
+                 than it are dropped and never count again. The larger value wins.
   ('name'|'notes'|'rating'|'status', H)  value
   ('it', H, T)   value 'add' | 'remove'      (item_tag)
   ('fi', H, F)   value 'add' | 'remove'      (folder_item)
@@ -29,6 +34,7 @@ EMPTY = {'notes': '', 'rating': 0}
 DEFAULTS = ('', '', 0, 'inbox')
 POSTS = ('p1', 'p2')
 KEEP = 5          # keep time before an original may be purged, in units of world time
+COMPACT = 5       # time after a cut before a device drops the entries it made obsolete
 MAXDEV = 5
 MAXIDS = 9
 
@@ -44,7 +50,12 @@ class Rules:
              'orphan_cleanup',     # variant: a device may delete files its view does not show
              'nodisklost',         # switch the disk-lost action off (to separate causes)
              'keep_deleted',       # a deleted file stays on disk until its delete is published
-             'collections', 'one_tick', 'member_del', 'coll_delreg', 'cadd_once')
+             'collections', 'one_tick', 'member_del', 'coll_delreg', 'cadd_once',
+             # third round
+             'undo_revive',        # the undo of a deletion moves the cut back (('del', H) values)
+             'compact',            # devices drop entries that a cut made obsolete, with floors
+             'compact_nofloor',    # variant: drop them without writing a floor
+             'compact_unpublished')  # variant: a floor may rest on an unpublished deletion
 
     def __init__(self, on=()):
         for n in self.NAMES:
@@ -56,18 +67,48 @@ class Rules:
 
 # ---------------------------------------------------------------- view
 
+def is_undo(e):
+    return e is not None and isinstance(e[1], tuple) and e[1][0] == 'u'
+
+
+def floor_of(held, X):
+    e = held.get(('floor', X))
+    return e[1] if e else ZERO
+
+
 def del_time(held, H):
+    """The cut of H: an entry of H counts only when it is later than the cut. It is
+    the time of the held deletion, or the time an undo went back to, and never
+    earlier than the floor."""
     e = held.get(('del', H))
-    return e[0] if e else ZERO
+    if e is None:
+        c = ZERO
+    elif is_undo(e):
+        c = e[1][1]
+    else:
+        c = e[0]
+    return max(c, floor_of(held, H))
 
 
-def exists(held, ids, H):
+def live_adds(held, ids, H):
+    """The cut and the sorted adds of H that count. When an undo is held and no add
+    counts, the record of the undo counts as an add at the time of the undo."""
     dt = del_time(held, H)
+    live = []
     for i in ids:
         e = held.get(('add', H, i))
         if e is not None and e[0] > dt:
-            return True
-    return False
+            live.append(e)
+    if not live:
+        e = held.get(('del', H))
+        if is_undo(e):
+            live.append((e[0], e[1][2]))
+    live.sort()
+    return dt, live
+
+
+def exists(held, ids, H):
+    return bool(live_adds(held, ids, H)[1])
 
 
 def _fields(held, live, X, dt, rules):
@@ -133,15 +174,9 @@ def _fields(held, live, X, dt, rules):
 def item(held, ids, H, rules=None):
     """The item H as the view shows it, or None when H does not exist. The seventh
     field is the collection the file is a member of, or None when it is loose."""
-    dt = del_time(held, H)
-    live = []
-    for i in ids:
-        e = held.get(('add', H, i))
-        if e is not None and e[0] > dt:
-            live.append(e)
+    dt, live = live_adds(held, ids, H)
     if not live:
         return None
-    live.sort()
     out = _fields(held, live, H, dt, rules)
     coll, jt = None, None
     m = held.get(('mem', H))
@@ -170,7 +205,8 @@ def coll_fields(held, ids, K, rules=None):
 
 class Dev:
     __slots__ = ('id', 'rec', 'pre', 'held', 'own', 'files', 'tasks', 'done', 'clk',
-                 'skew', 'stash', 'delst', 'snap', 'cand', 'blocked', 'cleared', 'left')
+                 'skew', 'stash', 'delst', 'snap', 'cand', 'blocked', 'cleared', 'left',
+                 'off', 'removed')
 
     def __init__(self, id):
         self.id = id
@@ -190,6 +226,8 @@ class Dev:
         self.blocked = False   # restored and has not merged its own published entries yet
         self.cleared = set()   # (key, time) of adds checked against purge markers
         self.left = set()      # files on disk that the view does not show (after a restore)
+        self.off = 0           # world time until which the device neither publishes nor merges
+        self.removed = set()   # own keys dropped by compaction and not yet removed from pub
 
     def clone(self):
         d = Dev(self.id)
@@ -209,6 +247,8 @@ class Dev:
         d.blocked = self.blocked
         d.cleared = set(self.cleared)
         d.left = set(self.left)
+        d.off = self.off
+        d.removed = set(self.removed)
         return d
 
     def key(self):
@@ -218,7 +258,8 @@ class Dev:
                 tuple(self.done), self.clk, self.skew, tuple(sorted(self.stash.items())),
                 tuple(sorted(self.delst.items())), self.snap is not None and self.snap[5],
                 None if self.cand is None else tuple(sorted(self.cand)), self.blocked,
-                tuple(sorted(self.cleared)), tuple(sorted(self.left)))
+                tuple(sorted(self.cleared)), tuple(sorted(self.left)), self.off,
+                tuple(sorted(self.removed)))
 
 
 class World:
@@ -244,6 +285,7 @@ class World:
         self.colls = set()  # every collection key that was used
         self.shown = []     # ghost: (K, members, action) when a device showed K after creating it
         self.prec = {}      # device index -> collections held before recording
+        self.dropped = {}   # ghost: device id -> the newest entry per key it dropped
         for i, entry in enumerate(init):
             skew, pre = entry[0], entry[1]
             d = Dev('d%d' % (i + 1))
@@ -274,6 +316,7 @@ class World:
         w.snapseq = self.snapseq
         w.aseq, w.cur, w.gseq = self.aseq, None, self.gseq
         w.colls, w.shown, w.prec = set(self.colls), list(self.shown), self.prec
+        w.dropped = {k: dict(v) for k, v in self.dropped.items()}
         return w
 
     def key(self):
@@ -281,7 +324,8 @@ class World:
                 tuple(sorted((k, tuple(sorted(v.items()))) for k, v in self.pub.items())),
                 tuple(sorted(self.orig)), self.now, tuple(self.log),
                 tuple(sorted(self.locks.items())), tuple(sorted(self.lost)),
-                tuple(sorted(self.pins)), self.gseq, tuple(self.shown))
+                tuple(sorted(self.pins)), self.gseq, tuple(self.shown),
+                tuple(sorted((k, tuple(sorted(v.items()))) for k, v in self.dropped.items())))
 
     # ------------------------------------------------------------ clock and entries
 
@@ -321,9 +365,12 @@ class World:
 
     def view(self, d):
         """The library the device shows: items, and collections with fields and members."""
+        return self.view_held(d.held)
+
+    def view_held(self, held):
         items = {}
         for H in self.files:
-            it = item(d.held, self.ids, H, self.rules)
+            it = item(held, self.ids, H, self.rules)
             if it is not None:
                 items[H] = it
         colls = {}
@@ -333,13 +380,13 @@ class World:
                 if it[6] is not None:
                     mem.setdefault(it[6], []).append(H)
             for K, hs in mem.items():
-                o = d.held.get(('ord', K))
+                o = held.get(('ord', K))
                 lst = []
                 for H in (o[1] if o else ()):
                     if H in hs and H not in lst:
                         lst.append(H)
                 lst += sorted(H for H in hs if H not in lst)
-                colls[K] = tuple(coll_fields(d.held, self.ids, K, self.rules)) + (tuple(lst),)
+                colls[K] = tuple(coll_fields(held, self.ids, K, self.rules)) + (tuple(lst),)
         return items, colls
 
     def kof(self, d, K):
@@ -551,16 +598,22 @@ class World:
         it = self.it(d, H)
         if it is None:
             return False
-        self.write(d, ('del', H), None, 'del')
-        d.stash[H] = it
+        before = del_time(d.held, H)
+        t = self.write(d, ('del', H), None, 'del')
+        d.stash[H] = (it, t, before)
         self.gc(d)
         return True
 
     def do_undo(self, d, H):
         if H not in d.stash:
             return False
-        rec = d.stash.pop(H)
-        self.write(d, ('add', H, d.id), rec, 'add', 'undo')
+        rec, deleted, before = d.stash.pop(H)
+        if self.rules.undo_revive:
+            # rule change: the undo goes into the deletion's place and moves the cut
+            # back to where it was on this device just before its deletion
+            self.write(d, ('del', H), ('u', before, rec), 'undo', deleted)
+        else:
+            self.write(d, ('add', H, d.id), rec, 'add', ('undo', deleted))
         d.files.add(H)
         return True
 
@@ -684,7 +737,7 @@ class World:
 
     def unpublished_adds(self, d):
         p = self.pub.get(d.id, {})
-        return [k for k, e in d.own.items() if k[0] == 'add' and k[1] in d.files
+        return [k for k, e in d.own.items() if (k[0] == 'add' or is_undo(e)) and k[1] in d.files
                 and ((cur := p.get(k)) is None or e[0] > cur[0])]
 
     def pin(self, d):
@@ -700,17 +753,28 @@ class World:
         return ch
 
     def publish(self, d):
-        if not d.rec:
+        if not d.rec or self.away(d):
             return False
         ch = False
+        p = self.pub.get(d.id, {})
+        for k in sorted(d.removed):
+            # the files of the device are written again without what compaction
+            # dropped; a published entry that still counts stays
+            pe = p.get(k)
+            if pe is not None and k not in d.own and not pe[0] > self.dead_line(d, k[1]):
+                del p[k]
+                ch = True
+        d.removed.clear()
         if self.rules.upload_first and not self.rules.purge_lock:
-            ch = self.upload(d)
+            ch = self.upload(d) or ch
         p = self.pub.get(d.id, {})
         for k, e in d.own.items():
             cur = p.get(k)
             if cur is not None and e[0] <= cur[0]:
                 continue
-            if k[0] == 'add' and k[1] in d.files:
+            if (k[0] == 'add' or is_undo(e)) and k[1] in d.files:
+                # an undo makes the file exist like an add, so it waits for the
+                # original in the same way
                 H = k[1]
                 if self.rules.purge_lock:
                     if (k, e[0]) not in d.cleared:
@@ -748,8 +812,12 @@ class World:
             ch = True
         return ch
 
+    def droppable(self, key):
+        """Whether the entry kind of key is one that a cut of key[1] makes obsolete."""
+        return key[0] in DROPPABLE or key[0] == 'mem' and self.rules.member_del
+
     def merge(self, d, src, keys=None, gc=True):
-        if not d.rec:
+        if not d.rec or self.away(d):
             return False
         if d.blocked == 2 and gc:
             return False                      # V3: its first merge is a merge of everything
@@ -769,7 +837,17 @@ class World:
                 d.clk = (t[0], t[1])
                 ch = True
             cur = d.held.get(k)
-            if cur is None or t > cur[0]:
+            if k[0] == 'floor':
+                newer = cur is None or (e[1], t) > (cur[1], cur[0])
+            else:
+                newer = cur is None or t > cur[0]
+                if newer and self.rules.compact and self.droppable(k) and \
+                        not t > floor_of(d.held, k[1]):
+                    newer = False             # below the floor: it never counts again
+                    COUNTS['stored_below_floor_skipped'] += 1
+                if newer and is_undo(e) and e[1][1] < floor_of(d.held, k[1]):
+                    COUNTS['undo_arrives_after_floor'] += 1
+            if newer:
                 d.held[k] = e
                 ch = True
                 if k[0] == 'del':
@@ -794,6 +872,73 @@ class World:
             return False
         d.files.add(H)
         COUNTS['fetches'] += 1
+        return True
+
+    # ------------------------------------------------------------ compaction
+
+    def away(self, d):
+        return self.now < d.off
+
+    def dead_line(self, d, X):
+        """Entries of X that are not later than this never count again on d."""
+        if self.rules.compact_nofloor:
+            return del_time(d.held, X)
+        return floor_of(d.held, X)
+
+    def compact(self, d):
+        """The device drops the entries of each file that its cut made obsolete, once
+        the cut is COMPACT old by the device's wall clock. It first writes the cut as
+        the floor of the file, so that every other device drops the same entries and
+        an undo that arrives later cannot bring them back."""
+        if not d.rec or not (self.rules.compact or self.rules.compact_nofloor):
+            return False
+        ch = False
+        for H in self.files:
+            c = del_time(d.held, H)
+            if self.rules.compact and c > floor_of(d.held, H) and \
+                    self.now + d.skew - c[0] >= COMPACT and self.cut_published(d, H):
+                self.write(d, ('floor', H), c, 'floor')
+                COUNTS['floors_written'] += 1
+                ch = True
+            if self.rules.compact_nofloor and self.now + d.skew - c[0] < COMPACT:
+                continue
+            line = self.dead_line(d, H)
+            for k in [k for k in d.held if k[1] == H and self.droppable(k)]:
+                e = d.held[k]
+                if e[0] > line:
+                    continue
+                mine = self.dropped.setdefault(d.id, {})
+                g = mine.get(k)
+                if g is None or e[0] > g[0]:
+                    mine[k] = e
+                del d.held[k]
+                COUNTS['entries_dropped'] += 1
+                ch = True
+                o = d.own.get(k)
+                if o is not None and not o[0] > line:
+                    del d.own[k]
+                    d.removed.add(k)
+        return ch
+
+    def cut_published(self, d, H):
+        """Whether the entry that sets the cut of H is in the shared folder: it came
+        from another device, or the device has published it. A floor without that
+        entry would end the entries of H for good while a lost disk or a restore
+        can still lose the deletion that justified it."""
+        e = d.held.get(('del', H))
+        if e is None:
+            return False
+        if self.rules.compact_unpublished or e[0][2] != d.id:
+            return True
+        pe = self.pub.get(d.id, {}).get(('del', H))
+        return pe is not None and pe[0] >= e[0]
+
+    def go_offline(self, d, n):
+        if not (self.rules.undo_revive or self.rules.compact or self.rules.compact_nofloor):
+            return False
+        if self.away(d) or n <= 0:
+            return False
+        d.off = self.now + n
         return True
 
     # ------------------------------------------------------------ purge of originals
@@ -888,6 +1033,7 @@ class World:
         if self.rules.restore_newid and len(self.ids) >= MAXIDS:
             return False
         held, own, files, delst, clk, _ = d.snap
+        self.dropped.pop(d.id, None)          # what it dropped is gone with its database
         disk = d.files | d.left
         if self.rules.keep_deleted:
             # rule change: the file of a Delete Permanently is still on the disk as long
@@ -935,6 +1081,7 @@ class World:
         if self.rules.nodisklost:
             return False
         old = d.id
+        self.dropped.pop(old, None)
         self.pins = set(x for x in self.pins if x[1] != old)
         for H in [H for H, o in self.locks.items() if o == old]:
             del self.locks[H]
@@ -1036,6 +1183,12 @@ class World:
             return self.start(d)
         if d.blocked and k in LOCAL:
             return False
+        if k in NETWORK and self.away(d):
+            return False
+        if k == 'compact':
+            return self.compact(d)
+        if k == 'offline':
+            return self.go_offline(d, a[2])
         if k == 'import':
             return self.do_import(d, a[2], a[3])
         if k == 'delete':
@@ -1118,6 +1271,8 @@ class World:
     def finish(self):
         """Everything is delivered and fetched."""
         for d in self.devs:
+            d.off = 0
+        for d in self.devs:
             if not d.rec:
                 self.begin_action()
                 self.start(d)
@@ -1138,6 +1293,55 @@ class World:
                 for H in self.files:
                     self.fetch(d, H)
 
+    def check_revival(self, H, acts, dels, td, fmax, vs, bad):
+        """P7: the undo of a deletion brings back what any device had done before
+        the deletion, unless a floor ended it. For each field, tag and folder, the
+        latest action counts when it is earlier than the undone deletion, later than
+        every floor, and no other deletion lies between it and the undone deletion."""
+        def counts(a):
+            return a[2] < td and a[2] > fmax and not any(a[2] < x[2] < td for x in dels)
+        for fi, f in enumerate(SCALARS):
+            eds = [a for a in acts if a[0] == 'edit' and a[1] == (f, H)]
+            if eds:
+                last = max(eds, key=lambda a: a[2])
+                if counts(last) and any(x is None or x[fi] != last[3] for x in vs):
+                    bad.append('P7-revive-scalar')
+        for kind, names, ik, dk, idx in (('tag', TAGS, 'it', 'td', 4),
+                                         ('folder', FOLDERS, 'fi', 'fd', 5)):
+            for T in names:
+                its = [a for a in acts if a[1] == (ik, H, T)]
+                if not its:
+                    continue
+                last = max(its, key=lambda a: a[2])
+                if not counts(last):
+                    continue
+                tds = [a for a in acts if a[1] == (dk, T)]
+                if last[3] == 'remove':
+                    want = False
+                elif kind == 'tag':
+                    want = not any(a[2] >= last[2] for a in tds)
+                else:
+                    want = not tds
+                if any(x is None or (T in x[idx]) != want for x in vs):
+                    bad.append('P7-revive-' + kind)
+
+    def finish_compact(self):
+        """Every cut becomes old enough, every device compacts, and everything is
+        delivered again."""
+        self.now += 200
+        for d in self.devs:
+            self.begin_action()
+            self.compact(d)
+        self.finish()
+
+    def final_check(self):
+        self.finish()
+        bad = self.check()
+        if self.rules.compact or self.rules.compact_nofloor:
+            self.finish_compact()
+            bad += [x + '-after-compaction' for x in self.check()]
+        return bad
+
     def check(self):
         devs, ids = self.devs, self.ids
         full = [self.view(d) for d in devs]
@@ -1149,6 +1353,23 @@ class World:
             bad.append('P1-view')
         if any(f != hf[0] for f in hf[1:]):
             bad.append('P1-files')
+        if self.rules.compact or self.rules.compact_nofloor:
+            # P6: what compaction dropped changes nothing. Every device shows the view
+            # of all entries that were ever held, published or dropped.
+            union = {}
+            stores = [x.held for x in devs] + list(self.pub.values()) + \
+                list(self.dropped.values())
+            for st in stores:
+                for k, e in st.items():
+                    cur = union.get(k)
+                    if k[0] == 'floor':
+                        if cur is None or (e[1], e[0]) > (cur[1], cur[0]):
+                            union[k] = e
+                    elif cur is None or e[0] > cur[0]:
+                        union[k] = e
+            uview = self.view_held(union)
+            if any(v != uview for v in full):
+                bad.append('P6-union')
         # Actions whose entry a restore destroyed before it was published do not count.
         acts = [a for i, a in enumerate(self.log) if i not in self.lost]
         tdacts = {}
@@ -1185,7 +1406,10 @@ class World:
                         later = [a for a in acts if a[2] > tdmax and (
                             a[1] == (ik, X, T) and a[3] == 'add' or
                             a[0] == addkind and a[1][1] == X and T in a[3][4]
-                            and a[5] != 'start')]
+                            and a[5] != 'start' or
+                            # the record of an undo counts like the record of an add
+                            a[0] == 'undo' and addkind == 'add' and a[1][1] == X
+                            and T in a[3][2][4])]
                         if not later and any(v is not None and T in v[4] for v in vs):
                             bad.append('P5-' + pre + 'tagdel')
 
@@ -1200,12 +1424,24 @@ class World:
         for H in self.files:
             adds = [a for a in acts if a[0] == 'add' and a[1][1] == H]
             dels = [a for a in acts if a[0] == 'del' and a[1][1] == H]
-            dmax = max((a[2] for a in dels), default=ZERO)
-            amax = max((a[2] for a in adds), default=ZERO)
+            undos = [a for a in acts if a[0] == 'undo' and a[1][1] == H]
+            fmax = max((a[3] for a in acts if a[0] == 'floor' and a[1][1] == H), default=ZERO)
+            # The cut by the log: the latest deletion or undo decides, and no cut is
+            # earlier than the largest floor.
+            last_reg = max(dels + undos, key=lambda a: a[2], default=None)
+            if last_reg is None:
+                dmax = ZERO
+            elif last_reg[0] == 'undo':
+                dmax = last_reg[3][1]
+            else:
+                dmax = last_reg[2]
+            dmax = max(dmax, fmax)
+            amax = max((a[2] for a in adds + undos), default=ZERO)
+            delmax = max((a[2] for a in dels), default=ZERO)
             if adds and not dels and not all(H in f for f in hf):
                 bad.append('P2-file')
             if adds or dels:
-                if amax > dmax:
+                if amax > delmax:
                     if not all(H in v for v in views):
                         bad.append('P3-exist')
                 elif any(H in v for v in views):
@@ -1217,6 +1453,13 @@ class World:
                     if any(H in v and v[H][fi] != last[3] for v in views):
                         bad.append('P3-scalar')
             vs = [v.get(H) for v in views]
+            # P7 also applies to the undo as an add, so that the search shows what the
+            # rules without undo_revive lose
+            undo_adds = [a for a in adds if isinstance(a[5], tuple) and a[5][0] == 'undo']
+            last_undo = max(dels + undos + undo_adds, key=lambda a: a[2], default=None)
+            if last_undo is not None and last_undo[0] != 'del':
+                td = last_undo[5] if last_undo[0] == 'undo' else last_undo[5][1]
+                self.check_revival(H, acts, dels, td, fmax, vs, bad)
             if not dels:
                 tagfolder(H, vs, adds, dels, dmax, '', 'add')
             else:
@@ -1250,6 +1493,10 @@ class World:
                     la = sorted((a for a in newest.values()
                                  if a[2] > dmax and a[3][6] is not None), key=lambda a: a[2])
                     exp, jt = (la[0][3][6], la[0][2]) if la else (None, None)
+                    if last_reg is not None and last_reg[0] == 'undo' and \
+                            not any(a[2] > dmax for a in newest.values()):
+                        # no add counts: the record of the undo counts as one
+                        exp, jt = last_reg[3][2][6], last_reg[2]
                 if exp is not None and self.rules.coll_delreg and any(
                         a[3] == exp and a[2] >= jt for a in cdacts):
                     exp = None
@@ -1292,7 +1539,9 @@ class World:
                 if cds:
                     tc = max(acttime[a[6]] for a in cds)
                     later = any(a[2] > tc and (a[0] == 'mem' and a[3] == K or
-                                               a[0] == 'add' and a[3][6] == K) for a in acts)
+                                               a[0] == 'add' and a[3][6] == K or
+                                               a[0] == 'undo' and a[3][2][6] == K)
+                                for a in acts)
                     if not later and live_views:
                         bad.append('P3-colldel')
             if CHECK_VANISH:
@@ -1316,7 +1565,11 @@ import collections
 COUNTS = collections.Counter()
 LOCAL = frozenset(('import', 'delete', 'undo', 'edit', 'tag', 'folder', 'tagdel', 'folderdel',
                    'tbegin', 'tend', 'tundo', 'tundo_after', 'ipost', 'group', 'ungroup',
-                   'detach', 'cdelete', 'reorder', 'cedit', 'ctag', 'cfolder', 'cleanup'))
+                   'detach', 'cdelete', 'reorder', 'cedit', 'ctag', 'cfolder', 'cleanup',
+                   'compact'))
+NETWORK = frozenset(('publish', 'upload', 'pin', 'clear', 'pubfull', 'merge', 'mergeall', 'fetch',
+                     'purge_begin', 'purge_end', 'snapshot', 'join'))
+DROPPABLE = frozenset(('add', 'name', 'notes', 'rating', 'status', 'it', 'fi'))
 
 
 # ---------------------------------------------------------------- formatting
@@ -1350,7 +1603,11 @@ def fmt_key(key, value):
     if k == 'cdel':
         return 'collection_delete(%s)' % key[1]
     if k == 'del':
+        if isinstance(value, tuple) and value[0] == 'u':
+            return 'undo(%s, before=%s)=[%s]' % (key[1], fmt_time(value[1]), fmt_rec(value[2]))
         return 'delete(%s)' % key[1]
+    if k == 'floor':
+        return 'floor(%s)=%s' % (key[1], fmt_time(value) if isinstance(value, tuple) else value)
     if k == 'it':
         return 'item_tag(%s,%s)=%s' % (key[1], key[2], value)
     if k == 'fi':
@@ -1371,6 +1628,10 @@ def fmt_action(w, a):
         return '%s runs all its publish steps' % dn
     if k == 'jump':
         return '%s wall clock skew becomes %+d' % (dn, a[2])
+    if k == 'offline':
+        return '%s is offline for %d units of world time' % (dn, a[2])
+    if k == 'compact':
+        return '%s compacts its entries' % dn
     if k == 'import':
         return '%s import %s [%s]' % (dn, a[2], fmt_rec(a[3]))
     if k == 'ipost':
@@ -1415,8 +1676,7 @@ def run(rules, init, nfiles, actions):
     w = World(rules, init, nfiles)
     for a in actions:
         w.apply(a)
-    w.finish()
-    return w.check()
+    return w.final_check()
 
 
 def replay_print(rules, init, nfiles, actions):
@@ -1448,7 +1708,17 @@ def replay_print(rules, init, nfiles, actions):
         print('  final phase writes: ' + '; '.join(w.tr))
     print('  final phase: everything published, merged and fetched')
     print(show_state(w))
-    print('  violated:', sorted(set(w.check())))
+    bad = w.check()
+    if w.rules.compact or w.rules.compact_nofloor:
+        print('  violated before the final compaction:', sorted(set(bad)))
+        w.tr = []
+        w.finish_compact()
+        if w.tr:
+            print('  final compaction writes: ' + '; '.join(w.tr))
+        print('  after every device compacted and everything was delivered again:')
+        print(show_state(w))
+        bad = [x + '-after-compaction' for x in w.check()]
+    print('  violated:', sorted(set(bad)))
 
 
 def shrink(rules, init, nfiles, actions, tag):
@@ -1528,7 +1798,8 @@ KINDS = (('import', 9), ('delete', 8), ('undo', 6), ('edit', 6), ('tag', 7), ('f
          ('tundo_after', 2), ('publish', 30), ('pin', 20), ('clear', 20), ('upload', 8),
          ('merge', 30), ('mergepart', 20), ('fetch', 14), ('join', 1), ('snapshot', 2),
          ('restore', 3), ('purge_begin', 7), ('purge_end', 8), ('wait', 5), ('jump', 1.5),
-         ('start', 6), ('mergeall', 10), ('disklost', 1), ('cleanup', 2))
+         ('start', 6), ('mergeall', 10), ('disklost', 1), ('cleanup', 2), ('compact', 6),
+         ('offline', 2))
 KIND_NAMES = [k for k, _ in KINDS]
 KIND_W = [x for _, x in KINDS]
 CKIND_NAMES = KIND_NAMES + [k for k, _ in CKINDS]
@@ -1585,6 +1856,8 @@ def rand_action(w, r):
         return (k, di, K)
     if k == 'wait':
         return ('wait', r.choice((1, KEEP, KEEP, KEEP + 1)))
+    if k == 'offline':
+        return ('offline', di, r.choice((KEEP + 1, 2 * KEEP, 4 * KEEP)))
     if k == 'jump':
         return ('jump', di, r.choice(SKEWS + (-15, 60)))
     if k == 'import':
@@ -1660,8 +1933,7 @@ def gen_run(rules, seed):
         a = rand_action(w, r)
         if w.apply(a):
             actions.append(a)
-    w.finish()
-    bad = w.check()
+    bad = w.final_check()
     saved = collections.Counter(COUNTS)
     if sorted(bad) != sorted(run(rules, init, nfiles, actions)):
         raise AssertionError('replay differs for seed %d' % seed)
@@ -1763,7 +2035,7 @@ def exh_actions(full):
                  ('publish', di), ('upload', di), ('pin', di), ('clear', di), ('pubfull', di),
                  ('merge', di, o, None),
                  ('fetch', di, 'h1'),
-                 ('purge_begin', di), ('purge_end', di)]
+                 ('purge_begin', di), ('purge_end', di), ('compact', di)]
         if full:
             acts += [('tbegin', di, (('h1', R_T),)), ('tend', di, 0), ('tundo', di, 0),
                      ('snapshot', di), ('restore', di), ('merge', di, di, None),
@@ -1788,7 +2060,7 @@ def exh_cactions():
                  ('reorder', di, '@h1', ('h2', 'h1')), ('cedit', di, '@h1', 'name', 'nC'),
                  ('ctag', di, '@h1', 't1', 'add'), ('ctag', di, '@h1', 't1', 'remove'),
                  ('delete', di, 'h1'), ('undo', di, 'h1'), ('tagdel', di, 't1'),
-                 ('pubfull', di), ('mergeall', di), ('start', di)]
+                 ('pubfull', di), ('mergeall', di), ('start', di), ('compact', di)]
     return acts
 
 
@@ -1829,8 +2101,7 @@ def exh_worker(args):
         seen[k] = left
         count[0] += 1
         c = w.clone()
-        c.finish()
-        for tag in set(c.check()):
+        for tag in set(c.final_check()):
             if tag not in found or len(found[tag]) > len(seq):
                 found[tag] = list(seq)
         if left == 0:
