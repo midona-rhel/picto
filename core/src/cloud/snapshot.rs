@@ -318,7 +318,23 @@ async fn purge_expired_cloud_blobs(
             .entry_view(hash)
             .map_err(|error| error.to_string())?
             .is_some();
-        if !still_due || exists {
+        if !still_due {
+            continue;
+        }
+        if exists {
+            // The original is in use again. Its row stops waiting, so it
+            // doesn't hold back the rows behind it in the next round.
+            application
+                .library()
+                .database()
+                .maintenance_write(picto_library::database::WorkPriority::Cloud, |transaction| {
+                    transaction.execute(
+                        "UPDATE cloud_deleted_original SET purge_after = NULL WHERE file_name = ?1",
+                        [&object_key],
+                    )?;
+                    Ok(())
+                })
+                .map_err(|error| error.to_string())?;
             continue;
         }
         let remote_path = format!(
@@ -1146,6 +1162,21 @@ mod tests {
             .unwrap();
 
         assert!(provider.exists(&remote_path).await.unwrap());
+        // The row no longer waits, so it can't keep later rows from being
+        // removed.
+        let purge_after = application
+            .library()
+            .auxiliary_read(picto_library::database::WorkPriority::VisibleRead, |connection| {
+                connection
+                    .query_row(
+                        "SELECT purge_after FROM cloud_deleted_original WHERE file_name = ?1",
+                        [&object_key],
+                        |row| row.get::<_, Option<String>>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(purge_after, None);
     }
 
     #[tokio::test]

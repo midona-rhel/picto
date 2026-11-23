@@ -802,7 +802,10 @@ impl Library {
                 )?;
                 resources.extend(["roots", "sidebar"].map(str::to_owned));
             }
-            let unrecorded = &created - &recorded;
+            // A picture whose file another computer has added stays: this
+            // import only brought the file here.
+            let added_elsewhere = super::shared::roots_added_elsewhere(transaction, &created)?;
+            let unrecorded = &(&created - &recorded) - &added_elsewhere;
             let cleanup = if unrecorded.is_empty() {
                 Vec::new()
             } else {

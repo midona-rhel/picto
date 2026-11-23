@@ -1203,6 +1203,10 @@ impl Library {
                 palette = value;
             }
             if let Some(content) = content {
+                // Pending changes name the picture by its root and get the
+                // file's hash when they become entries. They belong to the
+                // old file, so they become entries before the hash changes.
+                settle_in(transaction, &snapshot, usize::MAX)?;
                 if content.content_hash.len() != 64 || !content.content_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                     return Err(LibraryError::InvalidInput("Invalid repaired content hash".into()));
                 }

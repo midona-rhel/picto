@@ -39,7 +39,11 @@ use picto_library::{
 use tempfile::TempDir;
 
 const HASHES: u64 = 5;
-const TAGS: [&str; 3] = ["red", "green", "blue"];
+const TAGS: [&str; 5] = ["red", "green", "blue", "char:red", "person:red"];
+/// The tags without a namespace, which the tag rename and merge use.
+const PLAIN_TAGS: [&str; 3] = ["red", "green", "blue"];
+/// The namespaces of `TAGS`, which the namespace rename and merge use.
+const NAMESPACES: [&str; 2] = ["char", "person"];
 const FOLDERS: [&str; 2] = ["5d3c0b52-0000-4000-8000-000000000001", "5d3c0b52-0000-4000-8000-000000000002"];
 const RUNS_PER_TEST: u64 = 250;
 
@@ -394,7 +398,7 @@ fn uuid_like() -> String {
 fn act(random: &mut Random, computer: &mut Computer, log: &mut Vec<Action>) {
     let roots = computer.roots();
     let held = roots.keys().cloned().collect::<Vec<_>>();
-    let choice = random.below(100);
+    let choice = random.below(115);
     let undo = computer.deleted_last.take();
     let redo = computer.undone_last.take();
     if let (Some(hash), true) = (redo, choice < 10) {
@@ -529,13 +533,13 @@ fn act(random: &mut Random, computer: &mut Computer, log: &mut Vec<Action>) {
                 .map(|time| Action::File { hash: hash.clone(), folder: folder.clone(), on, time })
         }
         92..=96 => {
-            let tag = (*random.pick(&TAGS)).to_owned();
+            let tag = (*random.pick(&PLAIN_TAGS)).to_owned();
             let ids = computer.tag_ids();
             let Some(tag_id) = ids.get(&tag).copied() else {
                 return;
             };
-            let unused = TAGS.iter().find(|name| !ids.contains_key(**name));
-            let other = TAGS.iter().find(|name| **name != tag && ids.contains_key(**name));
+            let unused = PLAIN_TAGS.iter().find(|name| !ids.contains_key(**name));
+            let other = PLAIN_TAGS.iter().find(|name| **name != tag && ids.contains_key(**name));
             match (random.below(3), unused, other) {
                 (1, Some(new), _) => {
                     // Renaming a tag deletes the old name and puts the new
@@ -578,6 +582,112 @@ fn act(random: &mut Random, computer: &mut Computer, log: &mut Vec<Action>) {
                 }
             }
         }
+        100..=104 => {
+            // Renaming a tag group, or merging it into one that exists.
+            let from = (*random.pick(&NAMESPACES)).to_owned();
+            let into = NAMESPACES.iter().find(|name| **name != from).unwrap();
+            let namespaces = computer.library.tag_namespaces().unwrap();
+            let Some(namespace) = namespaces.iter().find(|namespace| namespace.name == from) else {
+                return;
+            };
+            let ids = computer.tag_ids();
+            let before_pictures = computer.pictures();
+            computer
+                .library
+                .rename_or_merge_tag_namespace(namespace.namespace_id, into)
+                .unwrap();
+            if let Some(time) = computer.action_time(before) {
+                for name in TAGS.iter().filter(|name| name.starts_with(&format!("{from}:"))) {
+                    let moved = name.replacen(&from, into, 1);
+                    // A tag that the other group has too is merged into it.
+                    // Any other tag is renamed, which deletes the old name.
+                    let merged = ids.contains_key(&moved);
+                    if !ids.contains_key(*name) {
+                        continue;
+                    }
+                    if !merged {
+                        log.push(Action::DeleteTag { tag: (*name).to_owned(), time: time.clone() });
+                    }
+                    for (hash, picture) in &before_pictures {
+                        if picture.tags.contains(*name) {
+                            if merged {
+                                log.push(Action::Tag { hash: hash.clone(), tag: (*name).to_owned(), on: false, time: time.clone() });
+                            }
+                            if !picture.tags.contains(&moved) {
+                                log.push(Action::Tag { hash: hash.clone(), tag: moved.clone(), on: true, time: time.clone() });
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        }
+        105..=109 => {
+            // Merging a duplicate into another picture that stays.
+            let Some(winner) = held.iter().find(|other| **other != hash).cloned() else {
+                return;
+            };
+            let file_of = |hash: &str| computer.library.details(roots[hash]).unwrap().media[0].file_id;
+            let (loser_file, winner_file) = (file_of(&hash), file_of(&winner));
+            let pictures = computer.pictures();
+            // A pair that was resolved before, and undone, isn't offered again.
+            if computer.library.record_duplicate_pair(loser_file, winner_file, 1, now_ms()).unwrap().is_none() {
+                return;
+            }
+            let before = computer.clock();
+            computer
+                .library
+                .resolve_duplicate(
+                    loser_file,
+                    winner_file,
+                    picto_library::DuplicateResolutionChoice::KeepFile { winner_file_id: winner_file },
+                    now_ms(),
+                )
+                .unwrap();
+            if let Some(time) = computer.action_time(before) {
+                log.push(Action::Delete { hash: hash.clone(), time: time.clone() });
+                let was = &pictures[&winner];
+                let now = computer.pictures().remove(&winner).unwrap();
+                log_differences(log, &winner, was, &now, &time);
+            }
+            None
+        }
+        110..=114 => {
+            // Repairing a video replaces its file with one of another hash.
+            let files = computer.rows("SELECT content_hash FROM media_file", |row| row.get::<_, String>(0));
+            let Some(new_hash) = (1..=HASHES)
+                .map(|number| format!("{number:064x}"))
+                .find(|other| !files.contains(other))
+            else {
+                return;
+            };
+            let media_id = computer.library.details(root).unwrap().media[0].media_id;
+            computer
+                .library
+                .repair_media_content(
+                    media_id,
+                    &picto_library::RepairedMediaContent {
+                        expected_hash: hash.clone(),
+                        content_hash: new_hash.clone(),
+                        file_path: format!("/picto-test/repaired-{new_hash}.png"),
+                        size_bytes: 2_048,
+                    },
+                    now_ms(),
+                )
+                .unwrap();
+            if let Some(time) = computer.action_time(before) {
+                let picture = computer.pictures().remove(&new_hash).unwrap();
+                log.push(Action::Delete { hash: hash.clone(), time: time.clone() });
+                log.push(Action::Add {
+                    hash: new_hash,
+                    time,
+                    start: false,
+                    tags: picture.tags,
+                    folders: picture.folders,
+                });
+            }
+            None
+        }
         _ => {
             // Folder definitions don't sync, so a folder deleted before
             // recording starts would be missing on this computer only.
@@ -601,6 +711,27 @@ fn act(random: &mut Random, computer: &mut Computer, log: &mut Vec<Action>) {
     }
     computer.undone_last = None;
     log.extend(logged);
+}
+
+/// Logs what changed on the picture `hash` from `was` to `now` as edits at
+/// `time`.
+fn log_differences(log: &mut Vec<Action>, hash: &str, was: &Picture, now: &Picture, time: &Time) {
+    for field in [Field::Name, Field::Notes, Field::Rating, Field::Status] {
+        if was.field(field) != now.field(field) {
+            log.push(Action::Edit {
+                hash: hash.to_owned(),
+                field,
+                value: now.field(field).to_owned(),
+                time: time.clone(),
+            });
+        }
+    }
+    for tag in now.tags.difference(&was.tags) {
+        log.push(Action::Tag { hash: hash.to_owned(), tag: tag.clone(), on: true, time: time.clone() });
+    }
+    for folder in now.folders.difference(&was.folders) {
+        log.push(Action::File { hash: hash.to_owned(), folder: folder.clone(), on: true, time: time.clone() });
+    }
 }
 
 /// Sends a random part of one computer's entries to another, in random order
@@ -1056,4 +1187,113 @@ fn undoing_an_import_task_after_its_pictures_were_recorded_trashes_them() {
         two.library.entry_view(&hash(2)).unwrap().map(|view| view.status),
         Some(Lifecycle::Trash)
     );
+}
+
+/// A rename that isn't an entry yet when a repair replaces the file stays
+/// with the old file; it isn't sent as a rename of the new one.
+#[test]
+fn a_pending_rename_before_a_repair_stays_with_the_old_file() {
+    let (_directory, template) = template();
+    let (one, _two) = two_synced(&template);
+    let root = one.roots()[&hash(1)];
+    one.library.rename_root(root, "renamed before the repair", now_ms()).unwrap();
+    let media_id = one.library.details(root).unwrap().media[0].media_id;
+    one.library
+        .repair_media_content(
+            media_id,
+            &picto_library::RepairedMediaContent {
+                expected_hash: hash(1),
+                content_hash: hash(2),
+                file_path: "/picto-test/repaired.png".into(),
+                size_bytes: 2_048,
+            },
+            now_ms(),
+        )
+        .unwrap();
+    let renames = one
+        .own_entries()
+        .into_iter()
+        .filter(|entry| entry.kind == picto_library::EntryKind::Name)
+        .map(|entry| entry.subject_key)
+        .collect::<Vec<_>>();
+    assert_eq!(renames, [hash(1)]);
+}
+
+/// Merging the tag group "char" into "person" moves its tags on every
+/// computer, both a tag that "person" has too and one that it doesn't have.
+#[test]
+fn merging_a_tag_group_into_another_moves_its_tags_on_every_computer() {
+    for existing in ["person:red", "person:other"] {
+        merge_tag_group(existing);
+    }
+}
+
+fn merge_tag_group(existing: &str) {
+    let (_directory, template) = template();
+    let (mut one, two) = two_synced(&template);
+    one.import(&hash(2), "second", vec![existing.into()], Vec::new());
+    let root = one.roots()[&hash(1)];
+    one.library.apply_tags(&one.target(root), &["char:red".into()], true).unwrap();
+    two.library.merge_entries(&one.own_entries()).unwrap();
+    let char_group = one
+        .library
+        .tag_namespaces()
+        .unwrap()
+        .into_iter()
+        .find(|namespace| namespace.name == "char")
+        .unwrap();
+    one.library.rename_or_merge_tag_namespace(char_group.namespace_id, "person").unwrap();
+    let entries = one.own_entries();
+    two.library.merge_entries(&entries).unwrap();
+    assert_eq!(
+        two.library.entry_view(&hash(1)).unwrap().unwrap().tags,
+        BTreeSet::from(["cat".to_owned(), "person:red".to_owned()]),
+        "{existing}: {entries:#?}"
+    );
+}
+
+/// A repair that turns a picture into a file another computer added earlier
+/// makes the picture look the way the entries say.
+#[test]
+fn a_repair_into_a_file_that_exists_follows_the_entries() {
+    let (_directory, template) = template();
+    let (mut one, mut two) = two_synced(&template);
+    one.import(&hash(2), "from one", Vec::new(), Vec::new());
+    two.import(&hash(3), "from two", Vec::new(), Vec::new());
+    two.library.merge_entries(&one.own_entries()).unwrap();
+    let root = two.roots()[&hash(3)];
+    let media_id = two.library.details(root).unwrap().media[0].media_id;
+    two.library
+        .repair_media_content(
+            media_id,
+            &picto_library::RepairedMediaContent {
+                expected_hash: hash(3),
+                content_hash: hash(2),
+                file_path: "/picto-test/repaired.png".into(),
+                size_bytes: 2_048,
+            },
+            now_ms(),
+        )
+        .unwrap();
+    two.settle();
+    two.library.merge_entries(&[]).unwrap();
+    assert_eq!(Some(&two.pictures()[&hash(2)]), two.views().get(&hash(2)));
+    assert_eq!(two.pictures()[&hash(2)].name, "from one");
+}
+
+/// Undoing an import task keeps a picture whose file another computer has
+/// added, because this computer's import only brought the file here.
+#[test]
+fn undoing_an_import_task_keeps_a_picture_another_computer_added() {
+    let (_directory, template) = template();
+    let (mut one, mut two) = two_synced(&template);
+    two.import(&hash(2), "from two", Vec::new(), Vec::new());
+    one.library.merge_entries(&two.own_entries()).unwrap();
+    let task = one.library.create_task("import", "Import", "{}", true, false, now_ms()).unwrap();
+    let input = one.prepared(&hash(2), "fetched", Vec::new(), Vec::new());
+    one.library.ingest_batch_for_task(&[input], task, false).unwrap();
+    one.settle();
+    one.library.stop_task(task, true, now_ms()).unwrap();
+    one.library.revert_task(task, now_ms()).unwrap();
+    assert!(one.roots().contains_key(&hash(2)));
 }

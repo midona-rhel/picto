@@ -828,6 +828,37 @@ pub(super) fn recorded_roots(
     Ok(recorded)
 }
 
+/// Returns those of `roots` whose file exists by an `add` entry of another
+/// computer.
+pub(super) fn roots_added_elsewhere(
+    transaction: &rusqlite::Transaction<'_>,
+    roots: &RoaringBitmap,
+) -> Result<RoaringBitmap> {
+    if roots.is_empty() || !recording(transaction)? {
+        return Ok(RoaringBitmap::new());
+    }
+    let mut statement = transaction.prepare_cached(
+        "SELECT ids.value FROM json_each(?1) ids
+         CROSS JOIN media_item media ON media.media_id = ids.value
+         JOIN media_file file ON file.file_id = media.file_id
+         WHERE EXISTS (
+             SELECT 1 FROM shared_entry added
+             WHERE added.subject_key = file.content_hash AND added.kind = 'add'
+               AND added.second_key <> (SELECT device_id FROM cloud_state WHERE singleton = 1)
+               AND NOT EXISTS (
+                   SELECT 1 FROM shared_entry deleted
+                   WHERE deleted.subject_key = added.subject_key AND deleted.kind = 'delete'
+                     AND (deleted.clock_ms, deleted.clock_counter, deleted.device_id)
+                         >= (added.clock_ms, added.clock_counter, added.device_id)))",
+    )?;
+    let found = statement
+        .query_map([serde_json::to_string(&roots.iter().collect::<Vec<_>>())?], |row| {
+            row.get::<_, u32>(0)
+        })?
+        .collect::<rusqlite::Result<RoaringBitmap>>()?;
+    Ok(found)
+}
+
 /// Removes the tombstones of the items `keys`, inside the caller's
 /// transaction. A tombstone is a row of `deletion_tombstone`; it stops an
 /// import from bringing back an item that was deleted after the import was
@@ -1121,19 +1152,22 @@ pub(super) fn settle_in(
                 };
                 let (known, new): (Vec<_>, Vec<_>) =
                     files.into_iter().partition(|file| existing.contains(&file.content_hash));
-                // A file that comes back after a deletion can have entries
-                // from after the deletion, such as a rename on another
-                // computer. Those win over the new record, so the next merge
-                // brings the picture in line with them.
+                // Other entries of the file can win over the new record: a
+                // rename on another computer after a deletion, or an earlier
+                // add when an undo or a repair brings the file back. The
+                // next merge brings the picture in line with them.
                 transaction.execute(
                     "INSERT OR IGNORE INTO merge_touched (subject_kind, subject_key)
                      SELECT 'file', hashes.value FROM json_each(?1) hashes
                      WHERE EXISTS (SELECT 1 FROM shared_entry entry
                                    WHERE entry.subject_key = hashes.value
-                                     AND entry.kind <> 'add')",
-                    [serde_json::to_string(
-                        &new.iter().map(|file| &file.content_hash).collect::<Vec<_>>(),
-                    )?],
+                                     AND (entry.kind <> 'add' OR entry.second_key <> ?2))",
+                    rusqlite::params![
+                        serde_json::to_string(
+                            &new.iter().map(|file| &file.content_hash).collect::<Vec<_>>(),
+                        )?,
+                        device_id
+                    ],
                 )?;
                 write_adds(transaction, &new, time, &device_id)?;
                 if !known.is_empty() {
