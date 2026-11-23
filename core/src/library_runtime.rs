@@ -456,7 +456,7 @@ fn start_cloud_snapshot_worker(
 ) -> tokio::task::JoinHandle<()> {
     const CLOUD_IDLE_DELAY: Duration = Duration::from_secs(30);
     // Every sixth tick, which is every 30 seconds, the worker merges the
-    // tombstones of the other devices when no snapshot is due.
+    // entries of the other computers when no snapshot is due.
     const RECEIVE_EVERY: u32 = 6;
     tokio::spawn(async move {
         if let Err(error) = crate::cloud::recover_interrupted_sync_library(&application) {
@@ -508,7 +508,7 @@ fn start_cloud_snapshot_worker(
                             tracing::warn!(%error, "Canonical cloud snapshot failed");
                         }
                     } else if let Err(error) = crate::cloud::receive_library(&application, &provider).await {
-                        tracing::warn!(%error, "Canonical cloud tombstones were not merged");
+                        tracing::warn!(%error, "Cloud sync entries were not merged");
                     }
                     drop(permit);
                 }

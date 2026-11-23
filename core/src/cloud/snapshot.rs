@@ -135,9 +135,9 @@ pub fn create_verified_library(
 ///
 /// 1. stops, and switches cloud sync off, if the library's cloud data is
 ///    gone (`stop_if_cloud_data_removed`);
-/// 2. merges the tombstones of the other devices;
-/// 3. copies the database, which then holds what the merge deleted;
-/// 4. writes this device's own tombstones;
+/// 2. merges the entries of the other computers;
+/// 3. copies the database, which then includes what the merge changed;
+/// 4. writes this computer's own entries;
 /// 5. removes the originals of deleted items whose "Keep deleted files" time
 ///    has passed, and uploads or downloads the originals that are missing on
 ///    one side;
@@ -169,11 +169,11 @@ async fn publish_library_inner(
     provider: &dyn CloudProvider,
 ) -> Result<SnapshotManifest, String> {
     let (library_id, _) = identity_and_frontier_library(application)?;
-    super::tombstones::receive_library(application, provider, &library_id).await?;
+    super::entries::receive_library(application, provider, &library_id).await?;
     let (artifact, database_revision) = create_verified_library(application)?;
     let (library_id, frontier) = identity_and_frontier_library(application)?;
     ensure_manifest_library(application, provider, &library_id).await?;
-    super::tombstones::publish_library(application, provider, &library_id).await?;
+    super::entries::publish_library(application, provider, &library_id).await?;
     purge_expired_cloud_blobs(application, provider, &library_id).await?;
     sync_snapshot_blobs(application, provider, &artifact.database_path, &library_id).await?;
     finish_blocking_restore(application)?;

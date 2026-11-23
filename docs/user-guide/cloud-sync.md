@@ -5,16 +5,17 @@
 > **Experimental.** Cloud sync is new and may change. Keep a separate backup of every library that
 > matters to you.
 
-Cloud sync copies a library into the **Google Drive** or **Dropbox** folder on your computer. The
-provider's desktop app uploads it from there. Picto does not sign in to the provider. The desktop
-app must be installed, and it must sync a folder on this computer. Google Drive has no desktop app
-for Linux, so on Linux Picto finds only Dropbox by itself.
+Cloud sync copies a library into the **Google Drive** or **Dropbox** folder on your computer, and
+the provider's desktop app uploads it from there. Picto doesn't sign in to the provider, so the
+desktop app has to be installed and syncing a folder on this computer. Google Drive has no desktop
+app for Linux, so on Linux Picto only finds Dropbox by itself.
 
-Picto stores three things in the cloud folder, under `picto/<library id>/`:
+Picto keeps three things in the cloud folder, under `picto/<library id>/`:
 
-- **Recovery snapshots**, which are compressed and verified copies of the library's database.
-- **Originals**, which are all media files of the library.
-- **Tombstones**, which record what you deleted on each computer.
+- Recovery snapshots: compressed copies of the library's database.
+- Originals: the media files of the library.
+- The changes each computer made to the library, such as an import, a new tag or a deletion. Each
+  computer writes its own and reads the others'.
 
 ## What reaches your other computers
 
@@ -56,54 +57,52 @@ names the file; choose **Sync Now** to try again.
 You can also click the **⋯** (Library actions) button of the library and choose **Enable Cloud
 Sync**.
 
-From then on Picto syncs by itself when the library has changes that are not synced and has been
-idle for about 30 seconds. A sync takes in the changes of your other computers, writes this
-computer's changes, copies the originals, and publishes a new snapshot. While the library syncs,
-a bar along the bottom of the main window shows the progress. The Library Manager shows it too.
+After that, Picto syncs by itself once the library has unsynced changes and has been idle for
+about 30 seconds. A sync takes in the changes from your other computers, writes this computer's
+changes, uploads the originals and saves a new snapshot. A bar along the bottom of the main window
+shows the progress, and so does the Library Manager.
 
 ## Day-to-day controls
 
-The **⋯** (Library actions) menu of the open library in the Library Manager has these commands:
+You'll find these commands in the **⋯** (Library actions) menu of the open library in the Library
+Manager:
 
 | Action | What it does |
 |---|---|
-| Sync Now | It syncs at once. |
-| Pause Sync, Resume Sync | It stops the automatic syncing, or starts it again. |
-| Create Recovery Snapshot | It syncs at once and publishes a snapshot. |
-| Show Cloud Folder | It opens the cloud folder in the system's file manager. |
-| Stop Syncing | It turns sync off, after a question. The local files and the copy in the cloud folder are not deleted. |
-| Delete Cloud Data… | It deletes the library's copy in the cloud folder and turns sync off, after a question. See below. |
+| Sync Now | Syncs now instead of waiting. |
+| Pause Sync, Resume Sync | Stops syncing by itself, or lets it start again. |
+| Create Recovery Snapshot | Syncs now and saves a snapshot you can restore later. |
+| Show Cloud Folder | Opens the library's cloud folder in Finder or your file manager. |
+| Stop Syncing | Turns sync off after asking you. Your library and its copy in the cloud folder are kept. |
+| Delete Cloud Data… | Deletes the library's copy in the cloud folder and turns sync off, after asking you. See below. |
 
-**Settings → Cloud** has the buttons **Sync now**, **Pause** or **Resume**, and **Create
-snapshot**, which do the same as the first three commands. It also shows the provider, the folder,
-the state and the time of the last sync. Under **Pending Work** it shows the numbers of mutations,
-of files, and of **Unavailable files**, which are originals that are missing both on this computer
-and in the cloud folder.
+**Settings → Cloud** has **Sync now**, **Pause** or **Resume**, and **Create snapshot** buttons that
+do the same as the first three commands. It also shows the provider, the folder, whether sync is
+working and when it last synced. **Pending Work** shows how many changes and files are waiting, and
+how many **Unavailable files** there are: originals that are missing both on this computer and in
+the cloud folder.
 
 ## Delete a library's cloud data
 
-**Delete Cloud Data…** removes the library's copy from the cloud folder. The button is at the end
-of the **Cloud Sync** card of the open library in the Library Manager, and the **⋯** (Library
-actions) menu has the same command.
+**Delete Cloud Data…** removes the library's copy from the cloud folder. You'll find it at the end
+of the **Cloud Sync** card of the open library in the Library Manager, and in the **⋯** (Library
+actions) menu.
 
-After you confirm:
+When you confirm, Picto deletes the folder `picto/<library id>/` from the cloud folder, with its
+snapshots, originals and changes. This can't be undone. Your library on this computer keeps all its
+pictures and files, and sync is turned off for it; you can turn it on again later, and Picto then
+writes new cloud data.
 
-- The folder `picto/<library id>/` is removed from the cloud folder, with the snapshots, the
-  originals and the changes in it. This cannot be undone.
-- The library on this computer is not changed. It keeps every item and every file.
-- Cloud sync is off for the library on this computer. You can enable it again later; Picto then
-  writes new cloud data.
-- Your other computers keep their local libraries. Each of them notices at its next sync that the
-  cloud data is gone, turns its own sync off, and shows the message "The cloud data of this
-  library was deleted." in the Cloud Sync card and in a notification. It deletes nothing.
+Your other computers keep their libraries. At their next sync they find that the cloud data is
+gone, turn their own sync off and show "The cloud data of this library was deleted." in the Cloud
+Sync card and in a notification. They don't delete anything.
 
-Picto removes only files that its sync wrote, by their names. If the library's folder in the cloud
-folder holds anything else, for example a file that you put there, Picto leaves that file and the
-folder, and the message in the Library Manager names what was left.
+Picto only removes files that its sync wrote. If you put something else into the library's cloud
+folder, Picto leaves that file and its folder, and the message in the Library Manager names them.
 
-A computer that still runs Picto 0.6.23 or older does not notice that the cloud data is gone. It
-writes a new snapshot at its next sync, and the folder appears again. Turn sync off on such a
-computer first.
+A computer that still runs Picto 0.6.23 or older doesn't notice that the cloud data is gone and
+writes a new snapshot at its next sync, so the folder comes back. Turn sync off on such a computer
+first.
 
 ## Open a library on another computer
 
@@ -113,17 +112,16 @@ computer first.
 3. Pick a library, enter a **Local library name**, and click **Choose Location…**.
 4. Choose where the local copy is stored.
 
-Picto puts the database of the latest snapshot in place and opens the library. It then copies the
-originals from the cloud folder. A dialog over the main window shows the progress until the
-copying is done. A library that is already in the list on this computer cannot be opened from the
-cloud a second time.
+Picto opens the library from the latest snapshot and then copies the originals from the cloud
+folder, with a dialog that shows the progress. A library that is already in the list on this
+computer can't be opened from the cloud a second time.
 
 ## Restore a snapshot
 
 **Settings → Cloud → Restore History** lists the recovery snapshots of all your computers with
-their date and size. Click **Restore** next to a snapshot and confirm. Picto closes the library,
-keeps the current database as an emergency copy inside the library folder, puts the snapshot's
-database in its place, and opens the library again.
+their date and size. Click **Restore** next to one and confirm. Picto closes the library, keeps the
+current database as an emergency copy inside the library folder, replaces it with the snapshot and
+opens the library again.
 
 A restore doesn't undo changes that were synced after the snapshot was made: they are in the cloud
 folder, and the next sync applies them to the restored library again. To get back a picture that
@@ -140,8 +138,7 @@ was deleted, import its file again after the restore. That brings it back on eve
 | Yearly snapshots | 0 to 100 | 5 |
 | Keep deleted files | 0 to 3,650 days | 7 |
 
-**Keep deleted files** says for how many days the original of an item that you deleted
-permanently stays in the cloud folder. After that time, the computer on which you deleted the item
-removes the original from the cloud folder at its next sync, unless the library on that computer
-holds the file again. An item that can still be undone on that computer keeps its original until
-the deletion leaves the undo history.
+**Keep deleted files** is how many days the original of a permanently deleted picture stays in the
+cloud folder. After that, the computer you deleted it on removes the original at its next sync,
+unless that library has the file again. While the deletion can still be undone on that computer,
+the original stays.

@@ -240,9 +240,9 @@ fn cloud_data(cloud: &Path, application: &LibraryApplication) -> PathBuf {
         .join(configuration_library(application).unwrap().library_id)
 }
 
-/// The tombstone files that `application`'s device wrote, in the order of
+/// The entry files that `application`'s computer wrote, in the order of
 /// their names.
-fn tombstone_files(cloud: &Path, application: &LibraryApplication) -> Vec<PathBuf> {
+fn entry_files(cloud: &Path, application: &LibraryApplication) -> Vec<PathBuf> {
     let configuration = configuration_library(application).unwrap();
     let folder = cloud_data(cloud, application)
         .join("entries")
@@ -270,6 +270,8 @@ fn import_later(application: &LibraryApplication, folder: &Path, index: u8) {
     assert_eq!(report.ingested, 1);
 }
 
+/// Returns whether the library has a local tombstone for the item `index`,
+/// which stops an older import from bringing it back.
 fn tombstoned(application: &LibraryApplication, index: u8) -> bool {
     count(
         application,
@@ -303,7 +305,7 @@ async fn a_deletion_on_one_device_arrives_on_the_other_and_a_restore_comes_back(
     first.delete_tag(tag).unwrap();
     first.delete_folders(&[folder]).unwrap();
     snapshot::publish_library(&first, &provider).await.unwrap();
-    assert!(!tombstone_files(cloud.path(), &first).is_empty());
+    assert!(!entry_files(cloud.path(), &first).is_empty());
 
     assert!(receive_library(&second, &provider).await.unwrap() > 0);
 
@@ -343,7 +345,7 @@ async fn a_deletion_on_one_device_arrives_on_the_other_and_a_restore_comes_back(
 
     // Merging every file again, as after a restart, changes nothing.
     let before = [rows(&first, &["cloud_state", "library_meta"]), rows(&second, &["cloud_state", "library_meta"])];
-    tombstones::forget_merged();
+    entries::forget_merged();
     receive_library(&first, &provider).await.unwrap();
     receive_library(&second, &provider).await.unwrap();
     assert_eq!(rows(&first, &["cloud_state", "library_meta"]), before[0]);
@@ -378,11 +380,11 @@ async fn an_item_that_is_imported_again_after_its_deletion_stays_and_its_tombsto
         .entry_view(&hash(&second, 1))
         .unwrap()
         .is_some());
-    tombstones::forget_merged();
+    entries::forget_merged();
     receive_library(&second, &provider).await.unwrap();
     assert_eq!(status(&second, 1), Some(Lifecycle::Inbox));
     snapshot::publish_library(&first, &provider).await.unwrap();
-    tombstones::forget_merged();
+    entries::forget_merged();
     snapshot::publish_library(&second, &provider).await.unwrap();
     assert_eq!(status(&second, 1), Some(Lifecycle::Inbox));
     assert!(!tombstoned(&second, 1));
@@ -475,18 +477,18 @@ async fn a_device_that_was_away_takes_the_deletions_over_and_keeps_what_it_added
 }
 
 #[tokio::test]
-async fn damaged_tombstone_files_delete_nothing_and_missing_ones_hold_nothing_back() {
+async fn damaged_entry_files_delete_nothing_and_missing_ones_hold_nothing_back() {
     let cloud = tempfile::tempdir().unwrap();
     let (first, second, provider, _folders) = two_devices(cloud.path()).await;
     first
         .set_lifecycle(&target(&first, &[0, 1]), Lifecycle::Trash)
         .unwrap();
-    let before = tombstone_files(cloud.path(), &first);
+    let before = entry_files(cloud.path(), &first);
     first.delete_items(&target(&first, &[0]), false).unwrap();
     snapshot::publish_library(&first, &provider).await.unwrap();
     // Only the files that the deletion and the move to the Trash wrote are
     // new to the second device.
-    let files = tombstone_files(cloud.path(), &first)
+    let files = entry_files(cloud.path(), &first)
         .into_iter()
         .filter(|file| !before.contains(file))
         .collect::<Vec<_>>();
@@ -545,7 +547,7 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
     snapshot::publish_library(&first, &provider).await.unwrap();
     snapshot::publish_library(&second, &provider).await.unwrap();
     let data = cloud_data(cloud.path(), &first);
-    assert!(!tombstone_files(cloud.path(), &first).is_empty());
+    assert!(!entry_files(cloud.path(), &first).is_empty());
     // An upload that was interrupted left a file of the sync behind.
     std::fs::write(
         data.join("snapshots")
@@ -771,7 +773,7 @@ async fn sync_that_is_enabled_again_starts_from_new_cloud_data() {
         .set_lifecycle(&target(&application, &[0]), Lifecycle::Trash)
         .unwrap();
     snapshot::publish_library(&application, &provider).await.unwrap();
-    assert!(!tombstone_files(cloud.path(), &application).is_empty());
+    assert!(!entry_files(cloud.path(), &application).is_empty());
     let data = cloud_data(cloud.path(), &application);
 
     delete_cloud_data_library(&application).await.unwrap();
@@ -797,5 +799,5 @@ async fn sync_that_is_enabled_again_starts_from_new_cloud_data() {
         application.library().entry_clock().unwrap().published,
         Some(application.library().entry_clock().unwrap().now)
     );
-    assert!(!tombstone_files(cloud.path(), &application).is_empty());
+    assert!(!entry_files(cloud.path(), &application).is_empty());
 }

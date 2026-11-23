@@ -460,7 +460,7 @@ entries and isn't on this computer is listed by `Library::wanted_files`; fetchin
 built yet. Pictures in collections, and collections, get no entries and are left alone by a merge.
 
 A computer's entries are spread over 256 files in `entries/<device id>/` by the first byte of the
-SHA-256 of an entry's key (`core/src/cloud/tombstones.rs`). A sync rewrites only the files whose
+SHA-256 of an entry's key (`core/src/cloud/entries.rs`). A sync rewrites only the files whose
 keys changed since the time in `cloud_device_frontier`. A file's name holds the first 16 hexadecimal
 digits of the SHA-256 of its content, so a file is never changed; a new state is a new file and the
 old one is removed. The content is zstd-compressed JSON lines after a header with the library, the
