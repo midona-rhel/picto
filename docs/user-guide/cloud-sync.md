@@ -44,7 +44,7 @@ picture with it afterwards works normally.
 Undoing a permanent deletion brings the picture back on every computer as it was before the
 deletion, including changes that another computer had made and that hadn't reached this computer
 yet. If another computer deleted the same picture before your undo, the picture still comes back.
-Seven days after a deletion, Picto drops the earlier changes of the deleted picture on every
+Seven days after a deletion, Picto removes the stored changes of the deleted picture on every
 computer. An undo that reaches the other computers only after that, for example because this
 computer was offline for a week, brings the picture back as this computer had it.
 

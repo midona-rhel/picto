@@ -144,8 +144,9 @@ pub enum HeldEntry {
     Add { time: EntryTime, record: FileRecord },
     /// A deletion, or with `undo` the undo of one.
     Delete { time: EntryTime, undo: Option<UndoRecord> },
-    /// The `compacted` entry, stored at the time `stored`: no entry of the
-    /// picture at or before `through` counts.
+    /// The `compacted` entry. `stored` is the time of the entry itself, and
+    /// `through` is the time in its value: no entry of the picture at or
+    /// before `through` counts.
     Compacted { stored: EntryTime, through: EntryTime },
     Name { time: EntryTime, value: String },
     Notes { time: EntryTime, value: String },
@@ -212,11 +213,11 @@ pub fn cut_of(entries: &[HeldEntry]) -> Cut {
 /// Only entries later than the cut count (`cut_of`). A picture exists when
 /// one of its `add` entries counts, or when its `delete` entry is an undo.
 /// When no add counts, the record of the undo counts as an add at the time of
-/// the undo. That happens when a `compacted` entry's time is later than the
-/// cut that the undo went back to, so the adds from before the deletion were
-/// dropped. A field entry counts when it's later than the
-/// cut. Without one, the name and status come from the earliest counting add,
-/// and the notes and rating from the first counting add that has them.
+/// the undo. That happens when the time in the `compacted` entry is later than
+/// the cut that the undo went back to, so the adds from before the deletion
+/// were dropped. A field entry counts when it's later than the cut. Without
+/// one, the name and status come from the earliest counting add, and the
+/// notes and rating from the first counting add that has them.
 ///
 /// A tag is on the picture when its latest counting `item_tag` entry says
 /// `add`. When there's no such entry, the tag is on when a counting add has
@@ -484,7 +485,8 @@ mod tests {
         let shown = view(&entries, &[]).unwrap();
         assert_eq!((shown.name.as_str(), shown.rating), ("as the undoing computer had it", 0));
         assert_eq!(shown.tags, BTreeSet::from(["kept".to_owned()]));
-        // A floor earlier than the deletion leaves a deleted picture deleted.
+        // A `compacted` entry with an earlier time than the deletion leaves a
+        // deleted picture deleted.
         let entries = [
             HeldEntry::Add { time: at(1, "a"), record: record("first", &[]) },
             HeldEntry::Delete { time: at(6, "b"), undo: None },

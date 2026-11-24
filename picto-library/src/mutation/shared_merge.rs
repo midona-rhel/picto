@@ -34,9 +34,9 @@
 //! entries (`settle_in`), so that a merge never works from an incomplete
 //! picture of what this computer did.
 //!
-//! An entry of a file at or before the file's floor (its `compacted` entry)
-//! isn't stored, and a stored floor drops the entries at or before it, as
-//! `compact_in` does on the computer that wrote it.
+//! An entry of a file at or before the time in the file's `compacted` entry
+//! isn't stored, and storing a `compacted` entry drops the file's entries at
+//! or before the time in it (`store_in`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -213,10 +213,11 @@ fn touch_files_of_roots(
 /// clock up to the latest of them, and notes what they're about in
 /// `merge_touched`. Returns how many were stored.
 ///
-/// An entry of a file at or before the file's floor isn't stored, because
-/// it never counts again; a computer that was away for weeks sends such
-/// entries. A stored `compacted` entry drops the entries at or before its
-/// floor, as on the computer that wrote it.
+/// An entry of a file at or before the time in the file's `compacted` entry
+/// isn't stored, because it never counts again; a computer that was away for
+/// weeks sends such entries. Storing a `compacted` entry drops the file's
+/// entries at or before the time in it, this computer's own entries too,
+/// because the `compacted` entry came from the cloud folder.
 fn store_in(transaction: &rusqlite::Transaction<'_>, entries: &[SharedEntry]) -> Result<u64> {
     let mut stored = 0;
     let mut latest = None::<(i64, i64)>;

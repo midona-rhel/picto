@@ -180,9 +180,9 @@ pub fn migrate_for_open(
                     "entry_compaction_due",
                     "removed_own_entry",
                 ]))?;
-                // Each file with a `delete` entry is looked at 7 days after
-                // the time of the entry, as the trigger of the writing
-                // connection notes it for a new entry.
+                // Every file with a `delete` entry gets a row, due 7 days
+                // after the time of that entry. The trigger of the writing
+                // connection adds the same row for each new `delete` entry.
                 connection.execute(
                     "INSERT INTO entry_compaction_due (content_hash, due_ms)
                      SELECT subject_key, clock_ms + ?1 FROM shared_entry
