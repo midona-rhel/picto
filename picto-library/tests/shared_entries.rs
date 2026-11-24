@@ -2002,3 +2002,22 @@ fn an_undo_brings_back_unseen_changes_after_a_restart() {
     }
     assert_eq!(two.pictures()[&hash(1)].rating, "5");
 }
+
+/// A computer deletes a picture, imports its file again in a task, and
+/// undoes the task before the import became an entry. Its old `add` entry is
+/// older than its deletion, so no other computer has the picture: the undo
+/// removes the picture instead of moving it to the Trash.
+#[test]
+fn undoing_an_import_task_removes_a_picture_that_this_computer_deleted_before() {
+    let (_directory, template) = template();
+    let (mut one, _two) = two_synced(&template);
+    one.delete(&hash(1));
+    one.settle();
+    pause();
+    let task = one.library.create_task("import", "Import", "{}", true, false, now_ms()).unwrap();
+    let input = one.prepared(&hash(1), "imported again", Vec::new(), Vec::new());
+    one.library.ingest_batch_for_task(&[input], task, false).unwrap();
+    one.library.stop_task(task, true, now_ms()).unwrap();
+    one.library.revert_task(task, now_ms()).unwrap();
+    assert!(!one.roots().contains_key(&hash(1)), "the picture is in the Trash");
+}
