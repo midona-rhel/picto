@@ -909,12 +909,6 @@ impl Library {
             .collect::<Vec<_>>();
         let result = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let deleted = delete_folder_subtrees(transaction, revision, &snapshot, &requested)?;
-            record_entries(
-                transaction,
-                EntryKind::Folder,
-                EntryState::Delete,
-                &deleted.stable_keys,
-            )?;
             insert_cloud_journal(
                 transaction,
                 revision,
@@ -1353,8 +1347,6 @@ pub(super) struct DeletedFolders {
     pub next: ProjectionSnapshot,
     /// Every deleted folder: the requested ones and all folders below them.
     pub folder_ids: Vec<FolderId>,
-    /// The stable keys of the deleted folders, in the order of `folder_ids`.
-    pub stable_keys: Vec<String>,
     /// The nearest folder above a single requested folder that still
     /// exists, for the view to show next.
     pub fallback_folder_id: Option<FolderId>,
@@ -1468,10 +1460,6 @@ pub(super) fn delete_folder_subtrees(
         folder_ids: definitions
             .iter()
             .map(|(definition, _)| definition.folder_id)
-            .collect(),
-        stable_keys: definitions
-            .iter()
-            .map(|(definition, _)| definition.stable_key.clone())
             .collect(),
         fallback_folder_id,
         affected,

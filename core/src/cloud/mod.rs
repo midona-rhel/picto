@@ -6,17 +6,15 @@
 //! - `snapshots/`, compressed copies of the whole database, each with a
 //!   manifest (`snapshot.rs`). A device writes a new one when the library
 //!   has changed and has been idle for 30 seconds.
-//! - `tombstones/<device id>/`, the tombstones that the device made: what it
-//!   deleted, moved into or out of the Trash, or added again
-//!   (`tombstones.rs`).
+//! - `entries/<device id>/`, the entries that the computer wrote: what it
+//!   imported, deleted, renamed, rated, tagged, put into folders or moved
+//!   into or out of the Trash (`entries.rs`).
 //!
-//! Another device gets the library by taking the newest snapshot as its
+//! Another computer gets the library by taking the newest snapshot as its
 //! database (Open from Cloud…) and copying the originals. After that, the
-//! only thing that the devices share by themselves is the tombstones: an
-//! item that was deleted permanently, moved to the Trash or restored, a
-//! deleted tag, folder or smart folder, and the removal of a tombstone. An
-//! item that is added or edited on one device reaches another device only
-//! when a snapshot is restored there.
+//! computers send each other entries, and each one changes its library to
+//! match (`picto-library/src/mutation/shared_merge.rs`). Fetching the
+//! originals of pictures that another computer imported isn't built yet.
 //!
 //! This file holds the configuration and the state of the sync
 //! (`cloud_state`), the commands that switch it on and off, and the removal
@@ -33,7 +31,7 @@ use crate::library_application::LibraryApplication;
 
 pub mod provider;
 pub mod snapshot;
-pub mod tombstones;
+pub mod entries;
 
 pub const CLOUD_SCHEMA_GENERATION: i64 = 1;
 
@@ -43,8 +41,8 @@ pub const CLOUD_DATA_REMOVED: &str = "The cloud data of this library was deleted
     Cloud sync is now off on this device. Nothing was deleted from this library.";
 
 /// Held by everything that reads or writes a library's cloud data: a sync,
-/// the merge of the other devices' tombstones, and the removal of the cloud
-/// data. So the cloud data is never removed while a sync writes into it.
+/// merging the other computers' entries, and removing the cloud data, so the
+/// data is never removed while a sync writes into it.
 static SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(
@@ -207,10 +205,10 @@ pub fn configure_library(
                     |row| row.get::<_, bool>(0),
                 )?;
                 if !connected {
-                    // The library starts to sync with this folder. What it
-                    // knew about the cloud data it synced with before does
-                    // not hold here: the time of the last sync, and which
-                    // of its tombstones are written there.
+                    // The library starts to sync with this folder, which
+                    // holds none of its snapshots or entries yet, so the
+                    // time of the last sync and the record of which entries
+                    // were written are cleared.
                     transaction.execute(
                         "UPDATE cloud_state SET last_sync_at = NULL, last_snapshot_at = NULL
                          WHERE singleton = 1",
@@ -280,7 +278,7 @@ pub fn snapshot_due_library(
 }
 
 pub fn recover_interrupted_sync_library(application: &LibraryApplication) -> Result<(), String> {
-    tombstones::forget_merged();
+    entries::forget_merged();
     application
         .library()
         .database()
@@ -571,8 +569,8 @@ pub async fn delete_cloud_data_library(
     Ok(removal)
 }
 
-/// Returns whether the worker should merge the tombstones in the cloud
-/// folder now: cloud sync is on, not paused, and no sync runs or failed.
+/// Returns whether the worker should merge the entries in the cloud folder
+/// now: cloud sync is on, not paused, and no sync is running or has failed.
 pub fn receive_due_library(application: &LibraryApplication) -> Result<bool, String> {
     application
         .library()
@@ -587,11 +585,11 @@ pub fn receive_due_library(application: &LibraryApplication) -> Result<bool, Str
         .map_err(|error| error.to_string())
 }
 
-/// Merges the tombstone files that are in the cloud folder and were not
-/// merged yet, and returns the number of files. The
-/// worker calls it between two syncs, so that a deletion made on another
-/// device arrives while this library is idle. A damaged file leaves the
-/// sync state `error` with a message that names it, and nothing is merged.
+/// Merges the entry files in the cloud folder that weren't merged yet and
+/// returns how many there were. The worker calls it between two syncs, so
+/// changes made on another computer arrive while this library is idle. A
+/// damaged file sets the sync state to `error` with a message that names it,
+/// and nothing is merged.
 pub async fn receive_library(
     application: &LibraryApplication,
     provider: &dyn provider::CloudProvider,
@@ -599,7 +597,7 @@ pub async fn receive_library(
     let _running = SYNC.lock().await;
     let library_id = configuration_library(application)?.library_id;
     stop_if_cloud_data_removed(application, provider, &library_id).await?;
-    let merged = tombstones::receive_library(application, provider, &library_id).await;
+    let merged = entries::receive_library(application, provider, &library_id).await;
     if let Err(error) = &merged {
         let _ = snapshot::set_sync_state(application, "error", "idle", error);
     }
@@ -632,10 +630,13 @@ fn seed_local_originals_library(application: &LibraryApplication) -> Result<(), 
             picto_library::database::WorkPriority::Cloud,
             |transaction| {
                 transaction.execute(
-                    // `WHERE true` ends the SELECT: after `FROM media_file`
-                    // SQLite would otherwise read `ON` as a join constraint.
+                    // A file that a merge kept after deleting its picture
+                    // isn't uploaded. The `WHERE` clause also ends the
+                    // SELECT: after `FROM media_file` SQLite would otherwise
+                    // read `ON` as a join constraint.
                     "INSERT INTO cloud_blob_state (file_hash, state, updated_at)
-                     SELECT content_hash, 'queued', ?1 FROM media_file WHERE true
+                     SELECT content_hash, 'queued', ?1 FROM media_file
+                     WHERE content_hash NOT IN (SELECT content_hash FROM kept_deleted_file)
                      ON CONFLICT(file_hash) DO UPDATE SET
                          state = 'queued', remote_present = 0, last_error = NULL,
                          uploaded_at = NULL, updated_at = excluded.updated_at",

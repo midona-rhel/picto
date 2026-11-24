@@ -326,7 +326,9 @@ Both pictures follow the same rules outside the library's folder and at deletion
 - A Picto Pack holds only originals (`core/src/picto_pack.rs`). The import of a pack queues
   `thumbnail` work for each file, as every import does.
 - A permanent delete queues the file in `blob_cleanup_queue`, and the cleanup deletes the
-  original, the thumbnail and the first-frame picture together (`BlobStore::delete`).
+  original, the thumbnail and the first-frame picture together (`BlobStore::delete`). A picture
+  that a cloud sync merge deleted keeps its files for "Keep deleted files", and at least 7 days,
+  first (`kept_deleted_file`).
 
 ## Subscriptions
 
@@ -397,9 +399,9 @@ When a source breaks, follow
 
 ## Cloud sync
 
-Cloud sync is experimental. Its transport is a folder that the Google Drive or Dropbox desktop app
-syncs; Picto has no account service and signs in to nothing. The core owns it (`core/src/cloud/`),
-and it changes a library only through the library's own writes.
+Cloud sync is experimental. It uses a folder that the Google Drive or Dropbox desktop app syncs;
+Picto has no account service and signs in to nothing. The core owns it (`core/src/cloud/`), and it
+changes a library only through the library's own writes.
 
 A library writes below `picto/<library id>/` in the cloud folder:
 
@@ -408,98 +410,107 @@ A library writes below `picto/<library id>/` in the cloud folder:
 | `library.json` | the library's id and name | once, by the first sync |
 | `blobs/f/<aa>/<bb>/<hash>.<ext>` | the original files, by content hash | when a file is missing there |
 | `snapshots/<id>.sqlite.zst`, `<id>.json` | a compressed copy of the whole database, and its manifest with both checksums | by every sync |
-| `tombstones/<device id>/<xx>.<digest>.jsonl.zst` | the tombstones that the device made | by a sync after the device made or changed one |
+| `entries/<device id>/<xx>.<digest>.jsonl.zst` | the entries that this computer wrote | by a sync after this computer wrote or changed one |
 
 A sync (`snapshot::publish_library`) runs when the library has changed and has been idle for 30
 seconds, and on Sync Now. Every file is written beside its target and then renamed onto it, so a
-reader never sees a file in part.
+reader never sees half a file. Open from Cloud… takes the newest snapshot as the new library's
+database, gives the library a device id of its own and copies the originals. Restore replaces the
+database with one snapshot.
 
-**What another device takes over.** Open from Cloud… takes the newest snapshot as the new
-library's database, gives the library a device id of its own and copies the originals. Restore
-replaces the database with one snapshot. Neither runs by itself. The only thing that the devices
-share by themselves is the tombstones. An item that is added or edited on one device does not
-reach another device.
+### Entries
 
-**Tombstones.** A permanent deletion writes a tombstone for every deleted item
-(`deletion_tombstone`), and an import refuses an item whose tombstone is later than the import.
-Cloud sync shares that model (`picto-library/src/mutation/shared.rs`). For every key that a
-deletion or its reversal touched, the library keeps one entry in `cloud_tombstone`: the state, the
-time of the library's hybrid logical clock (`cloud_state.hlc_physical_ms`, `hlc_logical`), and the
-device. The state is kept in the column `mutation_id`. A `delete` entry of an item that has a file
-also holds the content hash of that file, in the column `causal_frontier_json`.
+Each computer records what is done to its library as entries in `shared_entry`
+(`picto-library/src/mutation/shared.rs`), sends them to the other computers through the cloud
+folder, and changes its library to match the entries of all computers. A picture is identified by
+the content hash of its file. A tag is identified by its namespace and name, and a folder by its
+stable key.
 
-| Kind | Key | State | Written by |
-| --- | --- | --- | --- |
-| `item` | stable key of an item, a collection or a collection's member | `delete`, with the content hash of the item's file; a collection has no file and its entry no hash | Delete Permanently, Empty Trash, a rejected Inbox item with "Delete permanently" (`delete_roots`) |
-| `item` | the same | `add` | everything that removes a tombstone: an import of the item that is later than the deletion, a subscription run or reset, the undo of the deletion (`remove_item_tombstones`) |
-| `status` | stable key of an item or a collection | `trash`, `active`, `inbox` | a move into or out of the Trash, also by undo and redo |
-| `tag`, `folder`, `smart_folder` | stable key | `delete`, and `add` after an undo | the deletion of a tag, a folder with the folders below it, or a smart folder |
+The entry kinds are `add` (one per file and computer, with a record of the picture's name, notes,
+rating, status, tags and folders), `delete`, `name`, `notes`, `rating`, `status`, `item_tag`,
+`folder_item`, `tag_delete` and `folder_delete`. For each kind and key the library keeps only the
+latest entry, so the same entries give the same library in any order. If one computer sets 3 stars
+at 10:00 and another sets 5 stars at 10:05, both end with 5 stars. The clock is the later of the
+wall clock and the latest time the computer has seen (`cloud_state.hlc_physical_ms`,
+`hlc_logical`), and all entries of one action share one time.
 
-The clock's time is the later of the device's wall clock and the latest time that the library has
-seen, with a counter for one millisecond. Merging an entry moves the clock to that entry's time.
-What the user does after a merge is therefore later than everything that was merged, whatever the
-device's wall clock says.
+`shared_view.rs` works out a picture from its entries. It exists when an `add` is later than its
+`delete`. A field comes from its latest entry after the deletion, or else from the earliest `add`
+that counts. A tag is on the picture when its latest `item_tag` says so, or else when an `add`
+record has it, and it goes when the tag was deleted after it was put on: a tag put on at 9:00 and
+deleted at 10:00 is off, one put on again at 10:05 is on. A deleted folder never holds anything
+again.
 
-A move into or out of the Trash writes one `cloud_journal` row with the moved roots and the clock
-time, so that it costs the same for one root and for a million. The sync, and the worker every five
-minutes, turn those rows into `status` entries in batches (`Library::settle_trash_moves`).
+An import writes an `add` only when no computer has added the file yet; otherwise the picture is
+changed to look the way the entries say. Undoing a permanent deletion always writes an `add`, and
+so does a repaired video for its new file. Deleting a picture, merging a duplicate away and
+repairing a video write `delete` for the file that goes.
 
-**One merge rule.** A sync writes the entries that the device made into the device's folder and
-merges the entries in the folders of all devices (`core/src/cloud/tombstones.rs`,
-`Library::apply_shared_entries`). Per key, the entry with the later clock time wins, and of two
-entries with the same time the one of the device with the greater id. An entry that does not win
-changes nothing. So the same files give the same library in every order and however often they are
-merged, no file depends on another, and a file that has not arrived is merged when it arrives. A
-device also merges every 30 seconds while the library is idle (`cloud::receive_library`). A winning
-entry is stored and applied in one publication, with no history entry:
+A library starts recording at its first sync (`Library::start_recording`), and every file it holds
+then gets an `add` marked as written at the start, so its tags count as older than any deletion of
+those tags. After that, `record_changes` compares the library before and after each published write
+(from `PublishedDelta::settle`) and stores one `pending_entry` row per kind of change, with the
+changed roots as a bitmap, so tagging a million pictures costs one row. `Library::settle_entries`
+turns the rows and the files of the start into entries in batches of 20,000. Deletions of files,
+tags and folders are written as entries at once.
 
-- `item`, `delete`: the item gets its tombstone, and if the library holds it as an item or a
-  collection, it is deleted through `delete_roots`, whatever its status is. Two cases are
-  different. An entry that names the content hash of a file deletes the item only when the item's
-  file in that library has the same hash. The stable key of a manual import is made from the number
-  of the import task and the file's path, so two devices can hold different files under one key;
-  an item with another file stays, and the entry is handled as if the library held no item with
-  that key. And when the library holds no entry for the item, and the item was imported there after
-  the time of the deletion, the item was added again: it stays and gets an `add` entry of that
-  device. This is the rule of an import, which removes a tombstone that is earlier than the import.
-- `item`, `add`: the item's tombstone is removed. The item itself is not copied.
-- `status`: an item of the library is moved to the Trash, or out of it when it is in the Trash.
-- `tag`, `delete`: the tag is deleted.
-- `folder` and `smart_folder`, `delete`: a folder with such an entry is deleted once every folder
-  below it has one too. So a merge deletes no folder that the other device did not delete.
+A merge (`Library::merge_entries`, `shared_merge.rs`) first turns this computer's pending rows into
+entries, keeps the entries that are later than the stored ones, and changes every picture they
+touch through the functions that Undo and Redo use, in one published write without an undo step.
+It writes no entry and doesn't move the clock past the entries it saw. A picture that exists by the
+entries and isn't on this computer is listed by `Library::wanted_files`; fetching those files isn't
+built yet. Pictures in collections, and collections, get no entries and are left alone by a merge.
 
-**The files.** A device's entries are spread over 256 files by the first byte of the SHA-256 of
-kind and key, and a sync rewrites only the files of keys whose entry is later than the clock time
-up to which the device's entries were written before (`cloud_device_frontier` holds that time for
-the device). A file's name holds the first 16 hexadecimal digits of the SHA-256 of its content, so
-a file is never changed: a new state is a file with another name, and the replaced file is
-removed. The content is zstd-compressed lines of JSON, a header with the library, the device and
-the whole SHA-256, and one entry per line. Before a file is merged, every file that waits is read
-and checked against its name and its header. If one does not match, none is merged and the sync
-state becomes `error` with a message that names the file. A file that cannot be read at the moment
-is left for the next round.
+A merge that deletes a picture keeps its file on this computer for the "Keep deleted files" time,
+counted from the merge and at least 7 days, and notes it in `kept_deleted_file` instead of queuing
+it in `blob_cleanup_queue`. The setting is about the originals in the cloud folder, and this file is
+the copy on this computer, so a setting of 0 days still keeps it for 7. The entries of one action can arrive in two files, for example the deletion
+in one and its undo in another, and a provider's desktop app can download the file with the
+deletion first. When a later merge says that the picture exists again, `Library::apply_stored`
+imports it from the kept file through `Library::ingest_batch`, without fetching it. The file
+exists by the entries, so the import writes no `add`, and the next apply gives the picture its
+tags and folders. Once the time is over, `Library::clean_pending_blobs`
+queues a kept file for removal when its picture doesn't exist by the entries. A kept file is not a
+file of the library: the statistics and the duplicate scan leave it out, its detected duplicate
+pairs are removed, cloud sync doesn't upload it as an original, and a library opened from a
+snapshot that holds it removes it, because the file isn't on that computer. A restore keeps a kept
+file only when the file is on this computer's disk, since the snapshot can come from another
+computer.
 
-The originals of a permanently deleted item are removed from the cloud folder by the device that
-made the deletion, after the "Keep deleted files" time (`cloud_tombstone` rows of the kind `blob`
-with `purge_after`, `purge_expired_cloud_blobs`). A device that merges the deletion does not queue
-that removal.
+A computer's entries are spread over 256 files in `entries/<device id>/` by the first byte of the
+SHA-256 of an entry's key (`core/src/cloud/entries.rs`). A sync rewrites only the files whose
+keys changed since the time in `cloud_device_frontier`. A file's name holds the first 16 hexadecimal
+digits of the SHA-256 of its content, so a file is never changed; a new state is a new file and the
+old one is removed. The content is zstd-compressed JSON lines after a header with the library, the
+computer and the whole SHA-256. If any waiting file doesn't match its name and header, nothing is
+merged and the sync state becomes `error` with the file's name. A file that can't be read yet waits
+for the next round.
 
-**Removing the cloud data.** `cloud.data.delete` (Delete Cloud Data… in the Library Manager)
+The original of a permanently deleted picture is removed from the cloud folder by the computer that
+deleted it, after the "Keep deleted files" time (`cloud_deleted_original`,
+`purge_expired_cloud_blobs`).
+
+`scripts/sync-model/` holds the Python simulation that these rules were checked with, including the
+parts that aren't built yet (collections, import tasks, snapshots, Restore and originals).
+`model2.py` runs three to five computers that act and sync in random order and checks that they end
+with the same library, that nothing is lost that nobody removed, and that the later action wins.
+`round2_runs.sh` and `final_runs.sh` are the searches that were run, and `replay2.py` replays one
+run. Run it with `python3 -I` before changing a rule. `picto-library/tests/shared_entries.rs`
+checks the same properties on three real libraries.
+
+`cloud.data.delete` (Delete Cloud Data… in the Library Manager)
 removes the library's folder from the cloud folder and then switches sync off
 (`DirectoryProvider::remove_library`). It removes `library.json` first, and after it only files
 whose name and place are those of a file that the sync writes. A file of any other name stays, and
-so does every folder that still holds something. A sync, the merge of the tombstones and the
+so does every folder that still holds something. A sync, the merge of the entries and the
 removal hold one lock, so the data is not removed while a sync writes into it.
 
 A device whose library has synced with the folder before and no longer finds `library.json` there
 treats the cloud data as removed: it switches its sync off, leaves the message "The cloud data of
 this library was deleted. …" in `cloud_state`, writes nothing into the cloud folder and changes
 nothing else (`cloud::stop_if_cloud_data_removed`). Connecting a library to a cloud folder clears
-the time of the last sync and the clock time up to which the device's tombstones were written, so
+the time of the last sync and the clock time up to which the computer's entries were written, so
 the library then writes all of them into the folder's cloud data.
 
-**Compatibility.** The schema is unchanged. Snapshots, originals and `library.json` have the
-format that Picto 0.6.22 and 0.6.23 write, and data that they wrote is read as before. A device
-that runs one of those versions ignores the folder `tombstones/`: it neither writes nor merges
-tombstones, and after the cloud data was removed it writes a new snapshot into the folder at its
-next sync.
+Earlier versions wrote tombstone files into `tombstones/`. This version doesn't read them, and a
+library that it opens drops its tombstones and starts recording at its next sync.

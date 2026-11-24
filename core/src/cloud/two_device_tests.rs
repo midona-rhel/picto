@@ -166,7 +166,8 @@ fn rows(application: &LibraryApplication, left_out: &[&str]) -> BTreeMap<String,
 /// Two devices that sync one library through the folder `cloud`, and that
 /// folder as a provider. Both hold the items 0, 1 and 2 in All, with their
 /// files. Item 0 has the tag `sync:tag`, and item 1 is in the folder
-/// `Folder`. Both have synced, and the cloud folder holds no tombstone file.
+/// `Folder`. Both have synced, so the cloud folder holds the `add` entries
+/// that the first device wrote when it started recording.
 /// The two folders that hold the libraries are returned to keep them.
 async fn two_devices(
     cloud: &Path,
@@ -239,12 +240,12 @@ fn cloud_data(cloud: &Path, application: &LibraryApplication) -> PathBuf {
         .join(configuration_library(application).unwrap().library_id)
 }
 
-/// The tombstone files that `application`'s device wrote, in the order of
+/// The entry files that `application`'s computer wrote, in the order of
 /// their names.
-fn tombstone_files(cloud: &Path, application: &LibraryApplication) -> Vec<PathBuf> {
+fn entry_files(cloud: &Path, application: &LibraryApplication) -> Vec<PathBuf> {
     let configuration = configuration_library(application).unwrap();
     let folder = cloud_data(cloud, application)
-        .join("tombstones")
+        .join("entries")
         .join(configuration.device_id);
     let mut files = match std::fs::read_dir(folder) {
         Ok(entries) => entries.map(|entry| entry.unwrap().path()).collect::<Vec<_>>(),
@@ -269,6 +270,8 @@ fn import_later(application: &LibraryApplication, folder: &Path, index: u8) {
     assert_eq!(report.ingested, 1);
 }
 
+/// Returns whether the library has a local tombstone for the item `index`,
+/// which stops an older import from bringing it back.
 fn tombstoned(application: &LibraryApplication, index: u8) -> bool {
     count(
         application,
@@ -290,7 +293,7 @@ fn cloud_original(cloud: &Path, application: &LibraryApplication, hash: &str) ->
 #[tokio::test]
 async fn a_deletion_on_one_device_arrives_on_the_other_and_a_restore_comes_back() {
     let cloud = tempfile::tempdir().unwrap();
-    let (first, second, provider, _folders) = two_devices(cloud.path()).await;
+    let (first, second, provider, folders) = two_devices(cloud.path()).await;
     let deleted_hash = hash(&second, 1);
     let tag = first.library().projections().snapshot().tag_ids_by_name["sync:tag"];
     let folder = first.library().folders().unwrap()[0].folder_id;
@@ -302,7 +305,7 @@ async fn a_deletion_on_one_device_arrives_on_the_other_and_a_restore_comes_back(
     first.delete_tag(tag).unwrap();
     first.delete_folders(&[folder]).unwrap();
     snapshot::publish_library(&first, &provider).await.unwrap();
-    assert!(!tombstone_files(cloud.path(), &first).is_empty());
+    assert!(!entry_files(cloud.path(), &first).is_empty());
 
     assert!(receive_library(&second, &provider).await.unwrap() > 0);
 
@@ -320,14 +323,16 @@ async fn a_deletion_on_one_device_arrives_on_the_other_and_a_restore_comes_back(
     assert_eq!(status_library(&second).unwrap().state, "idle");
     // Nothing of it is on the second device's undo stack.
     assert!(!second.library().history().state().can_undo);
-    // The file of the deleted item leaves the second device's library.
+    // The file of the deleted item stays on the second device's disk for
+    // "Keep deleted files", in case another device adds the item again.
     crate::library_media_runtime::drain_blob_cleanup(&second, 8).unwrap();
     let original = second
         .blobs()
         .original_path_with_ext(&deleted_hash, Some("png"))
         .unwrap();
-    assert!(!original.exists());
-    assert_eq!(count(&second, "SELECT COUNT(*) FROM media_file"), 2);
+    assert!(original.exists());
+    assert_eq!(count(&second, "SELECT COUNT(*) FROM media_file"), 3);
+    assert_eq!(count(&second, "SELECT COUNT(*) FROM kept_deleted_file"), 1);
 
     // The second device restores the item, and the first takes that over.
     second
@@ -342,11 +347,30 @@ async fn a_deletion_on_one_device_arrives_on_the_other_and_a_restore_comes_back(
 
     // Merging every file again, as after a restart, changes nothing.
     let before = [rows(&first, &["cloud_state", "library_meta"]), rows(&second, &["cloud_state", "library_meta"])];
-    tombstones::forget_merged();
+    entries::forget_merged();
     receive_library(&first, &provider).await.unwrap();
     receive_library(&second, &provider).await.unwrap();
     assert_eq!(rows(&first, &["cloud_state", "library_meta"]), before[0]);
     assert_eq!(rows(&second, &["cloud_state", "library_meta"]), before[1]);
+
+    // The first device imports the deleted item again. The second device
+    // brings it back from the file it kept, without fetching the file.
+    import_later(&first, folders[0].path(), 1);
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    receive_library(&second, &provider).await.unwrap();
+    assert_eq!(
+        count(
+            &second,
+            &format!(
+                "SELECT COUNT(*) FROM media_item media
+                 JOIN media_file file ON file.file_id = media.file_id
+                 WHERE file.content_hash = '{deleted_hash}'"
+            ),
+        ),
+        1
+    );
+    assert!(original.exists());
+    assert_eq!(count(&second, "SELECT COUNT(*) FROM kept_deleted_file"), 0);
 }
 
 #[tokio::test]
@@ -367,16 +391,21 @@ async fn an_item_that_is_imported_again_after_its_deletion_stays_and_its_tombsto
     assert!(!tombstoned(&second, 1));
     snapshot::publish_library(&second, &provider).await.unwrap();
 
-    // The first device's tombstone goes. Its own files still hold the
-    // deletion until its next sync, and they do not delete the item on the
-    // second device, however often they are merged.
+    // The first device now sees the item again; it is waiting for its file.
+    // The first device's own entries still hold the deletion, and they do
+    // not delete the item on the second device, however often they are
+    // merged.
     receive_library(&first, &provider).await.unwrap();
-    assert!(!tombstoned(&first, 1));
-    tombstones::forget_merged();
+    assert!(first
+        .library()
+        .entry_view(&hash(&second, 1))
+        .unwrap()
+        .is_some());
+    entries::forget_merged();
     receive_library(&second, &provider).await.unwrap();
     assert_eq!(status(&second, 1), Some(Lifecycle::Inbox));
     snapshot::publish_library(&first, &provider).await.unwrap();
-    tombstones::forget_merged();
+    entries::forget_merged();
     snapshot::publish_library(&second, &provider).await.unwrap();
     assert_eq!(status(&second, 1), Some(Lifecycle::Inbox));
     assert!(!tombstoned(&second, 1));
@@ -469,15 +498,21 @@ async fn a_device_that_was_away_takes_the_deletions_over_and_keeps_what_it_added
 }
 
 #[tokio::test]
-async fn damaged_tombstone_files_delete_nothing_and_missing_ones_hold_nothing_back() {
+async fn damaged_entry_files_delete_nothing_and_missing_ones_hold_nothing_back() {
     let cloud = tempfile::tempdir().unwrap();
     let (first, second, provider, _folders) = two_devices(cloud.path()).await;
     first
         .set_lifecycle(&target(&first, &[0, 1]), Lifecycle::Trash)
         .unwrap();
+    let before = entry_files(cloud.path(), &first);
     first.delete_items(&target(&first, &[0]), false).unwrap();
     snapshot::publish_library(&first, &provider).await.unwrap();
-    let files = tombstone_files(cloud.path(), &first);
+    // Only the files that the deletion and the move to the Trash wrote are
+    // new to the second device.
+    let files = entry_files(cloud.path(), &first)
+        .into_iter()
+        .filter(|file| !before.contains(file))
+        .collect::<Vec<_>>();
     assert!(!files.is_empty());
     let whole = files
         .iter()
@@ -497,7 +532,7 @@ async fn damaged_tombstone_files_delete_nothing_and_missing_ones_hold_nothing_ba
         .unwrap_err();
     let name = files[0].file_name().unwrap().to_string_lossy().into_owned();
     assert!(error.contains(&name), "{error}");
-    assert!(error.contains("Nothing was deleted on this device"), "{error}");
+    assert!(error.contains("Nothing from the cloud folder was merged"), "{error}");
     let state = status_library(&second).unwrap();
     assert_eq!((state.state.as_str(), state.message), ("error", error));
     unchanged(&second);
@@ -533,7 +568,7 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
     snapshot::publish_library(&first, &provider).await.unwrap();
     snapshot::publish_library(&second, &provider).await.unwrap();
     let data = cloud_data(cloud.path(), &first);
-    assert!(!tombstone_files(cloud.path(), &first).is_empty());
+    assert!(!entry_files(cloud.path(), &first).is_empty());
     // An upload that was interrupted left a file of the sync behind.
     std::fs::write(
         data.join("snapshots")
@@ -549,7 +584,7 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
         "snapshots/202611世T101500.12Z-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11.json",
         "snapshots/readme.md",
         "blobs/f/aa/bb/picture.txt",
-        "tombstones/not-a-device/0a.0123456789abcdef.jsonl.zst",
+        "entries/not-a-device/0a.0123456789abcdef.jsonl.zst",
         "extra/file.bin",
     ];
     for name in foreign {
@@ -581,11 +616,11 @@ async fn delete_cloud_data_removes_only_what_the_sync_wrote_and_leaves_the_libra
         kept,
         [
             "blobs/f/aa/bb/picture.txt",
+            "entries/not-a-device",
             "extra",
             "notes.txt",
             "snapshots/202611世T101500.12Z-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11.json",
             "snapshots/readme.md",
-            "tombstones/not-a-device",
         ]
     );
     assert_eq!(removal.kept_entries, 6);
@@ -759,7 +794,7 @@ async fn sync_that_is_enabled_again_starts_from_new_cloud_data() {
         .set_lifecycle(&target(&application, &[0]), Lifecycle::Trash)
         .unwrap();
     snapshot::publish_library(&application, &provider).await.unwrap();
-    assert_eq!(tombstone_files(cloud.path(), &application).len(), 1);
+    assert!(!entry_files(cloud.path(), &application).is_empty());
     let data = cloud_data(cloud.path(), &application);
 
     delete_cloud_data_library(&application).await.unwrap();
@@ -769,11 +804,264 @@ async fn sync_that_is_enabled_again_starts_from_new_cloud_data() {
         .unwrap();
 
     // The library is connected again. It writes new cloud data, and all of
-    // its tombstones with it: the one that was in the removed cloud data,
-    // and the one that it made while sync was off.
+    // its entries with it, including the one it wrote while sync was off.
     configure_library(&application, &input).unwrap();
     assert_eq!(status_library(&application).unwrap().last_sync_at, None);
     snapshot::publish_library(&application, &provider).await.unwrap();
     assert!(data.join("library.json").is_file());
-    assert_eq!(tombstone_files(cloud.path(), &application).len(), 2);
+    let mut written = Vec::new();
+    application
+        .library()
+        .visit_own_entries(None, &mut |entry| written.push(entry))
+        .unwrap();
+    assert!(written.iter().any(|entry| entry.value.as_deref() == Some("trash")
+        && entry.kind == picto_library::EntryKind::Status));
+    assert_eq!(
+        application.library().entry_clock().unwrap().published,
+        Some(application.library().entry_clock().unwrap().now)
+    );
+    assert!(!entry_files(cloud.path(), &application).is_empty());
+}
+
+/// Makes `path` readable or unreadable, the way a file that the provider's
+/// desktop app lists but hasn't downloaded can't be read.
+#[cfg(unix)]
+fn set_readable(path: &Path, readable: bool) {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = if readable { 0o644 } else { 0o000 };
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// The entry file of `application`'s computer that holds `entry`'s key.
+fn file_holding(cloud: &Path, application: &LibraryApplication, entry: &picto_library::SharedEntry) -> PathBuf {
+    let shard = entries::shard_of(entry);
+    entry_files(cloud, application)
+        .into_iter()
+        .find(|file| file.file_name().unwrap().to_string_lossy().starts_with(&format!("{shard}.")))
+        .unwrap()
+}
+
+/// The first computer deletes a picture and imports it again. While the file
+/// with the new `add` can't be read on the second computer, the deletion
+/// alone must not remove the picture there.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_deletion_waits_while_a_file_of_the_round_cannot_be_read() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, folders) = two_devices(cloud.path()).await;
+    first.set_lifecycle(&target(&first, &[1]), Lifecycle::Trash).unwrap();
+    first.delete_items(&target(&first, &[1]), false).unwrap();
+    import_later(&first, folders[0].path(), 1);
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    let device_id = configuration_library(&first).unwrap().device_id;
+    let add = picto_library::SharedEntry {
+        kind: picto_library::EntryKind::Add,
+        subject_key: hash(&first, 1),
+        second_key: device_id.clone(),
+        value: None,
+        clock_ms: 0,
+        clock_counter: 0,
+        device_id,
+    };
+    let file = file_holding(cloud.path(), &first, &add);
+    set_readable(&file, false);
+    receive_library(&second, &provider).await.unwrap();
+    let kept = status(&second, 1);
+    set_readable(&file, true);
+    assert!(kept.is_some(), "the picture was deleted on the second computer");
+    receive_library(&second, &provider).await.unwrap();
+    assert!(status(&second, 1).is_some());
+}
+
+/// After a restore, a computer's own newer entry file that it couldn't read
+/// stays in the cloud folder instead of being replaced by older entries.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unread_own_file_is_not_replaced() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, _second, provider, _folders) = two_devices(cloud.path()).await;
+    first.library().set_rating(&target(&first, &[2]), picto_library::Rating::Four).unwrap();
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    let device_id = configuration_library(&first).unwrap().device_id;
+    let rating = picto_library::SharedEntry {
+        kind: picto_library::EntryKind::Rating,
+        subject_key: hash(&first, 2),
+        second_key: String::new(),
+        value: None,
+        clock_ms: 0,
+        clock_counter: 0,
+        device_id,
+    };
+    let file = file_holding(cloud.path(), &first, &rating);
+    // The database goes back to an older state, as after a restore.
+    write(
+        &first,
+        "UPDATE shared_entry SET value = '1', clock_ms = clock_ms - 1000 WHERE kind = 'rating'",
+        &[],
+    );
+    write(&first, "DELETE FROM cloud_device_frontier", &[]);
+    entries::forget_merged();
+    set_readable(&file, false);
+    let result = snapshot::publish_library(&first, &provider).await;
+    let kept = file.exists();
+    if kept {
+        set_readable(&file, true);
+    }
+    result.unwrap();
+    assert!(kept, "the newer own entry file was removed");
+}
+
+/// The file of a picture that a merge deleted stays on the computer, but it
+/// isn't one of the library's files for cloud sync. Connecting a new cloud
+/// folder doesn't queue it for upload, a sync doesn't upload it as an
+/// original, and a computer that opens the library from the cloud neither
+/// downloads it nor counts it.
+#[tokio::test]
+async fn a_file_that_a_merge_kept_is_not_a_file_of_the_library_for_cloud_sync() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, provider, folders) = two_devices(cloud.path()).await;
+    let kept = hash(&first, 1);
+    let queued = |application: &LibraryApplication, hash: &str| {
+        count(
+            application,
+            &format!(
+                "SELECT COUNT(*) FROM cloud_blob_state
+                 WHERE file_hash = '{hash}' AND state = 'queued'"
+            ),
+        )
+    };
+    second
+        .set_lifecycle(&target(&second, &[1]), Lifecycle::Trash)
+        .unwrap();
+    second.delete_items(&target(&second, &[1]), false).unwrap();
+    snapshot::publish_library(&second, &provider).await.unwrap();
+    receive_library(&first, &provider).await.unwrap();
+    assert_eq!(count(&first, "SELECT COUNT(*) FROM kept_deleted_file"), 1);
+
+    super::seed_local_originals_library(&first).unwrap();
+    assert_eq!(queued(&first, &hash(&first, 0)), 1);
+    assert_eq!(queued(&first, &kept), 0);
+
+    // Even when its state says that its original is missing, a sync doesn't
+    // upload the kept file.
+    write(
+        &first,
+        "UPDATE cloud_blob_state SET state = 'queued', remote_present = 0 WHERE file_hash = ?1",
+        &[&kept],
+    );
+    let original = cloud_original(cloud.path(), &first, &kept);
+    std::fs::remove_file(&original).unwrap();
+    let manifest = snapshot::publish_library(&first, &provider).await.unwrap();
+    assert!(!original.exists());
+
+    // Open from Cloud… on a third computer, from the first computer's
+    // snapshot.
+    let third_folder = tempfile::tempdir().unwrap();
+    let third_root = third_folder.path().join("Third.library");
+    let joined = snapshot::prepare_join(&provider, &manifest.library_id, &third_root)
+        .await
+        .unwrap();
+    std::fs::create_dir_all(third_root.join("blobs")).unwrap();
+    let database = third_root.join("library.sqlite");
+    std::fs::rename(&joined.database_path, &database).unwrap();
+    let cloud_text = cloud.path().to_string_lossy().into_owned();
+    crate::state::initialize_joined_database(&database, "dropbox", "Test", &cloud_text).unwrap();
+    let third = LibraryApplication::open(&third_root).unwrap();
+    assert_eq!(queued(&third, &kept), 0);
+    assert_eq!(count(&third, "SELECT pending_blobs FROM cloud_state"), 2);
+    assert_eq!(
+        count(&third, &format!("SELECT COUNT(*) FROM media_file WHERE content_hash = '{kept}'")),
+        0
+    );
+    assert_eq!(count(&third, "SELECT COUNT(*) FROM kept_deleted_file"), 0);
+    drop(folders);
+}
+
+/// A restore can take the snapshot of another computer. A file that a merge
+/// kept on that computer and that isn't on this computer's disk goes with
+/// the restore, so a later add doesn't bring its picture back without the
+/// file. A kept file that is on this computer's disk stays, and the add
+/// brings its picture back from it.
+#[tokio::test]
+async fn a_restore_keeps_only_the_kept_files_that_are_on_this_disk() {
+    let cloud = tempfile::tempdir().unwrap();
+    let (first, second, _provider, folders) = two_devices(cloud.path()).await;
+    // The second computer imports a file that the first doesn't have, and
+    // then a third computer deletes it and item 1.
+    import_later(&second, folders[1].path(), 3);
+    let (missing, present) = (hash(&second, 3), hash(&second, 1));
+    let third = "ffffffff-0000-4000-8000-000000000099";
+    let entry = |kind, subject_key: &str, value: Option<&str>, clock_ms| {
+        picto_library::SharedEntry {
+            kind,
+            subject_key: subject_key.to_owned(),
+            second_key: if kind == picto_library::EntryKind::Add {
+                third.into()
+            } else {
+                String::new()
+            },
+            value: value.map(str::to_owned),
+            clock_ms,
+            clock_counter: 0,
+            device_id: third.into(),
+        }
+    };
+    let later = second.library().entry_clock().unwrap().now.0 + 60_000;
+    second
+        .library()
+        .merge_entries(&[
+            entry(picto_library::EntryKind::Delete, &missing, None, later),
+            entry(picto_library::EntryKind::Delete, &present, None, later),
+        ])
+        .unwrap();
+    assert_eq!(count(&second, "SELECT COUNT(*) FROM kept_deleted_file"), 2);
+    let (artifact, _) = snapshot::create_verified_library(&second).unwrap();
+
+    // The first computer restores the second computer's snapshot.
+    let local = crate::state::local_cloud_configuration(&first).unwrap();
+    let root = first.root().to_path_buf();
+    drop(first);
+    let database = root.join("library.sqlite");
+    for sidecar in ["library.sqlite-wal", "library.sqlite-shm"] {
+        let _ = std::fs::remove_file(root.join(sidecar));
+    }
+    std::fs::copy(&artifact.database_path, &database).unwrap();
+    crate::state::initialize_restored_database(&database, &local).unwrap();
+    let restored = LibraryApplication::open(&root).unwrap();
+    assert_eq!(
+        count(
+            &restored,
+            &format!("SELECT COUNT(*) FROM kept_deleted_file WHERE content_hash = '{present}'")
+        ),
+        1
+    );
+
+    // Both pictures are added again.
+    restored
+        .library()
+        .merge_entries(&[
+            entry(picto_library::EntryKind::Add, &missing, Some(r#"{"name":"again"}"#), later + 1),
+            entry(picto_library::EntryKind::Add, &present, Some(r#"{"name":"again"}"#), later + 1),
+        ])
+        .unwrap();
+    let held = |hash: &str| {
+        count(
+            &restored,
+            &format!(
+                "SELECT COUNT(*) FROM media_item media
+                 JOIN media_file file ON file.file_id = media.file_id
+                 WHERE file.content_hash = '{hash}'"
+            ),
+        )
+    };
+    assert_eq!(held(&missing), 0, "a picture came back without its file");
+    let wanted = restored.library().wanted_files(None, 10).unwrap();
+    assert_eq!(wanted.iter().map(|file| file.content_hash.clone()).collect::<Vec<_>>(), [missing]);
+    assert_eq!(held(&present), 1);
+    assert!(restored
+        .blobs()
+        .original_path_with_ext(&present, Some("png"))
+        .unwrap()
+        .is_file());
+    drop(second);
 }

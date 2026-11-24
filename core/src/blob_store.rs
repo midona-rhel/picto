@@ -693,6 +693,26 @@ pub fn library_original_path(
         .join(format!("{hex_hash}.{ext}")))
 }
 
+/// Returns whether the library in the folder `library_root` stores an
+/// original with the hash `hex_hash`, with any extension. Nothing is created,
+/// so this works for a library that is not open.
+pub fn library_has_original(library_root: &Path, hex_hash: &str) -> BlobResult<bool> {
+    let (ab, cd) = shard_prefix(hex_hash)?;
+    let folder = library_root.join("blobs").join("f").join(ab).join(cd);
+    let entries = match fs::read_dir(&folder) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    let prefix = format!("{hex_hash}.");
+    for entry in entries {
+        if entry?.file_name().to_string_lossy().starts_with(&prefix) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Returns the thumbnail that belongs to `original` when `original` is the
 /// file with the hash `hex_hash` in the blob store of a library
 /// (`<library>/blobs/f/<ab>/<cd>/<hash>.<ext>`) and that library holds a

@@ -394,17 +394,99 @@ CREATE TABLE cloud_device_frontier (
     updated_at TEXT NOT NULL
 ) WITHOUT ROWID, STRICT;
 
-CREATE TABLE cloud_tombstone (
-    object_kind TEXT NOT NULL,
-    object_key TEXT NOT NULL,
-    mutation_id TEXT NOT NULL,
-    hlc_physical_ms INTEGER NOT NULL,
-    hlc_logical INTEGER NOT NULL,
+-- The entries that the computers of a library send each other through cloud
+-- sync. An entry says what one computer did to one picture, tag or folder,
+-- and when, by the time of that computer's clock. Only the latest entry per
+-- key is kept; `picto-library/src/mutation/shared.rs` explains the kinds.
+-- `subject_key` is the content hash of a file, except for `tag_delete`,
+-- where it's the tag's name, and `folder_delete`, where it's the folder's
+-- stable key. `second_key` is the computer's id for `add`, the tag's name for
+-- `item_tag`, the folder's stable key for `folder_item`, and empty for the
+-- other kinds. `value` is the picture's record as JSON for `add`, and the new
+-- value for the other kinds. The key starts with `subject_key`, so all
+-- entries of one file are read as one range.
+CREATE TABLE shared_entry (
+    subject_key TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    second_key TEXT NOT NULL DEFAULT '',
+    value TEXT,
+    clock_ms INTEGER NOT NULL,
+    clock_counter INTEGER NOT NULL,
     device_id TEXT NOT NULL,
-    causal_frontier_json TEXT NOT NULL,
+    PRIMARY KEY(subject_key, kind, second_key)
+) WITHOUT ROWID, STRICT;
+
+-- The single row exists once the library records entries. `started_ms` and
+-- `started_counter` are the clock time at which recording started. The
+-- pictures the library held then get an `add` entry with that time, written
+-- in batches: `start_next_root` is the first root that hasn't got one yet
+-- (NULL when all are written), and `start_end_root` is the first root id
+-- that didn't exist when recording started. The `action_` columns hold the
+-- revision and clock time of the last write that recorded something, so
+-- that everything one write records gets the same time.
+CREATE TABLE entry_recording (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    started_ms INTEGER NOT NULL,
+    started_counter INTEGER NOT NULL,
+    start_next_root INTEGER,
+    start_end_root INTEGER NOT NULL,
+    action_revision INTEGER NOT NULL DEFAULT 0,
+    action_ms INTEGER NOT NULL DEFAULT 0,
+    action_counter INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
+-- Changes this computer made that aren't entries yet. One row holds one kind
+-- of change that one write made to any number of pictures: the kind, second
+-- key and value as in `shared_entry`, the clock time of the write, and the
+-- changed roots as a serialized Roaring bitmap. Tagging a million pictures is
+-- one row. `Library::settle_entries` turns the rows into entries in batches.
+CREATE TABLE pending_entry (
+    pending_id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    second_key TEXT NOT NULL DEFAULT '',
+    value TEXT,
+    clock_ms INTEGER NOT NULL,
+    clock_counter INTEGER NOT NULL,
+    root_bitmap BLOB NOT NULL
+) STRICT;
+
+-- Files, tags and folders whose entries a merge has stored and that the
+-- library doesn't match yet. `subject_kind` is `file`, `tag` or `folder`,
+-- and `subject_key` is the content hash, the tag's name or the folder's
+-- stable key. `Library::apply_merged` changes the library and removes them.
+CREATE TABLE merge_touched (
+    subject_kind TEXT NOT NULL,
+    subject_key TEXT NOT NULL,
+    PRIMARY KEY(subject_kind, subject_key)
+) WITHOUT ROWID, STRICT;
+
+-- Files that exist by the entries and that this library doesn't hold yet.
+CREATE TABLE wanted_file (
+    content_hash TEXT PRIMARY KEY
+) WITHOUT ROWID, STRICT;
+
+-- Files of pictures that a merge deleted. The file and its `media_file` row
+-- stay on this computer until `remove_after_ms`, which is the time of the
+-- merge plus "Keep deleted files", and at least 7 days. When the entries say
+-- that the picture exists again in that time, the picture is imported again
+-- from this file. After that time the file goes to `blob_cleanup_queue`
+-- unless the picture exists by the entries. These files are not files of
+-- the library: statistics, the duplicate scan and cloud sync leave them out.
+CREATE TABLE kept_deleted_file (
+    content_hash TEXT PRIMARY KEY,
+    remove_after_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX idx_kept_deleted_file_remove_after ON kept_deleted_file(remove_after_ms);
+
+-- Original files in the cloud folder whose picture this computer deleted.
+-- `file_name` is the content hash, a dot and the extension. The original is
+-- removed from the cloud folder after `purge_after`; the row then stays with
+-- `purge_after` NULL.
+CREATE TABLE cloud_deleted_original (
+    file_name TEXT PRIMARY KEY,
     deleted_at TEXT NOT NULL,
-    purge_after TEXT,
-    PRIMARY KEY(object_kind, object_key)
+    purge_after TEXT
 ) WITHOUT ROWID, STRICT;
 
 CREATE TABLE cloud_quarantine (

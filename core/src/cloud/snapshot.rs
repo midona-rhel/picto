@@ -22,7 +22,7 @@ pub struct SnapshotArtifact {
     pub artifact_sha256: String,
     pub size_bytes: u64,
     pub compressed_path: PathBuf,
-    database_path: PathBuf,
+    pub(super) database_path: PathBuf,
 }
 
 impl Drop for SnapshotArtifact {
@@ -135,9 +135,9 @@ pub fn create_verified_library(
 ///
 /// 1. stops, and switches cloud sync off, if the library's cloud data is
 ///    gone (`stop_if_cloud_data_removed`);
-/// 2. merges the tombstones of the other devices;
-/// 3. copies the database, which then holds what the merge deleted;
-/// 4. writes this device's own tombstones;
+/// 2. merges the entries of the other computers;
+/// 3. copies the database, which then includes what the merge changed;
+/// 4. writes this computer's own entries;
 /// 5. removes the originals of deleted items whose "Keep deleted files" time
 ///    has passed, and uploads or downloads the originals that are missing on
 ///    one side;
@@ -169,11 +169,11 @@ async fn publish_library_inner(
     provider: &dyn CloudProvider,
 ) -> Result<SnapshotManifest, String> {
     let (library_id, _) = identity_and_frontier_library(application)?;
-    super::tombstones::receive_library(application, provider, &library_id).await?;
+    super::entries::receive_library(application, provider, &library_id).await?;
     let (artifact, database_revision) = create_verified_library(application)?;
     let (library_id, frontier) = identity_and_frontier_library(application)?;
     ensure_manifest_library(application, provider, &library_id).await?;
-    super::tombstones::publish_library(application, provider, &library_id).await?;
+    super::entries::publish_library(application, provider, &library_id).await?;
     purge_expired_cloud_blobs(application, provider, &library_id).await?;
     sync_snapshot_blobs(application, provider, &artifact.database_path, &library_id).await?;
     finish_blocking_restore(application)?;
@@ -265,12 +265,11 @@ async fn purge_expired_cloud_blobs(
         .library()
         .auxiliary_read(picto_library::database::WorkPriority::Cloud, |connection| {
             let mut statement = connection.prepare(
-                "SELECT object_key
-                     FROM cloud_tombstone
-                     WHERE object_kind = 'blob'
-                       AND purge_after IS NOT NULL
+                "SELECT file_name
+                     FROM cloud_deleted_original
+                     WHERE purge_after IS NOT NULL
                        AND purge_after <= ?1
-                     ORDER BY purge_after, object_key
+                     ORDER BY purge_after, file_name
                      LIMIT 128",
             )?;
             let rows = statement
@@ -298,10 +297,9 @@ async fn purge_expired_cloud_blobs(
                 connection
                     .query_row(
                         "SELECT EXISTS(
-                                 SELECT 1 FROM cloud_tombstone tombstone
-                                 WHERE tombstone.object_kind = 'blob'
-                                   AND tombstone.object_key = ?1
-                                   AND tombstone.purge_after IS NOT NULL
+                                 SELECT 1 FROM cloud_deleted_original original
+                                 WHERE original.file_name = ?1
+                                   AND original.purge_after IS NOT NULL
                                    AND NOT EXISTS(
                                        SELECT 1 FROM media_file
                                        WHERE content_hash = ?2
@@ -313,7 +311,30 @@ async fn purge_expired_cloud_blobs(
                     .map_err(Into::into)
             })
             .map_err(|error| error.to_string())?;
+        // The original stays while the picture exists by the entries, for
+        // example after another computer imported the file again.
+        let exists = application
+            .library()
+            .entry_view(hash)
+            .map_err(|error| error.to_string())?
+            .is_some();
         if !still_due {
+            continue;
+        }
+        if exists {
+            // The original is in use again. Its row stops waiting, so it
+            // doesn't hold back the rows behind it in the next round.
+            application
+                .library()
+                .database()
+                .maintenance_write(picto_library::database::WorkPriority::Cloud, |transaction| {
+                    transaction.execute(
+                        "UPDATE cloud_deleted_original SET purge_after = NULL WHERE file_name = ?1",
+                        [&object_key],
+                    )?;
+                    Ok(())
+                })
+                .map_err(|error| error.to_string())?;
             continue;
         }
         let remote_path = format!(
@@ -329,11 +350,11 @@ async fn purge_expired_cloud_blobs(
             .maintenance_write(
                 picto_library::database::WorkPriority::Cloud,
                 |transaction| {
-                    // The row stays and loses the time at which the original
-                    // was to be removed, so the removal is not tried again.
+                    // The row stays without its removal time, so the
+                    // removal isn't tried again.
                     transaction.execute(
-                        "UPDATE cloud_tombstone SET purge_after = NULL
-                         WHERE object_kind = 'blob' AND object_key = ?1",
+                        "UPDATE cloud_deleted_original SET purge_after = NULL
+                         WHERE file_name = ?1",
                         [&object_key],
                     )?;
                     Ok(())
@@ -419,6 +440,10 @@ async fn sync_snapshot_blobs(
     Ok(())
 }
 
+/// Returns the size of the originals that a sync uploads or downloads: the
+/// files in the copy of the database whose original isn't known to be in the
+/// cloud folder. A file that a merge kept after deleting its picture
+/// (`kept_deleted_file`) isn't one of them.
 fn count_snapshot_blobs(snapshot_database: &Path) -> Result<i64, String> {
     let snapshot = Connection::open_with_flags(
         snapshot_database,
@@ -430,13 +455,16 @@ fn count_snapshot_blobs(snapshot_database: &Path) -> Result<i64, String> {
             "SELECT COALESCE(SUM(MAX(file.size_bytes, 1)), 0)
              FROM media_file AS file
              LEFT JOIN cloud_blob_state AS blob ON blob.file_hash = file.content_hash
-             WHERE blob.file_hash IS NULL OR blob.state != 'available' OR blob.remote_present = 0",
+             WHERE (blob.file_hash IS NULL OR blob.state != 'available' OR blob.remote_present = 0)
+               AND file.content_hash NOT IN (SELECT content_hash FROM kept_deleted_file)",
             [],
             |row| row.get(0),
         )
         .map_err(|error| format!("Failed to count cloud originals: {error}"))
 }
 
+/// Returns the next 64 of the originals that [`count_snapshot_blobs`]
+/// counts, after the content hash `cursor`.
 fn load_snapshot_blob_page(
     snapshot_database: &Path,
     cursor: &str,
@@ -455,6 +483,7 @@ fn load_snapshot_blob_page(
              WHERE file.content_hash > ?1
                AND (blob.file_hash IS NULL OR blob.state != 'available'
                     OR blob.remote_present = 0)
+               AND file.content_hash NOT IN (SELECT content_hash FROM kept_deleted_file)
              ORDER BY file.content_hash
              LIMIT 64",
         )
@@ -1039,12 +1068,8 @@ mod tests {
                 picto_library::database::WorkPriority::Cloud,
                 |transaction| {
                     transaction.execute(
-                        "INSERT INTO cloud_tombstone
-                             (object_kind, object_key, mutation_id, hlc_physical_ms,
-                              hlc_logical, device_id, causal_frontier_json,
-                              deleted_at, purge_after)
-                         VALUES ('blob', ?1, 'delete-1', 1, 0, 'device-1', '{}',
-                                 '2026-08-01T00:00:00Z', '2026-08-08T00:00:00Z')",
+                        "INSERT INTO cloud_deleted_original (file_name, deleted_at, purge_after)
+                         VALUES (?1, '2026-08-01T00:00:00Z', '2026-08-08T00:00:00Z')",
                         [&object_key],
                     )?;
                     Ok(())
@@ -1064,14 +1089,100 @@ mod tests {
                 |connection| {
                     connection
                         .query_row(
-                            "SELECT purge_after FROM cloud_tombstone
-                             WHERE object_kind = 'blob' AND object_key = ?1",
+                            "SELECT purge_after FROM cloud_deleted_original
+                             WHERE file_name = ?1",
                             [&object_key],
                             |row| row.get::<_, Option<String>>(0),
                         )
                         .map_err(Into::into)
                 },
             )
+            .unwrap();
+        assert_eq!(purge_after, None);
+    }
+
+    #[tokio::test]
+    async fn an_expired_original_stays_while_its_picture_exists_by_the_entries() {
+        let library_root = tempfile::tempdir().unwrap();
+        let cloud_root = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(library_root.path()).unwrap();
+        let provider = DirectoryProvider::open(cloud_root.path()).unwrap();
+        let hash = "a".repeat(64);
+        let library_id = application
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    connection
+                        .query_row(
+                            "SELECT library_id FROM cloud_state WHERE singleton = 1",
+                            [],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .map_err(Into::into)
+                },
+            )
+            .unwrap();
+        let object_key = format!("{hash}.png");
+        let remote_path = format!(
+            "picto/{library_id}/blobs/f/{}/{}/{}",
+            &hash[..2],
+            &hash[2..4],
+            object_key
+        );
+        let bytes = b"retained cloud original".to_vec();
+        let checksum = hex::encode(Sha256::digest(&bytes));
+        provider
+            .upload(&remote_path, bytes, &checksum)
+            .await
+            .unwrap();
+        application
+            .library()
+            .database()
+            .maintenance_write(
+                picto_library::database::WorkPriority::Cloud,
+                |transaction| {
+                    transaction.execute(
+                        "INSERT INTO cloud_deleted_original (file_name, deleted_at, purge_after)
+                         VALUES (?1, '2026-08-01T00:00:00Z', '2026-08-08T00:00:00Z')",
+                        [&object_key],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        // Another computer added the file again after the deletion.
+        application
+            .library()
+            .merge_entries(&[picto_library::SharedEntry {
+                kind: picto_library::EntryKind::Add,
+                subject_key: hash.clone(),
+                second_key: "ffffffff-0000-4000-8000-000000000001".into(),
+                value: Some(r#"{"name":"again","status":"active"}"#.into()),
+                clock_ms: 5_000_000_000_000,
+                clock_counter: 0,
+                device_id: "ffffffff-0000-4000-8000-000000000001".into(),
+            }])
+            .unwrap();
+        purge_expired_cloud_blobs(&application, &provider, &library_id)
+            .await
+            .unwrap();
+
+        assert!(provider.exists(&remote_path).await.unwrap());
+        // The row no longer waits, so it can't keep later rows from being
+        // removed.
+        let purge_after = application
+            .library()
+            .auxiliary_read(picto_library::database::WorkPriority::VisibleRead, |connection| {
+                connection
+                    .query_row(
+                        "SELECT purge_after FROM cloud_deleted_original WHERE file_name = ?1",
+                        [&object_key],
+                        |row| row.get::<_, Option<String>>(0),
+                    )
+                    .map_err(Into::into)
+            })
             .unwrap();
         assert_eq!(purge_after, None);
     }

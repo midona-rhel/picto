@@ -192,8 +192,8 @@ impl DirectoryProvider {
     /// A file is
     /// removed only when its name and its place are those of a file that
     /// the sync writes: `library.json`, a snapshot and its manifest in
-    /// `snapshots/`, an original in `blobs/f/<aa>/<bb>/`, a tombstone file in
-    /// `tombstones/<device id>/`, and a file that an interrupted upload left
+    /// `snapshots/`, an original in `blobs/f/<aa>/<bb>/`, an entry file in
+    /// `entries/<device id>/`, and a file that an interrupted upload left
     /// beside one of them. Everything else is left where it is and counted in
     /// the result, and a folder that still holds something is not removed.
     /// Links are never followed and never removed.
@@ -253,10 +253,10 @@ impl DirectoryProvider {
         let trees: [(&str, &[Known]); 3] = [
             ("snapshots", &[Known::Files(is_snapshot_file)]),
             (
-                "tombstones",
+                "entries",
                 &[
                     Known::Folders(is_uuid),
-                    Known::Files(super::tombstones::is_file_name),
+                    Known::Files(super::entries::is_file_name),
                 ],
             ),
             (
@@ -669,6 +669,12 @@ pub fn validate_root(
 }
 
 fn home_directory() -> Option<PathBuf> {
+    // Tests name their stand-in cloud folders with `PICTO_DROPBOX_ROOT` and
+    // `PICTO_GOOGLE_DRIVE_ROOT`. They must never look at the real cloud
+    // folders of the computer that runs them.
+    if cfg!(test) {
+        return None;
+    }
     std::env::var_os(if cfg!(target_os = "windows") {
         "USERPROFILE"
     } else {
@@ -1100,7 +1106,7 @@ mod tests {
         let id = "20261122T101500.123Z-0b0c2f0e-7a52-4d0e-9c59-2f1f4c1d8a11";
         assert!(is_snapshot_file(&format!("{id}.json")));
         assert!(is_snapshot_file(&format!("{id}.sqlite.zst")));
-        assert!(super::super::tombstones::is_file_name(
+        assert!(super::super::entries::is_file_name(
             "0a.0123456789abcdef.jsonl.zst"
         ));
         assert!(is_blob_file(&format!("{}.png", "a".repeat(64))));
@@ -1122,7 +1128,7 @@ mod tests {
             format!("{}世.png", "a".repeat(61)),
         ] {
             assert!(!is_snapshot_file(&name), "{name}");
-            assert!(!super::super::tombstones::is_file_name(&name), "{name}");
+            assert!(!super::super::entries::is_file_name(&name), "{name}");
             assert!(!is_blob_file(&name), "{name}");
             assert!(!is_upload_remnant(&name), "{name}");
             assert!(!is_hex_pair(&name), "{name}");

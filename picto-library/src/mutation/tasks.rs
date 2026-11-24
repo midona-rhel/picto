@@ -785,11 +785,32 @@ impl Library {
             };
 
             affected |= &created;
-            let cleanup = if created.is_empty() {
+            // Pictures whose `add` entries other computers may already have
+            // go to the Trash, which those computers see too. The others are
+            // deleted, because no other computer knows them.
+            let recorded = super::shared::recorded_roots(transaction, &created)?;
+            if !recorded.is_empty() {
+                let keys = Lifecycle::ALL.map(|lifecycle| lifecycle.bitmap_key());
+                move_to_partition(
+                    transaction,
+                    revision,
+                    &mut next,
+                    BitmapDomain::Lifecycle,
+                    Lifecycle::Trash.bitmap_key(),
+                    &keys,
+                    &recorded,
+                )?;
+                resources.extend(["roots", "sidebar"].map(str::to_owned));
+            }
+            // A picture whose file another computer has added stays: this
+            // import only brought the file here.
+            let added_elsewhere = super::shared::roots_added_elsewhere(transaction, &created)?;
+            let unrecorded = &(&created - &recorded) - &added_elsewhere;
+            let cleanup = if unrecorded.is_empty() {
                 Vec::new()
             } else {
                 let (deleted, cleanup, receipt) = super::structure::delete_roots(
-                    transaction, revision, &next, &created, now_ms, &protected_cleanup_files,
+                    transaction, revision, &next, &unrecorded, now_ms, &protected_cleanup_files,
                     crate::history::DeletionOrigin::Library,
                 )?;
                 resources.extend(receipt.resources);

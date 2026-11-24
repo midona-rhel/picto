@@ -204,17 +204,19 @@ impl RelinkState {
 /// the deletion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeletionOrigin {
-    /// The user deleted the items on this device (Delete Permanently, Empty
-    /// Trash, or a rejected Inbox item with the setting "Delete
-    /// permanently"). Cloud sync sends the deletion to the other devices.
+    /// The user deleted the items on this computer with Delete Permanently,
+    /// Empty Trash, or by rejecting an Inbox item with the setting "Delete
+    /// permanently". Cloud sync sends the deletion to the other computers.
     User,
-    /// The library removed the roots itself: an item merged into another,
-    /// or the items of an import that was stopped and undone. Cloud sync
-    /// does not send it.
+    /// The item was merged into a duplicate that stays. Cloud sync sends the
+    /// deletion of its file when no other item uses that file.
+    MergedDuplicate,
+    /// The library removed the items itself, for example the items of an
+    /// import that was stopped and undone. Cloud sync doesn't send it.
     Library,
-    /// Another device deleted the items and cloud sync brought the deletion
-    /// here. It is not sent again, and the device that made the deletion
-    /// removes the originals from the cloud folder.
+    /// Another computer deleted the items and cloud sync brought the
+    /// deletion here. It isn't sent again, and the computer that made the
+    /// deletion removes the originals from the cloud folder.
     OtherDevice,
 }
 

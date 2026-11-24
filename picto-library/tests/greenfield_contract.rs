@@ -5587,9 +5587,9 @@ fn permanent_delete_past_the_undo_limit_queues_its_blobs_at_once() {
                     2
                 );
                 let (object_key, retention_days): (String, i64) = connection.query_row(
-                    "SELECT object_key,
+                    "SELECT file_name,
                             CAST(julianday(purge_after) - julianday(deleted_at) AS INTEGER)
-                     FROM cloud_tombstone WHERE object_kind = 'blob'",
+                     FROM cloud_deleted_original",
                     [],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )?;

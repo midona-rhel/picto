@@ -41,6 +41,8 @@ mod merge;
 mod library_merge;
 mod undo;
 mod shared;
+mod shared_merge;
+mod shared_view;
 pub(crate) mod tasks;
 use tags::*;
 use folders::*;
@@ -50,9 +52,12 @@ use merge::*;
 pub use merge::{SharedFileMerge, merged_notes};
 pub use library_merge::{MergeTaskInput, translate_view, MERGE_BACKUP, MERGE_LIBRARY};
 pub use shared::{
-    AppliedEntries, EntryClock, EntryKind, EntryState, SharedEntry, remove_item_tombstones,
+    EntryClock, EntryKind, SharedEntry, WantedFile, remove_item_tombstones,
     reset_published_entries,
 };
+pub(crate) use shared::install_recording_triggers;
+pub use shared_merge::AppliedMerge;
+pub use shared_view::{EntryTime, FileRecord, FileView};
 use shared::*;
 use undo::*;
 
@@ -68,8 +73,47 @@ struct PublishedDelta {
 /// the receipt names the auxiliary tables that changed. A failed transaction
 /// publishes nothing, so the state in memory never differs from what readers
 /// can see.
-impl crate::database::PublicationDelta for PublishedDelta {
-    fn settle(&mut self, transaction: &rusqlite::Transaction<'_>) -> Result<()> {
+impl crate::database::PublicationDelta<Arc<ProjectionSnapshot>> for PublishedDelta {
+    fn settle(
+        &mut self,
+        transaction: &rusqlite::Transaction<'_>,
+        before: &Arc<ProjectionSnapshot>,
+    ) -> Result<()> {
+        // Cloud sync records what the write changed, compared with the
+        // library before it. A tag rename or a folder deletion is only
+        // visible in the history entry.
+        if let Some(history) = &self.history {
+            record_definition_changes(
+                transaction,
+                before.revision + 1,
+                &self.snapshot,
+                &history.change,
+                true,
+            )?;
+        }
+        record_changes(transaction, before, &self.snapshot)?;
+        self.settle_projection(transaction)
+    }
+}
+
+/// The delta of a merge of other computers' entries. It settles like any
+/// other write but records nothing, because a merge must not send the
+/// changes it makes back to the other computers as this computer's own.
+struct UnrecordedDelta(PublishedDelta);
+
+impl crate::database::PublicationDelta<Arc<ProjectionSnapshot>> for UnrecordedDelta {
+    fn settle(
+        &mut self,
+        transaction: &rusqlite::Transaction<'_>,
+        _before: &Arc<ProjectionSnapshot>,
+    ) -> Result<()> {
+        discard_changes(transaction)?;
+        self.0.settle_projection(transaction)
+    }
+}
+
+impl PublishedDelta {
+    fn settle_projection(&mut self, transaction: &rusqlite::Transaction<'_>) -> Result<()> {
         let snapshot = &mut self.snapshot;
         if crate::subscription_counts::SubscriptionCounts::dirty(transaction)? {
             snapshot.subscription_counts = Arc::new(
@@ -198,8 +242,8 @@ impl Library {
                         ))",
                 [],
             )?;
-            // The state in memory is rebuilt from the canonical rows below, so
-            // the journal rows that an earlier session left behind are not
+            // The state in memory is rebuilt from the library's tables below,
+            // so the journal rows that an earlier session left behind are not
             // needed.
             transaction.execute("DELETE FROM browsing_dirty_root", [])?;
             Ok(())
@@ -485,9 +529,10 @@ impl Library {
         })
     }
 
-    /// Run a query on one captured snapshot. Duplicate inspection is the one
-    /// scope that still reads canonical tables, inside a consistent read that
-    /// captures the matching snapshot; every other query never touches SQLite.
+    /// Runs a query on one captured snapshot. A query of duplicate pairs is
+    /// the only one that reads the database, inside a read that captures the
+    /// snapshot of the same revision. Every other query reads only the
+    /// snapshot in memory.
     fn scoped<T>(
         &self,
         scope: &crate::query::ItemScope,
@@ -655,7 +700,8 @@ impl Library {
             |connection, snapshot| {
                 let values = connection.query_row(
                     // The statistics are read in one pass over the media
-                    // items and one pass over the files.
+                    // items and one pass over the files. The files that a
+                    // merge kept after deleting their pictures don't count.
                     "WITH assets AS (
                          SELECT COUNT(*) AS total,
                                 COALESCE(SUM(file.mime LIKE 'image/%'), 0) AS images,
@@ -665,6 +711,7 @@ impl Library {
                      ), files AS (
                          SELECT COUNT(*) AS total, COALESCE(SUM(size_bytes), 0) AS bytes
                          FROM media_file
+                         WHERE content_hash NOT IN (SELECT content_hash FROM kept_deleted_file)
                      )
                      SELECT
                          assets.total, assets.images, assets.videos, assets.audio,
@@ -1159,6 +1206,10 @@ impl Library {
                 palette = value;
             }
             if let Some(content) = content {
+                // Pending changes name the picture by its root and get the
+                // file's hash when they become entries. They belong to the
+                // old file, so they become entries before the hash changes.
+                settle_in(transaction, &snapshot, usize::MAX)?;
                 if content.content_hash.len() != 64 || !content.content_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                     return Err(LibraryError::InvalidInput("Invalid repaired content hash".into()));
                 }
@@ -1170,6 +1221,8 @@ impl Library {
                 }
                 // Remote bytes belong to the old hash. Never mark repaired bytes as uploaded.
                 transaction.execute("DELETE FROM cloud_blob_state WHERE file_hash = ?1", [&actual_hash])?;
+                // The other computers drop the old file and get the new one.
+                record_replaced_file(transaction, revision, &snapshot, &actual_hash, media_id)?;
                 transaction.execute(
                     "UPDATE media_file SET content_hash = ?2, file_path = ?3, size_bytes = ?4 WHERE file_id = ?1",
                     rusqlite::params![file_id, content.content_hash, content.file_path,
@@ -1838,9 +1891,6 @@ impl Library {
                     changed_at_ms,
                 )?;
             }
-            if domain == BitmapDomain::Lifecycle {
-                journal_trash_moves(transaction, revision, &snapshot, &next, changed_at_ms)?;
-            }
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
                 revision,
@@ -1874,8 +1924,8 @@ impl Library {
         Ok(receipt)
     }
 
-    /// Run one canonical write, publish its projection delta and, when the
-    /// write is undoable, record its history entry.
+    /// Runs one write of the library, publishes what it changed in the state
+    /// in memory and, when the write can be undone, records its undo step.
     fn publish<T>(
         &self,
         priority: WorkPriority,
@@ -1956,58 +2006,6 @@ fn move_to_partition(
     };
     crate::smart::settle_affected_for(transaction, next, selection, &[smart_change])?;
     Ok(changes)
-}
-
-/// Records in the cloud journal which roots a change moved into the Trash
-/// and which it took out of it, by comparing the Trash of `before` with the
-/// Trash of `after`. One row of the kind `root.trash` is written for the
-/// roots that entered the Trash, and one for each lifecycle that restored
-/// roots now have. Each row holds the time of the library's hybrid logical
-/// clock at the change. Cloud sync turns the rows into the `status` entries
-/// that the devices share (`shared.rs`). A change that moved nothing into or
-/// out of the Trash writes no row and does not advance the clock.
-fn journal_trash_moves(
-    transaction: &rusqlite::Transaction<'_>,
-    revision: u64,
-    before: &ProjectionSnapshot,
-    after: &ProjectionSnapshot,
-    changed_at_ms: i64,
-) -> Result<()> {
-    if Arc::ptr_eq(&before.lifecycle, &after.lifecycle) {
-        return Ok(());
-    }
-    let (was, now) = (
-        before.lifecycle(Lifecycle::Trash),
-        after.lifecycle(Lifecycle::Trash),
-    );
-    let entered = now - was;
-    let left = was - now;
-    let moves = [
-        (Lifecycle::Trash, entered),
-        (Lifecycle::Active, &left & after.lifecycle(Lifecycle::Active)),
-        (Lifecycle::Inbox, &left & after.lifecycle(Lifecycle::Inbox)),
-    ];
-    if moves.iter().all(|(_, roots)| roots.is_empty()) {
-        return Ok(());
-    }
-    let (at_ms, logical) = tick(transaction)?;
-    for (lifecycle, roots) in moves {
-        if !roots.is_empty() {
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "root.trash",
-                Some(&roots),
-                serde_json::json!({
-                    "lifecycle": lifecycle.bitmap_key(),
-                    "at_ms": at_ms,
-                    "logical": logical,
-                }),
-                changed_at_ms,
-            )?;
-        }
-    }
-    Ok(())
 }
 
 fn projection_bitmap(snapshot: &ProjectionSnapshot, key: BitmapKey) -> RoaringBitmap {

@@ -184,7 +184,9 @@ pub(super) fn merge_media(
     let roots = RoaringBitmap::from_iter([loser_root.0]);
     let state = merge
         .record
-        .then(|| capture_deleted_roots(transaction, snapshot, &roots, DeletionOrigin::Library))
+        .then(|| {
+            capture_deleted_roots(transaction, snapshot, &roots, DeletionOrigin::MergedDuplicate)
+        })
         .transpose()?;
     // The merged-away file (a duplicate's) is freed by the cleanup worker once
     // no history entry needs it; nothing is removed here.
@@ -196,7 +198,7 @@ pub(super) fn merge_media(
         &roots,
         now_ms,
         &protected,
-        DeletionOrigin::Library,
+        DeletionOrigin::MergedDuplicate,
     )?;
     *snapshot = next;
     merge.affected |= &roots;

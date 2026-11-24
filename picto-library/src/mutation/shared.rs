@@ -1,183 +1,201 @@
-//! The tombstones that the devices of one library share through cloud sync.
+//! The entries that the computers of one library send each other through
+//! cloud sync, and how this computer writes its own.
 //!
-//! A permanent deletion writes a tombstone for every deleted item
-//! (`deletion_tombstone`), and an import refuses an item whose tombstone is
-//! later than the import. This file makes that model shared. For every key
-//! that a deletion or its reversal touched, the library keeps one entry: what
-//! was done last, the time of the library's hybrid logical clock at which it
-//! was done, and the device that did it. A sync writes the entries that this
-//! device made into the cloud folder and merges the entries that are there
-//! ([`Library::apply_shared_entries`]).
+//! An entry says what one computer did to one picture, tag or folder, and
+//! when. The library keeps one entry per key in `shared_entry`. When two
+//! entries have the same key, the later one stays. For example, if this
+//! computer rated a picture 3 stars at 10:00 and another computer rated it
+//! 5 stars at 10:05, the library keeps the 5-star entry, whichever of the two
+//! arrived first. `shared_view.rs` works out what a picture looks like from
+//! its entries, and `shared_merge.rs` stores the entries of other computers
+//! and changes the library to match.
 //!
-//! The entries are rows of `cloud_tombstone`. `object_kind` and `object_key`
-//! name the key, `mutation_id` holds the state, `hlc_physical_ms` and
-//! `hlc_logical` the clock time, and `device_id` the device. A `delete`
-//! entry of an item that has a file also holds the content hash of that
-//! file, as `{"file": "<hash>"}` in `causal_frontier_json`. The rows of the
-//! kind `blob` in the same table are the originals that wait to be removed
-//! from the cloud folder; they are not entries.
+//! A picture is keyed by the content hash of its file, so two computers that
+//! import the same file have the same picture.
 //!
-//! | Kind | Key | States |
-//! | --- | --- | --- |
-//! | `item` | stable key of an item or a collection | `delete`: deleted permanently; with the content hash of the item's file, and without one for a collection. `add`: the tombstone was removed, by an import of the item, a subscription or an undo. |
-//! | `status` | stable key of an item or a collection | `trash`, `active`, `inbox`: where the last move into or out of the Trash put it. |
-//! | `tag`, `folder`, `smart_folder` | stable key | `delete`, and `add` when the deletion was undone. |
+//! A library records entries once `Library::start_recording` has been called.
+//! After that, every published write compares the library before and after
+//! it (`record_changes`) and stores one row in `pending_entry` per kind of
+//! change, holding the changed roots as a bitmap. Tagging a million pictures
+//! therefore costs one row while the user waits. `Library::settle_entries`
+//! turns the rows into entries later, a batch at a time.
 //!
-//! One rule merges everything: per key, the entry with the later clock time
-//! wins, and of two entries with the same time the one of the device with
-//! the greater id. An entry that does not win changes nothing. So the same
-//! entries give the same library in every order and however often they are
-//! merged.
+//! Deletions of files, tags and folders are written as entries straight away,
+//! because the hash or name is gone once the rows are deleted.
 //!
-//! The clock ([`tick`]) is the later of the device's wall clock and the
-//! latest time the library has seen, and merging an entry moves it forward
-//! to that entry's time. What the user does after a merge is therefore later
-//! than everything that was merged, whatever the device's wall clock says.
+//! When recording starts, every file the library already holds gets an `add`
+//! entry. Those are written in batches by `Library::settle_entries` too, and
+//! their record is marked as written at the start, so a tag in it counts as
+//! older than any deletion of that tag.
 //!
-//! A merged `delete` deletes the item through the existing delete code.
-//! Three things are left alone. An item whose file has another content hash
-//! than the entry names is another item under the same stable key: the
-//! stable key of a manual import is made from the number of the import task
-//! and the file's path, and two devices can give the same number and path to
-//! different files. Such an item stays, as if the library did not hold an
-//! item with that key. An item of which the library holds no entry yet,
-//! and which was imported here after the deletion was made, was added again:
-//! it stays and gets an `add` entry. That is the rule of an import, which
-//! removes a tombstone that is earlier than the import. A folder or
-//! smart folder with a folder below it that has no `delete` entry stays until
-//! that folder is deleted too, so a merge deletes no folder that the other
-//! device did not delete.
+//! Only pictures that are not in a collection are recorded. A picture inside a
+//! collection, and the collection itself, get no entries, and a merge leaves
+//! them alone.
+
+use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
+use super::shared_view::{EntryTime, FileRecord};
 use super::*;
 
-/// What kind of thing a shared entry is about.
+/// What an entry says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryKind {
-    Item,
+    /// A computer holds the file. The value is the picture's record.
+    Add,
+    /// The file was deleted.
+    Delete,
+    Name,
+    Notes,
+    Rating,
     Status,
-    Tag,
-    Folder,
-    SmartFolder,
+    /// A tag was put on or taken off a picture.
+    ItemTag,
+    /// A picture was put into or taken out of a folder.
+    FolderItem,
+    /// A tag was deleted.
+    TagDelete,
+    /// A folder was deleted.
+    FolderDelete,
 }
 
 impl EntryKind {
-    /// The value of `cloud_tombstone.object_kind`.
+    pub const ALL: [Self; 10] = [
+        Self::Add,
+        Self::Delete,
+        Self::Name,
+        Self::Notes,
+        Self::Rating,
+        Self::Status,
+        Self::ItemTag,
+        Self::FolderItem,
+        Self::TagDelete,
+        Self::FolderDelete,
+    ];
+
+    /// The value of `shared_entry.kind`.
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Item => "item",
-            Self::Status => "status",
-            Self::Tag => "tag",
-            Self::Folder => "folder",
-            Self::SmartFolder => "smart_folder",
-        }
-    }
-
-    fn parse(text: &str) -> Option<Self> {
-        [Self::Item, Self::Status, Self::Tag, Self::Folder, Self::SmartFolder]
-            .into_iter()
-            .find(|kind| kind.as_str() == text)
-    }
-}
-
-/// What was done last to the key of a shared entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EntryState {
-    /// Deleted.
-    Delete,
-    /// The deletion was taken back: the item was imported again, or the
-    /// deletion was undone.
-    Add,
-    /// Moved to the Trash.
-    Trash,
-    /// Taken out of the Trash into All.
-    Active,
-    /// Taken out of the Trash into the Inbox.
-    Inbox,
-}
-
-impl EntryState {
-    /// The value of `cloud_tombstone.mutation_id`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Delete => "delete",
             Self::Add => "add",
-            Self::Trash => "trash",
-            Self::Active => "active",
-            Self::Inbox => "inbox",
+            Self::Delete => "delete",
+            Self::Name => "name",
+            Self::Notes => "notes",
+            Self::Rating => "rating",
+            Self::Status => "status",
+            Self::ItemTag => "item_tag",
+            Self::FolderItem => "folder_item",
+            Self::TagDelete => "tag_delete",
+            Self::FolderDelete => "folder_delete",
         }
     }
 
-    fn parse(text: &str) -> Option<Self> {
-        [Self::Delete, Self::Add, Self::Trash, Self::Active, Self::Inbox]
-            .into_iter()
-            .find(|state| state.as_str() == text)
-    }
-
-    fn lifecycle(self) -> Option<Lifecycle> {
-        match self {
-            Self::Trash => Some(Lifecycle::Trash),
-            Self::Active => Some(Lifecycle::Active),
-            Self::Inbox => Some(Lifecycle::Inbox),
-            Self::Delete | Self::Add => None,
-        }
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == text)
     }
 }
 
-/// One shared entry, as it is written to the cloud folder. The device that
-/// made it is the device whose file holds it.
+/// One entry, as it is written to the cloud folder and as a merge takes it.
+/// The fields are the columns of `shared_entry`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SharedEntry {
     pub kind: EntryKind,
-    pub key: String,
-    pub state: EntryState,
-    /// The time of the hybrid logical clock: milliseconds, and a counter
-    /// that orders the entries of one millisecond.
-    pub at_ms: i64,
-    pub logical: i64,
-    /// The content hash of the deleted item's file. Only a `delete` entry of
-    /// the kind `item` has one, and only for an item that has a file: a
-    /// collection has none. A device that merges the entry deletes its item
-    /// with the same stable key only when that item's file has this hash.
+    /// The content hash of the file. For `tag_delete` it's the tag's name
+    /// and for `folder_delete` the folder's stable key.
+    pub subject_key: String,
+    /// The computer's id for `add`, the tag's name for `item_tag`, the
+    /// folder's stable key for `folder_item`, and empty otherwise.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub second_key: String,
+    /// The picture's record as JSON for `add`, the text for `name` and
+    /// `notes`, the stars for `rating`, `inbox`, `active` or `trash` for
+    /// `status`, and `add` or `remove` for `item_tag` and `folder_item`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file: Option<String>,
+    pub value: Option<String>,
+    pub clock_ms: i64,
+    pub clock_counter: i64,
+    /// The computer that wrote the entry.
+    pub device_id: String,
+}
+
+impl SharedEntry {
+    pub fn time(&self) -> EntryTime {
+        (self.clock_ms, self.clock_counter, self.device_id.clone())
+    }
 }
 
 /// The state of this library's exchange of entries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryClock {
-    /// This device's id.
+    /// This computer's id.
     pub device_id: String,
-    /// The time of the library's hybrid logical clock.
+    /// The time of the library's clock.
     pub now: (i64, i64),
-    /// The clock time up to which this device's entries are in the cloud
+    /// The clock time up to which this computer's entries are in the cloud
     /// folder, or `None` when none were written yet.
     pub published: Option<(i64, i64)>,
 }
 
-/// What merging the entries of another device changed in this library.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AppliedEntries {
-    /// The number of entries that were later than what the library held.
-    pub won: u64,
-    pub trashed: u64,
-    pub restored: u64,
-    pub deleted: u64,
-    pub tags: u64,
-    pub folders: u64,
-    pub smart_folders: u64,
-    /// `None` when no entry won, and nothing was written.
-    pub receipt: Option<MutationReceipt>,
+/// A file that the entries say exists and that this library doesn't hold
+/// yet. The next step of a sync fetches it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WantedFile {
+    pub content_hash: String,
+    /// The record of the earliest `add` entry that still counts.
+    pub record: FileRecord,
 }
 
 const NOW_SQL: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
-/// Advances the library's hybrid logical clock and returns its new time. The
-/// time is later than every time the clock returned or saw before, also when
-/// the device's wall clock was set back.
+/// The end of every statement that stores an entry. The new entry replaces
+/// the stored one only when it is later, so storing the same entries again or
+/// in another order gives the same table.
+pub(super) const KEEP_LATER: &str = "ON CONFLICT(subject_key, kind, second_key) DO UPDATE SET
+     value = excluded.value,
+     clock_ms = excluded.clock_ms,
+     clock_counter = excluded.clock_counter,
+     device_id = excluded.device_id
+ WHERE (excluded.clock_ms, excluded.clock_counter, excluded.device_id)
+     > (shared_entry.clock_ms, shared_entry.clock_counter, shared_entry.device_id)";
+
+/// Creates the temporary tables that a write fills for `record_changes` on
+/// the connection that writes the library.
+///
+/// `entry_text_change` is filled by a trigger. Names and notes aren't in the
+/// resident projection, so a trigger is the cheap way to learn which pictures
+/// a write renamed or gave other notes. Missing notes and empty notes count
+/// as the same notes.
+///
+/// `entry_restored_root` holds the pictures that an undo brought back
+/// (`mark_restored_files`).
+pub(crate) fn install_recording_triggers(connection: &rusqlite::Connection) -> Result<()> {
+    connection.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS entry_restored_root (root_id INTEGER PRIMARY KEY);
+         CREATE TEMP TABLE IF NOT EXISTS entry_text_change (
+             root_id INTEGER PRIMARY KEY,
+             name INTEGER NOT NULL,
+             notes INTEGER NOT NULL
+         );
+         CREATE TEMP TRIGGER IF NOT EXISTS entry_text_changed
+         AFTER UPDATE OF name, notes ON main.library_root
+         WHEN (OLD.name <> NEW.name OR COALESCE(OLD.notes, '') <> COALESCE(NEW.notes, ''))
+              AND EXISTS (SELECT 1 FROM main.entry_recording)
+         BEGIN
+             INSERT INTO entry_text_change (root_id, name, notes)
+             VALUES (NEW.root_id, OLD.name <> NEW.name,
+                     COALESCE(OLD.notes, '') <> COALESCE(NEW.notes, ''))
+             ON CONFLICT(root_id) DO UPDATE SET
+                 name = MAX(name, excluded.name),
+                 notes = MAX(notes, excluded.notes);
+         END;",
+    )?;
+    Ok(())
+}
+
+/// Moves the library's clock forward and returns the new time. The time is
+/// later than every time the clock has returned or seen, even when the
+/// computer's wall clock was set back.
 pub(super) fn tick(transaction: &rusqlite::Transaction<'_>) -> Result<(i64, i64)> {
     Ok(transaction.query_row(
         "UPDATE cloud_state SET
@@ -190,9 +208,9 @@ pub(super) fn tick(transaction: &rusqlite::Transaction<'_>) -> Result<(i64, i64)
     )?)
 }
 
-/// Moves the library's clock forward to `time` when `time` is later, so that
-/// the next [`tick`] is later than an entry of that time.
-fn observe(transaction: &rusqlite::Transaction<'_>, time: (i64, i64)) -> Result<()> {
+/// Moves the library's clock up to `time` when `time` is later, so that what
+/// this computer does next is later than an entry it has seen.
+pub(super) fn observe(transaction: &rusqlite::Transaction<'_>, time: (i64, i64)) -> Result<()> {
     transaction.execute(
         "UPDATE cloud_state SET
              hlc_logical = CASE WHEN ?1 > hlc_physical_ms THEN ?2
@@ -205,89 +223,653 @@ fn observe(transaction: &rusqlite::Transaction<'_>, time: (i64, i64)) -> Result<
     Ok(())
 }
 
-fn own_device_id(transaction: &rusqlite::Transaction<'_>) -> Result<String> {
-    Ok(transaction.query_row(
-        "SELECT device_id FROM cloud_state WHERE singleton = 1",
-        [],
-        |row| row.get(0),
-    )?)
+pub(super) fn own_device_id(connection: &rusqlite::Connection) -> Result<String> {
+    Ok(connection
+        .prepare_cached("SELECT device_id FROM cloud_state WHERE singleton = 1")?
+        .query_row([], |row| row.get(0))?)
 }
 
-/// Records that this device put `keys` of `kind` into `state` now. The
-/// entries get one new clock time, which is later than every entry the
-/// library holds, so they replace what was stored for the keys.
-pub(super) fn record_entries(
+/// Returns whether the library records entries.
+pub(super) fn recording(connection: &rusqlite::Connection) -> Result<bool> {
+    Ok(connection
+        .prepare_cached("SELECT EXISTS (SELECT 1 FROM entry_recording)")?
+        .query_row([], |row| row.get(0))?)
+}
+
+/// Returns the clock time of the write with the revision `revision`, or
+/// `None` when the library doesn't record entries. Everything one write
+/// records gets the same time: the first call in a write moves the clock, and
+/// later calls in the same write return that time again.
+pub(super) fn action_time(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+) -> Result<Option<(i64, i64)>> {
+    use rusqlite::OptionalExtension;
+    let held = transaction
+        .prepare_cached(
+            "SELECT action_revision, action_ms, action_counter FROM entry_recording
+             WHERE singleton = 1",
+        )?
+        .query_row([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+        })
+        .optional()?;
+    let Some((held_revision, clock_ms, clock_counter)) = held else {
+        return Ok(None);
+    };
+    if held_revision == revision as i64 {
+        return Ok(Some((clock_ms, clock_counter)));
+    }
+    let time = tick(transaction)?;
+    transaction
+        .prepare_cached(
+            "UPDATE entry_recording
+             SET action_revision = ?1, action_ms = ?2, action_counter = ?3
+             WHERE singleton = 1",
+        )?
+        .execute(rusqlite::params![revision as i64, time.0, time.1])?;
+    Ok(Some(time))
+}
+
+/// The name of a tag as entries carry it: the bare name for a tag without a
+/// namespace, and `namespace:name` otherwise. It's the same name that
+/// `ProjectionSnapshot::tag_ids_by_name` uses.
+pub(super) fn whole_tag_name(namespace: &str, subname: &str) -> String {
+    if namespace.is_empty() || namespace.eq_ignore_ascii_case("general") {
+        subname.to_owned()
+    } else {
+        format!("{namespace}:{subname}")
+    }
+}
+
+/// Returns the name of the tag `tag_id`, or `None` when the library doesn't
+/// have the tag.
+pub(super) fn tag_name(connection: &rusqlite::Connection, tag_id: u32) -> Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    Ok(connection
+        .prepare_cached(
+            "SELECT namespace.display_name, tag.subname
+             FROM tag_definition tag
+             JOIN tag_namespace namespace ON namespace.namespace_id = tag.namespace_id
+             WHERE tag.tag_id = ?1",
+        )?
+        .query_row([tag_id], |row| {
+            Ok(whole_tag_name(&row.get::<_, String>(0)?, &row.get::<_, String>(1)?))
+        })
+        .optional()?)
+}
+
+/// Returns the stable key of the folder `folder_id`, or `None` when the
+/// library doesn't have the folder.
+pub(super) fn folder_key(
+    connection: &rusqlite::Connection,
+    folder_id: u32,
+) -> Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    Ok(connection
+        .prepare_cached("SELECT stable_key FROM folder_definition WHERE folder_id = ?1")?
+        .query_row([folder_id], |row| row.get(0))
+        .optional()?)
+}
+
+/// The roots that are pictures of their own, outside any collection.
+fn file_roots(snapshot: &ProjectionSnapshot) -> RoaringBitmap {
+    snapshot
+        .root_kinds
+        .get(&RootKind::Media)
+        .map(|roots| roots.to_bitmap())
+        .unwrap_or_default()
+}
+
+/// Stores one row of `pending_entry`. A row without roots isn't stored.
+fn write_pending(
     transaction: &rusqlite::Transaction<'_>,
     kind: EntryKind,
-    state: EntryState,
-    keys: &[String],
+    second_key: &str,
+    value: Option<&str>,
+    time: (i64, i64),
+    roots: &RoaringBitmap,
 ) -> Result<()> {
-    if keys.is_empty() {
+    if roots.is_empty() {
         return Ok(());
     }
-    let (at_ms, logical) = tick(transaction)?;
-    transaction.execute(
-        // `WHERE true` ends the SELECT: after `FROM json_each(…)` SQLite
-        // would otherwise read `ON` as a join constraint.
-        &format!(
-            "INSERT INTO cloud_tombstone
-                 (object_kind, object_key, mutation_id, hlc_physical_ms, hlc_logical,
-                  device_id, causal_frontier_json, deleted_at, purge_after)
-             SELECT ?1, keys.value, ?2, ?3, ?4,
-                    (SELECT device_id FROM cloud_state WHERE singleton = 1),
-                    '{{}}', {NOW_SQL}, NULL
-             FROM json_each(?5) keys WHERE true
-             ON CONFLICT(object_kind, object_key) DO UPDATE SET
-                 mutation_id = excluded.mutation_id,
-                 hlc_physical_ms = excluded.hlc_physical_ms,
-                 hlc_logical = excluded.hlc_logical,
-                 device_id = excluded.device_id,
-                 causal_frontier_json = excluded.causal_frontier_json,
-                 deleted_at = excluded.deleted_at"
-        ),
-        rusqlite::params![
+    transaction
+        .prepare_cached(
+            "INSERT INTO pending_entry
+                 (kind, second_key, value, clock_ms, clock_counter, root_bitmap)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )?
+        .execute(rusqlite::params![
             kind.as_str(),
-            state.as_str(),
-            at_ms,
-            logical,
-            serde_json::to_string(keys)?
-        ],
+            second_key,
+            value,
+            time.0,
+            time.1,
+            crate::bitmap::encode(roots)?
+        ])?;
+    Ok(())
+}
+
+/// Stores an entry of this computer that has no second key and no value,
+/// which is a `tag_delete` or a `folder_delete`.
+fn write_own_entry(
+    transaction: &rusqlite::Transaction<'_>,
+    kind: EntryKind,
+    subject_key: &str,
+    time: (i64, i64),
+) -> Result<()> {
+    transaction
+        .prepare_cached(&format!(
+            "INSERT INTO shared_entry
+                 (subject_key, kind, second_key, value, clock_ms, clock_counter, device_id)
+             SELECT ?1, ?2, '', NULL, ?3, ?4, device_id FROM cloud_state WHERE singleton = 1
+             {KEEP_LATER}"
+        ))?
+        .execute(rusqlite::params![subject_key, kind.as_str(), time.0, time.1])?;
+    Ok(())
+}
+
+/// The roots that one tag or folder gained and lost in a write.
+struct MemberChange {
+    id: u32,
+    gained: RoaringBitmap,
+    lost: RoaringBitmap,
+}
+
+/// Compares the member bitmaps of `before` and `after` and returns what each
+/// tag or folder gained and lost among `roots`. A bitmap that is the same
+/// object in both snapshots didn't change, so only changed ones are compared.
+fn member_changes<K: Copy + Eq + std::hash::Hash>(
+    before: &HashMap<K, crate::projection::SharedBitmap>,
+    after: &HashMap<K, crate::projection::SharedBitmap>,
+    roots: &RoaringBitmap,
+    id_of: impl Fn(K) -> u32,
+) -> Vec<MemberChange> {
+    let mut changes = before
+        .iter()
+        .filter(|(key, _)| !after.contains_key(key))
+        .map(|(key, was)| MemberChange {
+            id: id_of(*key),
+            gained: RoaringBitmap::new(),
+            lost: &**was & roots,
+        })
+        .filter(|change| !change.lost.is_empty())
+        .collect::<Vec<_>>();
+    for (key, now) in after {
+        let was = before.get(key);
+        if was.is_some_and(|was| was.allocation_id() == now.allocation_id()) {
+            continue;
+        }
+        let empty = RoaringBitmap::new();
+        let was: &RoaringBitmap = was.map_or(&empty, |was| was);
+        let mut gained = &**now - was;
+        gained &= roots;
+        let mut lost = was - &**now;
+        lost &= roots;
+        if !gained.is_empty() || !lost.is_empty() {
+            changes.push(MemberChange { id: id_of(*key), gained, lost });
+        }
+    }
+    changes
+}
+
+/// Records what a write changed, when the library records entries. `before`
+/// is the library before the write and `after` the library the write leaves.
+/// It's called for every published write except a merge, from
+/// `PublishedDelta::settle`.
+///
+/// New pictures get an `add` row. Pictures that existed before and after get
+/// rows for a new status, rating, tag, folder, name or notes. A write that
+/// changed none of these stores nothing and doesn't move the clock.
+pub(super) fn record_changes(
+    transaction: &rusqlite::Transaction<'_>,
+    before: &ProjectionSnapshot,
+    after: &ProjectionSnapshot,
+) -> Result<()> {
+    if !recording(transaction)? {
+        return Ok(());
+    }
+    let revision = before.revision + 1;
+    // Each row is the kind, the second key, the value and the roots.
+    let mut rows = Vec::<(EntryKind, String, Option<String>, RoaringBitmap)>::new();
+    let files_after = file_roots(after);
+    let files_before = if Arc::ptr_eq(&before.root_kinds, &after.root_kinds) {
+        files_after.clone()
+    } else {
+        file_roots(before)
+    };
+    let in_both = &files_after & &files_before;
+    // An import adds a file only when no computer has added it yet, but an
+    // undo of a deletion always adds it again. The value `always` marks the
+    // rows of the second kind for `settle_in`.
+    let restored = transaction
+        .prepare_cached("SELECT root_id FROM temp.entry_restored_root")?
+        .query_map([], |row| row.get::<_, u32>(0))?
+        .collect::<rusqlite::Result<RoaringBitmap>>()?;
+    transaction.execute("DELETE FROM temp.entry_restored_root", [])?;
+    let added = &files_after - &files_before;
+    rows.push((EntryKind::Add, String::new(), Some("always".into()), &added & &restored));
+    rows.push((EntryKind::Add, String::new(), None, &added - &restored));
+
+    if !Arc::ptr_eq(&before.lifecycle, &after.lifecycle) {
+        for lifecycle in Lifecycle::ALL {
+            let mut moved = after.lifecycle(lifecycle) - before.lifecycle(lifecycle);
+            moved &= &in_both;
+            rows.push((
+                EntryKind::Status,
+                String::new(),
+                Some(lifecycle_name(lifecycle).to_owned()),
+                moved,
+            ));
+        }
+    }
+    if !Arc::ptr_eq(&before.ratings, &after.ratings) {
+        for rating in Rating::ALL {
+            let mut moved = after.rating(rating) - before.rating(rating);
+            moved &= &in_both;
+            rows.push((
+                EntryKind::Rating,
+                String::new(),
+                Some(rating.bitmap_key().to_string()),
+                moved,
+            ));
+        }
+    }
+    if !Arc::ptr_eq(&before.tags, &after.tags) {
+        let changes = member_changes(&before.tags, &after.tags, &in_both, |tag| tag.0);
+        // A tag that the write removed, for example by merging it into
+        // another, is taken off its pictures under the name it had before.
+        let gone_names = if changes.iter().any(|change| !after.tags.contains_key(&crate::TagId(change.id))) {
+            before
+                .tag_ids_by_name
+                .iter()
+                .filter(|(_, tag_id)| !after.tags.contains_key(tag_id))
+                .map(|(name, tag_id)| (tag_id.0, name.clone()))
+                .collect::<HashMap<_, _>>()
+        } else {
+            HashMap::new()
+        };
+        for change in changes {
+            let name = match gone_names.get(&change.id) {
+                Some(name) => Some(name.clone()),
+                None => tag_name(transaction, change.id)?,
+            };
+            if let Some(name) = name {
+                rows.push((EntryKind::ItemTag, name.clone(), Some("add".into()), change.gained));
+                rows.push((EntryKind::ItemTag, name, Some("remove".into()), change.lost));
+            }
+        }
+    }
+    if !Arc::ptr_eq(&before.folders, &after.folders) {
+        for change in member_changes(&before.folders, &after.folders, &in_both, |folder| folder.0)
+        {
+            if let Some(key) = folder_key(transaction, change.id)? {
+                rows.push((EntryKind::FolderItem, key.clone(), Some("add".into()), change.gained));
+                rows.push((EntryKind::FolderItem, key, Some("remove".into()), change.lost));
+            }
+        }
+    }
+    let (mut renamed, mut noted) = (RoaringBitmap::new(), RoaringBitmap::new());
+    {
+        let mut statement = transaction
+            .prepare_cached("SELECT root_id, name, notes FROM temp.entry_text_change")?;
+        let mut changed = statement.query([])?;
+        while let Some(row) = changed.next()? {
+            let root = row.get::<_, u32>(0)?;
+            if !in_both.contains(root) {
+                continue;
+            }
+            if row.get::<_, bool>(1)? {
+                renamed.insert(root);
+            }
+            if row.get::<_, bool>(2)? {
+                noted.insert(root);
+            }
+        }
+    }
+    transaction.execute("DELETE FROM temp.entry_text_change", [])?;
+    rows.push((EntryKind::Name, String::new(), None, renamed));
+    rows.push((EntryKind::Notes, String::new(), None, noted));
+
+    rows.retain(|row| !row.3.is_empty());
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let Some(time) = action_time(transaction, revision)? else {
+        return Ok(());
+    };
+    for (kind, second_key, value, roots) in rows {
+        write_pending(transaction, kind, &second_key, value.as_deref(), time, &roots)?;
+    }
+    Ok(())
+}
+
+/// Drops what the trigger collected during a write that isn't recorded, which
+/// is a merge of other computers' entries.
+pub(super) fn discard_changes(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
+    transaction.execute("DELETE FROM temp.entry_text_change", [])?;
+    transaction.execute("DELETE FROM temp.entry_restored_root", [])?;
+    Ok(())
+}
+
+/// Notes the pictures that are in `after` and not in `before`, for an undo or
+/// redo that brings deleted pictures back. Their `add` entries are written
+/// even when another computer has added the file, as an undo of a deletion
+/// should.
+pub(super) fn mark_restored_files(
+    transaction: &rusqlite::Transaction<'_>,
+    before: &ProjectionSnapshot,
+    after: &ProjectionSnapshot,
+) -> Result<()> {
+    if Arc::ptr_eq(&before.root_kinds, &after.root_kinds) {
+        return Ok(());
+    }
+    let restored = file_roots(after) - file_roots(before);
+    if restored.is_empty() {
+        return Ok(());
+    }
+    transaction.execute(
+        "INSERT OR IGNORE INTO temp.entry_restored_root (root_id)
+         SELECT value FROM json_each(?1)",
+        [serde_json::to_string(&restored.iter().collect::<Vec<_>>())?],
     )?;
     Ok(())
 }
 
-/// Records that the deletion of `keys` of `kind` was taken back now: every
-/// `delete` entry among them becomes an `add` entry with a new clock time. A
-/// key without a `delete` entry was never shared as deleted and gets none.
-pub(super) fn record_added_again(
+/// The value of a `status` entry.
+pub(super) fn lifecycle_name(lifecycle: Lifecycle) -> &'static str {
+    match lifecycle {
+        Lifecycle::Active => "active",
+        Lifecycle::Inbox => "inbox",
+        Lifecycle::Trash => "trash",
+    }
+}
+
+/// Records what a change in the undo history did to tag names and folders,
+/// when the library records entries. `forward` is `true` when the change is
+/// made or redone and `false` when it's undone. `after` is the library the
+/// write leaves.
+///
+/// Entries name a tag by its name, so renaming a tag is recorded as deleting
+/// the old name and putting the new name on every picture that has the tag.
+/// Renaming a tag group renames every tag in it. A folder that the change
+/// removes gets a `folder_delete` entry.
+///
+/// A deleted folder never holds anything again on any computer, so a folder
+/// that an undo brings back gets a new stable key. Its pictures are then
+/// recorded under the new key by `record_changes`.
+pub(super) fn record_definition_changes(
     transaction: &rusqlite::Transaction<'_>,
-    kind: EntryKind,
-    keys: &[String],
+    revision: u64,
+    after: &ProjectionSnapshot,
+    change: &SemanticChange,
+    forward: bool,
 ) -> Result<()> {
-    if keys.is_empty() {
+    if !recording(transaction)? {
         return Ok(());
     }
-    let (at_ms, logical) = tick(transaction)?;
+    let mut renamed_tags = Vec::<(u32, String, String)>::new();
+    let mut removed_folders = Vec::<String>::new();
+    let mut returned_folders = Vec::<(FolderId, String)>::new();
+    collect_definition_changes(
+        transaction,
+        change,
+        forward,
+        &mut renamed_tags,
+        &mut removed_folders,
+        &mut returned_folders,
+    )?;
+    let files = file_roots(after);
+    for (tag_id, old_name, new_name) in renamed_tags {
+        let Some(time) = action_time(transaction, revision)? else {
+            return Ok(());
+        };
+        write_own_entry(transaction, EntryKind::TagDelete, &old_name, time)?;
+        if let Some(members) = after.tags.get(&crate::TagId(tag_id)) {
+            let members = &**members & &files;
+            write_pending(transaction, EntryKind::ItemTag, &new_name, Some("add"), time, &members)?;
+        }
+    }
+    for key in removed_folders {
+        let Some(time) = action_time(transaction, revision)? else {
+            return Ok(());
+        };
+        write_own_entry(transaction, EntryKind::FolderDelete, &key, time)?;
+    }
+    for (folder_id, key) in returned_folders {
+        let deleted: bool = transaction
+            .prepare_cached(
+                "SELECT EXISTS (SELECT 1 FROM shared_entry
+                 WHERE subject_key = ?1 AND kind = 'folder_delete' AND second_key = '')",
+            )?
+            .query_row([&key], |row| row.get(0))?;
+        if deleted {
+            transaction.execute(
+                "UPDATE folder_definition SET stable_key = ?1 WHERE folder_id = ?2",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), folder_id.0],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_definition_changes(
+    transaction: &rusqlite::Transaction<'_>,
+    change: &SemanticChange,
+    forward: bool,
+    renamed_tags: &mut Vec<(u32, String, String)>,
+    removed_folders: &mut Vec<String>,
+    returned_folders: &mut Vec<(FolderId, String)>,
+) -> Result<()> {
+    match change {
+        SemanticChange::Compound(changes) => {
+            for change in changes {
+                collect_definition_changes(
+                    transaction,
+                    change,
+                    forward,
+                    renamed_tags,
+                    removed_folders,
+                    returned_folders,
+                )?;
+            }
+        }
+        SemanticChange::TagName { tag_id, before, after } => {
+            let (old, new) = if forward { (before, after) } else { (after, before) };
+            if old != new {
+                renamed_tags.push((tag_id.0, old.clone(), new.clone()));
+            }
+        }
+        SemanticChange::TagNamespaceName { namespace_id, before, after } => {
+            let (old, new) = if forward { (before, after) } else { (after, before) };
+            let mut statement = transaction.prepare_cached(
+                "SELECT tag_id, subname FROM tag_definition WHERE namespace_id = ?1",
+            )?;
+            let tags = statement
+                .query_map([namespace_id.0], |row| {
+                    Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (tag_id, subname) in tags {
+                let (old, new) = (whole_tag_name(old, &subname), whole_tag_name(new, &subname));
+                if old != new {
+                    renamed_tags.push((tag_id, old, new));
+                }
+            }
+        }
+        SemanticChange::FolderDefinition { folder_id, before, after } => {
+            let (old, new) = if forward { (before, after) } else { (after, before) };
+            match (old, new) {
+                (Some(old), None) => removed_folders.push(old.stable_key.clone()),
+                (None, Some(new)) => returned_folders.push((*folder_id, new.stable_key.clone())),
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Records that the user deleted the tags `names`, when the library records
+/// entries. Merging one tag into another doesn't call this: the pictures of
+/// the merged tag get the other tag, and other computers keep the merged tag
+/// on pictures they tagged themselves.
+pub(super) fn record_deleted_tags(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    names: &[String],
+) -> Result<()> {
+    if names.is_empty() {
+        return Ok(());
+    }
+    let Some(time) = action_time(transaction, revision)? else {
+        return Ok(());
+    };
+    for name in names {
+        write_own_entry(transaction, EntryKind::TagDelete, name, time)?;
+    }
+    Ok(())
+}
+
+/// Called by `delete_roots` while the deleted media are listed in
+/// `temp.delete_media` and their rows still exist. When the user deleted the
+/// pictures, or the library merged a duplicate away, it stores a `delete`
+/// entry for each file that no other picture in the library still uses. A
+/// picture inside a collection gets no entry, because collections don't sync
+/// yet. A deletion that came from another computer, or the undo of an import,
+/// stores nothing.
+pub(super) fn record_deleted_files(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    origin: DeletionOrigin,
+) -> Result<()> {
+    if !matches!(origin, DeletionOrigin::User | DeletionOrigin::MergedDuplicate) {
+        return Ok(());
+    }
+    let Some((clock_ms, clock_counter)) = action_time(transaction, revision)? else {
+        return Ok(());
+    };
     transaction.execute(
         &format!(
-            "UPDATE cloud_tombstone SET
-                 mutation_id = 'add', hlc_physical_ms = ?2, hlc_logical = ?3,
-                 device_id = (SELECT device_id FROM cloud_state WHERE singleton = 1),
-                 causal_frontier_json = '{{}}', deleted_at = {NOW_SQL}
-             WHERE object_kind = ?1 AND mutation_id = 'delete'
-               AND object_key IN (SELECT value FROM json_each(?4))"
+            "INSERT INTO shared_entry
+                 (subject_key, kind, second_key, value, clock_ms, clock_counter, device_id)
+             SELECT DISTINCT file.content_hash, 'delete', '', NULL, ?1, ?2,
+                    (SELECT device_id FROM cloud_state WHERE singleton = 1)
+             FROM temp.delete_media selected
+             CROSS JOIN media_item media ON media.media_id = selected.local_id
+             JOIN media_file file ON file.file_id = media.file_id
+             WHERE EXISTS (SELECT 1 FROM library_root root WHERE root.root_id = media.media_id)
+               AND NOT EXISTS (
+                 SELECT 1 FROM media_item other
+                 WHERE other.file_id = media.file_id
+                   AND other.media_id NOT IN (SELECT local_id FROM temp.delete_media))
+             {KEEP_LATER}"
         ),
-        rusqlite::params![kind.as_str(), at_ms, logical, serde_json::to_string(keys)?],
+        [clock_ms, clock_counter],
     )?;
     Ok(())
+}
+
+/// Records that a repair replaced the file of the media `media_id`, whose old
+/// content hash was `old_hash`: the old file gets a `delete` entry and the
+/// new file an `add` entry. A picture inside a collection gets neither,
+/// because collections don't sync yet.
+pub(super) fn record_replaced_file(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    snapshot: &ProjectionSnapshot,
+    old_hash: &str,
+    media_id: MediaId,
+) -> Result<()> {
+    if !file_roots(snapshot).contains(media_id.0) {
+        return Ok(());
+    }
+    let Some(time) = action_time(transaction, revision)? else {
+        return Ok(());
+    };
+    transaction
+        .prepare_cached(&format!(
+            "INSERT INTO shared_entry
+                 (subject_key, kind, second_key, value, clock_ms, clock_counter, device_id)
+             SELECT ?1, 'delete', '', NULL, ?2, ?3, device_id FROM cloud_state WHERE singleton = 1
+             {KEEP_LATER}"
+        ))?
+        .execute(rusqlite::params![old_hash, time.0, time.1])?;
+    write_pending(
+        transaction,
+        EntryKind::Add,
+        "",
+        Some("always"),
+        time,
+        &RoaringBitmap::from_iter([media_id.0]),
+    )?;
+    Ok(())
+}
+
+/// Returns those of `roots` whose file has an `add` entry of this computer,
+/// which other computers may already have received.
+pub(super) fn recorded_roots(
+    transaction: &rusqlite::Transaction<'_>,
+    roots: &RoaringBitmap,
+) -> Result<RoaringBitmap> {
+    if roots.is_empty() || !recording(transaction)? {
+        return Ok(RoaringBitmap::new());
+    }
+    let mut statement = transaction.prepare_cached(
+        "SELECT ids.value FROM json_each(?1) ids
+         CROSS JOIN media_item media ON media.media_id = ids.value
+         JOIN media_file file ON file.file_id = media.file_id
+         WHERE EXISTS (
+             SELECT 1 FROM shared_entry entry
+             WHERE entry.subject_key = file.content_hash AND entry.kind = 'add'
+               AND entry.second_key = (SELECT device_id FROM cloud_state WHERE singleton = 1))",
+    )?;
+    let recorded = statement
+        .query_map([serde_json::to_string(&roots.iter().collect::<Vec<_>>())?], |row| {
+            row.get::<_, u32>(0)
+        })?
+        .collect::<rusqlite::Result<RoaringBitmap>>()?;
+    Ok(recorded)
+}
+
+/// Returns those of `roots` whose file exists by an `add` entry of another
+/// computer.
+pub(super) fn roots_added_elsewhere(
+    transaction: &rusqlite::Transaction<'_>,
+    roots: &RoaringBitmap,
+) -> Result<RoaringBitmap> {
+    if roots.is_empty() || !recording(transaction)? {
+        return Ok(RoaringBitmap::new());
+    }
+    let mut statement = transaction.prepare_cached(
+        "SELECT ids.value FROM json_each(?1) ids
+         CROSS JOIN media_item media ON media.media_id = ids.value
+         JOIN media_file file ON file.file_id = media.file_id
+         WHERE EXISTS (
+             SELECT 1 FROM shared_entry added
+             WHERE added.subject_key = file.content_hash AND added.kind = 'add'
+               AND added.second_key <> (SELECT device_id FROM cloud_state WHERE singleton = 1)
+               AND NOT EXISTS (
+                   SELECT 1 FROM shared_entry deleted
+                   WHERE deleted.subject_key = added.subject_key AND deleted.kind = 'delete'
+                     AND (deleted.clock_ms, deleted.clock_counter, deleted.device_id)
+                         >= (added.clock_ms, added.clock_counter, added.device_id)))",
+    )?;
+    let found = statement
+        .query_map([serde_json::to_string(&roots.iter().collect::<Vec<_>>())?], |row| {
+            row.get::<_, u32>(0)
+        })?
+        .collect::<rusqlite::Result<RoaringBitmap>>()?;
+    Ok(found)
 }
 
 /// Removes the tombstones of the items `keys`, inside the caller's
-/// transaction, and records the removal for the other devices
-/// ([`record_added_again`]). An import of a deleted item, a subscription
-/// that brings an item again, a reset of a subscription and the undo of a
-/// permanent deletion all remove tombstones through this function. Returns
-/// the number of tombstones that were removed.
+/// transaction. A tombstone is a row of `deletion_tombstone`; it stops an
+/// import from bringing back an item that was deleted after the import was
+/// prepared. An import that is later than the deletion, a subscription that
+/// brings an item again, resetting a subscription and undoing a permanent
+/// deletion remove tombstones through this function. Returns how many were
+/// removed.
 pub fn remove_item_tombstones(
     transaction: &rusqlite::Transaction<'_>,
     keys: &[String],
@@ -295,185 +877,437 @@ pub fn remove_item_tombstones(
     if keys.is_empty() {
         return Ok(0);
     }
-    let removed = transaction.execute(
+    Ok(transaction.execute(
         "DELETE FROM deletion_tombstone
          WHERE stable_key IN (SELECT value FROM json_each(?1))",
         [serde_json::to_string(keys)?],
-    )?;
-    // A subscription run calls this for every item it records. Most of them
-    // have no tombstone, and then nothing is recorded and the clock stays.
-    if removed != 0 {
-        record_added_again(transaction, EntryKind::Item, keys)?;
-    }
-    Ok(removed)
+    )?)
 }
 
-/// Called by `delete_roots` while the ids of the roots and of their media
-/// are staged in `temp.delete_root` and `temp.delete_item` and their rows
-/// still exist. For a deletion that the user made it records a `delete`
-/// entry for every item that gets a tombstone, with the content hash of the
-/// item's file when the item has one. For every deletion it drops
-/// the `status` entries of the deleted roots, which no longer mean anything.
-pub(super) fn record_deleted_roots(
-    transaction: &rusqlite::Transaction<'_>,
-    origin: DeletionOrigin,
-) -> Result<()> {
-    transaction.execute(
-        "DELETE FROM cloud_tombstone
-         WHERE object_kind = 'status' AND object_key IN (
-             SELECT item.stable_key FROM temp.delete_root selected
-             CROSS JOIN library_item item ON item.local_id = selected.local_id)",
-        [],
-    )?;
-    if origin != DeletionOrigin::User {
-        return Ok(());
-    }
-    let (at_ms, logical) = tick(transaction)?;
-    transaction.execute(
-        &format!(
-            "INSERT INTO cloud_tombstone
-                 (object_kind, object_key, mutation_id, hlc_physical_ms, hlc_logical,
-                  device_id, causal_frontier_json, deleted_at, purge_after)
-             SELECT 'item', item.stable_key, 'delete', ?1, ?2,
-                    (SELECT device_id FROM cloud_state WHERE singleton = 1),
-                    CASE WHEN file.content_hash IS NULL THEN '{{}}'
-                         ELSE json_object('file', file.content_hash) END,
-                    {NOW_SQL}, NULL
-             FROM temp.delete_item selected
-             CROSS JOIN library_item item ON item.local_id = selected.local_id
-             LEFT JOIN media_item media ON media.media_id = item.local_id
-             LEFT JOIN media_file file ON file.file_id = media.file_id
-             WHERE true
-             ON CONFLICT(object_kind, object_key) DO UPDATE SET
-                 mutation_id = excluded.mutation_id,
-                 hlc_physical_ms = excluded.hlc_physical_ms,
-                 hlc_logical = excluded.hlc_logical,
-                 device_id = excluded.device_id,
-                 causal_frontier_json = excluded.causal_frontier_json,
-                 deleted_at = excluded.deleted_at"
-        ),
-        [at_ms, logical],
-    )?;
-    Ok(())
-}
-
-/// Makes the library write all of this device's entries into the cloud
-/// folder again at its next sync, inside the transaction that connects the
-/// library to a cloud folder. What was written before is in the cloud data
-/// that the library synced with before.
+/// Makes the library write all of this computer's entries into the cloud
+/// folder again at its next sync. It's called inside the transaction that
+/// connects the library to a cloud folder, because the new folder holds none
+/// of them.
 pub fn reset_published_entries(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
     transaction.execute("DELETE FROM cloud_device_frontier", [])?;
     Ok(())
 }
 
-/// Turns the roots of pending `root.trash` journal rows into `status`
-/// entries of this device, at most `limit` roots, and returns whether rows
-/// are left. A row holds the roots that one change moved into the Trash or
-/// out of it, and the clock time of the change. The rows are written by the
-/// change itself, which stays as fast as it was for any number of roots;
-/// the entries are written here, on the cloud queue. An entry is not stored
-/// over a later one.
-fn settle_trash_moves_in(transaction: &rusqlite::Transaction<'_>, limit: usize) -> Result<bool> {
+/// Returns those of `hashes` whose file exists by the stored entries: an
+/// `add` entry is later than the `delete` entry, or there's no `delete`.
+pub(super) fn existing_files(
+    connection: &rusqlite::Connection,
+    hashes: &[&str],
+) -> Result<HashSet<String>> {
+    if hashes.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let mut statement = connection.prepare_cached(
+        "SELECT DISTINCT hashes.value FROM json_each(?1) hashes
+         CROSS JOIN shared_entry added
+             ON added.subject_key = hashes.value AND added.kind = 'add'
+         WHERE NOT EXISTS (
+             SELECT 1 FROM shared_entry deleted
+             WHERE deleted.subject_key = hashes.value AND deleted.kind = 'delete'
+               AND deleted.second_key = ''
+               AND (deleted.clock_ms, deleted.clock_counter, deleted.device_id)
+                   >= (added.clock_ms, added.clock_counter, added.device_id))",
+    )?;
+    let existing = statement
+        .query_map([serde_json::to_string(hashes)?], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<HashSet<_>>>()?;
+    Ok(existing)
+}
+
+/// One picture outside any collection, with its file and its record as the
+/// library holds it now.
+pub(super) struct HeldFile {
+    pub root: u32,
+    pub content_hash: String,
+    pub record: FileRecord,
+}
+
+/// Returns the pictures among `roots` that aren't in a collection, each with
+/// its record as the library holds it now, ordered by root.
+///
+/// Tags and folders are found by intersecting each tag's and folder's bitmap
+/// with the batch, which is one pass over the tags and folders per batch
+/// instead of a query per picture.
+pub(super) fn file_records(
+    connection: &rusqlite::Connection,
+    snapshot: &ProjectionSnapshot,
+    roots: &RoaringBitmap,
+    start: bool,
+) -> Result<Vec<HeldFile>> {
+    let mut files = Vec::new();
+    {
+        let mut statement = connection.prepare_cached(
+            "SELECT root.root_id, file.content_hash, root.name, root.notes
+             FROM json_each(?1) ids
+             CROSS JOIN library_root root ON root.root_id = ids.value
+             JOIN media_item media ON media.media_id = root.root_id
+             JOIN media_file file ON file.file_id = media.file_id
+             ORDER BY root.root_id",
+        )?;
+        let ids = serde_json::to_string(&roots.iter().collect::<Vec<_>>())?;
+        let mut rows = statement.query([ids])?;
+        while let Some(row) = rows.next()? {
+            let root = row.get::<_, u32>(0)?;
+            files.push(HeldFile {
+                root,
+                content_hash: row.get(1)?,
+                record: FileRecord {
+                    name: row.get(2)?,
+                    notes: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    rating: Rating::ALL
+                        .into_iter()
+                        .find(|rating| snapshot.rating(*rating).contains(root))
+                        .map_or(0, |rating| rating.bitmap_key() as u8),
+                    status: Lifecycle::ALL
+                        .into_iter()
+                        .find(|lifecycle| snapshot.lifecycle(*lifecycle).contains(root))
+                        .unwrap_or(Lifecycle::Active),
+                    tags: Vec::new(),
+                    folders: Vec::new(),
+                    start,
+                },
+            });
+        }
+    }
+    let held = files.iter().map(|file| file.root).collect::<RoaringBitmap>();
+    let mut tagged = Vec::new();
+    for (tag_id, members) in snapshot.tags.iter() {
+        if members.is_disjoint(&held) {
+            continue;
+        }
+        if let Some(name) = tag_name(connection, tag_id.0)? {
+            tagged.extend((&**members & &held).iter().map(|root| (root, name.clone())));
+        }
+    }
+    let mut placed = Vec::new();
+    for (folder_id, members) in snapshot.folders.iter() {
+        if members.is_disjoint(&held) {
+            continue;
+        }
+        if let Some(key) = folder_key(connection, folder_id.0)? {
+            placed.extend((&**members & &held).iter().map(|root| (root, key.clone())));
+        }
+    }
+    for (root, name) in tagged {
+        if let Ok(index) = files.binary_search_by_key(&root, |file| file.root) {
+            files[index].record.tags.push(name);
+        }
+    }
+    for (root, key) in placed {
+        if let Ok(index) = files.binary_search_by_key(&root, |file| file.root) {
+            files[index].record.folders.push(key);
+        }
+    }
+    for file in &mut files {
+        file.record.tags.sort();
+        file.record.folders.sort();
+    }
+    Ok(files)
+}
+
+/// Stores an `add` entry of this computer for each of `files` at `time`.
+fn write_adds(
+    transaction: &rusqlite::Transaction<'_>,
+    files: &[HeldFile],
+    time: (i64, i64),
+    device_id: &str,
+) -> Result<()> {
+    let mut statement = transaction.prepare_cached(&format!(
+        "INSERT INTO shared_entry
+             (subject_key, kind, second_key, value, clock_ms, clock_counter, device_id)
+         VALUES (?1, 'add', ?2, ?3, ?4, ?5, ?2)
+         {KEEP_LATER}"
+    ))?;
+    for file in files {
+        statement.execute(rusqlite::params![
+            file.content_hash,
+            device_id,
+            serde_json::to_string(&file.record)?,
+            time.0,
+            time.1
+        ])?;
+    }
+    Ok(())
+}
+
+/// Writes the `add` entries of the start of recording for at most `limit`
+/// roots and returns how many roots it looked at, or zero when they're all
+/// written.
+fn settle_start(
+    transaction: &rusqlite::Transaction<'_>,
+    snapshot: &ProjectionSnapshot,
+    limit: usize,
+    device_id: &str,
+) -> Result<usize> {
     use rusqlite::OptionalExtension;
+    let start = transaction
+        .prepare_cached(
+            "SELECT start_next_root, start_end_root, started_ms, started_counter
+             FROM entry_recording
+             WHERE singleton = 1 AND start_next_root IS NOT NULL",
+        )?
+        .query_row([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                (row.get::<_, i64>(2)?, row.get::<_, i64>(3)?),
+            ))
+        })
+        .optional()?;
+    let Some((next, end, time)) = start else {
+        return Ok(0);
+    };
+    let roots = transaction
+        .prepare_cached(
+            "SELECT root.root_id FROM library_root root
+             JOIN media_item media ON media.media_id = root.root_id
+             WHERE root.root_id >= ?1 AND root.root_id < ?2
+             ORDER BY root.root_id LIMIT ?3",
+        )?
+        .query_map(rusqlite::params![next, end, limit as i64], |row| row.get::<_, u32>(0))?
+        .collect::<rusqlite::Result<RoaringBitmap>>()?;
+    let files = file_records(transaction, snapshot, &roots, true)?;
+    write_adds(transaction, &files, time, device_id)?;
+    // Fewer roots than the limit means that none are left below the end.
+    let next = roots
+        .max()
+        .filter(|_| roots.len() as usize == limit)
+        .map(|last| i64::from(last) + 1);
+    transaction.execute(
+        "UPDATE entry_recording SET start_next_root = ?1 WHERE singleton = 1",
+        [next],
+    )?;
+    Ok((roots.len() as usize).max(1))
+}
+
+/// Turns this computer's pending changes into entries, at most `limit` roots,
+/// and returns whether work is left. The `add` entries of the start of
+/// recording come first, then the rows of `pending_entry` in the order they
+/// were stored. `snapshot` is the library as the transaction sees it.
+pub(super) fn settle_in(
+    transaction: &rusqlite::Transaction<'_>,
+    snapshot: &ProjectionSnapshot,
+    limit: usize,
+) -> Result<bool> {
+    use rusqlite::OptionalExtension;
+    if !recording(transaction)? {
+        return Ok(false);
+    }
     let device_id = own_device_id(transaction)?;
     let mut room = limit;
+    while room > 0 {
+        let looked_at = settle_start(transaction, snapshot, room, &device_id)?;
+        if looked_at == 0 {
+            break;
+        }
+        room = room.saturating_sub(looked_at);
+    }
     loop {
         let row = transaction
             .prepare_cached(
-                "SELECT journal_id, target_bitmap, payload_json, created_at_ms
-                 FROM cloud_journal WHERE operation_kind = 'root.trash'
-                 ORDER BY journal_id LIMIT 1",
+                "SELECT pending_id, kind, second_key, value, clock_ms, clock_counter, root_bitmap
+                 FROM pending_entry ORDER BY pending_id LIMIT 1",
             )?
             .query_row([], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
-                    row.get::<_, Option<Vec<u8>>>(1)?,
+                    row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<String>>(3)?,
+                    (row.get::<_, i64>(4)?, row.get::<_, i64>(5)?),
+                    row.get::<_, Vec<u8>>(6)?,
                 ))
             })
             .optional()?;
-        let Some((journal_id, targets, payload, created_at_ms)) = row else {
-            return Ok(false);
+        let Some((pending_id, kind, second_key, value, time, roots)) = row else {
+            let starting: bool = transaction.query_row(
+                "SELECT EXISTS (SELECT 1 FROM entry_recording
+                                WHERE start_next_root IS NOT NULL)",
+                [],
+                |row| row.get(0),
+            )?;
+            return Ok(starting);
         };
         if room == 0 {
             return Ok(true);
         }
-        let payload: serde_json::Value = serde_json::from_str(&payload)?;
-        let state = match payload["lifecycle"].as_u64() {
-            Some(key) if key == u64::from(Lifecycle::Trash.bitmap_key()) => EntryState::Trash,
-            Some(key) if key == u64::from(Lifecycle::Inbox.bitmap_key()) => EntryState::Inbox,
-            _ => EntryState::Active,
-        };
-        let at_ms = payload["at_ms"].as_i64().unwrap_or(created_at_ms);
-        let logical = payload["logical"].as_i64().unwrap_or(0);
-        let mut roots = targets
-            .map(|bytes| RoaringBitmap::deserialize_from(&mut std::io::Cursor::new(bytes)))
-            .transpose()?
-            .unwrap_or_default();
-        let taken = roots.iter().take(room).collect::<Vec<_>>();
-        room -= taken.len();
-        transaction.execute(
-            &format!(
-                "INSERT INTO cloud_tombstone
-                     (object_kind, object_key, mutation_id, hlc_physical_ms, hlc_logical,
-                      device_id, causal_frontier_json, deleted_at, purge_after)
-                 SELECT 'status', item.stable_key, ?2, ?3, ?4, ?5, '{{}}', {NOW_SQL}, NULL
-                 FROM json_each(?1) ids
-                 CROSS JOIN library_item item ON item.local_id = ids.value
-                 JOIN library_root root ON root.root_id = item.local_id
-                 WHERE true
-                 ON CONFLICT(object_kind, object_key) DO UPDATE SET
-                     mutation_id = excluded.mutation_id,
-                     hlc_physical_ms = excluded.hlc_physical_ms,
-                     hlc_logical = excluded.hlc_logical,
-                     device_id = excluded.device_id,
-                     deleted_at = excluded.deleted_at
-                 WHERE (excluded.hlc_physical_ms, excluded.hlc_logical, excluded.device_id)
-                     > (cloud_tombstone.hlc_physical_ms, cloud_tombstone.hlc_logical,
-                        cloud_tombstone.device_id)"
-            ),
-            rusqlite::params![
-                serde_json::to_string(&taken)?,
-                state.as_str(),
-                at_ms,
-                logical,
-                device_id
-            ],
-        )?;
-        for root in &taken {
-            roots.remove(*root);
+        let mut roots = RoaringBitmap::deserialize_from(&mut std::io::Cursor::new(roots))?;
+        let taken = roots.iter().take(room).collect::<RoaringBitmap>();
+        room -= taken.len() as usize;
+        match EntryKind::parse(&kind) {
+            Some(EntryKind::Add) => {
+                // An import of a file that already exists by the entries
+                // writes nothing. The picture is changed to look the way the
+                // entries say instead, by the next merge. An undo or a
+                // repair (`always`) writes its entry in any case.
+                let files = file_records(transaction, snapshot, &taken, false)?;
+                let existing = if value.as_deref() == Some("always") {
+                    HashSet::new()
+                } else {
+                    existing_files(
+                        transaction,
+                        &files.iter().map(|file| file.content_hash.as_str()).collect::<Vec<_>>(),
+                    )?
+                };
+                let (known, new): (Vec<_>, Vec<_>) =
+                    files.into_iter().partition(|file| existing.contains(&file.content_hash));
+                // Other entries of the file can win over the new record: a
+                // rename on another computer after a deletion, or an earlier
+                // add when an undo or a repair brings the file back. The
+                // next merge brings the picture in line with them.
+                transaction.execute(
+                    "INSERT OR IGNORE INTO merge_touched (subject_kind, subject_key)
+                     SELECT 'file', hashes.value FROM json_each(?1) hashes
+                     WHERE EXISTS (SELECT 1 FROM shared_entry entry
+                                   WHERE entry.subject_key = hashes.value
+                                     AND (entry.kind <> 'add' OR entry.second_key <> ?2))",
+                    rusqlite::params![
+                        serde_json::to_string(
+                            &new.iter().map(|file| &file.content_hash).collect::<Vec<_>>(),
+                        )?,
+                        device_id
+                    ],
+                )?;
+                write_adds(transaction, &new, time, &device_id)?;
+                if !known.is_empty() {
+                    transaction.execute(
+                        "INSERT OR IGNORE INTO merge_touched (subject_kind, subject_key)
+                         SELECT 'file', value FROM json_each(?1)",
+                        [serde_json::to_string(
+                            &known.iter().map(|file| &file.content_hash).collect::<Vec<_>>(),
+                        )?],
+                    )?;
+                }
+            }
+            Some(kind @ (EntryKind::Name | EntryKind::Notes)) => {
+                // The rows hold no text: the text is read now. A later change
+                // of the same text has its own, later row, so the last entry
+                // always carries the text the picture has.
+                let column = if kind == EntryKind::Name {
+                    "root.name"
+                } else {
+                    "COALESCE(root.notes, '')"
+                };
+                transaction.execute(
+                    &format!(
+                        "INSERT INTO shared_entry
+                             (subject_key, kind, second_key, value, clock_ms, clock_counter,
+                              device_id)
+                         SELECT file.content_hash, ?2, '', {column}, ?3, ?4, ?5
+                         FROM json_each(?1) ids
+                         CROSS JOIN library_root root ON root.root_id = ids.value
+                         JOIN media_item media ON media.media_id = root.root_id
+                         JOIN media_file file ON file.file_id = media.file_id
+                         WHERE true
+                         {KEEP_LATER}"
+                    ),
+                    rusqlite::params![
+                        serde_json::to_string(&taken.iter().collect::<Vec<_>>())?,
+                        kind.as_str(),
+                        time.0,
+                        time.1,
+                        device_id
+                    ],
+                )?;
+            }
+            Some(
+                kind @ (EntryKind::Rating
+                | EntryKind::Status
+                | EntryKind::ItemTag
+                | EntryKind::FolderItem),
+            ) => {
+                transaction.execute(
+                    &format!(
+                        "INSERT INTO shared_entry
+                             (subject_key, kind, second_key, value, clock_ms, clock_counter,
+                              device_id)
+                         SELECT file.content_hash, ?2, ?3, ?4, ?5, ?6, ?7
+                         FROM json_each(?1) ids
+                         CROSS JOIN library_root root ON root.root_id = ids.value
+                         JOIN media_item media ON media.media_id = root.root_id
+                         JOIN media_file file ON file.file_id = media.file_id
+                         WHERE true
+                         {KEEP_LATER}"
+                    ),
+                    rusqlite::params![
+                        serde_json::to_string(&taken.iter().collect::<Vec<_>>())?,
+                        kind.as_str(),
+                        second_key,
+                        value,
+                        time.0,
+                        time.1,
+                        device_id
+                    ],
+                )?;
+            }
+            // No other kind is stored as a row.
+            _ => roots.clear(),
         }
+        roots -= &taken;
         if roots.is_empty() {
-            transaction.execute("DELETE FROM cloud_journal WHERE journal_id = ?1", [journal_id])?;
+            transaction.execute("DELETE FROM pending_entry WHERE pending_id = ?1", [pending_id])?;
         } else {
             transaction.execute(
-                "UPDATE cloud_journal SET target_bitmap = ?2 WHERE journal_id = ?1",
-                rusqlite::params![journal_id, crate::bitmap::encode(&roots)?],
+                "UPDATE pending_entry SET root_bitmap = ?2 WHERE pending_id = ?1",
+                rusqlite::params![pending_id, crate::bitmap::encode(&roots)?],
             )?;
         }
     }
 }
 
 impl Library {
-    /// Writes the `status` entries of the moves into and out of the Trash
-    /// that this device made since the last call, for at most `limit` roots
-    /// ([`settle_trash_moves_in`]). Returns whether moves are left.
-    pub fn settle_trash_moves(&self, limit: usize) -> Result<bool> {
+    /// Makes the library record entries from now on, and returns `true` when
+    /// it didn't record before. The `add` entries of the pictures the library
+    /// holds now are written afterwards by `Library::settle_entries`, all with
+    /// the clock time of this call. A library that records already is left
+    /// alone, which includes a library opened from a copy of one that records.
+    pub fn start_recording(&self) -> Result<bool> {
         self.database
             .maintenance_write(WorkPriority::Cloud, |transaction| {
-                settle_trash_moves_in(transaction, limit)
+                if recording(transaction)? {
+                    return Ok(false);
+                }
+                let (clock_ms, clock_counter) = tick(transaction)?;
+                transaction.execute(
+                    "INSERT INTO entry_recording
+                         (singleton, started_ms, started_counter, start_next_root, start_end_root)
+                     SELECT 1, ?1, ?2, 1, next_local_id FROM library_meta WHERE singleton = 1",
+                    [clock_ms, clock_counter],
+                )?;
+                Ok(true)
             })
     }
 
-    /// Returns this device's id, the time of the library's clock, and the
-    /// clock time up to which this device's entries are in the cloud folder.
+    /// Returns whether the library records entries.
+    pub fn records_entries(&self) -> Result<bool> {
+        self.database
+            .read(WorkPriority::Cloud, recording)
+    }
+
+    /// Turns this computer's pending changes into entries, at most `limit`
+    /// roots per call, and returns whether work is left. Each call is one
+    /// short write, so the library stays usable while the caller repeats it.
+    pub fn settle_entries(&self, limit: usize) -> Result<bool> {
+        self.database
+            .maintenance_write(WorkPriority::Cloud, |transaction| {
+                let snapshot = self.projections.snapshot();
+                settle_in(transaction, &snapshot, limit)
+            })
+    }
+
+    /// Returns this computer's id, the time of the library's clock, and the
+    /// clock time up to which this computer's entries are in the cloud folder.
     pub fn entry_clock(&self) -> Result<EntryClock> {
+        use rusqlite::OptionalExtension;
         self.database.read(WorkPriority::Cloud, |connection| {
-            use rusqlite::OptionalExtension;
             let (device_id, now) = connection.query_row(
-                "SELECT device_id, hlc_physical_ms, hlc_logical
-                 FROM cloud_state WHERE singleton = 1",
+                "SELECT device_id, hlc_physical_ms, hlc_logical FROM cloud_state
+                 WHERE singleton = 1",
                 [],
                 |row| Ok((row.get::<_, String>(0)?, (row.get(1)?, row.get(2)?))),
             )?;
@@ -485,54 +1319,50 @@ impl Library {
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()?;
-            Ok(EntryClock {
-                device_id,
-                now,
-                published,
-            })
+            Ok(EntryClock { device_id, now, published })
         })
     }
 
-    /// Calls `visit` with every entry that this device made, in the order of
-    /// the kinds and keys. With `later_than`, only with the entries whose
-    /// clock time is later than that time.
+    /// Calls `visit` with every stored entry that this computer wrote,
+    /// ordered by key. With `since`, only entries later than that clock time
+    /// are visited.
     pub fn visit_own_entries(
         &self,
-        later_than: Option<(i64, i64)>,
+        since: Option<(i64, i64)>,
         visit: &mut dyn FnMut(SharedEntry),
     ) -> Result<()> {
+        let since = since.unwrap_or((-1, -1));
         self.database.read(WorkPriority::Cloud, |connection| {
-            let (at_ms, logical) = later_than.unwrap_or((i64::MIN, 0));
             let mut statement = connection.prepare(
-                "SELECT object_kind, object_key, mutation_id, hlc_physical_ms, hlc_logical,
-                        json_extract(causal_frontier_json, '$.file')
-                 FROM cloud_tombstone
-                 WHERE object_kind != 'blob'
-                   AND device_id = (SELECT device_id FROM cloud_state WHERE singleton = 1)
-                   AND (hlc_physical_ms, hlc_logical) > (?1, ?2)
-                 ORDER BY object_kind, object_key",
+                "SELECT entry.kind, entry.subject_key, entry.second_key, entry.value,
+                        entry.clock_ms, entry.clock_counter, entry.device_id
+                 FROM shared_entry entry
+                 WHERE entry.device_id = (SELECT device_id FROM cloud_state WHERE singleton = 1)
+                   AND (entry.clock_ms, entry.clock_counter) > (?1, ?2)
+                 ORDER BY entry.subject_key, entry.kind, entry.second_key",
             )?;
-            let mut rows = statement.query([at_ms, logical])?;
+            let mut rows = statement.query([since.0, since.1])?;
             while let Some(row) = rows.next()? {
-                let kind = EntryKind::parse(&row.get::<_, String>(0)?);
-                let state = EntryState::parse(&row.get::<_, String>(2)?);
-                if let (Some(kind), Some(state)) = (kind, state) {
-                    visit(SharedEntry {
-                        kind,
-                        key: row.get(1)?,
-                        state,
-                        at_ms: row.get(3)?,
-                        logical: row.get(4)?,
-                        file: row.get(5)?,
-                    });
-                }
+                let kind: String = row.get(0)?;
+                let Some(kind) = EntryKind::parse(&kind) else {
+                    continue;
+                };
+                visit(SharedEntry {
+                    kind,
+                    subject_key: row.get(1)?,
+                    second_key: row.get(2)?,
+                    value: row.get(3)?,
+                    clock_ms: row.get(4)?,
+                    clock_counter: row.get(5)?,
+                    device_id: row.get(6)?,
+                });
             }
             Ok(())
         })
     }
 
-    /// Records that this device's entries up to the clock time `through` are
-    /// in the cloud folder.
+    /// Records that this computer's entries up to the clock time `through`
+    /// are in the cloud folder.
     pub fn set_entries_published(&self, through: (i64, i64)) -> Result<()> {
         self.database
             .maintenance_write(WorkPriority::Cloud, |transaction| {
@@ -540,8 +1370,7 @@ impl Library {
                     &format!(
                         "INSERT INTO cloud_device_frontier
                              (device_id, hlc_physical_ms, hlc_logical, updated_at)
-                         VALUES ((SELECT device_id FROM cloud_state WHERE singleton = 1),
-                                 ?1, ?2, {NOW_SQL})
+                         SELECT device_id, ?1, ?2, {NOW_SQL} FROM cloud_state WHERE singleton = 1
                          ON CONFLICT(device_id) DO UPDATE SET
                              hlc_physical_ms = excluded.hlc_physical_ms,
                              hlc_logical = excluded.hlc_logical,
@@ -551,585 +1380,5 @@ impl Library {
                 )?;
                 Ok(())
             })
-    }
-
-    /// Merges `entries`, which the device `device_id` made, into this
-    /// library, in one publication. Nothing is recorded in the undo history.
-    ///
-    /// An entry wins when the library holds no entry for its key, or an
-    /// earlier one, or one of the same time from a device with a smaller id.
-    /// An entry that does not win changes nothing. An entry that wins is
-    /// stored, and:
-    ///
-    /// - `item`, `delete`: the item gets its tombstone. If it is an item or
-    ///   a collection of this library, it is deleted, whatever its status
-    ///   is. An entry that names the content hash of a file deletes the
-    ///   item only when the item's file here has that hash. An item with
-    ///   another file is another item under the same stable key: it stays,
-    ///   and the entry is handled as if the library held no item with that
-    ///   key. One more case is different: the library holds no entry for the item,
-    ///   and the item was imported here after the time of the deletion. Then
-    ///   the item stays, gets no tombstone, and gets an `add` entry of this
-    ///   device.
-    /// - `item`, `add`: the item's tombstone is removed.
-    /// - `status`: an item of this library is moved to the Trash, or, when
-    ///   it is in the Trash, out of it. An entry for an item that this
-    ///   library does not hold is dropped.
-    /// - `tag`, `delete`: the tag is deleted.
-    /// - `folder` and `smart_folder`, `delete`: every folder that has a
-    ///   `delete` entry is deleted once every folder below it has one too.
-    ///   The items in a deleted folder stay in the library.
-    ///
-    /// The moves into and out of the Trash that this device made and has not
-    /// turned into entries yet are settled first, so that an earlier entry
-    /// of another device does not win over them.
-    pub fn apply_shared_entries(
-        &self,
-        device_id: &str,
-        entries: &[SharedEntry],
-    ) -> Result<AppliedEntries> {
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let protected = self.history.protected_cleanup_files();
-        let published = self.database.published_write_if_changed(
-            WorkPriority::Cloud,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                settle_trash_moves_in(transaction, usize::MAX)?;
-                let held = held_entries(transaction, entries)?;
-                let mut winners = entries
-                    .iter()
-                    .filter(|entry| {
-                        held.get(&(entry.kind, entry.key.as_str())).is_none_or(|held| {
-                            (entry.at_ms, entry.logical, device_id)
-                                > (held.0, held.1, held.2.as_str())
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                if winners.is_empty() {
-                    return Ok(None);
-                }
-                if let Some(latest) = winners.iter().map(|e| (e.at_ms, e.logical)).max() {
-                    observe(transaction, latest)?;
-                }
-                let mut next = (*snapshot).clone();
-                let mut applied = AppliedEntries::default();
-                let mut resources = BTreeSet::from(["cloud".to_string()]);
-                let mut affected = RoaringBitmap::new();
-                let keys_of = |winners: &[&SharedEntry], kind: EntryKind, state: EntryState| {
-                    winners
-                        .iter()
-                        .filter(|entry| entry.kind == kind && entry.state == state)
-                        .map(|entry| entry.key.clone())
-                        .collect::<Vec<_>>()
-                };
-
-                // The roots of this library that the item and status
-                // entries name.
-                let root_keys = winners
-                    .iter()
-                    .filter(|entry| matches!(entry.kind, EntryKind::Item | EntryKind::Status))
-                    .map(|entry| entry.key.as_str())
-                    .collect::<BTreeSet<_>>();
-                let roots = local_roots(transaction, &root_keys)?;
-                // The keys under which this library holds an item with
-                // another file than a `delete` entry names. Such an item is
-                // not the deleted one, and the entry does not touch it.
-                let other_file = winners
-                    .iter()
-                    .filter(|entry| entry.kind == EntryKind::Item)
-                    .filter(|entry| {
-                        entry.file.as_ref().is_some_and(|named| {
-                            roots
-                                .get(entry.key.as_str())
-                                .is_some_and(|(_, _, held)| held.as_ref() != Some(named))
-                        })
-                    })
-                    .map(|entry| entry.key.as_str())
-                    .collect::<HashSet<_>>();
-
-                // An item of which the library holds no entry, and which was
-                // imported here after it was deleted elsewhere, was added
-                // again. It stays. When the library holds an entry for the
-                // item, the clock times alone decide.
-                let mut added_again = Vec::new();
-                winners.retain(|entry| {
-                    let later_import = entry.kind == EntryKind::Item
-                        && entry.state == EntryState::Delete
-                        && !held.contains_key(&(EntryKind::Item, entry.key.as_str()))
-                        && !other_file.contains(entry.key.as_str())
-                        && roots
-                            .get(entry.key.as_str())
-                            .is_some_and(|(_, imported_at_ms, _)| *imported_at_ms > entry.at_ms);
-                    if later_import {
-                        added_again.push(entry.key.clone());
-                    }
-                    !later_import
-                });
-                // A status entry for an item that is not here is dropped.
-                winners.retain(|entry| {
-                    entry.kind != EntryKind::Status || roots.contains_key(entry.key.as_str())
-                });
-                if winners.is_empty() && added_again.is_empty() {
-                    return Ok(None);
-                }
-
-                // Moves into and out of the Trash.
-                let lifecycle_keys = Lifecycle::ALL
-                    .iter()
-                    .map(|value| value.bitmap_key())
-                    .collect::<Vec<_>>();
-                for destination in Lifecycle::ALL {
-                    let mut moved = winners
-                        .iter()
-                        .filter(|entry| {
-                            entry.kind == EntryKind::Status
-                                && entry.state.lifecycle() == Some(destination)
-                        })
-                        .filter_map(|entry| roots.get(entry.key.as_str()).map(|(root, _, _)| *root))
-                        .collect::<RoaringBitmap>();
-                    if destination == Lifecycle::Trash {
-                        moved -= next.lifecycle(Lifecycle::Trash);
-                    } else {
-                        // A restore moves only an item that is in the Trash.
-                        moved &= next.lifecycle(Lifecycle::Trash);
-                    }
-                    if moved.is_empty() {
-                        continue;
-                    }
-                    move_to_partition(
-                        transaction,
-                        revision,
-                        &mut next,
-                        BitmapDomain::Lifecycle,
-                        destination.bitmap_key(),
-                        &lifecycle_keys,
-                        &moved,
-                    )?;
-                    if destination == Lifecycle::Trash {
-                        applied.trashed += moved.len();
-                    } else {
-                        applied.restored += moved.len();
-                    }
-                    affected |= &moved;
-                    resources.extend(["roots", "sidebar", "tags", "folders"].map(str::to_owned));
-                }
-
-                // Permanent deletions.
-                let deleted_items = winners
-                    .iter()
-                    .filter(|entry| {
-                        entry.kind == EntryKind::Item && entry.state == EntryState::Delete
-                    })
-                    .map(|entry| (entry.key.as_str(), entry.at_ms))
-                    .collect::<Vec<_>>();
-                let deleted = deleted_items
-                    .iter()
-                    .filter(|(key, _)| !other_file.contains(key))
-                    .filter_map(|(key, _)| roots.get(key).map(|(root, _, _)| *root))
-                    .collect::<RoaringBitmap>();
-                if !deleted.is_empty() {
-                    let (after, _, receipt) = delete_roots(
-                        transaction,
-                        revision,
-                        &next,
-                        &deleted,
-                        now_ms(),
-                        &protected,
-                        DeletionOrigin::OtherDevice,
-                    )?;
-                    next = after;
-                    applied.deleted = deleted.len();
-                    affected |= &deleted;
-                    resources.extend(receipt.resources);
-                }
-                if !deleted_items.is_empty() {
-                    // Every deleted item gets its tombstone with the time of
-                    // the deletion, also an item that is not here, so that
-                    // an earlier import of it is refused here too.
-                    transaction.execute(
-                        "INSERT INTO deletion_tombstone(stable_key, revision, deleted_at_ms)
-                         SELECT json_extract(entry.value, '$[0]'), ?2,
-                                json_extract(entry.value, '$[1]')
-                         FROM json_each(?1) entry WHERE true
-                         ON CONFLICT(stable_key) DO UPDATE SET
-                             revision = excluded.revision,
-                             deleted_at_ms = excluded.deleted_at_ms",
-                        rusqlite::params![
-                            serde_json::to_string(&deleted_items)?,
-                            revision as i64
-                        ],
-                    )?;
-                }
-                let added = keys_of(&winners, EntryKind::Item, EntryState::Add);
-                if !added.is_empty() {
-                    transaction.execute(
-                        "DELETE FROM deletion_tombstone
-                         WHERE stable_key IN (SELECT value FROM json_each(?1))",
-                        [serde_json::to_string(&added)?],
-                    )?;
-                }
-
-                // The winning entries are stored before the folders are
-                // looked at, because a folder is deleted by the entries that
-                // the library holds and not by this call's entries alone.
-                store_entries(transaction, device_id, &winners)?;
-                record_entries(transaction, EntryKind::Item, EntryState::Add, &added_again)?;
-                if !deleted_items.is_empty() {
-                    // A status entry of an item that these entries delete
-                    // means nothing any more, whichever of the two came
-                    // first in the list.
-                    let keys = deleted_items.iter().map(|(key, _)| *key).collect::<Vec<_>>();
-                    transaction.execute(
-                        "DELETE FROM cloud_tombstone
-                         WHERE object_kind = 'status'
-                           AND object_key IN (SELECT value FROM json_each(?1))",
-                        [serde_json::to_string(&keys)?],
-                    )?;
-                }
-
-                // Tags.
-                let tag_keys = keys_of(&winners, EntryKind::Tag, EntryState::Delete);
-                for tag_id in definition_ids(transaction, "tag_definition", "tag_id", &tag_keys)? {
-                    let tag_id = crate::TagId(tag_id);
-                    let (members, _) =
-                        remove_tag_in_transaction(transaction, &mut next, tag_id, None, revision)?;
-                    crate::smart::settle_affected_for(
-                        transaction,
-                        &mut next,
-                        &members,
-                        &[crate::predicate::DependencyChange::Tag(tag_id)],
-                    )?;
-                    applied.tags += 1;
-                    affected |= &members;
-                }
-                if applied.tags != 0 {
-                    resources
-                        .extend(["roots", "tags", "navigation", "smart-folders"].map(str::to_owned));
-                    if prune_deleted_starred_tags(transaction, &next)?.is_some() {
-                        resources.insert("settings".into());
-                    }
-                }
-
-                // Folders.
-                if winners.iter().any(|entry| entry.kind == EntryKind::Folder) {
-                    let named = tombstoned(transaction, "folder_definition", "folder_id", "folder")?;
-                    let parents = parents_of(transaction, "folder_definition", "folder_id")?;
-                    let requested = whole_subtrees(&named, &parents)
-                        .into_iter()
-                        .map(FolderId)
-                        .collect::<Vec<_>>();
-                    if !requested.is_empty() {
-                        let removed =
-                            delete_folder_subtrees(transaction, revision, &next, &requested)?;
-                        applied.folders = removed.folder_ids.len() as u64;
-                        affected |= &removed.affected;
-                        next = removed.next;
-                        resources.extend(
-                            ["folders", "navigation", "sidebar", "smart-folders"]
-                                .map(str::to_owned),
-                        );
-                    }
-                }
-
-                // Smart folders.
-                if winners.iter().any(|entry| entry.kind == EntryKind::SmartFolder) {
-                    let named = tombstoned(
-                        transaction,
-                        "smart_folder_definition",
-                        "smart_folder_id",
-                        "smart_folder",
-                    )?;
-                    let parents =
-                        parents_of(transaction, "smart_folder_definition", "smart_folder_id")?;
-                    for smart_folder_id in whole_subtrees(&named, &parents) {
-                        let removed = delete_smart_folder_subtree(
-                            transaction,
-                            &mut next,
-                            SmartFolderId(smart_folder_id),
-                        )?;
-                        applied.smart_folders += removed.smart_folder_ids.len() as u64;
-                    }
-                    if applied.smart_folders != 0 {
-                        resources.extend(["smart-folders", "navigation"].map(str::to_owned));
-                    }
-                }
-
-                applied.won = (winners.len() + added_again.len()) as u64;
-                if applied.trashed
-                    + applied.restored
-                    + applied.deleted
-                    + applied.tags
-                    + applied.folders
-                    + applied.smart_folders
-                    != 0
-                {
-                    // The row makes the next snapshot due, so that this
-                    // device's copy in the cloud folder holds the change.
-                    insert_cloud_journal(
-                        transaction,
-                        revision,
-                        "sync.entries_applied",
-                        None,
-                        serde_json::json!({ "device_id": device_id }),
-                        now_ms(),
-                    )?;
-                }
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    resources,
-                    affected.iter().map(RootId),
-                );
-                applied.receipt = Some(receipt.clone());
-                Ok(Some((
-                    applied,
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: None,
-                    },
-                )))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        Ok(published.map(|(applied, _, _)| applied).unwrap_or_default())
-    }
-}
-
-/// The clock time (milliseconds and counter) and the device of the entries
-/// that the library holds, by kind and key.
-type HeldEntries<'a> = HashMap<(EntryKind, &'a str), (i64, i64, String)>;
-
-/// Returns the clock time and the device of the entry that the library holds
-/// for each key of `entries`.
-fn held_entries<'a>(
-    transaction: &rusqlite::Transaction<'_>,
-    entries: &'a [SharedEntry],
-) -> Result<HeldEntries<'a>> {
-    let wanted = entries
-        .iter()
-        .map(|entry| (entry.kind.as_str(), entry.key.as_str()))
-        .collect::<Vec<_>>();
-    let mut statement = transaction.prepare_cached(
-        "SELECT stored.object_kind, stored.object_key, stored.hlc_physical_ms,
-                stored.hlc_logical, stored.device_id
-         FROM json_each(?1) wanted
-         CROSS JOIN cloud_tombstone stored
-           ON stored.object_kind = json_extract(wanted.value, '$[0]')
-          AND stored.object_key = json_extract(wanted.value, '$[1]')",
-    )?;
-    let rows = statement
-        .query_map([serde_json::to_string(&wanted)?], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                (row.get::<_, i64>(2)?, row.get::<_, i64>(3)?, row.get::<_, String>(4)?),
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let by_key = entries
-        .iter()
-        .map(|entry| ((entry.kind, entry.key.as_str()), entry.key.as_str()))
-        .collect::<HashMap<_, _>>();
-    Ok(rows
-        .into_iter()
-        .filter_map(|(kind, key, held)| {
-            let kind = EntryKind::parse(&kind)?;
-            let key = by_key.get(&(kind, key.as_str()))?;
-            Some(((kind, *key), held))
-        })
-        .collect())
-}
-
-/// Stores `entries` as entries of the device `device_id`, over what the
-/// library holds for their keys.
-fn store_entries(
-    transaction: &rusqlite::Transaction<'_>,
-    device_id: &str,
-    entries: &[&SharedEntry],
-) -> Result<()> {
-    if entries.is_empty() {
-        return Ok(());
-    }
-    let rows = entries
-        .iter()
-        .map(|entry| {
-            serde_json::json!([
-                entry.kind.as_str(),
-                entry.key,
-                entry.state.as_str(),
-                entry.at_ms,
-                entry.logical,
-                entry.file
-            ])
-        })
-        .collect::<Vec<_>>();
-    transaction.execute(
-        &format!(
-            "INSERT INTO cloud_tombstone
-                 (object_kind, object_key, mutation_id, hlc_physical_ms, hlc_logical,
-                  device_id, causal_frontier_json, deleted_at, purge_after)
-             SELECT json_extract(entry.value, '$[0]'), json_extract(entry.value, '$[1]'),
-                    json_extract(entry.value, '$[2]'), json_extract(entry.value, '$[3]'),
-                    json_extract(entry.value, '$[4]'), ?2,
-                    CASE WHEN json_extract(entry.value, '$[5]') IS NULL THEN '{{}}'
-                         ELSE json_object('file', json_extract(entry.value, '$[5]')) END,
-                    {NOW_SQL}, NULL
-             FROM json_each(?1) entry WHERE true
-             ON CONFLICT(object_kind, object_key) DO UPDATE SET
-                 mutation_id = excluded.mutation_id,
-                 hlc_physical_ms = excluded.hlc_physical_ms,
-                 hlc_logical = excluded.hlc_logical,
-                 device_id = excluded.device_id,
-                 causal_frontier_json = excluded.causal_frontier_json,
-                 deleted_at = excluded.deleted_at"
-        ),
-        rusqlite::params![serde_json::to_string(&rows)?, device_id],
-    )?;
-    Ok(())
-}
-
-/// A root of this library: its id, the time of its import, and the content
-/// hash of its file. A collection has no file of its own.
-type LocalRoot = (u32, i64, Option<String>);
-
-/// Returns, for each of `keys` that is the stable key of an item or a
-/// collection of this library, that root.
-fn local_roots<'a>(
-    transaction: &rusqlite::Transaction<'_>,
-    keys: &BTreeSet<&'a str>,
-) -> Result<HashMap<&'a str, LocalRoot>> {
-    if keys.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let mut statement = transaction.prepare_cached(
-        "SELECT keys.value, root.root_id, root.imported_at_ms, file.content_hash
-         FROM json_each(?1) keys
-         CROSS JOIN library_item item ON item.stable_key = keys.value
-         JOIN library_root root ON root.root_id = item.local_id
-         LEFT JOIN media_item media ON media.media_id = root.root_id
-         LEFT JOIN media_file file ON file.file_id = media.file_id",
-    )?;
-    let rows = statement
-        .query_map([serde_json::to_string(keys)?], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                (row.get::<_, u32>(1)?, row.get::<_, i64>(2)?, row.get(3)?),
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|(key, root)| Some((*keys.get(key.as_str())?, root)))
-        .collect())
-}
-
-/// Returns the ids of the rows of `table` whose stable key is in `keys`.
-fn definition_ids(
-    transaction: &rusqlite::Transaction<'_>,
-    table: &'static str,
-    id_column: &'static str,
-    keys: &[String],
-) -> Result<Vec<u32>> {
-    if keys.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut statement = transaction.prepare_cached(&format!(
-        "SELECT definition.{id_column} FROM json_each(?1) keys
-         CROSS JOIN {table} definition ON definition.stable_key = keys.value
-         ORDER BY definition.{id_column}"
-    ))?;
-    let rows = statement.query_map([serde_json::to_string(keys)?], |row| row.get::<_, u32>(0))?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
-}
-
-/// Returns the ids of the rows of `table` that still exist and for whose
-/// stable key the library holds a `delete` entry of `kind`.
-fn tombstoned(
-    transaction: &rusqlite::Transaction<'_>,
-    table: &'static str,
-    id_column: &'static str,
-    kind: &'static str,
-) -> Result<Vec<u32>> {
-    let mut statement = transaction.prepare_cached(&format!(
-        "SELECT definition.{id_column} FROM cloud_tombstone stored
-         CROSS JOIN {table} definition ON definition.stable_key = stored.object_key
-         WHERE stored.object_kind = '{kind}' AND stored.mutation_id = 'delete'
-         ORDER BY definition.{id_column}"
-    ))?;
-    let rows = statement.query_map([], |row| row.get::<_, u32>(0))?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
-}
-
-/// Returns the parent of every row of `table`, which is the table of the
-/// folders or of the smart folders.
-fn parents_of(
-    transaction: &rusqlite::Transaction<'_>,
-    table: &'static str,
-    id_column: &'static str,
-) -> Result<HashMap<u32, Option<u32>>> {
-    let mut statement =
-        transaction.prepare_cached(&format!("SELECT {id_column}, parent_id FROM {table}"))?;
-    let rows = statement.query_map([], |row| {
-        Ok((row.get::<_, u32>(0)?, row.get::<_, Option<u32>>(1)?))
-    })?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
-}
-
-/// Returns the members of `named` that can be deleted without deleting
-/// anything outside `named`, leaving out those that lie below another such
-/// member. `parents` gives the parent of every folder. A folder with a
-/// folder below it that `named` does not hold is left out, together with
-/// every folder above it. So is a folder that `parents` does not hold.
-fn whole_subtrees(named: &[u32], parents: &HashMap<u32, Option<u32>>) -> Vec<u32> {
-    let named = named.iter().copied().collect::<BTreeSet<_>>();
-    let mut kept = HashSet::new();
-    for folder in parents.keys().filter(|folder| !named.contains(folder)) {
-        let mut above = parents.get(folder).copied().flatten();
-        while let Some(parent) = above {
-            if !kept.insert(parent) {
-                break;
-            }
-            above = parents.get(&parent).copied().flatten();
-        }
-    }
-    let whole = |folder: &u32| {
-        named.contains(folder) && parents.contains_key(folder) && !kept.contains(folder)
-    };
-    named
-        .iter()
-        .copied()
-        .filter(|folder| {
-            whole(folder)
-                && !parents
-                    .get(folder)
-                    .copied()
-                    .flatten()
-                    .is_some_and(|parent| whole(&parent))
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::whole_subtrees;
-    use std::collections::HashMap;
-
-    /// The folders 1 > 2 > 3 and 1 > 4, and the folder 5 beside them.
-    fn tree() -> HashMap<u32, Option<u32>> {
-        HashMap::from([(1, None), (2, Some(1)), (3, Some(2)), (4, Some(1)), (5, None)])
-    }
-
-    #[test]
-    fn a_folder_is_deleted_only_with_everything_below_it() {
-        // Every folder below 1 is named, so 1 alone is asked for.
-        assert_eq!(whole_subtrees(&[1, 2, 3, 4], &tree()), [1]);
-        // 4 is not named, so 1 stays, and the whole branch below 2 goes.
-        assert_eq!(whole_subtrees(&[1, 2, 3], &tree()), [2]);
-        // 3 is not named, so 2 and 1 stay and only the leaf 4 goes.
-        assert_eq!(whole_subtrees(&[1, 2, 4, 5], &tree()), [4, 5]);
-        assert!(whole_subtrees(&[1], &tree()).is_empty());
-        assert!(whole_subtrees(&[9], &tree()).is_empty());
     }
 }

@@ -571,9 +571,12 @@ impl Library {
         )
     }
 
-    /// Delete unreferenced physical files while retaining the serialized writer.
-    /// Readers continue through WAL; canonical ingestion cannot race a cleanup
-    /// by attaching a new media item to the file being removed.
+    /// Removes at most `limit` queued files that no media item uses from the
+    /// disk with `delete`, and then their `media_file` rows. Files that a
+    /// merge kept and whose "Keep deleted files" time is over are queued
+    /// first (`release_kept_files`). All of it happens in one write, so an
+    /// import can't give a file a new media item while the file is removed.
+    /// Reads go on meanwhile.
     pub fn clean_pending_blobs(
         &self,
         limit: usize,
@@ -582,9 +585,18 @@ impl Library {
         self.database
             .maintenance_write(WorkPriority::Maintenance, |transaction| {
                 let protected = self.history.protected_cleanup_files();
+                super::shared_merge::release_kept_files(transaction, now_ms(), limit)?;
                 let cleanup = crate::duplicate::ready_cleanup(transaction, &protected, limit)?;
                 let mut removed = 0;
                 for pending in cleanup {
+                    // A duplicate merge that kept this file names it as the
+                    // file that stayed. No picture uses the file any more,
+                    // so the decision goes with it. The other pairs of the
+                    // file go with it through their foreign keys.
+                    transaction.execute(
+                        "DELETE FROM duplicate_pair WHERE winner_file_id = ?1",
+                        [pending.file_id.0],
+                    )?;
                     delete(&pending)?;
                     let deleted = transaction.execute(
                         "DELETE FROM media_file
@@ -607,17 +619,24 @@ impl Library {
     }
 }
 
-/// Remove `roots` (and their media) from the library inside a publication:
-/// tombstones, projections, orders, smart folders and the cloud journal.
-/// Files no other media item uses are queued for cleanup; those an undo entry
-/// still needs (`protected`) are queued but not returned for immediate removal.
+/// The shortest time, in days, that a file stays on this computer after a
+/// merge deleted its picture.
+const MIN_KEPT_DELETED_FILE_DAYS: i64 = 7;
+
+/// Removes `roots` and their media from the library inside a publication:
+/// their rows, tombstones, projections, orders, smart folders and a row of
+/// the cloud journal. The files that no other media item uses are queued for
+/// removal from the disk and returned, except those that an undo entry still
+/// needs (`protected_cleanup_files`), which are queued but not returned.
 ///
 /// `origin` says what cloud sync does with the deletion. A deletion that the
-/// user made gets a shared `delete` entry for every tombstone it writes
-/// (`shared.rs`), so that the other devices delete the same items. For a
-/// deletion that came from another device, the originals are not queued for
-/// removal from the cloud folder, because the device that made the deletion
-/// removes them.
+/// user made gets a `delete` entry for each file (`shared.rs`), so that the
+/// other computers delete the same pictures, and its originals in the cloud
+/// folder are noted for removal. A deletion that came from another computer
+/// gets neither, because the computer that made the deletion removes the
+/// originals. Its files stay on this computer for "Keep deleted files", and
+/// for at least `MIN_KEPT_DELETED_FILE_DAYS`, and are noted in
+/// `kept_deleted_file` instead of being queued.
 pub(super) fn delete_roots(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
@@ -645,10 +664,10 @@ pub(super) fn delete_roots(
     stage_delete_ids(transaction, "delete_media", &media_ids)?;
     stage_delete_ids(transaction, "delete_item", &item_ids)?;
 
-    let (device_id, retention_json) = transaction.query_row(
-        "SELECT device_id, retention_json FROM cloud_state WHERE singleton = 1",
+    let retention_json = transaction.query_row(
+        "SELECT retention_json FROM cloud_state WHERE singleton = 1",
         [],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        |row| row.get::<_, String>(0),
     )?;
 
     // One set-based read of the deleted media's files. CROSS JOIN keeps
@@ -691,7 +710,7 @@ pub(super) fn delete_roots(
              deleted_at_ms = excluded.deleted_at_ms",
         rusqlite::params![revision as i64, deleted_at_ms],
     )?;
-    record_deleted_roots(transaction, origin)?;
+    record_deleted_files(transaction, revision, origin)?;
     transaction.execute(
         "DELETE FROM root_fts WHERE rowid IN
              (SELECT local_id FROM temp.delete_root)",
@@ -740,48 +759,61 @@ pub(super) fn delete_roots(
         rows.collect::<std::result::Result<std::collections::HashSet<_>, _>>()?
     };
     for (file_id, (content_hash, file_path, remote_extension)) in files {
-        if !still_referenced.contains(&file_id) {
-            if let Some(remote_extension) =
-                remote_extension.filter(|_| origin != DeletionOrigin::OtherDevice)
-            {
-                transaction.execute(
-                    "INSERT INTO cloud_tombstone
-                         (object_kind, object_key, mutation_id, hlc_physical_ms,
-                          hlc_logical, device_id, causal_frontier_json,
-                          deleted_at, purge_after)
-                     VALUES ('blob', ?1, ?2, ?3, 0, ?4, '{}', ?5, ?6)
-                     ON CONFLICT(object_kind, object_key) DO UPDATE SET
-                         mutation_id = excluded.mutation_id,
-                         hlc_physical_ms = excluded.hlc_physical_ms,
-                         hlc_logical = excluded.hlc_logical,
-                         device_id = excluded.device_id,
-                         causal_frontier_json = excluded.causal_frontier_json,
-                         deleted_at = excluded.deleted_at,
-                         purge_after = excluded.purge_after",
-                    rusqlite::params![
-                        format!("{content_hash}.{remote_extension}"),
-                        uuid::Uuid::new_v4().to_string(),
-                        deleted_at_ms,
-                        device_id,
-                        deleted_at.to_rfc3339(),
-                        purge_after.to_rfc3339(),
-                    ],
-                )?;
-            }
+        if still_referenced.contains(&file_id) {
+            continue;
+        }
+        if origin == DeletionOrigin::OtherDevice {
+            // The file stays on this computer in case the entries of another
+            // computer add the picture again (`kept_deleted_file`). It stays
+            // for "Keep deleted files", and for at least
+            // `MIN_KEPT_DELETED_FILE_DAYS` even when that setting is shorter,
+            // because the setting is about the originals in the cloud folder
+            // and this file is the copy on this computer.
+            let remove_after = deleted_at
+                + chrono::Duration::days(retention_days.max(MIN_KEPT_DELETED_FILE_DAYS));
             transaction.execute(
-                "INSERT INTO blob_cleanup_queue(file_id, file_path, enqueued_revision)
-                 VALUES (?1, ?2, ?3)
-                 ON CONFLICT(file_id) DO NOTHING",
-                rusqlite::params![file_id, file_path, revision as i64],
+                "INSERT INTO kept_deleted_file (content_hash, remove_after_ms) VALUES (?1, ?2)
+                 ON CONFLICT(content_hash) DO UPDATE SET
+                     remove_after_ms = excluded.remove_after_ms",
+                rusqlite::params![content_hash, remove_after.timestamp_millis()],
             )?;
-            let file_id = crate::FileId(file_id);
-            if !protected_cleanup_files.contains(&file_id) {
-                cleanup.push(crate::PendingBlobCleanup {
-                    file_id,
-                    content_hash,
-                    file_path,
-                });
-            }
+            transaction.execute("DELETE FROM blob_cleanup_queue WHERE file_id = ?1", [file_id])?;
+            // The file is no picture of the library, so it is no candidate
+            // for duplicate review either. A pair that was decided stays.
+            transaction.execute(
+                "DELETE FROM duplicate_pair
+                 WHERE status = ?2 AND (file_id_a = ?1 OR file_id_b = ?1)",
+                rusqlite::params![file_id, crate::duplicate::STATUS_DETECTED],
+            )?;
+            continue;
+        }
+        if let Some(remote_extension) = remote_extension {
+            transaction.execute(
+                "INSERT INTO cloud_deleted_original (file_name, deleted_at, purge_after)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(file_name) DO UPDATE SET
+                     deleted_at = excluded.deleted_at,
+                     purge_after = excluded.purge_after",
+                rusqlite::params![
+                    format!("{content_hash}.{remote_extension}"),
+                    deleted_at.to_rfc3339(),
+                    purge_after.to_rfc3339(),
+                ],
+            )?;
+        }
+        transaction.execute(
+            "INSERT INTO blob_cleanup_queue(file_id, file_path, enqueued_revision)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(file_id) DO NOTHING",
+            rusqlite::params![file_id, file_path, revision as i64],
+        )?;
+        let file_id = crate::FileId(file_id);
+        if !protected_cleanup_files.contains(&file_id) {
+            cleanup.push(crate::PendingBlobCleanup {
+                file_id,
+                content_hash,
+                file_path,
+            });
         }
     }
 
@@ -1130,8 +1162,9 @@ pub(super) fn restore_deleted_roots(
             rusqlite::params![root, viewed_at_ms],
         )?;
     }
-    // Queue IDs may have been reused; restore jobs with fresh IDs, and let
-    // interrupted running jobs be claimed again rather than stranding them.
+    // The ids of the deleted work rows may have been given to other rows
+    // since, so the rows come back with new ids. A row that was running is
+    // put back as waiting, so that a worker claims it again.
     transaction.execute(
         "INSERT INTO work_item
              (root_id, media_item_id, file_id, file_hash, work_type, status,
@@ -1179,8 +1212,7 @@ pub(super) fn restore_deleted_roots(
            )",
         [&items_json],
     )?;
-    // The delete's tombstones and queued file removals no longer apply.
-    // The removal of the tombstones is recorded for the other devices.
+    // The deletion's tombstones and queued file removals no longer apply.
     remove_item_tombstones(
         transaction,
         &state
@@ -1190,12 +1222,12 @@ pub(super) fn restore_deleted_roots(
             .collect::<Vec<_>>(),
     )?;
     transaction.execute(
-        "DELETE FROM cloud_tombstone
-         WHERE object_kind = 'blob' AND EXISTS (
+        "DELETE FROM cloud_deleted_original
+         WHERE EXISTS (
              SELECT 1 FROM media_file file
              WHERE file.file_id IN (SELECT value FROM json_each(?1))
-               AND (cloud_tombstone.object_key = file.content_hash
-                    OR cloud_tombstone.object_key LIKE file.content_hash || '.%')
+               AND (cloud_deleted_original.file_name = file.content_hash
+                    OR cloud_deleted_original.file_name LIKE file.content_hash || '.%')
          )",
         [&files_json],
     )?;

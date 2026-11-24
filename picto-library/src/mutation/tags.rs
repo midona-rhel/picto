@@ -845,7 +845,7 @@ impl Library {
                 .collect::<Vec<_>>();
             let mut next = (*snapshot).clone();
             let mut changes = Vec::new();
-            let mut stable_keys = Vec::new();
+            let mut deleted_names = Vec::new();
             for tag_id in &unused {
                 let (_, tag_changes) = remove_tag_in_transaction(
                     transaction,
@@ -854,7 +854,7 @@ impl Library {
                     None,
                     revision,
                 )?;
-                stable_keys.extend(removed_tag_key(&tag_changes));
+                deleted_names.extend(removed_tag_name(&tag_changes));
                 changes.extend(tag_changes);
             }
             let settings_changed =
@@ -864,7 +864,7 @@ impl Library {
                 } else {
                     false
                 };
-            record_entries(transaction, EntryKind::Tag, EntryState::Delete, &stable_keys)?;
+            record_deleted_tags(transaction, revision, &deleted_names)?;
             insert_cloud_journal(
                 transaction,
                 revision,
@@ -957,8 +957,8 @@ impl Library {
                 // A deleted tag is deleted on the other devices too. A tag
                 // that was merged into another is not: the other devices
                 // do not get the merge.
-                let keys = removed_tag_key(&history_changes).into_iter().collect::<Vec<_>>();
-                record_entries(transaction, EntryKind::Tag, EntryState::Delete, &keys)?;
+                let names = removed_tag_name(&history_changes).into_iter().collect::<Vec<_>>();
+                record_deleted_tags(transaction, revision, &names)?;
             }
             transaction.execute(
                 "INSERT INTO cloud_journal
@@ -1367,13 +1367,13 @@ pub(super) fn remove_unreferenced_tags(
 
 /// Returns the stable key of the tag that `remove_tag_in_transaction`
 /// removed, read from the changes it returned.
-pub(super) fn removed_tag_key(changes: &[SemanticChange]) -> Option<String> {
+pub(super) fn removed_tag_name(changes: &[SemanticChange]) -> Option<String> {
     changes.iter().find_map(|change| match change {
         SemanticChange::TagDefinition {
             before: Some(state),
             after: None,
             ..
-        } => Some(state.stable_key.clone()),
+        } => Some(state.full_name.clone()),
         _ => None,
     })
 }
