@@ -9,13 +9,16 @@
 //! - A merge of the 100,000 `add` entries of that import, into a library that
 //!   holds the same files and into an empty one, and the same merge when the
 //!   entries arrive as 16 files, the way a sync reads them.
-//! - An import of the 100,000 files into the library that merged their
-//!   entries while empty. The files exist by the entries, so the import
-//!   writes no `add` entry.
 //! - Deleting 100,000 items permanently whose changes are entries already,
 //!   and 100,000 items with a pending tag and status change each, which the
 //!   deletion turns into entries first. Then compacting the entries of the
-//!   second 100,000 as if 8 days had passed.
+//!   second 100,000 as if 8 days had passed: the first sync writes the
+//!   `compacted` entries and drops nothing of this computer, the next one
+//!   drops this computer's own entries.
+//! - An import of the 100,000 files into the library that merged their
+//!   entries while empty. The files exist by the entries, so the import
+//!   writes no `add` entry. It runs last, because the deletions measured
+//!   about 2 seconds slower right after it.
 
 use std::time::Instant;
 
@@ -87,18 +90,6 @@ pub fn run(library: Library, ids: &[RootId], directory: &std::path::Path) -> R<(
     let wanted = empty.wanted_files(None, IMPORT + 1)?.len();
     println!("ROW|merge add entries into an empty library|{adds}|{:.1}|-|n=1 wanted={wanted}", ms(started));
 
-    // The same library imports the files that the merged entries say exist.
-    // Each import finds that the file exists and writes no entry.
-    let started = Instant::now();
-    import(&empty)?;
-    println!("ROW|import files that exist by another computer's entries (action)|{IMPORT}|{:.1}|-|n=1", ms(started));
-    let before = entry_count(&empty)?;
-    let (total, longest, batches) = settle(&empty)?;
-    println!(
-        "ROW|import files that exist by another computer's entries (entries, all batches)|{IMPORT}|{total:.1}|-|n=1 batches={batches} longest_batch_ms={longest:.1} new_entries={}",
-        entry_count(&empty)? - before
-    );
-
     let held = all_roots(&off)?;
     off.add_tag(&explicit(&held), "synced:before-deletion")?;
     off.set_lifecycle(&explicit(&held), picto_library::Lifecycle::Trash)?;
@@ -122,9 +113,31 @@ pub fn run(library: Library, ids: &[RootId], directory: &std::path::Path) -> R<(
     let started = Instant::now();
     on.compact_entries(eight_days_later)?;
     println!(
-        "ROW|compact the entries of the deleted items|{IMPORT}|{:.1}|-|n=1 entries_before={before} entries_after={}",
+        "ROW|compact the entries of the deleted items, first sync|{IMPORT}|{:.1}|-|n=1 entries_before={before} entries_after={}",
         ms(started),
         entry_count(&on)?
+    );
+    // The `compacted` entries are in the cloud folder now, so the next
+    // compaction drops this computer's own entries too.
+    on.set_entries_published(on.entry_clock()?.now)?;
+    let started = Instant::now();
+    on.compact_entries(eight_days_later + 60_000)?;
+    println!(
+        "ROW|compact the entries of the deleted items, next sync|{IMPORT}|{:.1}|-|n=1 entries_after={}",
+        ms(started),
+        entry_count(&on)?
+    );
+
+    // The library that merged the entries while empty imports their files.
+    // Each import finds that the file exists and writes no entry.
+    let started = Instant::now();
+    import(&empty)?;
+    println!("ROW|import files that exist by another computer's entries (action)|{IMPORT}|{:.1}|-|n=1", ms(started));
+    let before = entry_count(&empty)?;
+    let (total, longest, batches) = settle(&empty)?;
+    println!(
+        "ROW|import files that exist by another computer's entries (entries, all batches)|{IMPORT}|{total:.1}|-|n=1 batches={batches} longest_batch_ms={longest:.1} new_entries={}",
+        entry_count(&empty)? - before
     );
     Ok(())
 }
