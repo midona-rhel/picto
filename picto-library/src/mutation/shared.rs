@@ -1597,7 +1597,9 @@ pub(super) fn drop_below(
 }
 
 /// Compacts the entries of at most `limit` files of `entry_compaction_due`
-/// whose time has come by `now_ms`, and returns whether more are due.
+/// whose time has come by `now_ms`, in the order of their time and hash and
+/// starting after `after`. Returns the time and hash of the last file it
+/// looked at when more files may be due, and `None` otherwise.
 ///
 /// When the cut of a file is later than the time in its `compacted` entry, or
 /// it has none, and the cut is at least 7 days old, this computer stores the
@@ -1626,14 +1628,16 @@ pub(super) fn drop_below(
 /// picture with it, and those that hadn't would show it without.
 ///
 /// A file that waits for one of these two entries to be in the cloud folder
-/// is looked at again at the next call after `now_ms`. A file whose cut is
-/// less than 7 days old is looked at again 7 days after its cut. The `delete`
+/// keeps its time, so every later call looks at it again; the caller passes
+/// `after` so that one call doesn't look at it twice. A file whose cut is less
+/// than 7 days old is looked at again 7 days after its cut. The `delete`
 /// entries stay.
 pub(super) fn compact_in(
     transaction: &rusqlite::Transaction<'_>,
     now_ms: i64,
     limit: usize,
-) -> Result<bool> {
+    after: Option<&(i64, String)>,
+) -> Result<Option<(i64, String)>> {
     use rusqlite::OptionalExtension;
     let device_id = own_device_id(transaction)?;
     let published = transaction
@@ -1646,17 +1650,20 @@ pub(super) fn compact_in(
     let in_cloud = |time: &EntryTime| {
         time.2 != device_id || published.is_some_and(|through| (time.0, time.1) <= through)
     };
+    let (after_ms, after_hash) = after.cloned().unwrap_or((i64::MIN, String::new()));
     let due = transaction
         .prepare_cached(
-            "SELECT content_hash FROM entry_compaction_due WHERE due_ms <= ?1
-             ORDER BY due_ms LIMIT ?2",
+            "SELECT due_ms, content_hash FROM entry_compaction_due
+             WHERE due_ms <= ?1 AND (due_ms, content_hash) > (?3, ?4)
+             ORDER BY due_ms, content_hash LIMIT ?2",
         )?
-        .query_map(rusqlite::params![now_ms, limit.min(i64::MAX as usize) as i64], |row| {
-            row.get::<_, String>(0)
-        })?
+        .query_map(
+            rusqlite::params![now_ms, limit.min(i64::MAX as usize) as i64, after_ms, after_hash],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut time = None;
-    for content_hash in &due {
+    for (_, content_hash) in &due {
         let entries = super::shared_merge::held_entries(transaction, content_hash)?;
         let Cut { cut, floor } = cut_of(&entries);
         if cut > floor && cut.0.saturating_add(COMPACT_AFTER_MS) > now_ms {
@@ -1670,14 +1677,7 @@ pub(super) fn compact_in(
             HeldEntry::Delete { time, .. } => in_cloud(time),
             _ => true,
         });
-        let wait = |transaction: &rusqlite::Transaction<'_>| {
-            transaction.execute(
-                "UPDATE entry_compaction_due SET due_ms = ?2 WHERE content_hash = ?1",
-                rusqlite::params![content_hash, now_ms.saturating_add(1)],
-            )
-        };
         if cut > floor && !deletion_in_cloud {
-            wait(transaction)?;
             continue;
         }
         let floor_in_cloud = if cut > floor {
@@ -1707,11 +1707,9 @@ pub(super) fn compact_in(
                 "DELETE FROM entry_compaction_due WHERE content_hash = ?1",
                 [content_hash],
             )?;
-        } else {
-            wait(transaction)?;
         }
     }
-    Ok(due.len() == limit)
+    Ok(due.last().cloned().filter(|_| due.len() == limit))
 }
 
 impl Library {
@@ -1818,12 +1816,12 @@ impl Library {
     /// Drops the entries that a deletion made obsolete at least 7 days before
     /// `now_ms`, in short writes (`compact_in`).
     pub fn compact_entries(&self, now_ms: i64) -> Result<()> {
-        while self
-            .database
-            .maintenance_write(WorkPriority::Cloud, |transaction| {
-                compact_in(transaction, now_ms, COMPACT_BATCH)
-            })?
-        {}
+        let mut after = None;
+        while let Some(last) = self.database.maintenance_write(WorkPriority::Cloud, |transaction| {
+            compact_in(transaction, now_ms, COMPACT_BATCH, after.as_ref())
+        })? {
+            after = Some(last);
+        }
         Ok(())
     }
 
