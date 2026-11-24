@@ -481,9 +481,11 @@ CREATE TABLE kept_deleted_file (
 CREATE INDEX idx_kept_deleted_file_remove_after ON kept_deleted_file(remove_after_ms);
 
 -- Files with a `delete` entry whose obsolete entries `Library::compact_entries`
--- hasn't dropped yet. `due_ms` is when it looks at the file next: 7 days
--- after the time of the entry, or after the cut that an undo went back to.
--- A trigger of the writing connection adds the rows.
+-- hasn't dropped yet. `due_ms` is when it looks at the file next. A trigger of
+-- the writing connection adds a row for every `delete` entry that is stored
+-- or replaced, due 7 days after the time of the entry. `compact_in` moves the
+-- time later while the file has to wait, and removes the row once it has
+-- dropped the entries.
 CREATE TABLE entry_compaction_due (
     content_hash TEXT PRIMARY KEY,
     due_ms INTEGER NOT NULL

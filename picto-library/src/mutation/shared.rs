@@ -25,12 +25,15 @@
 //! changes of a deleted picture become entries just before, for the same
 //! reason (`settle_roots`).
 //!
-//! The undo of a deleted file is written into the file's `delete` entry
-//! (`write_undos`). It moves the file's cut back to where it was before the
-//! deletion, so every entry that the deletion had made obsolete counts again
-//! (`shared_view.rs`). Seven days after a cut, `compact_in` drops the entries
-//! before it and writes a `compacted` entry, so that every computer drops the
-//! same ones and no later undo can bring them back on one computer only.
+//! Each file has a cut, a time: only the file's entries that are later than
+//! it count (`cut_of` in `shared_view.rs`). After a deletion, the cut is the
+//! time of the deletion. The undo of a deletion is written into the file's
+//! `delete` entry, in the same write as the undo (`write_undos`). It moves the
+//! cut back to where it was before the deletion, so every entry that the
+//! deletion had made obsolete counts again. Seven days after a cut,
+//! `compact_in` writes the cut into a `compacted` entry and drops the entries
+//! that aren't later than it. Every computer drops the same entries, and no
+//! later undo moves the cut back below that time on any computer.
 //!
 //! When recording starts, every file the library already holds gets an `add`
 //! entry. Those are written in batches by `Library::settle_entries` too, and
@@ -189,8 +192,7 @@ pub(super) const KEEP_LATER: &str = "ON CONFLICT(subject_key, kind, second_key) 
      END";
 
 /// How long the entries that a deletion made obsolete are kept before
-/// `compact_in` drops them, in milliseconds. It's the default of "Keep
-/// deleted files", 7 days.
+/// `compact_in` drops them: 7 days, in milliseconds.
 pub(crate) const COMPACT_AFTER_MS: i64 = 7 * 24 * 60 * 60 * 1_000;
 
 /// The SQL expression for the time of an entry in the table `entry` as

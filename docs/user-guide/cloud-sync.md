@@ -42,11 +42,11 @@ imported again. Deleting a tag takes it off the pictures that had it at that mom
 picture with it afterwards works normally.
 
 Undoing a permanent deletion brings the picture back on every computer as it was before the
-deletion, also with changes that another computer had made and that hadn't reached this computer
+deletion, including changes that another computer had made and that hadn't reached this computer
 yet. If another computer deleted the same picture before your undo, the picture still comes back.
-Seven days after a deletion, the computers forget the changes of the deleted picture. An undo that
-reaches the other computers only after that, for example because this computer was offline for a
-week, brings the picture back as this computer had it.
+Seven days after a deletion, Picto drops the earlier changes of the deleted picture on every
+computer. An undo that reaches the other computers only after that, for example because this
+computer was offline for a week, brings the picture back as this computer had it.
 
 When you turn on sync for a library that already has pictures, they are all added to what is
 shared. The order in which changes arrive doesn't matter. If a file of changes in the cloud folder

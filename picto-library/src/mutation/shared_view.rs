@@ -212,8 +212,9 @@ pub fn cut_of(entries: &[HeldEntry]) -> Cut {
 /// Only entries later than the cut count (`cut_of`). A picture exists when
 /// one of its `add` entries counts, or when its `delete` entry is an undo.
 /// When no add counts, the record of the undo counts as an add at the time of
-/// the undo; that's the case after a floor has ended the entries the undo
-/// would have brought back. A field entry counts when it's later than the
+/// the undo. That happens when a `compacted` entry's time is later than the
+/// cut that the undo went back to, so the adds from before the deletion were
+/// dropped. A field entry counts when it's later than the
 /// cut. Without one, the name and status come from the earliest counting add,
 /// and the notes and rating from the first counting add that has them.
 ///
@@ -469,10 +470,11 @@ mod tests {
         assert_eq!((shown.name.as_str(), shown.rating), ("imported again", 0));
     }
 
-    /// After a floor, the entries before it don't count, and the record of the
-    /// undo is the picture.
+    /// When the time in the `compacted` entry is later than the cut that the
+    /// undo went back to, the entries up to that time don't count, and the
+    /// record of the undo is the picture.
     #[test]
-    fn behind_a_floor_the_undo_brings_back_its_own_record() {
+    fn after_a_later_compacted_entry_the_undo_brings_back_its_own_record() {
         let entries = [
             HeldEntry::Rating { time: at(3, "a"), value: 5 },
             undo(8, None, "as the undoing computer had it"),
