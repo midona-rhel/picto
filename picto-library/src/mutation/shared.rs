@@ -530,16 +530,17 @@ pub(super) fn record_changes(
         file_roots(before)
     };
     let in_both = &files_after & &files_before;
-    // An import adds a file only when no computer has added it yet. The
-    // undo of a deletion writes its own entry whatever other computers did;
-    // the value `undo` marks its rows for `settle_in`.
+    // An import adds a file only when no computer has added it yet, and
+    // becomes an entry later, like the other changes. The undo of a deletion
+    // is written in this transaction: it needs the cut in
+    // `entry_deletion_cut`, which is gone once the library is closed.
     let restored = transaction
         .prepare_cached("SELECT root_id FROM temp.entry_restored_root")?
         .query_map([], |row| row.get::<_, u32>(0))?
         .collect::<rusqlite::Result<RoaringBitmap>>()?;
     transaction.execute("DELETE FROM temp.entry_restored_root", [])?;
     let added = &files_after - &files_before;
-    rows.push((EntryKind::Add, String::new(), Some("undo".into()), &added & &restored));
+    let undone = &added & &restored;
     rows.push((EntryKind::Add, String::new(), None, &added - &restored));
 
     if !Arc::ptr_eq(&before.lifecycle, &after.lifecycle) {
@@ -623,12 +624,25 @@ pub(super) fn record_changes(
     rows.push((EntryKind::Notes, String::new(), None, noted));
 
     rows.retain(|row| !row.3.is_empty());
-    if rows.is_empty() {
+    if rows.is_empty() && undone.is_empty() {
         return Ok(());
     }
     let Some(time) = action_time(transaction, revision)? else {
         return Ok(());
     };
+    if !undone.is_empty() {
+        let device_id = own_device_id(transaction)?;
+        settle_row(
+            transaction,
+            after,
+            EntryKind::Add.as_str(),
+            "",
+            Some("undo"),
+            time,
+            &undone,
+            &device_id,
+        )?;
+    }
     for (kind, second_key, value, roots) in rows {
         write_pending(transaction, kind, &second_key, value.as_deref(), time, &roots)?;
     }
@@ -644,8 +658,8 @@ pub(super) fn discard_changes(transaction: &rusqlite::Transaction<'_>) -> Result
 }
 
 /// Notes the pictures that are in `after` and not in `before`, for an undo or
-/// redo that brings deleted pictures back. `settle_in` writes the undo of the
-/// deletion for them (`write_undos`).
+/// redo that brings deleted pictures back. `record_changes` writes the undo of
+/// the deletion for them in the same write (`write_undos`).
 pub(super) fn mark_restored_files(
     transaction: &rusqlite::Transaction<'_>,
     before: &ProjectionSnapshot,
@@ -1141,11 +1155,12 @@ fn deleted_files(connection: &rusqlite::Connection, hashes: &[&str]) -> Result<H
 /// Stores the undo of the deletion of each of `files` at `time`, in the
 /// `delete` entry of the file. The undo moves the cut back to the one in
 /// `entry_deletion_cut`, so every entry that the deletion had made obsolete
-/// counts again, also those of other computers that hadn't arrived here.
-/// When the library was closed after the undo and before its row of
-/// `pending_entry` became an entry, the table has no row, and the cut stays
-/// where it is: the picture comes back with the record of the undo. The next
-/// merge makes the picture look the way the entries say.
+/// counts again, including those of other computers that hadn't arrived
+/// here. A deletion that this computer made before it recorded entries has no
+/// row there; when another computer's `delete` entry for the file arrived
+/// since, the cut stays where it is, and the picture comes back with the
+/// record of the undo. The next merge makes the picture look the way the
+/// entries say.
 fn write_undos(
     transaction: &rusqlite::Transaction<'_>,
     files: &[HeldFile],

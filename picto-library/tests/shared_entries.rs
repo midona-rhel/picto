@@ -1942,3 +1942,52 @@ fn a_tag_deleted_after_a_late_undo_stays_off() {
     }
     assert_eq!(two.pictures()[&hash(1)].tags, BTreeSet::new());
 }
+
+/// Closes the library of `computer` and opens it again, as a restart of the
+/// app does.
+fn reopen(computer: Computer) -> Computer {
+    let Computer {
+        library,
+        _directory,
+        id,
+        recording,
+        imports,
+        deleted_last,
+        undone_last,
+        offline_until,
+        held_files,
+    } = computer;
+    drop(library);
+    let library = Library::open(_directory.path().join("library.sqlite")).unwrap();
+    Computer {
+        library,
+        _directory,
+        id,
+        recording,
+        imports,
+        deleted_last,
+        undone_last,
+        offline_until,
+        held_files,
+    }
+}
+
+/// The app closes right after the undo of a deletion, before a sync. The
+/// undo still brings back the 5 stars that another computer gave the picture
+/// and that hadn't arrived before the deletion.
+#[test]
+fn an_undo_brings_back_unseen_changes_after_a_restart() {
+    let (_directory, template) = template();
+    let (one, two) = two_synced(&template);
+    one.library.set_rating(&one.target(one.roots()[&hash(1)]), Rating::Five).unwrap();
+    pause();
+    two.delete(&hash(1));
+    two.library.undo().unwrap();
+    let two = reopen(two);
+    two.library.merge_entries(&one.own_entries()).unwrap();
+    one.library.merge_entries(&two.own_entries()).unwrap();
+    for computer in [&one, &two] {
+        assert_eq!(computer.views()[&hash(1)].rating, "5");
+    }
+    assert_eq!(two.pictures()[&hash(1)].rating, "5");
+}
