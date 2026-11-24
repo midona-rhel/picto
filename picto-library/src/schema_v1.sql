@@ -484,10 +484,10 @@ CREATE INDEX idx_kept_deleted_file_remove_after ON kept_deleted_file(remove_afte
 -- hasn't dropped yet. `due_ms` is when it looks at the file next. A trigger of
 -- the writing connection adds a row for every `delete` entry that is stored
 -- or replaced, due 7 days after the time of the entry. `compact_in` sets a
--- later time while the cut is less than 7 days old. While the `delete` or
--- `compacted` entry that it needs isn't in the cloud folder yet, the row
--- keeps its time and every compaction looks at it again. `compact_in`
--- removes the row once it has dropped the entries.
+-- later time while the picture's `deleted_at` is less than 7 days old. While
+-- the `delete` or `compacted` entry that it needs isn't in the cloud folder
+-- yet, the row keeps its time and every compaction looks at it again.
+-- `compact_in` removes the row once it has dropped the entries.
 CREATE TABLE entry_compaction_due (
     content_hash TEXT PRIMARY KEY,
     due_ms INTEGER NOT NULL

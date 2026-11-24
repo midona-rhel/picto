@@ -435,9 +435,10 @@ sets 5 stars at 10:05, both end with 5 stars. The clock is the later of the wall
 latest time the computer has seen (`cloud_state.hlc_physical_ms`, `hlc_logical`), and all entries
 of one action share one time.
 
-`shared_view.rs` works out a picture from its entries. Only entries later than the file's cut
-count. The cut is the time of the `delete` entry, or, when that entry is an undo, the cut that the
-undoing computer had just before it deleted the picture; it is never earlier than the time in the
+`shared_view.rs` works out a picture from its entries. Each picture has a `deleted_at`: the time
+of its last deletion that still counts, and changes from before it are ignored. Deleting the
+picture sets `deleted_at` to the time of the deletion, and undoing the deletion sets it back to what
+it was on the undoing computer before the deletion. It is never earlier than the time in the
 `compacted` entry. The picture exists when an `add` counts or the `delete` entry is an undo. A
 field comes from its latest entry that counts, or else from the earliest `add` that counts. A tag
 is on the picture when its latest `item_tag` says so, or else when an `add` record has it, and it
@@ -448,18 +449,19 @@ An import writes an `add` only when no computer has added the file yet; otherwis
 changed to look the way the entries say. A repaired video writes an `add` for its new file.
 Deleting a picture, merging a duplicate away and repairing a video write `delete` for the file that
 goes, and turn the pending changes of the picture into entries first (`settle_roots`). The deleting
-computer notes the cut that the file had in the temporary table `entry_deletion_cut`, which lasts
-as long as the library is open, like the undo history. Undoing the deletion writes the undo into
-the file's `delete` entry in the same write: the value holds that cut and the picture's record. So
+computer notes the picture's `deleted_at` from before the deletion in the temporary table
+`entry_previous_deleted_at`, which lasts as long as the library is open, like the undo history.
+Undoing the deletion writes the undo into the file's `delete` entry in the same write: the value
+holds that `deleted_at` and the picture's record. So
 the entries that the deletion had made obsolete count again, including those of other computers
 that hadn't arrived yet: if one computer gives a picture 5 stars and another deletes it before the
 stars arrive and undoes the deletion, the picture has 5 stars on both. The undo is later than any
 deletion before it, so a deletion that another computer made in between doesn't keep the picture
 away.
 
-Seven days after the cut of a deleted file (`COMPACT_AFTER_MS`), a sync drops the file's entries
-that the cut made obsolete (`Library::compact_entries`, `compact_in`). It first stores the cut in a
-`compacted` entry, and the cut never goes below that time again. A merge that stores a `compacted`
+Seven days after the `deleted_at` of a deleted picture (`COMPACT_AFTER_MS`), a sync drops the
+file's entries that the deletion made obsolete (`Library::compact_entries`, `compact_in`). It first
+stores `deleted_at` in a `compacted` entry, and `deleted_at` never goes below that time again. A merge that stores a `compacted`
 entry drops the same entries, and a merge doesn't store an entry at or before its time, which is
 what a computer that was away for weeks sends. The `delete` entries stay, so such a computer still
 learns of the deletion. Without the `compacted` entry, an undo that arrives after one computer

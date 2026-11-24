@@ -25,15 +25,16 @@
 //! changes of a deleted picture become entries just before, for the same
 //! reason (`settle_roots`).
 //!
-//! Only the entries of a file that are later than the file's cut count
-//! (`cut_of` in `shared_view.rs`). After a deletion, the cut is the time of
-//! the deletion. Undoing the deletion writes the undo into the file's
-//! `delete` entry (`write_undos`), which moves the cut back to where it was
-//! before the deletion, so every entry that the deletion had made obsolete
-//! counts again. Seven days after a cut, `compact_in` writes the cut into a
-//! `compacted` entry and drops the entries that aren't later than it. Every
-//! computer drops the same entries, and no later undo moves the cut back
-//! below that time on any computer.
+//! Each picture has a `deleted_at`: the time of its last deletion that still
+//! counts. Changes to the picture from before it are ignored
+//! (`deleted_at_of` in `shared_view.rs`). Undoing the deletion writes the
+//! undo into the file's `delete` entry (`write_undos`), which sets
+//! `deleted_at` back to what it was before the deletion, so every change that
+//! the deletion had made obsolete counts again. Seven days after
+//! `deleted_at`, `compact_in` writes it into a `compacted` entry and drops the
+//! entries at or before it. Every computer drops the same entries, and no
+//! later undo sets `deleted_at` back below the time in the `compacted`
+//! entry.
 //!
 //! When recording starts, every file the library already holds gets an `add`
 //! entry. Those are written in batches by `Library::settle_entries` too, and
@@ -48,7 +49,9 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use super::shared_view::{cut_of, time_text, Cut, EntryTime, FileRecord, HeldEntry};
+use super::shared_view::{
+    deleted_at_of, time_text, DeletedAt, EntryTime, FileRecord, HeldEntry,
+};
 use super::*;
 
 /// What an entry says.
@@ -206,9 +209,10 @@ macro_rules! time_text_sql {
     };
 }
 
-/// The SQL expression for the cut of the file `?hash` as `time_text` writes
-/// it, the same cut that `cut_of` returns, and the empty text for none.
-fn cut_sql(hash: &str) -> String {
+/// The SQL expression for the `deleted_at` of the file `hash`, the same time
+/// as `deleted_at_of` returns, as `time_text` writes it, and the empty text
+/// for none. `hash` is an SQL expression too.
+fn deleted_at_sql(hash: &str) -> String {
     format!(
         "MAX(
              COALESCE((SELECT floor.value FROM shared_entry floor
@@ -216,7 +220,8 @@ fn cut_sql(hash: &str) -> String {
                          AND floor.second_key = ''), ''),
              COALESCE((SELECT CASE WHEN json_extract(deleted.value, '$.record') IS NULL
                                    THEN {deleted_time}
-                                   ELSE COALESCE(json_extract(deleted.value, '$.before'), '') END
+                                   ELSE COALESCE(json_extract(deleted.value, '$.deleted_at'), '')
+                                   END
                        FROM shared_entry deleted
                        WHERE deleted.subject_key = {hash} AND deleted.kind = 'delete'
                          AND deleted.second_key = ''), ''))",
@@ -235,11 +240,11 @@ fn cut_sql(hash: &str) -> String {
 /// `entry_restored_root` holds the pictures that an undo brought back
 /// (`mark_restored_files`).
 ///
-/// `entry_deletion_cut` holds, for each file this computer deleted since the
-/// library was opened, the cut the file had just before the deletion, as
-/// `time_text` writes it. The undo of the deletion moves the cut back to it.
-/// The undo history lasts as long as the library is open, and so does this
-/// table.
+/// `entry_previous_deleted_at` holds, for each file this computer deleted
+/// since the library was opened, the `deleted_at` that the picture had just
+/// before the deletion, as `time_text` writes it. Undoing the deletion sets
+/// `deleted_at` back to it. The undo history lasts as long as the library is
+/// open, and so does this table.
 ///
 /// The two `entry_compaction_due_on_` triggers note the file of every
 /// `delete` entry that is stored or replaced in `entry_compaction_due`, so
@@ -247,9 +252,9 @@ fn cut_sql(hash: &str) -> String {
 pub(crate) fn install_recording_triggers(connection: &rusqlite::Connection) -> Result<()> {
     connection.execute_batch(&format!(
         "CREATE TEMP TABLE IF NOT EXISTS entry_restored_root (root_id INTEGER PRIMARY KEY);
-         CREATE TEMP TABLE IF NOT EXISTS entry_deletion_cut (
+         CREATE TEMP TABLE IF NOT EXISTS entry_previous_deleted_at (
              content_hash TEXT PRIMARY KEY,
-             cut TEXT NOT NULL
+             deleted_at TEXT NOT NULL
          );
          CREATE TEMP TRIGGER IF NOT EXISTS entry_compaction_due_on_insert
          AFTER INSERT ON main.shared_entry WHEN NEW.kind = 'delete'
@@ -535,8 +540,8 @@ pub(super) fn record_changes(
     // An imported file gets an `add` entry only when no computer has added
     // it yet, and its row becomes that entry later, like the rows of the
     // other changes. The undo of a deletion is written in this transaction,
-    // because it needs the cut in `entry_deletion_cut`, which is gone once
-    // the library is closed.
+    // because it needs the time in `entry_previous_deleted_at`, which is gone
+    // once the library is closed.
     let restored = transaction
         .prepare_cached("SELECT root_id FROM temp.entry_restored_root")?
         .query_map([], |row| row.get::<_, u32>(0))?
@@ -842,7 +847,8 @@ pub(super) fn record_deleted_tags(
 /// `temp.delete_media` and their rows still exist. When the user deleted the
 /// pictures, or the library merged a duplicate away, it stores a `delete`
 /// entry for each file that no other picture in the library still uses, and
-/// notes in `entry_deletion_cut` the cut that the file had before. A picture
+/// notes in `entry_previous_deleted_at` the `deleted_at` that the picture
+/// had before. A picture
 /// inside a collection gets no entry, because collections don't sync yet. A
 /// deletion that came from another computer, or the undo of an import,
 /// stores nothing.
@@ -859,12 +865,12 @@ pub(super) fn record_deleted_files(
     };
     transaction.execute(
         &format!(
-            "INSERT OR REPLACE INTO temp.entry_deletion_cut (content_hash, cut)
-             SELECT DISTINCT file.content_hash, {cut}
+            "INSERT OR REPLACE INTO temp.entry_previous_deleted_at (content_hash, deleted_at)
+             SELECT DISTINCT file.content_hash, {deleted_at}
              FROM temp.delete_media selected
              CROSS JOIN media_item media ON media.media_id = selected.local_id
              JOIN media_file file ON file.file_id = media.file_id",
-            cut = cut_sql("file.content_hash")
+            deleted_at = deleted_at_sql("file.content_hash")
         ),
         [],
     )?;
@@ -926,9 +932,9 @@ pub(super) fn record_replaced_file(
 }
 
 /// Returns those of `roots` whose file has an `add` entry of this computer
-/// that is later than the file's cut, which other computers may already have
-/// received. An older `add` of this computer doesn't count: the deletion that
-/// set the cut made it obsolete on every computer.
+/// that is later than the picture's `deleted_at`, which other computers may
+/// already have received. An older `add` of this computer doesn't count: the
+/// deletion made it obsolete on every computer.
 pub(super) fn recorded_roots(
     transaction: &rusqlite::Transaction<'_>,
     roots: &RoaringBitmap,
@@ -944,9 +950,9 @@ pub(super) fn recorded_roots(
              SELECT 1 FROM shared_entry entry
              WHERE entry.subject_key = file.content_hash AND entry.kind = 'add'
                AND entry.second_key = (SELECT device_id FROM cloud_state WHERE singleton = 1)
-               AND {entry_time} > {cut})",
+               AND {entry_time} > {deleted_at})",
         entry_time = time_text_sql!("entry"),
-        cut = cut_sql("file.content_hash"),
+        deleted_at = deleted_at_sql("file.content_hash"),
     ))?;
     let recorded = statement
         .query_map([serde_json::to_string(&roots.iter().collect::<Vec<_>>())?], |row| {
@@ -1018,8 +1024,9 @@ pub fn reset_published_entries(transaction: &rusqlite::Transaction<'_>) -> Resul
 }
 
 /// Returns those of `hashes` whose file exists by the stored entries, by the
-/// same rule as `file_view`: an `add` entry is later than the file's cut, or
-/// the `delete` entry is an undo. It is one query for all of `hashes`.
+/// same rule as `file_view`: an `add` entry is later than the picture's
+/// `deleted_at`, or the `delete` entry is an undo. It is one query for all of
+/// `hashes`.
 pub(super) fn existing_files(
     connection: &rusqlite::Connection,
     hashes: &[&str],
@@ -1038,9 +1045,9 @@ pub(super) fn existing_files(
                 OR EXISTS (
                      SELECT 1 FROM shared_entry added
                      WHERE added.subject_key = hashes.value AND added.kind = 'add'
-                       AND {added_time} > {cut})",
+                       AND {added_time} > {deleted_at})",
             added_time = time_text_sql!("added"),
-            cut = cut_sql("hashes.value"),
+            deleted_at = deleted_at_sql("hashes.value"),
         ))?
         .query_map([serde_json::to_string(hashes)?], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<HashSet<_>>>()?;
@@ -1155,14 +1162,14 @@ fn deleted_files(connection: &rusqlite::Connection, hashes: &[&str]) -> Result<H
 }
 
 /// Stores the undo of the deletion of each of `files` at `time`, in the
-/// `delete` entry of the file. The undo moves the cut back to the one in
-/// `entry_deletion_cut`, so every entry that the deletion had made obsolete
-/// counts again, including those of other computers that hadn't arrived
-/// here. A deletion that this computer made before it recorded entries has no
-/// row there; when another computer's `delete` entry for the file arrived
-/// since, the cut stays where it is, and the picture comes back with the
-/// record of the undo. The next merge makes the picture look the way the
-/// entries say.
+/// `delete` entry of the file. The undo sets the picture's `deleted_at` back
+/// to the one in `entry_previous_deleted_at`, so every change that the
+/// deletion had made obsolete counts again, including those of other
+/// computers that hadn't arrived here. A deletion that this computer made
+/// before it recorded entries has no row there; when another computer's
+/// `delete` entry for the file arrived since, `deleted_at` stays where it is,
+/// and the picture comes back with the record of the undo. The next merge
+/// makes the picture look the way the entries say.
 fn write_undos(
     transaction: &rusqlite::Transaction<'_>,
     files: &[HeldFile],
@@ -1183,9 +1190,9 @@ fn write_undos(
             "INSERT INTO shared_entry
                  (subject_key, kind, second_key, value, clock_ms, clock_counter, device_id)
              SELECT undone.hash, 'delete', '',
-                    json_object('before', COALESCE(
-                        (SELECT cut FROM temp.entry_deletion_cut
-                         WHERE content_hash = undone.hash), {cut}),
+                    json_object('deleted_at', COALESCE(
+                        (SELECT deleted_at FROM temp.entry_previous_deleted_at
+                         WHERE content_hash = undone.hash), {deleted_at}),
                         'record', json(undone.record)),
                     ?2, ?3, ?4
              FROM (SELECT json_extract(row.value, '$[0]') AS hash,
@@ -1193,7 +1200,7 @@ fn write_undos(
                    FROM json_each(?1) row) undone
              WHERE true
              {KEEP_LATER}",
-            cut = cut_sql("undone.hash")
+            deleted_at = deleted_at_sql("undone.hash")
         ))?
         .execute(rusqlite::params![serde_json::to_string(&rows)?, time.0, time.1, device_id])?;
     transaction.execute(
@@ -1553,9 +1560,9 @@ pub(super) fn settle_in(
     }
 }
 
-/// The kinds of entries of a file that its cut makes obsolete. `compact_in`
-/// drops them, and a merge doesn't store them, once they are at or before
-/// the file's floor.
+/// The kinds of entries of a file that a deletion makes obsolete.
+/// `compact_in` drops them, and a merge doesn't store them, once they are at
+/// or before the file's floor.
 pub(super) const DROPPED_KINDS: &str =
     "('add', 'name', 'notes', 'rating', 'status', 'item_tag', 'folder_item')";
 
@@ -1601,20 +1608,21 @@ pub(super) fn drop_below(
 /// starting after `after`. Returns the time and hash of the last file it
 /// looked at when more files may be due, and `None` otherwise.
 ///
-/// When the cut of a file is later than the time in its `compacted` entry, or
-/// it has none, and the cut is at least 7 days old, this computer stores the
-/// cut in a `compacted` entry. Then it drops the entries of the file at or
+/// When the `deleted_at` of a picture is later than the time in its
+/// `compacted` entry, or it has none, and `deleted_at` is at least 7 days
+/// old, this computer stores `deleted_at` in a `compacted` entry. Then it
+/// drops the entries of the file at or
 /// before the time in that entry: those of other computers at once, and its
 /// own ones once the `compacted` entry is in the cloud folder. The
 /// `compacted` entry reaches every other computer, which drops the same
 /// entries. An undo of the deletion that arrives later can't bring them back
-/// on any computer: the cut never goes below the time in the `compacted`
-/// entry, and the undo's record is the picture instead. Without the
+/// on any computer: `deleted_at` never goes below the time in the
+/// `compacted` entry, and the undo's record is the picture instead. Without the
 /// `compacted` entry, a computer that had dropped them would show the
 /// picture differently from one that still had them.
 ///
-/// The `compacted` entry is stored only once the `delete` entry that sets the
-/// cut is in the cloud folder: it came from another computer, or this
+/// The `compacted` entry is stored only once the `delete` entry that set
+/// `deleted_at` is in the cloud folder: it came from another computer, or this
 /// computer has written it there. Otherwise a restore or a lost disk could
 /// lose the deletion while the `compacted` entry is already in the cloud
 /// folder, and the picture would be gone on every computer although the
@@ -1629,9 +1637,9 @@ pub(super) fn drop_below(
 ///
 /// A file that waits for one of these two entries to be in the cloud folder
 /// keeps its time, so every later call looks at it again; the caller passes
-/// `after` so that one call doesn't look at it twice. A file whose cut is less
-/// than 7 days old is looked at again 7 days after its cut. The `delete`
-/// entries stay.
+/// `after` so that one call doesn't look at it twice. A file whose
+/// `deleted_at` is less than 7 days old is looked at again 7 days after it.
+/// The `delete` entries stay.
 pub(super) fn compact_in(
     transaction: &rusqlite::Transaction<'_>,
     now_ms: i64,
@@ -1665,11 +1673,12 @@ pub(super) fn compact_in(
     let mut time = None;
     for (_, content_hash) in &due {
         let entries = super::shared_merge::held_entries(transaction, content_hash)?;
-        let Cut { cut, floor } = cut_of(&entries);
-        if cut > floor && cut.0.saturating_add(COMPACT_AFTER_MS) > now_ms {
+        let DeletedAt { deleted_at, floor } = deleted_at_of(&entries);
+        let due_ms = deleted_at.0.saturating_add(COMPACT_AFTER_MS);
+        if deleted_at > floor && due_ms > now_ms {
             transaction.execute(
                 "UPDATE entry_compaction_due SET due_ms = ?2 WHERE content_hash = ?1",
-                rusqlite::params![content_hash, cut.0.saturating_add(COMPACT_AFTER_MS)],
+                rusqlite::params![content_hash, due_ms],
             )?;
             continue;
         }
@@ -1677,10 +1686,10 @@ pub(super) fn compact_in(
             HeldEntry::Delete { time, .. } => in_cloud(time),
             _ => true,
         });
-        if cut > floor && !deletion_in_cloud {
+        if deleted_at > floor && !deletion_in_cloud {
             continue;
         }
-        let floor_in_cloud = if cut > floor {
+        let floor_in_cloud = if deleted_at > floor {
             let (clock_ms, clock_counter) = match time {
                 Some(time) => time,
                 None => *time.insert(tick(transaction)?),
@@ -1693,7 +1702,12 @@ pub(super) fn compact_in(
                      FROM cloud_state WHERE singleton = 1
                      {KEEP_LATER}"
                 ))?
-                .execute(rusqlite::params![content_hash, time_text(&cut), clock_ms, clock_counter])?;
+                .execute(rusqlite::params![
+                    content_hash,
+                    time_text(&deleted_at),
+                    clock_ms,
+                    clock_counter
+                ])?;
             false
         } else {
             entries.iter().all(|entry| match entry {
@@ -1701,7 +1715,7 @@ pub(super) fn compact_in(
                 _ => true,
             })
         };
-        drop_below(transaction, content_hash, &time_text(&cut), floor_in_cloud)?;
+        drop_below(transaction, content_hash, &time_text(&deleted_at), floor_in_cloud)?;
         if floor_in_cloud {
             transaction.execute(
                 "DELETE FROM entry_compaction_due WHERE content_hash = ?1",

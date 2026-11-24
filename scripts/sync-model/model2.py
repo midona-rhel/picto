@@ -4,9 +4,10 @@
 Entry keys:
   ('add', H, d)  value = record (name, notes, rating, status, tags, folders)
   ('del', H)     value = None for a deletion, or with the rule undo_revive
-                 ('u', before, rec) for the undo of a deletion: the cut goes back
-                 to `before`, the cut that the undoing device had just before its
-                 deletion, and `rec` is the item as that device had it
+                 ('u', before, rec) for the undo of a deletion: deleted_at(H) goes
+                 back to `before`, the deleted_at(H) that the undoing device had
+                 just before its deletion, and `rec` is the item as that device
+                 had it
   ('floor', H)   value = a time (rule compact). Entries of H that are not later
                  than it are dropped and never count again. The larger value wins.
   ('name'|'notes'|'rating'|'status', H)  value
@@ -34,7 +35,7 @@ EMPTY = {'notes': '', 'rating': 0}
 DEFAULTS = ('', '', 0, 'inbox')
 POSTS = ('p1', 'p2')
 KEEP = 5          # keep time before an original may be purged, in units of world time
-COMPACT = 5       # time after a cut before a device drops the entries it made obsolete
+COMPACT = 5       # time after deleted_at(H) before a device drops the entries it made obsolete
 MAXDEV = 5
 MAXIDS = 9
 
@@ -52,8 +53,8 @@ class Rules:
              'keep_deleted',       # a deleted file stays on disk until its delete is published
              'collections', 'one_tick', 'member_del', 'coll_delreg', 'cadd_once',
              # third round
-             'undo_revive',        # the undo of a deletion moves the cut back (('del', H) values)
-             'compact',            # devices drop entries that a cut made obsolete, with floors
+             'undo_revive',        # the undo of a deletion sets deleted_at(H) back (('del', H) values)
+             'compact',            # devices drop entries that a deletion made obsolete, with floors
              'compact_nofloor',    # variant: drop them without writing a floor
              'compact_unpublished',  # variant: a floor may rest on an unpublished deletion
              'compact_own_later')  # a device drops its own entries only after its floor is published
@@ -77,10 +78,10 @@ def floor_of(held, X):
     return e[1] if e else ZERO
 
 
-def del_time(held, H):
-    """The cut of H: an entry of H counts only when it is later than the cut. It is
-    the time of the held deletion, or the time an undo went back to, and never
-    earlier than the floor."""
+def deleted_at(held, H):
+    """The time of the last deletion of H that still counts: an entry of H counts
+    only when it is later than this time. It is the time of the held deletion, or
+    the time that an undo set back, and never earlier than the floor."""
     e = held.get(('del', H))
     if e is None:
         c = ZERO
@@ -92,9 +93,10 @@ def del_time(held, H):
 
 
 def live_adds(held, ids, H):
-    """The cut and the sorted adds of H that count. When an undo is held and no add
-    counts, the record of the undo counts as an add at the time of the undo."""
-    dt = del_time(held, H)
+    """deleted_at(H) and the sorted adds of H that count. When an undo is held and
+    no add counts, the record of the undo counts as an add at the time of the
+    undo."""
+    dt = deleted_at(held, H)
     live = []
     for i in ids:
         e = held.get(('add', H, i))
@@ -599,7 +601,7 @@ class World:
         it = self.it(d, H)
         if it is None:
             return False
-        before = del_time(d.held, H)
+        before = deleted_at(d.held, H)
         t = self.write(d, ('del', H), None, 'del')
         d.stash[H] = (it, t, before)
         self.gc(d)
@@ -610,8 +612,8 @@ class World:
             return False
         rec, deleted, before = d.stash.pop(H)
         if self.rules.undo_revive:
-            # rule change: the undo goes into the deletion's place and moves the cut
-            # back to where it was on this device just before its deletion
+            # rule change: the undo goes into the deletion's place and sets
+            # deleted_at(H) back to what it was on this device before its deletion
             self.write(d, ('del', H), ('u', before, rec), 'undo', deleted)
         else:
             self.write(d, ('add', H, d.id), rec, 'add', ('undo', deleted))
@@ -705,7 +707,7 @@ class World:
                     other[0][1].add(H)        # the other unfinished task now owns the file
                     continue
             else:
-                dt = del_time(d.held, H)
+                dt = deleted_at(d.held, H)
                 if any((e := d.held.get(('add', H, o))) is not None and e[0] > dt
                        for o in self.ids if o != d.id):
                     continue                  # exists by another device's add
@@ -822,7 +824,8 @@ class World:
         return ch
 
     def droppable(self, key):
-        """Whether the entry kind of key is one that a cut of key[1] makes obsolete."""
+        """Whether the entry kind of key is one that a deletion of key[1] makes
+        obsolete."""
         return key[0] in DROPPABLE or key[0] == 'mem' and self.rules.member_del
 
     def merge(self, d, src, keys=None, gc=True):
@@ -891,21 +894,21 @@ class World:
     def dead_line(self, d, X):
         """Entries of X that are not later than this never count again on d."""
         if self.rules.compact_nofloor:
-            return del_time(d.held, X)
+            return deleted_at(d.held, X)
         return floor_of(d.held, X)
 
     def compact(self, d):
-        """The device drops the entries of each file that its cut made obsolete, once
-        the cut is COMPACT old by the device's wall clock. It first writes the cut as
-        the floor of the file, so that every other device drops the same entries and
-        an undo that arrives later cannot bring them back."""
+        """The device drops the entries of each file that its deletion made obsolete,
+        once deleted_at(H) is COMPACT old by the device's wall clock. It first writes
+        deleted_at(H) as the floor of the file, so that every other device drops the
+        same entries and an undo that arrives later cannot bring them back."""
         if not d.rec or not (self.rules.compact or self.rules.compact_nofloor):
             return False
         ch = False
         for H in self.files:
-            c = del_time(d.held, H)
+            c = deleted_at(d.held, H)
             if self.rules.compact and c > floor_of(d.held, H) and \
-                    self.now + d.skew - c[0] >= COMPACT and self.cut_published(d, H):
+                    self.now + d.skew - c[0] >= COMPACT and self.deletion_published(d, H):
                 self.write(d, ('floor', H), c, 'floor')
                 COUNTS['floors_written'] += 1
                 ch = True
@@ -932,8 +935,8 @@ class World:
                     d.removed.add(k)
         return ch
 
-    def cut_published(self, d, H):
-        """Whether the entry that sets the cut of H is in the shared folder: it came
+    def deletion_published(self, d, H):
+        """Whether the entry that sets deleted_at(H) is in the shared folder: it came
         from another device, or the device has published it. A floor without that
         entry would end the entries of H for good while a lost disk or a restore
         can still lose the deletion that justified it."""
@@ -1358,8 +1361,8 @@ class World:
                     bad.append('undo-missed-an-earlier-' + kind)
 
     def finish_compact(self):
-        """Every cut becomes old enough, every device compacts, and everything is
-        delivered again."""
+        """Every deleted_at(H) becomes old enough, every device compacts, and
+        everything is delivered again."""
         self.now += 200
         for d in self.devs:
             self.begin_action()
@@ -1458,8 +1461,8 @@ class World:
             dels = [a for a in acts if a[0] == 'del' and a[1][1] == H]
             undos = [a for a in acts if a[0] == 'undo' and a[1][1] == H]
             fmax = max((a[3] for a in acts if a[0] == 'floor' and a[1][1] == H), default=ZERO)
-            # The cut by the log: the latest deletion or undo decides, and no cut is
-            # earlier than the largest floor.
+            # deleted_at(H) by the log: the latest deletion or undo decides, and it
+            # is never earlier than the largest floor.
             last_reg = max(dels + undos, key=lambda a: a[2], default=None)
             if last_reg is None:
                 dmax = ZERO
