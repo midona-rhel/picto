@@ -825,8 +825,10 @@ pub(super) fn record_deleted_tags(
 /// `temp.delete_media` and their rows still exist. When the user deleted the
 /// pictures, or the library merged a duplicate away, it stores a `delete`
 /// entry for each file that no other picture in the library still uses, and
-/// notes the cut the file had before in `entry_deletion_cut`. A deletion that
-/// came from another computer, or the undo of an import, stores nothing.
+/// notes in `entry_deletion_cut` the cut that the file had before. A picture
+/// inside a collection gets no entry, because collections don't sync yet. A
+/// deletion that came from another computer, or the undo of an import,
+/// stores nothing.
 pub(super) fn record_deleted_files(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
@@ -858,7 +860,8 @@ pub(super) fn record_deleted_files(
              FROM temp.delete_media selected
              CROSS JOIN media_item media ON media.media_id = selected.local_id
              JOIN media_file file ON file.file_id = media.file_id
-             WHERE NOT EXISTS (
+             WHERE EXISTS (SELECT 1 FROM library_root root WHERE root.root_id = media.media_id)
+               AND NOT EXISTS (
                  SELECT 1 FROM media_item other
                  WHERE other.file_id = media.file_id
                    AND other.media_id NOT IN (SELECT local_id FROM temp.delete_media))
@@ -870,9 +873,9 @@ pub(super) fn record_deleted_files(
 }
 
 /// Records that a repair replaced the file of the media `media_id`, whose old
-/// content hash was `old_hash`: the old file is deleted, and the picture gets
-/// an `add` entry for the new file when it isn't in a collection. The cut of
-/// the old file goes to `entry_deletion_cut`, for the undo of the repair.
+/// content hash was `old_hash`: the old file gets a `delete` entry and the
+/// new file an `add` entry. A picture inside a collection gets neither,
+/// because collections don't sync yet.
 pub(super) fn record_replaced_file(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
@@ -880,6 +883,9 @@ pub(super) fn record_replaced_file(
     old_hash: &str,
     media_id: MediaId,
 ) -> Result<()> {
+    if !file_roots(snapshot).contains(media_id.0) {
+        return Ok(());
+    }
     let Some(time) = action_time(transaction, revision)? else {
         return Ok(());
     };
@@ -899,16 +905,14 @@ pub(super) fn record_replaced_file(
              {KEEP_LATER}"
         ))?
         .execute(rusqlite::params![old_hash, time.0, time.1])?;
-    if file_roots(snapshot).contains(media_id.0) {
-        write_pending(
-            transaction,
-            EntryKind::Add,
-            "",
-            Some("always"),
-            time,
-            &RoaringBitmap::from_iter([media_id.0]),
-        )?;
-    }
+    write_pending(
+        transaction,
+        EntryKind::Add,
+        "",
+        Some("always"),
+        time,
+        &RoaringBitmap::from_iter([media_id.0]),
+    )?;
     Ok(())
 }
 
