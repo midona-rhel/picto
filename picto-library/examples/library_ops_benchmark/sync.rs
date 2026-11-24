@@ -15,6 +15,8 @@
 //!   second 100,000 as if 8 days had passed: the first sync writes the
 //!   `compacted` entries and drops nothing of this computer, the next one
 //!   drops this computer's own entries.
+//! - A permanent deletion of 100,000 items that can be undone, and its undo,
+//!   in a library that records entries and in one that doesn't.
 //! - An import of the 100,000 files into the library that merged their
 //!   entries while empty. The files exist by the entries, so the import
 //!   writes no `add` entry. It runs last, because the deletions measured
@@ -127,6 +129,30 @@ pub fn run(library: Library, ids: &[RootId], directory: &std::path::Path) -> R<(
         ms(started),
         entry_count(&on)?
     );
+
+    // A deletion that can be undone, and its undo, which writes the undo
+    // entries of all 100,000 files in the undo's own write.
+    let held = all_roots(&split)?;
+    split.set_lifecycle(&explicit(&held), picto_library::Lifecycle::Trash)?;
+    settle(&split)?;
+    let started = Instant::now();
+    split.permanently_delete(&explicit(&held), 0, IMPORT, false)?;
+    println!("ROW|delete permanently, can be undone|{IMPORT}|{:.1}|-|n=1", ms(started));
+    let started = Instant::now();
+    split.undo()?;
+    println!("ROW|undo the permanent deletion|{IMPORT}|{:.1}|-|n=1", ms(started));
+
+    // The same deletion and undo in a library that records no entries.
+    let unrecorded = Library::create(directory.join("unrecorded.sqlite"))?;
+    import(&unrecorded)?;
+    let held = all_roots(&unrecorded)?;
+    unrecorded.set_lifecycle(&explicit(&held), picto_library::Lifecycle::Trash)?;
+    let started = Instant::now();
+    unrecorded.permanently_delete(&explicit(&held), 0, IMPORT, false)?;
+    println!("ROW|delete permanently, can be undone, recording off|{IMPORT}|{:.1}|-|n=1", ms(started));
+    let started = Instant::now();
+    unrecorded.undo()?;
+    println!("ROW|undo the permanent deletion, recording off|{IMPORT}|{:.1}|-|n=1", ms(started));
 
     // The library that merged the entries while empty imports their files.
     // Each import finds that the file exists and writes no entry.

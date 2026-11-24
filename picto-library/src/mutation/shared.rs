@@ -25,15 +25,15 @@
 //! changes of a deleted picture become entries just before, for the same
 //! reason (`settle_roots`).
 //!
-//! Each file has a cut, a time: only the file's entries that are later than
-//! it count (`cut_of` in `shared_view.rs`). After a deletion, the cut is the
-//! time of the deletion. The undo of a deletion is written into the file's
-//! `delete` entry, in the same write as the undo (`write_undos`). It moves the
-//! cut back to where it was before the deletion, so every entry that the
-//! deletion had made obsolete counts again. Seven days after a cut,
-//! `compact_in` writes the cut into a `compacted` entry and drops the entries
-//! that aren't later than it. Every computer drops the same entries, and no
-//! later undo moves the cut back below that time on any computer.
+//! Only the entries of a file that are later than the file's cut count
+//! (`cut_of` in `shared_view.rs`). After a deletion, the cut is the time of
+//! the deletion. Undoing the deletion writes the undo into the file's
+//! `delete` entry (`write_undos`), which moves the cut back to where it was
+//! before the deletion, so every entry that the deletion had made obsolete
+//! counts again. Seven days after a cut, `compact_in` writes the cut into a
+//! `compacted` entry and drops the entries that aren't later than it. Every
+//! computer drops the same entries, and no later undo moves the cut back
+//! below that time on any computer.
 //!
 //! When recording starts, every file the library already holds gets an `add`
 //! entry. Those are written in batches by `Library::settle_entries` too, and
@@ -176,8 +176,8 @@ const COMPACT_BATCH: usize = 5_000;
 /// The end of every statement that stores an entry. The new entry replaces
 /// the stored one only when it is later, so storing the same entries again or
 /// in another order gives the same table. A `compacted` entry replaces the
-/// stored one when its time value is later, because the later floor is the
-/// one every computer has to keep.
+/// stored one when the time in its value is later, because every computer
+/// has to keep the latest of those times.
 pub(super) const KEEP_LATER: &str = "ON CONFLICT(subject_key, kind, second_key) DO UPDATE SET
      value = excluded.value,
      clock_ms = excluded.clock_ms,
@@ -532,10 +532,11 @@ pub(super) fn record_changes(
         file_roots(before)
     };
     let in_both = &files_after & &files_before;
-    // An import adds a file only when no computer has added it yet, and
-    // becomes an entry later, like the other changes. The undo of a deletion
-    // is written in this transaction: it needs the cut in
-    // `entry_deletion_cut`, which is gone once the library is closed.
+    // An imported file gets an `add` entry only when no computer has added
+    // it yet, and its row becomes that entry later, like the rows of the
+    // other changes. The undo of a deletion is written in this transaction,
+    // because it needs the cut in `entry_deletion_cut`, which is gone once
+    // the library is closed.
     let restored = transaction
         .prepare_cached("SELECT root_id FROM temp.entry_restored_root")?
         .query_map([], |row| row.get::<_, u32>(0))?
@@ -1171,25 +1172,30 @@ fn write_undos(
     if files.is_empty() {
         return Ok(());
     }
-    let mut statement = transaction.prepare_cached(&format!(
-        "INSERT INTO shared_entry
-             (subject_key, kind, second_key, value, clock_ms, clock_counter, device_id)
-         VALUES (?1, 'delete', '', json_object('before', COALESCE(
-                     (SELECT cut FROM temp.entry_deletion_cut WHERE content_hash = ?1), {cut}),
-                     'record', json(?2)),
-                 ?3, ?4, ?5)
-         {KEEP_LATER}",
-        cut = cut_sql("?1")
-    ))?;
-    for file in files {
-        statement.execute(rusqlite::params![
-            file.content_hash,
-            serde_json::to_string(&file.record)?,
-            time.0,
-            time.1,
-            device_id
-        ])?;
-    }
+    // One statement for all files. Each row of `?1` is a file's hash and its
+    // record.
+    let rows = files
+        .iter()
+        .map(|file| Ok(serde_json::json!([file.content_hash, serde_json::to_value(&file.record)?])))
+        .collect::<Result<Vec<_>>>()?;
+    transaction
+        .prepare_cached(&format!(
+            "INSERT INTO shared_entry
+                 (subject_key, kind, second_key, value, clock_ms, clock_counter, device_id)
+             SELECT undone.hash, 'delete', '',
+                    json_object('before', COALESCE(
+                        (SELECT cut FROM temp.entry_deletion_cut
+                         WHERE content_hash = undone.hash), {cut}),
+                        'record', json(undone.record)),
+                    ?2, ?3, ?4
+             FROM (SELECT json_extract(row.value, '$[0]') AS hash,
+                          json_extract(row.value, '$[1]') AS record
+                   FROM json_each(?1) row) undone
+             WHERE true
+             {KEEP_LATER}",
+            cut = cut_sql("undone.hash")
+        ))?
+        .execute(rusqlite::params![serde_json::to_string(&rows)?, time.0, time.1, device_id])?;
     transaction.execute(
         "INSERT OR IGNORE INTO merge_touched (subject_kind, subject_key)
          SELECT 'file', value FROM json_each(?1)",
@@ -1593,27 +1599,31 @@ pub(super) fn drop_below(
 /// Compacts the entries of at most `limit` files of `entry_compaction_due`
 /// whose time has come by `now_ms`, and returns whether more are due.
 ///
-/// When the cut of a file is later than its floor and at least 7 days old,
-/// this computer stores the cut as the file's floor in a `compacted` entry,
-/// and then drops the entries at or before it. The `compacted` entry reaches
-/// every other computer, which drops the same entries. An undo of the
-/// deletion that arrives later can't bring them back on any computer: the cut
-/// never goes below the floor, and the undo's record is the picture instead.
-/// Without the floor, a computer that had dropped them would show the picture
-/// differently from one that still had them.
+/// When the cut of a file is later than the time in its `compacted` entry, or
+/// it has none, and the cut is at least 7 days old, this computer stores the
+/// cut in a `compacted` entry. Then it drops the entries of the file at or
+/// before the time in that entry: those of other computers at once, and its
+/// own ones once the `compacted` entry is in the cloud folder. The
+/// `compacted` entry reaches every other computer, which drops the same
+/// entries. An undo of the deletion that arrives later can't bring them back
+/// on any computer: the cut never goes below the time in the `compacted`
+/// entry, and the undo's record is the picture instead. Without the
+/// `compacted` entry, a computer that had dropped them would show the
+/// picture differently from one that still had them.
 ///
-/// The floor is stored only once the `delete` entry that sets the cut is in
-/// the cloud folder: it came from another computer, or this computer has
-/// written it there. Otherwise a restore or a lost disk could lose the
-/// deletion while the floor is already in the cloud folder, and the picture
-/// would be gone on every computer although the deletion never reached them.
+/// The `compacted` entry is stored only once the `delete` entry that sets the
+/// cut is in the cloud folder: it came from another computer, or this
+/// computer has written it there. Otherwise a restore or a lost disk could
+/// lose the deletion while the `compacted` entry is already in the cloud
+/// folder, and the picture would be gone on every computer although the
+/// deletion never reached them.
 ///
-/// This computer's own entries are dropped only once the `compacted` entry is
-/// in the cloud folder. A sync writes the cloud files one at a time. If it
-/// wrote a file without a dropped entry and stopped before it wrote the file
-/// with the `compacted` entry, and this computer then lost its disk, the
-/// other computers that never received the entry would show the picture
-/// differently from those that did.
+/// This computer's own entries wait for the `compacted` entry because a sync
+/// writes the cloud files one at a time. Suppose a sync wrote a file without
+/// a dropped entry, stopped before it wrote the file with the `compacted`
+/// entry, and this computer then lost its disk. Once an undo of the deletion
+/// arrived, the computers that had received the dropped entry would show the
+/// picture with it, and those that hadn't would show it without.
 ///
 /// A file that waits for one of these two entries to be in the cloud folder
 /// is looked at again at the next call after `now_ms`. A file whose cut is
