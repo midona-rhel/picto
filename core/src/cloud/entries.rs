@@ -28,7 +28,7 @@
 //! yet is merged when it arrives. A file that doesn't match its checksum
 //! isn't merged, and no file is merged in the round that finds it.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 use picto_library::{EntryKind, SharedEntry};
@@ -89,10 +89,9 @@ fn set_merged(device_id: &str, path: &str) {
         .insert((device_id.to_owned(), path.to_owned()));
 }
 
-/// Forgets which files the device `device_id` merged. It is called when a
+/// Forgets which files the computer `device_id` merged. It is called when a
 /// library is opened, because its database can have been replaced by a
-/// snapshot. What other devices merged stays, so that tests that run several
-/// libraries in one process don't change each other's state.
+/// snapshot. What other computers in the same process merged stays.
 pub(super) fn forget_merged(device_id: &str) {
     MERGED
         .lock()
@@ -209,19 +208,14 @@ fn decode(
 /// Writes the entries that this computer made into the cloud folder.
 ///
 /// The first sync starts recording, which gives every picture the library
-/// already holds an `add` entry. Then the entries that deletions made
-/// obsolete at least 7 days ago are dropped (`Library::compact_entries`), and
-/// the computer's pending changes are turned into entries. Then it rewrites
-/// the files of every key whose entry is later than the clock time up to
-/// which the computer's entries were written before, and of every key whose
-/// entry compaction dropped. It removes the files that the new ones replace,
-/// and records the new clock time. A run that stops in the middle is
-/// repeated by the next one and writes the same files.
-///
-/// The files that only lose entries are written last. Compaction drops
-/// entries only behind a `compacted` entry, which is in one of the files
-/// written first, so a run that stops in between never leaves a file
-/// without the entries while the `compacted` entry is missing.
+/// already holds an `add` entry. Then the computer's pending changes are
+/// turned into entries, and the entries that deletions made obsolete at
+/// least 7 days ago are dropped (`Library::compact_entries`). Then it
+/// rewrites the files of every key whose entry is later than the clock time
+/// up to which the computer's entries were written before, and of every key
+/// whose entry compaction dropped. It removes the files that the new ones
+/// replace, and records the new clock time. A run that stops in the middle
+/// is repeated by the next one and writes the same files.
 pub(super) async fn publish_library(
     application: &LibraryApplication,
     provider: &dyn CloudProvider,
@@ -229,9 +223,6 @@ pub(super) async fn publish_library(
 ) -> Result<(), String> {
     let library = application.library();
     library.start_recording().map_err(|error| error.to_string())?;
-    library
-        .compact_entries(chrono::Utc::now().timestamp_millis())
-        .map_err(|error| error.to_string())?;
     // The clock is read before the pending changes are settled. A change
     // made after this point gets a later time, so the next sync writes it.
     let clock = library.entry_clock().map_err(|error| error.to_string())?;
@@ -239,45 +230,37 @@ pub(super) async fn publish_library(
         .settle_entries(SETTLE_LIMIT)
         .map_err(|error| error.to_string())?
     {}
+    library
+        .compact_entries(chrono::Utc::now().timestamp_millis())
+        .map_err(|error| error.to_string())?;
     let removed = library.removed_own_entries().map_err(|error| error.to_string())?;
-    let mut changed = BTreeSet::new();
+    let mut changed = removed
+        .iter()
+        .map(|(kind, subject_key, second_key)| shard_of_key(*kind, subject_key, second_key))
+        .collect::<BTreeSet<_>>();
     library
         .visit_own_entries(clock.published, &mut |entry| {
             changed.insert(shard_of(&entry));
         })
         .map_err(|error| error.to_string())?;
-    let emptied = removed
-        .iter()
-        .map(|(kind, subject_key, second_key)| shard_of_key(*kind, subject_key, second_key))
-        .filter(|shard| !changed.contains(shard))
-        .collect::<BTreeSet<_>>();
-    if changed.is_empty() && emptied.is_empty() {
+    if changed.is_empty() {
         return Ok(());
     }
-    // The files with new entries come first; `BTreeMap` orders by the flag.
     let mut files = changed
         .into_iter()
-        .map(|shard| ((false, shard), Vec::new()))
-        .chain(emptied.into_iter().map(|shard| ((true, shard), Vec::new())))
+        .map(|shard| (shard, Vec::new()))
         .collect::<BTreeMap<_, _>>();
-    let place = files
-        .keys()
-        .map(|(emptied, shard)| (shard.clone(), *emptied))
-        .collect::<HashMap<_, _>>();
     library
         .visit_own_entries(None, &mut |entry| {
-            let shard = shard_of(&entry);
-            if let Some(emptied) = place.get(&shard) {
-                if let Some(entries) = files.get_mut(&(*emptied, shard)) {
-                    entries.push(entry);
-                }
+            if let Some(entries) = files.get_mut(&shard_of(&entry)) {
+                entries.push(entry);
             }
         })
         .map_err(|error| error.to_string())?;
     let folder = format!("{}/{}", directory(library_id), clock.device_id);
     let existing = provider.list(&folder).await?;
     let mut skipped = false;
-    for ((_, shard), entries) in files {
+    for (shard, entries) in files {
         let (name, bytes) = encode(library_id, &clock.device_id, &shard, &entries)?;
         let path = format!("{folder}/{name}");
         let replaced = format!("{folder}/{shard}.");

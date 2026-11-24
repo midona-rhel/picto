@@ -191,7 +191,7 @@ pub(super) const KEEP_LATER: &str = "ON CONFLICT(subject_key, kind, second_key) 
 /// How long the entries that a deletion made obsolete are kept before
 /// `compact_in` drops them, in milliseconds. It's the default of "Keep
 /// deleted files", 7 days.
-pub(super) const COMPACT_AFTER_MS: i64 = 7 * 24 * 60 * 60 * 1_000;
+pub(crate) const COMPACT_AFTER_MS: i64 = 7 * 24 * 60 * 60 * 1_000;
 
 /// The SQL expression for the time of an entry in the table `entry` as
 /// `time_text` writes it.
@@ -1546,29 +1546,38 @@ pub(super) const DROPPED_KINDS: &str =
 
 /// Drops the entries of the file `content_hash` whose kind is one of
 /// `DROPPED_KINDS` and whose time is at or before `through`, which is a time
-/// as `time_text` writes it. Those of this computer are noted in
-/// `removed_own_entry`, so the next sync writes their files in the cloud
-/// folder again without them.
+/// as `time_text` writes it. This computer's own entries are dropped only
+/// with `own`, and they are noted in `removed_own_entry`, so that the next
+/// sync writes their files in the cloud folder again without them.
 pub(super) fn drop_below(
     transaction: &rusqlite::Transaction<'_>,
     content_hash: &str,
     through: &str,
+    own: bool,
 ) -> Result<()> {
     let old = format!(
         "subject_key = ?1 AND kind IN {DROPPED_KINDS} AND {time} <= ?2",
         time = time_text_sql!("shared_entry")
     );
-    transaction
-        .prepare_cached(&format!(
-            "INSERT OR IGNORE INTO removed_own_entry (subject_key, kind, second_key)
-             SELECT subject_key, kind, second_key FROM shared_entry
-             WHERE {old}
-               AND device_id = (SELECT device_id FROM cloud_state WHERE singleton = 1)"
-        ))?
-        .execute([content_hash, through])?;
-    transaction
-        .prepare_cached(&format!("DELETE FROM shared_entry WHERE {old}"))?
-        .execute([content_hash, through])?;
+    let own_device = "(SELECT device_id FROM cloud_state WHERE singleton = 1)";
+    if own {
+        transaction
+            .prepare_cached(&format!(
+                "INSERT OR IGNORE INTO removed_own_entry (subject_key, kind, second_key)
+                 SELECT subject_key, kind, second_key FROM shared_entry
+                 WHERE {old} AND device_id = {own_device}"
+            ))?
+            .execute([content_hash, through])?;
+        transaction
+            .prepare_cached(&format!("DELETE FROM shared_entry WHERE {old}"))?
+            .execute([content_hash, through])?;
+    } else {
+        transaction
+            .prepare_cached(&format!(
+                "DELETE FROM shared_entry WHERE {old} AND device_id <> {own_device}"
+            ))?
+            .execute([content_hash, through])?;
+    }
     Ok(())
 }
 
@@ -1576,9 +1585,9 @@ pub(super) fn drop_below(
 /// whose time has come by `now_ms`, and returns whether more are due.
 ///
 /// When the cut of a file is later than its floor and at least 7 days old,
-/// this computer stores the cut as the file's floor in a `compacted` entry
-/// first, and then drops the entries at or before it. The `compacted` entry
-/// reaches every other computer, which drops the same entries. An undo of the
+/// this computer stores the cut as the file's floor in a `compacted` entry,
+/// and then drops the entries at or before it. The `compacted` entry reaches
+/// every other computer, which drops the same entries. An undo of the
 /// deletion that arrives later can't bring them back on any computer: the cut
 /// never goes below the floor, and the undo's record is the picture instead.
 /// Without the floor, a computer that had dropped them would show the picture
@@ -1589,11 +1598,18 @@ pub(super) fn drop_below(
 /// written it there. Otherwise a restore or a lost disk could lose the
 /// deletion while the floor is already in the cloud folder, and the picture
 /// would be gone on every computer although the deletion never reached them.
-/// Such a file is looked at again at the next call after `now_ms`, which is
-/// after the sync has written the entry.
 ///
-/// A cut that is less than 7 days old is looked at again when it is. The
-/// `delete` entries stay.
+/// This computer's own entries are dropped only once the `compacted` entry is
+/// in the cloud folder. A sync writes the cloud files one at a time. If it
+/// wrote a file without a dropped entry and stopped before it wrote the file
+/// with the `compacted` entry, and this computer then lost its disk, the
+/// other computers that never received the entry would show the picture
+/// differently from those that did.
+///
+/// A file that waits for one of these two entries to be in the cloud folder
+/// is looked at again at the next call after `now_ms`. A file whose cut is
+/// less than 7 days old is looked at again 7 days after its cut. The `delete`
+/// entries stay.
 pub(super) fn compact_in(
     transaction: &rusqlite::Transaction<'_>,
     now_ms: i64,
@@ -1608,6 +1624,9 @@ pub(super) fn compact_in(
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
         )
         .optional()?;
+    let in_cloud = |time: &EntryTime| {
+        time.2 != device_id || published.is_some_and(|through| (time.0, time.1) <= through)
+    };
     let due = transaction
         .prepare_cached(
             "SELECT content_hash FROM entry_compaction_due WHERE due_ms <= ?1
@@ -1628,20 +1647,21 @@ pub(super) fn compact_in(
             )?;
             continue;
         }
-        let unpublished = entries.iter().any(|entry| match entry {
-            HeldEntry::Delete { time, .. } => {
-                time.2 == device_id && published.is_none_or(|through| (time.0, time.1) > through)
-            }
-            _ => false,
+        let deletion_in_cloud = entries.iter().all(|entry| match entry {
+            HeldEntry::Delete { time, .. } => in_cloud(time),
+            _ => true,
         });
-        if cut > floor && unpublished {
+        let wait = |transaction: &rusqlite::Transaction<'_>| {
             transaction.execute(
                 "UPDATE entry_compaction_due SET due_ms = ?2 WHERE content_hash = ?1",
                 rusqlite::params![content_hash, now_ms.saturating_add(1)],
-            )?;
+            )
+        };
+        if cut > floor && !deletion_in_cloud {
+            wait(transaction)?;
             continue;
         }
-        if cut > floor {
+        let floor_in_cloud = if cut > floor {
             let (clock_ms, clock_counter) = match time {
                 Some(time) => time,
                 None => *time.insert(tick(transaction)?),
@@ -1655,10 +1675,22 @@ pub(super) fn compact_in(
                      {KEEP_LATER}"
                 ))?
                 .execute(rusqlite::params![content_hash, time_text(&cut), clock_ms, clock_counter])?;
+            false
+        } else {
+            entries.iter().all(|entry| match entry {
+                HeldEntry::Compacted { stored, .. } => in_cloud(stored),
+                _ => true,
+            })
+        };
+        drop_below(transaction, content_hash, &time_text(&cut), floor_in_cloud)?;
+        if floor_in_cloud {
+            transaction.execute(
+                "DELETE FROM entry_compaction_due WHERE content_hash = ?1",
+                [content_hash],
+            )?;
+        } else {
+            wait(transaction)?;
         }
-        drop_below(transaction, content_hash, &time_text(&cut))?;
-        transaction
-            .execute("DELETE FROM entry_compaction_due WHERE content_hash = ?1", [content_hash])?;
     }
     Ok(due.len() == limit)
 }

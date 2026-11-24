@@ -1807,8 +1807,9 @@ fn an_undo_wins_over_an_earlier_deletion_on_another_computer() {
     assert!(one.views().contains_key(&hash(1)));
 }
 
-/// 7 days after a deletion, the computer that deleted the picture drops the
-/// picture's other entries and writes a `compacted` entry, and the other
+/// 7 days after a deletion, the computer that deleted the picture writes a
+/// `compacted` entry and drops the picture's other entries. It drops its own
+/// entries only once the `compacted` entry is in the cloud folder. The other
 /// computer drops the same entries when it merges that entry. An old entry
 /// that arrives afterwards isn't stored.
 #[test]
@@ -1827,6 +1828,11 @@ fn compaction_drops_what_a_deletion_made_obsolete_on_every_computer() {
     one.library.compact_entries(now_ms()).unwrap();
     assert!(one.entry_kinds(&hash(1)).len() > 2);
     one.library.compact_entries(now_ms() + EIGHT_DAYS_MS).unwrap();
+    assert!(one.entry_kinds(&hash(1)).contains(&"compacted".to_owned()));
+    assert!(one.entry_kinds(&hash(1)).contains(&"rating".to_owned()));
+    assert!(one.library.removed_own_entries().unwrap().is_empty());
+    one.publish();
+    one.library.compact_entries(now_ms() + EIGHT_DAYS_MS).unwrap();
     assert_eq!(one.entry_kinds(&hash(1)), ["compacted", "delete"]);
     let removed = one.library.removed_own_entries().unwrap();
     assert!(removed.iter().any(|(kind, _, _)| *kind == picto_library::EntryKind::Rating));
@@ -1842,8 +1848,9 @@ fn compaction_drops_what_a_deletion_made_obsolete_on_every_computer() {
     assert!(two.views().is_empty());
 }
 
-/// A computer doesn't compact behind its own deletion before it has written
-/// that deletion to the cloud folder.
+/// A computer writes no `compacted` entry for its own deletion before it has
+/// written the deletion to the cloud folder, and drops its own entries only
+/// after it has written the `compacted` entry there too.
 #[test]
 fn compaction_waits_until_the_deletion_is_in_the_cloud_folder() {
     let (_directory, template) = template();
@@ -1851,6 +1858,8 @@ fn compaction_waits_until_the_deletion_is_in_the_cloud_folder() {
     one.delete(&hash(1));
     one.library.compact_entries(now_ms() + EIGHT_DAYS_MS).unwrap();
     assert!(one.entry_kinds(&hash(1)).iter().any(|kind| kind.starts_with("add ")));
+    one.publish();
+    one.library.compact_entries(now_ms() + EIGHT_DAYS_MS).unwrap();
     one.publish();
     one.library.compact_entries(now_ms() + EIGHT_DAYS_MS).unwrap();
     assert_eq!(one.entry_kinds(&hash(1)), ["compacted", "delete"]);
@@ -1878,6 +1887,8 @@ fn an_undo_that_arrives_after_compaction_gives_the_same_picture_everywhere() {
         computer.library.merge_entries(&deletion).unwrap();
     }
     three.library.merge_entries(&one.publish()).unwrap();
+    one.library.compact_entries(now_ms() + EIGHT_DAYS_MS).unwrap();
+    one.publish();
     one.library.compact_entries(now_ms() + EIGHT_DAYS_MS).unwrap();
     assert_eq!(one.entry_kinds(&hash(1)), ["compacted", "delete"]);
 

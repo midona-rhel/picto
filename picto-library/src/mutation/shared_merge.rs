@@ -83,7 +83,9 @@ pub(super) fn held_entries(
             Some(EntryKind::Delete) => {
                 HeldEntry::Delete { time, undo: UndoRecord::parse(&value) }
             }
-            Some(EntryKind::Compacted) => HeldEntry::Compacted { through: parse_time_text(&value) },
+            Some(EntryKind::Compacted) => {
+                HeldEntry::Compacted { stored: time, through: parse_time_text(&value) }
+            }
             Some(EntryKind::Name) => HeldEntry::Name { time, value },
             Some(EntryKind::Notes) => HeldEntry::Notes { time, value },
             Some(EntryKind::Rating) => HeldEntry::Rating {
@@ -285,7 +287,7 @@ fn store_in(transaction: &rusqlite::Transaction<'_>, entries: &[SharedEntry]) ->
         }
     }
     for (content_hash, through) in floors {
-        drop_below(transaction, &content_hash, &through)?;
+        drop_below(transaction, &content_hash, &through, true)?;
     }
     if let Some(latest) = latest {
         observe(transaction, latest)?;

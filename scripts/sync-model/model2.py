@@ -55,7 +55,8 @@ class Rules:
              'undo_revive',        # the undo of a deletion moves the cut back (('del', H) values)
              'compact',            # devices drop entries that a cut made obsolete, with floors
              'compact_nofloor',    # variant: drop them without writing a floor
-             'compact_unpublished')  # variant: a floor may rest on an unpublished deletion
+             'compact_unpublished',  # variant: a floor may rest on an unpublished deletion
+             'compact_own_later')  # a device drops its own entries only after its floor is published
 
     def __init__(self, on=()):
         for n in self.NAMES:
@@ -752,23 +753,31 @@ class World:
                 ch = True
         return ch
 
-    def publish(self, d):
+    def publish(self, d, pick=None):
+        """Writes the device's entries into the shared folder. With `pick`, the
+        publish stops part way: only the keys for which pick(key) is true are
+        written, which is what a sync that writes one file at a time and is
+        interrupted leaves behind."""
         if not d.rec or self.away(d):
             return False
         ch = False
         p = self.pub.get(d.id, {})
         for k in sorted(d.removed):
+            if pick is not None and not pick(k):
+                continue
             # the files of the device are written again without what compaction
             # dropped; a published entry that still counts stays
             pe = p.get(k)
             if pe is not None and k not in d.own and not pe[0] > self.dead_line(d, k[1]):
                 del p[k]
                 ch = True
-        d.removed.clear()
+            d.removed.discard(k)
         if self.rules.upload_first and not self.rules.purge_lock:
             ch = self.upload(d) or ch
         p = self.pub.get(d.id, {})
         for k, e in d.own.items():
+            if pick is not None and not pick(k):
+                continue
             cur = p.get(k)
             if cur is not None and e[0] <= cur[0]:
                 continue
@@ -786,7 +795,7 @@ class World:
             ch = True
         if p:
             self.pub[d.id] = p
-        if self.rules.purge_lock:
+        if self.rules.purge_lock and pick is None:
             d.cleared.clear()
             keep = set(k[1] for k in self.unpublished_adds(d))
             for x in [x for x in self.pins if x[1] == d.id and x[0] not in keep]:
@@ -903,10 +912,13 @@ class World:
             if self.rules.compact_nofloor and self.now + d.skew - c[0] < COMPACT:
                 continue
             line = self.dead_line(d, H)
+            own_too = not self.rules.compact_own_later or self.floor_published(d, H)
             for k in [k for k in d.held if k[1] == H and self.droppable(k)]:
                 e = d.held[k]
                 if e[0] > line:
                     continue
+                if not own_too and d.own.get(k) is not None:
+                    continue              # it waits until the floor is in the shared folder
                 mine = self.dropped.setdefault(d.id, {})
                 g = mine.get(k)
                 if g is None or e[0] > g[0]:
@@ -932,6 +944,17 @@ class World:
             return True
         pe = self.pub.get(d.id, {}).get(('del', H))
         return pe is not None and pe[0] >= e[0]
+
+    def floor_published(self, d, H):
+        """Whether the floor that the device holds for H is in the shared folder: it
+        came from another device, or the device has published it."""
+        f = d.held.get(('floor', H))
+        if f is None:
+            return False
+        if f[0][2] != d.id:
+            return True
+        pe = self.pub.get(d.id, {}).get(('floor', H))
+        return pe is not None and pe[1] >= f[1]
 
     def go_offline(self, d, n):
         if not (self.rules.undo_revive or self.rules.compact or self.rules.compact_nofloor):
@@ -1215,6 +1238,15 @@ class World:
             return self.task_undo_after(d, a[2])
         if k == 'publish':
             return self.publish(d)
+        if k == 'pubkeys':
+            # a publish that is interrupted after it wrote the files of these keys
+            return self.publish(d, lambda key: key in a[2])
+        if k == 'pubpart':
+            # a publish that is interrupted: each key is written or not by a coin
+            # that the action's number decides, so a replay writes the same keys
+            r = random.Random(a[2])
+            chosen = {}
+            return self.publish(d, lambda key: chosen.setdefault(key, r.random() < 0.5))
         if k == 'upload':
             return self.upload(d)
         if k == 'pin':
@@ -1294,7 +1326,7 @@ class World:
                     self.fetch(d, H)
 
     def check_revival(self, H, acts, dels, td, fmax, vs, bad):
-        """P7: the undo of a deletion brings back what any device had done before
+        """The undo of a deletion brings back what any device had done before
         the deletion, unless a floor ended it. For each field, tag and folder, the
         latest action counts when it is earlier than the undone deletion, later than
         every floor, and no other deletion lies between it and the undone deletion."""
@@ -1305,7 +1337,7 @@ class World:
             if eds:
                 last = max(eds, key=lambda a: a[2])
                 if counts(last) and any(x is None or x[fi] != last[3] for x in vs):
-                    bad.append('P7-revive-scalar')
+                    bad.append('undo-missed-an-earlier-field-edit')
         for kind, names, ik, dk, idx in (('tag', TAGS, 'it', 'td', 4),
                                          ('folder', FOLDERS, 'fi', 'fd', 5)):
             for T in names:
@@ -1323,7 +1355,7 @@ class World:
                 else:
                     want = not tds
                 if any(x is None or (T in x[idx]) != want for x in vs):
-                    bad.append('P7-revive-' + kind)
+                    bad.append('undo-missed-an-earlier-' + kind)
 
     def finish_compact(self):
         """Every cut becomes old enough, every device compacts, and everything is
@@ -1354,7 +1386,7 @@ class World:
         if any(f != hf[0] for f in hf[1:]):
             bad.append('P1-files')
         if self.rules.compact or self.rules.compact_nofloor:
-            # P6: what compaction dropped changes nothing. Every device shows the view
+            # What compaction dropped changes nothing: every device shows the view
             # of all entries that were ever held, published or dropped.
             union = {}
             stores = [x.held for x in devs] + list(self.pub.values()) + \
@@ -1369,7 +1401,7 @@ class World:
                         union[k] = e
             uview = self.view_held(union)
             if any(v != uview for v in full):
-                bad.append('P6-union')
+                bad.append('dropped-entries-changed-the-library')
         # Actions whose entry a restore destroyed before it was published do not count.
         acts = [a for i, a in enumerate(self.log) if i not in self.lost]
         tdacts = {}
@@ -1453,18 +1485,25 @@ class World:
                     if any(H in v and v[H][fi] != last[3] for v in views):
                         bad.append('P3-scalar')
             vs = [v.get(H) for v in views]
-            # P7 also applies to the undo as an add, so that the search shows what the
-            # rules without undo_revive lose
+            # The undo is also checked when it is written as an add, so that the search
+            # shows what the rules without undo_revive lose.
             undo_adds = [a for a in adds if isinstance(a[5], tuple) and a[5][0] == 'undo']
             last_undo = max(dels + undos + undo_adds, key=lambda a: a[2], default=None)
             if last_undo is not None and last_undo[0] != 'del':
                 td = last_undo[5] if last_undo[0] == 'undo' else last_undo[5][1]
                 self.check_revival(H, acts, dels, td, fmax, vs, bad)
+            # A later add of the same device replaces the record of an earlier one, so
+            # only the newest add per key can still hold a tag or a folder.
+            newest_adds = {}
+            for a in adds:
+                if a[1] not in newest_adds or a[2] > newest_adds[a[1]][2]:
+                    newest_adds[a[1]] = a
             if not dels:
-                tagfolder(H, vs, adds, dels, dmax, '', 'add')
+                tagfolder(H, vs, list(newest_adds.values()), dels, dmax, '', 'add')
             else:
                 # after a deletion only P5 applies, and only to views in which H exists
-                tagfolder(H, [x for x in vs if x is not None], adds, dels, dmax, '', 'add')
+                tagfolder(H, [x for x in vs if x is not None], list(newest_adds.values()), dels,
+                          dmax, '', 'add')
             if any(H in v for v in views) and H not in self.orig \
                     and not all(H in d.files for d in devs):
                 bad.append('P4')
@@ -1567,7 +1606,7 @@ LOCAL = frozenset(('import', 'delete', 'undo', 'edit', 'tag', 'folder', 'tagdel'
                    'tbegin', 'tend', 'tundo', 'tundo_after', 'ipost', 'group', 'ungroup',
                    'detach', 'cdelete', 'reorder', 'cedit', 'ctag', 'cfolder', 'cleanup',
                    'compact'))
-NETWORK = frozenset(('publish', 'upload', 'pin', 'clear', 'pubfull', 'merge', 'mergeall', 'fetch',
+NETWORK = frozenset(('publish', 'pubpart', 'pubkeys', 'upload', 'pin', 'clear', 'pubfull', 'merge', 'mergeall', 'fetch',
                      'purge_begin', 'purge_end', 'snapshot', 'join'))
 DROPPABLE = frozenset(('add', 'name', 'notes', 'rating', 'status', 'it', 'fi'))
 
@@ -1799,7 +1838,7 @@ KINDS = (('import', 9), ('delete', 8), ('undo', 6), ('edit', 6), ('tag', 7), ('f
          ('merge', 30), ('mergepart', 20), ('fetch', 14), ('join', 1), ('snapshot', 2),
          ('restore', 3), ('purge_begin', 7), ('purge_end', 8), ('wait', 5), ('jump', 1.5),
          ('start', 6), ('mergeall', 10), ('disklost', 1), ('cleanup', 2), ('compact', 6),
-         ('offline', 2))
+         ('offline', 2), ('pubpart', 10))
 KIND_NAMES = [k for k, _ in KINDS]
 KIND_W = [x for _, x in KINDS]
 CKIND_NAMES = KIND_NAMES + [k for k, _ in CKINDS]
@@ -1858,6 +1897,8 @@ def rand_action(w, r):
         return ('wait', r.choice((1, KEEP, KEEP, KEEP + 1)))
     if k == 'offline':
         return ('offline', di, r.choice((KEEP + 1, 2 * KEEP, 4 * KEEP)))
+    if k == 'pubpart':
+        return ('pubpart', di, r.randrange(1 << 30))
     if k == 'jump':
         return ('jump', di, r.choice(SKEWS + (-15, 60)))
     if k == 'import':
@@ -2187,6 +2228,15 @@ SCRIPTS.update({
         ('import', 0, 'h1', RA), ('import', 0, 'h2', RA), ('pubfull', 0), ('mergeall', 1),
         ('fetch', 1, 'h1'), ('fetch', 1, 'h2'),
         ('group', 0, 'g1', ('h1', 'h2'), C_T), ('group', 1, 'g2', ('h2', 'h1'), C_0)]),
+    # A device compacts, and an interrupted publish writes the file without its own
+    # dropped edit but not the file with the floor. Then its disk is lost, and the
+    # deleting device undoes its deletion.
+    'partial_publish_before_floor': (((0, None, ()), (0, None, ()), (0, None, ())), 1, [
+        ('import', 0, 'h1', RA), ('pubfull', 0), ('mergeall', 1), ('fetch', 1, 'h1'),
+        ('edit', 0, 'h1', 'name', 'nC'), ('pubfull', 0), ('mergeall', 1),
+        ('delete', 1, 'h1'), ('pubfull', 1), ('mergeall', 0), ('wait', KEEP),
+        ('compact', 0), ('pubkeys', 0, (('name', 'h1'),)), ('disklost', 0),
+        ('undo', 1, 'h1')]),
     # V2 with new id on restore: the restored device deletes the files its view does not
     # show before it has merged its own published add.
     'cleanup_before_merge': (E2C, 1, [

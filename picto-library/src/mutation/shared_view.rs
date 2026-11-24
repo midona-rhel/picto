@@ -144,9 +144,9 @@ pub enum HeldEntry {
     Add { time: EntryTime, record: FileRecord },
     /// A deletion, or with `undo` the undo of one.
     Delete { time: EntryTime, undo: Option<UndoRecord> },
-    /// The `compacted` entry: no entry of the picture at or before `through`
-    /// counts.
-    Compacted { through: EntryTime },
+    /// The `compacted` entry, stored at the time `stored`: no entry of the
+    /// picture at or before `through` counts.
+    Compacted { stored: EntryTime, through: EntryTime },
     Name { time: EntryTime, value: String },
     Notes { time: EntryTime, value: String },
     Rating { time: EntryTime, value: u8 },
@@ -197,7 +197,7 @@ pub fn cut_of(entries: &[HeldEntry]) -> Cut {
         match entry {
             HeldEntry::Delete { time, undo: None } => cut = time.clone(),
             HeldEntry::Delete { undo: Some(undo), .. } => cut = parse_time_text(&undo.before),
-            HeldEntry::Compacted { through } => floor = through.clone(),
+            HeldEntry::Compacted { through, .. } => floor = through.clone(),
             _ => {}
         }
     }
@@ -476,7 +476,7 @@ mod tests {
         let entries = [
             HeldEntry::Rating { time: at(3, "a"), value: 5 },
             undo(8, None, "as the undoing computer had it"),
-            HeldEntry::Compacted { through: at(6, "b") },
+            HeldEntry::Compacted { stored: at(20, "b"), through: at(6, "b") },
         ];
         assert_eq!(cut_of(&entries), Cut { cut: at(6, "b"), floor: at(6, "b") });
         let shown = view(&entries, &[]).unwrap();
@@ -486,7 +486,7 @@ mod tests {
         let entries = [
             HeldEntry::Add { time: at(1, "a"), record: record("first", &[]) },
             HeldEntry::Delete { time: at(6, "b"), undo: None },
-            HeldEntry::Compacted { through: at(2, "b") },
+            HeldEntry::Compacted { stored: at(20, "b"), through: at(2, "b") },
         ];
         assert_eq!(cut_of(&entries).cut, at(6, "b"));
         assert!(view(&entries, &[]).is_none());
