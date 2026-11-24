@@ -1084,12 +1084,13 @@ fn kinds_in_files(cloud: &Path, application: &LibraryApplication, subject_key: &
     kinds
 }
 
-/// 7 days after a deletion, compaction writes a `compacted` entry. Once a
-/// sync has written that entry to the cloud folder, compaction drops the
-/// first computer's own entries that the deletion made obsolete, and the next
-/// sync writes the files that held them again without them. The other
-/// computer drops them as soon as it merges the `compacted` entry, and its
-/// next sync writes its own files again.
+/// 7 days after a deletion, a sync writes a `compacted` entry. That sync
+/// records the time up to which the computer's entries are in the cloud
+/// folder from before it compacted, so the next sync still keeps the first
+/// computer's own entries that the deletion made obsolete. The sync after
+/// that drops them and writes the files that held them again without them.
+/// The other computer drops them as soon as it merges the `compacted` entry,
+/// and its next sync writes its own files again.
 #[tokio::test]
 async fn a_sync_writes_the_entry_files_again_without_what_compaction_dropped() {
     let cloud = tempfile::tempdir().unwrap();
@@ -1103,17 +1104,16 @@ async fn a_sync_writes_the_entry_files_again_without_what_compaction_dropped() {
     assert_eq!(kinds_in_files(cloud.path(), &first, &deleted), ["add", "delete", "status"]);
     assert_eq!(kinds_in_files(cloud.path(), &second, &deleted), ["add"]);
 
-    let eight_days_later = chrono::Utc::now().timestamp_millis() + 8 * 24 * 60 * 60 * 1_000;
-    first.library().compact_entries(eight_days_later).unwrap();
-    snapshot::publish_library(&first, &provider).await.unwrap();
-    assert_eq!(
-        kinds_in_files(cloud.path(), &first, &deleted),
-        ["add", "compacted", "delete", "status"]
+    // The syncs from here on compact as if 8 days had passed.
+    entries::COMPACTION_TIME_AHEAD.lock().unwrap().insert(
+        configuration_library(&first).unwrap().library_id,
+        8 * 24 * 60 * 60 * 1_000,
     );
-    // The second sync records that the `compacted` entry is in the cloud
-    // folder, so compaction drops the first computer's own entries now.
     snapshot::publish_library(&first, &provider).await.unwrap();
-    first.library().compact_entries(eight_days_later + 60_000).unwrap();
+    let kept = ["add", "compacted", "delete", "status"];
+    assert_eq!(kinds_in_files(cloud.path(), &first, &deleted), kept);
+    snapshot::publish_library(&first, &provider).await.unwrap();
+    assert_eq!(kinds_in_files(cloud.path(), &first, &deleted), kept);
     snapshot::publish_library(&first, &provider).await.unwrap();
     assert_eq!(kinds_in_files(cloud.path(), &first, &deleted), ["compacted", "delete"]);
     snapshot::publish_library(&second, &provider).await.unwrap();

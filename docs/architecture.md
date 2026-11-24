@@ -468,8 +468,10 @@ it, the undo's record is the picture on both.
 
 A computer writes a `compacted` entry only once its own `delete` entry for the file is in the cloud
 folder, because a restore or a lost disk could otherwise lose the deletion while the `compacted`
-entry is already there. It drops its own entries one sync later, once the `compacted` entry is in
-the cloud folder, because a sync writes the cloud files one at a time and can stop in between.
+entry is already there. It drops its own entries only once the `compacted` entry is in the cloud
+folder, because a sync writes the cloud files one at a time and can stop in between. A sync records
+the time up to which its entries are in the cloud folder from before it compacted, so the own
+entries go two syncs after the one that writes the `compacted` entry.
 `entry_compaction_due` holds the files with a `delete` entry that haven't been compacted, filled by
 a trigger, and `removed_own_entry` holds the keys of this computer's dropped entries, whose files
 the next sync writes again.

@@ -91,7 +91,7 @@ fn set_merged(device_id: &str, path: &str) {
 
 /// Forgets which files the computer `device_id` merged. It is called when a
 /// library is opened, because its database can have been replaced by a
-/// snapshot. What other computers in the same process merged stays.
+/// snapshot. What other libraries open in the same process merged stays.
 pub(super) fn forget_merged(device_id: &str) {
     MERGED
         .lock()
@@ -101,6 +101,29 @@ pub(super) fn forget_merged(device_id: &str) {
 
 fn directory(library_id: &str) -> String {
     format!("picto/{library_id}/entries")
+}
+
+/// Milliseconds that tests add to the time that compaction compares the
+/// entries with, by library id, so that a sync acts as if days had passed.
+#[cfg(test)]
+pub(super) static COMPACTION_TIME_AHEAD: LazyLock<Mutex<std::collections::HashMap<String, i64>>> =
+    LazyLock::new(Default::default);
+
+/// The time that a sync passes to `Library::compact_entries`: now, plus the
+/// time that a test set in `COMPACTION_TIME_AHEAD` for the library.
+fn compaction_time(library_id: &str) -> i64 {
+    let now = chrono::Utc::now().timestamp_millis();
+    #[cfg(test)]
+    let now = now
+        + COMPACTION_TIME_AHEAD
+            .lock()
+            .unwrap_or_else(|held| held.into_inner())
+            .get(library_id)
+            .copied()
+            .unwrap_or(0);
+    #[cfg(not(test))]
+    let _ = library_id;
+    now
 }
 
 /// Returns the two hexadecimal digits of the file that holds `entry`.
@@ -231,7 +254,7 @@ pub(super) async fn publish_library(
         .map_err(|error| error.to_string())?
     {}
     library
-        .compact_entries(chrono::Utc::now().timestamp_millis())
+        .compact_entries(compaction_time(library_id))
         .map_err(|error| error.to_string())?;
     let removed = library.removed_own_entries().map_err(|error| error.to_string())?;
     let mut changed = removed
