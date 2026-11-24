@@ -1009,9 +1009,9 @@ pub fn reset_published_entries(transaction: &rusqlite::Transaction<'_>) -> Resul
     Ok(())
 }
 
-/// Returns those of `hashes` whose file exists by the stored entries
-/// (`file_view`). Only files with an `add` or `delete` entry can exist, so
-/// the others are left out with one query.
+/// Returns those of `hashes` whose file exists by the stored entries, by the
+/// same rule as `file_view`: an `add` entry is later than the file's cut, or
+/// the `delete` entry is an undo. It is one query for all of `hashes`.
 pub(super) fn existing_files(
     connection: &rusqlite::Connection,
     hashes: &[&str],
@@ -1019,21 +1019,23 @@ pub(super) fn existing_files(
     if hashes.is_empty() {
         return Ok(HashSet::new());
     }
-    let candidates = connection
-        .prepare_cached(
-            "SELECT DISTINCT hashes.value FROM json_each(?1) hashes
-             CROSS JOIN shared_entry entry ON entry.subject_key = hashes.value
-             WHERE entry.kind IN ('add', 'delete')",
-        )?
+    let existing = connection
+        .prepare_cached(&format!(
+            "SELECT hashes.value FROM json_each(?1) hashes
+             WHERE EXISTS (
+                     SELECT 1 FROM shared_entry deleted
+                     WHERE deleted.subject_key = hashes.value AND deleted.kind = 'delete'
+                       AND deleted.second_key = ''
+                       AND json_extract(deleted.value, '$.record') IS NOT NULL)
+                OR EXISTS (
+                     SELECT 1 FROM shared_entry added
+                     WHERE added.subject_key = hashes.value AND added.kind = 'add'
+                       AND {added_time} > {cut})",
+            added_time = time_text_sql!("added"),
+            cut = cut_sql("hashes.value"),
+        ))?
         .query_map([serde_json::to_string(hashes)?], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut deleted = super::shared_merge::DeletedDefinitions::default();
-    let mut existing = HashSet::new();
-    for hash in candidates {
-        if super::shared_merge::view_of(connection, &mut deleted, &hash)?.is_some() {
-            existing.insert(hash);
-        }
-    }
+        .collect::<rusqlite::Result<HashSet<_>>>()?;
     Ok(existing)
 }
 

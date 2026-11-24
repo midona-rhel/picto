@@ -9,6 +9,9 @@
 //! - A merge of the 100,000 `add` entries of that import, into a library that
 //!   holds the same files and into an empty one, and the same merge when the
 //!   entries arrive as 16 files, the way a sync reads them.
+//! - An import of the 100,000 files into the library that merged their
+//!   entries while empty. The files exist by the entries, so the import
+//!   writes no `add` entry.
 //! - Deleting 100,000 items permanently whose changes are entries already,
 //!   and 100,000 items with a pending tag and status change each, which the
 //!   deletion turns into entries first. Then compacting the entries of the
@@ -83,6 +86,18 @@ pub fn run(library: Library, ids: &[RootId], directory: &std::path::Path) -> R<(
     empty.merge_entries(&entries)?;
     let wanted = empty.wanted_files(None, IMPORT + 1)?.len();
     println!("ROW|merge add entries into an empty library|{adds}|{:.1}|-|n=1 wanted={wanted}", ms(started));
+
+    // The same library imports the files that the merged entries say exist.
+    // Each import finds that the file exists and writes no entry.
+    let started = Instant::now();
+    import(&empty)?;
+    println!("ROW|import files that exist by another computer's entries (action)|{IMPORT}|{:.1}|-|n=1", ms(started));
+    let before = entry_count(&empty)?;
+    let (total, longest, batches) = settle(&empty)?;
+    println!(
+        "ROW|import files that exist by another computer's entries (entries, all batches)|{IMPORT}|{total:.1}|-|n=1 batches={batches} longest_batch_ms={longest:.1} new_entries={}",
+        entry_count(&empty)? - before
+    );
 
     let held = all_roots(&off)?;
     off.add_tag(&explicit(&held), "synced:before-deletion")?;

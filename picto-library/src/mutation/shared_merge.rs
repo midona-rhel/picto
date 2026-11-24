@@ -113,7 +113,7 @@ pub(super) fn held_entries(
 /// The `tag_delete` and `folder_delete` entries that a batch has looked up,
 /// so each is read only once.
 #[derive(Default)]
-pub(super) struct DeletedDefinitions {
+struct DeletedDefinitions {
     tags: HashMap<String, Option<EntryTime>>,
     folders: HashMap<String, bool>,
 }
@@ -152,7 +152,7 @@ impl DeletedDefinitions {
 
 /// Returns the picture that the stored entries of `content_hash` describe,
 /// or `None` when it doesn't exist.
-pub(super) fn view_of(
+fn view_of(
     connection: &rusqlite::Connection,
     deleted: &mut DeletedDefinitions,
     content_hash: &str,
