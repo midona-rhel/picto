@@ -903,14 +903,6 @@ pub(super) fn record_replaced_file(
     let Some(time) = action_time(transaction, revision)? else {
         return Ok(());
     };
-    transaction.execute(
-        &format!(
-            "INSERT OR REPLACE INTO temp.entry_deletion_cut (content_hash, cut)
-             VALUES (?1, {cut})",
-            cut = cut_sql("?1")
-        ),
-        [old_hash],
-    )?;
     transaction
         .prepare_cached(&format!(
             "INSERT INTO shared_entry
