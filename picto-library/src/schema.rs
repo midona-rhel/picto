@@ -11,7 +11,7 @@ use crate::{LibraryError, Result};
 pub const SCHEMA_GENERATION: u32 = 1;
 pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-11-23-entry-compaction";
 /// The schema before `entry_compaction_due` and `removed_own_entry` were
-/// added. Everything else is the same.
+/// added.
 const KEPT_DELETED_FILES_PREDECESSOR: &str = "picto-library-schema-1-2026-11-23-kept-deleted-files";
 const TOMBSTONE_ENTRIES_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-task-rollback-aliases";
 const COMBINED_IMPORT_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-media-aliases-import-tasks";
@@ -180,6 +180,15 @@ pub fn migrate_for_open(
                     "entry_compaction_due",
                     "removed_own_entry",
                 ]))?;
+                // Each file with a `delete` entry is looked at 7 days after
+                // the time of the entry, as the trigger of the writing
+                // connection notes it for a new entry.
+                connection.execute(
+                    "INSERT INTO entry_compaction_due (content_hash, due_ms)
+                     SELECT subject_key, clock_ms + ?1 FROM shared_entry
+                     WHERE kind = 'delete' AND second_key = ''",
+                    [crate::mutation::COMPACT_AFTER_MS],
+                )?;
                 connection.execute(
                     "UPDATE projection_checkpoint SET schema_fingerprint = ?1
                      WHERE schema_fingerprint = ?2",
@@ -1421,6 +1430,7 @@ mod tests {
 
     /// A library from before entry compaction gets the two tables of it, a
     /// backup, and the new fingerprint, keeps its entries, and opens again.
+    /// Its `delete` entries are due for compaction 7 days after their time.
     #[test]
     fn open_adds_the_compaction_tables_to_the_kept_deleted_files_schema() {
         let directory = tempfile::tempdir().unwrap();
@@ -1452,6 +1462,14 @@ mod tests {
         assert!(super::has_table(&migrated, "entry_compaction_due").unwrap());
         assert!(super::has_table(&migrated, "removed_own_entry").unwrap());
         assert_eq!(count(&migrated, "SELECT COUNT(*) FROM shared_entry"), 1);
+        assert_eq!(
+            count(
+                &migrated,
+                "SELECT COUNT(*) FROM entry_compaction_due
+                 WHERE content_hash = 'kept' AND due_ms = 5 + 604800000"
+            ),
+            1
+        );
         assert_eq!(backups_in(directory.path()), 1);
     }
 

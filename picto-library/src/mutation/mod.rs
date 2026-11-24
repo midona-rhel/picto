@@ -55,7 +55,7 @@ pub use shared::{
     EntryClock, EntryKind, SharedEntry, WantedFile, remove_item_tombstones,
     reset_published_entries,
 };
-pub(crate) use shared::install_recording_triggers;
+pub(crate) use shared::{install_recording_triggers, COMPACT_AFTER_MS};
 pub use shared_merge::AppliedMerge;
 pub use shared_view::{EntryTime, FileRecord, FileView};
 use shared::*;
