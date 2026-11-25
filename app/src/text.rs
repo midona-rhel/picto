@@ -139,7 +139,7 @@ pub fn match_range(text: &str, query: &str) -> Option<std::ops::Range<usize>> {
 }
 
 // The functions in this section write byte sizes. The inspector writes a size
-// in one way, and Settings, the cloud sync bar and the Picto Pack dialog
+// in one way, and Settings, the Library Manager and the Picto Pack dialog
 // write it in another way, so each way has its own function here.
 
 /// Writes a size for the inspector's Size row, in binary units: whole bytes
@@ -158,7 +158,7 @@ pub fn size_to_gigabytes(bytes: u64) -> String {
     }
 }
 
-/// Writes a size for Settings, the cloud sync bar and the Picto Pack dialog:
+/// Writes a size for Settings, the Library Manager and the Picto Pack dialog:
 /// whole bytes below 1024 bytes, and otherwise the largest binary unit up to
 /// TB, with two decimals when the number is below ten and one decimal when it
 /// is ten or more.

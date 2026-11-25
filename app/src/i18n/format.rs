@@ -242,21 +242,6 @@ pub fn date(date: NaiveDate) -> String {
     numeric_date(system(), date)
 }
 
-/// Returns the date written with numbers only, then the time with seconds,
-/// in the system's language: `8/26/2026, 3:05:09 PM` in English.
-pub fn date_time(value: NaiveDateTime) -> String {
-    date_time_in(system(), value)
-}
-
-pub fn date_time_in(locale: Locale, value: NaiveDateTime) -> String {
-    format!(
-        "{}{}{}",
-        numeric_date(locale, value.date()),
-        joiner(locale),
-        time(locale, value, true)
-    )
-}
-
 /// Returns the date with the short name of the month, in the system's
 /// language: `Aug 26, 2026` in English and `26. Aug. 2026` in German.
 pub fn short_month_date(date: NaiveDate) -> String {

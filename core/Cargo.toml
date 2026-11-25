@@ -56,7 +56,6 @@ sha2 = "0.10"
 img_hash = "3.2"
 rustdct = "0.4"
 uuid = { version = "1", features = ["v4"] }
-zstd = "0.13"
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
@@ -93,7 +92,6 @@ security-framework = "3.7"
 
 [target.'cfg(windows)'.dependencies]
 ort = { version = "2.0.0-rc.12", features = ["directml"] }
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ort = { version = "2.0.0-rc.12", features = ["webgpu"] }

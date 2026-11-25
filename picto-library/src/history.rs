@@ -105,8 +105,11 @@ pub struct StructuralState {
     pub collections: BTreeMap<RootId, Vec<MediaId>>,
 }
 
-/// Only affected members are retained, anchored to their original neighbours.
-/// Later imports into the same folder are not replaced when structure is undone.
+/// The position of one changed member of a folder, stored as the member
+/// before it and the next member that the change did not touch. Only the
+/// changed members are stored. When the change is undone, each member is put
+/// back next to these neighbours, so items imported into the folder later
+/// keep their places.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StructuralFolderPosition {
     pub root_id: RootId,
@@ -141,10 +144,6 @@ pub type DeletedMediaRow = (u32, String, Option<String>, u32);
 /// A `source_provenance` row: source key, source item key, media, text.
 pub type DeletedProvenanceRow = (String, String, u32, Option<String>);
 
-/// Everything a permanent delete removed, so undo can put it back exactly:
-/// the roots' structure (rows, memberships, folder positions, collection
-/// orders) and the rows that pointed at them. The files stay on disk while
-/// the entry is in history (`protected_cleanup_files`).
 /// Rows a merge pointed from the merged-away item (or a collection it
 /// emptied) at the item that stays, so undo can point them back. Each move
 /// names the row, where it pointed before and where it points after.
@@ -200,30 +199,12 @@ impl RelinkState {
     }
 }
 
-/// Who removed roots from the library. It decides what cloud sync does with
-/// the deletion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeletionOrigin {
-    /// The user deleted the items on this computer with Delete Permanently,
-    /// Empty Trash, or by rejecting an Inbox item with the setting "Delete
-    /// permanently". Cloud sync sends the deletion to the other computers.
-    User,
-    /// The item was merged into a duplicate that stays. Cloud sync sends the
-    /// deletion of its file when no other item uses that file.
-    MergedDuplicate,
-    /// The library removed the items itself, for example the items of an
-    /// import that was stopped and undone. Cloud sync doesn't send it.
-    Library,
-    /// Another computer deleted the items and cloud sync brought the
-    /// deletion here. It isn't sent again, and the computer that made the
-    /// deletion removes the originals from the cloud folder.
-    OtherDevice,
-}
-
+/// Everything a permanent delete removed, so undo can put it back exactly:
+/// the roots' structure (rows, memberships, folder positions, collection
+/// orders) and the rows that pointed at them. The files stay on disk while
+/// the entry is in history (`protected_cleanup_files`).
 #[derive(Debug, Clone)]
 pub struct DeletedRootsState {
-    /// Who made the deletion. A redo deletes the roots with the same origin.
-    pub origin: DeletionOrigin,
     pub roots: Arc<RoaringBitmap>,
     pub structure: StructuralState,
     /// `library_item` rows of the roots and their media: id, stable key, kind.
@@ -243,7 +224,9 @@ pub struct DeletedRootsState {
     /// Folders whose cover was a deleted root.
     pub folder_covers: Arc<Vec<(u32, u32)>>,
     pub recent_views: Arc<Vec<(u32, i64)>>,
-    /// Cascaded queue rows, serialized for set-based restoration.
+    /// The work queue rows that the delete removed through `ON DELETE
+    /// CASCADE`, as JSON, so that undo can insert them again with one
+    /// statement.
     pub work_items_json: Arc<String>,
     pub files: Arc<Vec<FileId>>,
 }

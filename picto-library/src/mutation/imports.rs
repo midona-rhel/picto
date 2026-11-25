@@ -161,18 +161,6 @@ impl Library {
                 )?;
                 resources.insert("tasks".to_owned());
             }
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "root.ingest",
-                Some(&affected),
-                serde_json::json!({"count": root_ids.len()}),
-                inputs
-                    .iter()
-                    .map(|input| input.imported_at_ms)
-                    .max()
-                    .unwrap_or_else(now_ms),
-            )?;
             let receipt = PublicationCoordinator::receipt(
                 revision,
                 resources,
@@ -507,8 +495,9 @@ impl Library {
     }
 }
 
-/// Move `roots` into the lifecycle among them that keeps an item most (Active,
-/// then Inbox, then Trash), so they can be grouped.
+/// Moves all `roots` to the highest-ranked lifecycle that one of them has
+/// (Active ranks above Inbox, and Inbox above Trash), so that they can be
+/// grouped.
 pub(super) fn settle_lifecycles(
     snapshot: &mut ProjectionSnapshot,
     roots: &[RootId],

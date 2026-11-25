@@ -1,8 +1,10 @@
-//! Application-shell ownership for the greenfield media-library kernel.
+//! The open library as the app uses it: the `picto_library::Library`, the
+//! blob store that holds the files, and the state of the AI tagger.
 //!
-//! This type is the sole owner used by the cutover path. It deliberately does
-//! not open the legacy `Store`; auxiliary services share the kernel's
-//! `LibraryDatabase` scheduler through `library().database()`.
+//! The other services of the app (subscriptions, AI tagging, packs) do not
+//! open the database themselves. They write through the same
+//! `LibraryDatabase` work queue, which they reach through
+//! `library().database()`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -153,8 +155,9 @@ impl LibraryApplication {
             ai_worker_status: std::sync::Mutex::new(AiWorkerStatus::default()),
             import_start: std::sync::Mutex::new(()),
         };
-        // Retired sources: pause their subscriptions with a note and remove
-        // their saved sign-ins, once.
+        // Pause the subscriptions of sources that are no longer supported,
+        // with a note that says why, and remove their saved sign-ins. Once
+        // this is done, later opens find nothing to change.
         match crate::subscriptions::retired_sites::settle_retired_sites(&application) {
             Ok(settled) if settled != Default::default() => tracing::info!(
                 paused_queries = settled.paused_queries,
@@ -452,11 +455,7 @@ impl LibraryApplication {
         input: picto_library::ReorderCollectionInput,
     ) -> Result<picto_library::MutationReceipt, String> {
         self.library
-            .reorder_collection(
-                input.collection_id,
-                input.media_ids,
-                chrono::Utc::now().timestamp_millis(),
-            )
+            .reorder_collection(input.collection_id, input.media_ids)
             .map_err(|error| error.to_string())
     }
 
@@ -536,11 +535,7 @@ impl LibraryApplication {
         tag_ids.dedup();
         drop(snapshot);
         self.library
-            .set_folder_auto_tags(
-                input.folder_id,
-                tag_ids,
-                chrono::Utc::now().timestamp_millis(),
-            )
+            .set_folder_auto_tags(input.folder_id, tag_ids)
             .map_err(|error| error.to_string())
     }
 
@@ -798,7 +793,7 @@ impl LibraryApplication {
         match target {
             Some(target) if target != tag_id => {
                 self.library
-                    .merge_tags(tag_id, target, chrono::Utc::now().timestamp_millis())
+                    .merge_tags(tag_id, target)
             }
             _ => self.library.rename_tag(tag_id, name),
         }
@@ -810,7 +805,7 @@ impl LibraryApplication {
         tag_id: picto_library::TagId,
     ) -> Result<picto_library::MutationReceipt, String> {
         self.library
-            .delete_tag(tag_id, chrono::Utc::now().timestamp_millis())
+            .delete_tag(tag_id)
             .map_err(|error| error.to_string())
     }
 
@@ -1121,7 +1116,8 @@ impl LibraryApplication {
         })
     }
 
-    /// Emit at most one coalesced invalidation for the current render frame.
+    /// Sends one library-changed event that combines all changes published
+    /// since the last call, or nothing when there were none.
     pub fn flush_publications(&self) -> Option<LibraryChanged> {
         let event = self.library.publication().flush()?;
         let event = LibraryChanged {

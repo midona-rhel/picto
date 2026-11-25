@@ -69,11 +69,6 @@ pub struct ActionButton {
     look: Look,
     icon: Option<(&'static str, f32)>,
     label: Option<SharedString>,
-    /// A second, smaller text in the tertiary text colour, drawn after the
-    /// label, at the end of the button. When it is set, the label is
-    /// left-aligned and fills the rest of the width. The buttons that choose
-    /// a cloud provider in the library manager use it.
-    caption: Option<SharedString>,
     height: f32,
     width: Option<f32>,
     full_width: bool,
@@ -95,7 +90,6 @@ pub fn action_button(id: impl Into<ElementId>, look: Look) -> ActionButton {
         look,
         icon: None,
         label: None,
-        caption: None,
         height: if settings { 36. } else { theme::ACTION_BUTTON },
         width: None,
         full_width: false,
@@ -122,14 +116,6 @@ impl ActionButton {
     }
     pub fn label(mut self, label: impl Into<SharedString>) -> Self {
         self.label = Some(label.into());
-        self
-    }
-    /// Sets a small text in the tertiary text colour that is drawn after the
-    /// label, at the end of the button. With a caption, the label is
-    /// left-aligned and, when it does not fit, is cut short with an
-    /// ellipsis.
-    pub fn caption(mut self, caption: impl Into<SharedString>) -> Self {
-        self.caption = Some(caption.into());
         self
     }
     pub fn height(mut self, height: f32) -> Self {
@@ -315,23 +301,8 @@ impl RenderOnce for ActionButton {
         if let Some(name) = name {
             button = button.aria_label(name);
         }
-        match (self.label, self.caption) {
-            (Some(label), Some(caption)) => {
-                button = button.justify_start().child(
-                    div().flex_1().min_w_0().truncate().child(label),
-                );
-                button = button.child(
-                    div()
-                        .flex_none()
-                        .max_w(relative(0.5))
-                        .truncate()
-                        .text(theme::TEXT_CAPTION)
-                        .text_color(theme.text_tertiary())
-                        .child(caption),
-                );
-            }
-            (Some(label), None) => button = button.child(label),
-            (None, _) => {}
+        if let Some(label) = self.label {
+            button = button.child(label);
         }
         let focus = super::focus::control(&self.id, window, cx);
         if let Some(handler) = &self.on_focus {

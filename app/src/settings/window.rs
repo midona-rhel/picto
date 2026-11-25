@@ -39,12 +39,6 @@ pub struct SettingsWindow {
     body_focus: FocusHandle,
     pub(super) shortcuts_scroll: ScrollHandle,
     pub(super) statistics: Option<LibraryStatistics>,
-    /// `cloud` is the cloud sync state of the library, which the session
-    /// holds. `cloud_panel` is the state of the Cloud section itself: the
-    /// restore points, whether an operation is under way, and the restore
-    /// that the user is asked to confirm.
-    pub(super) cloud: Option<Entity<crate::cloud::Cloud>>,
-    pub(super) cloud_panel: super::panels::CloudPanel,
     /// The state of the AI Models section, whose id is `aitagging`: the
     /// status of the AI model runtime, and the downloads and optimizations
     /// that are under way.
@@ -135,27 +129,6 @@ impl SettingsWindow {
             }
         })
         .detach();
-        // The cloud sync state is the entity that the shell created and the
-        // session holds. The window observes it and draws again when it
-        // changes. The restore points are read by this window: once when it
-        // opens, and again each time the library reports a change that
-        // names the resource `cloud`.
-        let cloud = session.read(cx).cloud.clone();
-        let mut subscriptions = subscriptions;
-        if let Some(cloud) = &cloud {
-            subscriptions.push(cx.observe(cloud, |_, _, cx| cx.notify()));
-            subscriptions.push(cx.subscribe(
-                &session,
-                |this, _, event: &crate::application::Event, cx| {
-                    if let crate::application::Event::Changed(changed) = event
-                        && crate::application::touches(changed, "cloud")
-                    {
-                        this.refresh_restore_points(cx);
-                    }
-                },
-            ));
-        }
-        cx.defer_in(window, |this, _, cx| this.refresh_restore_points(cx));
         // The status of the AI model runtime is read when the window opens
         // too. Reading it does not load a model: it checks which models'
         // files are in the models' folder.
@@ -171,8 +144,6 @@ impl SettingsWindow {
             body_focus: cx.focus_handle(),
             shortcuts_scroll: ScrollHandle::new(),
             statistics: None,
-            cloud,
-            cloud_panel: Default::default(),
             ai: Default::default(),
             conflicts: HashMap::new(),
             conflict_generation: 0,
@@ -384,7 +355,6 @@ fn nav_icon(name: &str) -> &'static str {
         "folder-down" => "settings-nav-folder-down",
         "trash" => "settings-nav-trash",
         "download" => "settings-nav-download",
-        "cloud" => "settings-nav-cloud",
         "box" => "settings-nav-box",
         _ => "settings-nav-info-circle",
     }
@@ -407,7 +377,6 @@ fn result_icon(name: &str) -> &'static str {
         "folder-down" => "settings-panel-folder-down",
         "trash" => "trash-2",
         "download" => "settings-panel-download",
-        "cloud" => "cloud-hero",
         "box" => "settings-panel-box",
         _ => "settings-panel-info-circle",
     }
@@ -686,8 +655,7 @@ impl Render for SettingsWindow {
             .key_context("Settings") // i18n: a key context
             .child(sidebar)
             .child(content);
-        root.children(self.restore_question(window, cx))
-            .children(ui::window_chrome::resize_edges(window))
+        root.children(ui::window_chrome::resize_edges(window))
             .children(ui::window_chrome::rim(window, cx))
     }
 }

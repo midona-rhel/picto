@@ -7,7 +7,7 @@ use roaring::RoaringBitmap;
 use crate::bitmap::{self, BitmapDomain, BitmapKey};
 use crate::database::WorkPriority;
 use crate::history::{
-    DeletionOrigin, FolderDefinitionState, HistoryEntry, SemanticChange, SessionHistory,
+    FolderDefinitionState, HistoryEntry, SemanticChange, SessionHistory,
     SmartFolderDefinitionState, StructuralMediaNoteState, StructuralRootState, StructuralState,
     TagDefinitionState, TagNamespaceDefinitionState,
 };
@@ -40,9 +40,6 @@ mod structure;
 mod merge;
 mod library_merge;
 mod undo;
-mod shared;
-mod shared_merge;
-mod shared_view;
 pub(crate) mod tasks;
 use tags::*;
 use folders::*;
@@ -51,14 +48,7 @@ use structure::*;
 use merge::*;
 pub use merge::{SharedFileMerge, merged_notes};
 pub use library_merge::{MergeTaskInput, translate_view, MERGE_BACKUP, MERGE_LIBRARY};
-pub use shared::{
-    EntryClock, EntryKind, SharedEntry, WantedFile, remove_item_tombstones,
-    reset_published_entries,
-};
-pub(crate) use shared::install_recording_triggers;
-pub use shared_merge::AppliedMerge;
-pub use shared_view::{EntryTime, FileRecord, FileView};
-use shared::*;
+pub use structure::remove_item_tombstones;
 use undo::*;
 
 struct PublishedDelta {
@@ -77,38 +67,9 @@ impl crate::database::PublicationDelta<Arc<ProjectionSnapshot>> for PublishedDel
     fn settle(
         &mut self,
         transaction: &rusqlite::Transaction<'_>,
-        before: &Arc<ProjectionSnapshot>,
-    ) -> Result<()> {
-        // Cloud sync records what the write changed, compared with the
-        // library before it. A tag rename or a folder deletion is only
-        // visible in the history entry.
-        if let Some(history) = &self.history {
-            record_definition_changes(
-                transaction,
-                before.revision + 1,
-                &self.snapshot,
-                &history.change,
-                true,
-            )?;
-        }
-        record_changes(transaction, before, &self.snapshot)?;
-        self.settle_projection(transaction)
-    }
-}
-
-/// The delta of a merge of other computers' entries. It settles like any
-/// other write but records nothing, because a merge must not send the
-/// changes it makes back to the other computers as this computer's own.
-struct UnrecordedDelta(PublishedDelta);
-
-impl crate::database::PublicationDelta<Arc<ProjectionSnapshot>> for UnrecordedDelta {
-    fn settle(
-        &mut self,
-        transaction: &rusqlite::Transaction<'_>,
         _before: &Arc<ProjectionSnapshot>,
     ) -> Result<()> {
-        discard_changes(transaction)?;
-        self.0.settle_projection(transaction)
+        self.settle_projection(transaction)
     }
 }
 
@@ -359,31 +320,6 @@ impl Library {
         Ok(published.map(|((output, receipt), _, _)| (output, receipt)))
     }
 
-    pub fn auxiliary_semantic_write_if_changed<T>(
-        &self,
-        priority: WorkPriority,
-        resources: impl IntoIterator<Item = String>,
-        item_ids: impl IntoIterator<Item = RootId>,
-        operation_kind: &'static str,
-        payload: serde_json::Value,
-        operation: impl FnOnce(&rusqlite::Transaction<'_>, u64) -> Result<Option<T>>,
-    ) -> Result<Option<(T, MutationReceipt)>> {
-        self.auxiliary_write_if_changed(priority, resources, item_ids, |transaction, revision| {
-            let Some(output) = operation(transaction, revision)? else {
-                return Ok(None);
-            };
-            insert_cloud_journal(
-                transaction,
-                revision,
-                operation_kind,
-                None,
-                payload,
-                now_ms(),
-            )?;
-            Ok(Some(output))
-        })
-    }
-
     pub fn read_auxiliary_json(&self, table: &str, key: &str) -> Result<Option<String>> {
         let (table, key_column) = auxiliary_json_spec(table)?;
         self.database.read(WorkPriority::VisibleRead, |connection| {
@@ -458,14 +394,6 @@ impl Library {
                         [&key],
                     )?;
                 }
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    command,
-                    None,
-                    serde_json::json!({"key": key}),
-                    now_ms(),
-                )?;
                 let mut next = (*snapshot).clone();
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
@@ -700,8 +628,7 @@ impl Library {
             |connection, snapshot| {
                 let values = connection.query_row(
                     // The statistics are read in one pass over the media
-                    // items and one pass over the files. The files that a
-                    // merge kept after deleting their pictures don't count.
+                    // items and one pass over the files.
                     "WITH assets AS (
                          SELECT COUNT(*) AS total,
                                 COALESCE(SUM(file.mime LIKE 'image/%'), 0) AS images,
@@ -711,7 +638,6 @@ impl Library {
                      ), files AS (
                          SELECT COUNT(*) AS total, COALESCE(SUM(size_bytes), 0) AS bytes
                          FROM media_file
-                         WHERE content_hash NOT IN (SELECT content_hash FROM kept_deleted_file)
                      )
                      SELECT
                          assets.total, assets.images, assets.videos, assets.audio,
@@ -950,77 +876,6 @@ impl Library {
         Ok(receipt)
     }
 
-    pub fn pending_cloud_journal(&self, limit: usize) -> Result<Vec<crate::CloudJournalRecord>> {
-        if limit == 0 {
-            return Ok(Vec::new());
-        }
-        self.database.read(WorkPriority::Cloud, |connection| {
-            let mut statement = connection.prepare(
-                "SELECT journal_id, revision, operation_kind, target_bitmap,
-                        payload_json, created_at_ms
-                 FROM cloud_journal
-                 WHERE expanded_at_ms IS NULL
-                 ORDER BY journal_id
-                 LIMIT ?1",
-            )?;
-            let rows = statement
-                .query_map([limit.min(1000) as i64], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)? as u64,
-                        row.get::<_, i64>(1)? as u64,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<Vec<u8>>>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, i64>(5)?,
-                    ))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            rows.into_iter()
-                .map(
-                    |(journal_id, revision, operation_kind, targets, payload, created_at_ms)| {
-                        let target_root_ids = targets
-                            .map(|payload| {
-                                RoaringBitmap::deserialize_from(&mut std::io::Cursor::new(payload))
-                            })
-                            .transpose()?;
-                        Ok(crate::CloudJournalRecord {
-                            journal_id,
-                            revision,
-                            operation_kind,
-                            target_root_ids,
-                            payload: serde_json::from_str(&payload)?,
-                            created_at_ms,
-                        })
-                    },
-                )
-                .collect()
-        })
-    }
-
-    pub fn mark_cloud_journal_expanded(
-        &self,
-        journal_ids: &[u64],
-        expanded_at_ms: i64,
-    ) -> Result<()> {
-        if journal_ids.is_empty() {
-            return Ok(());
-        }
-        self.database
-            .maintenance_write(WorkPriority::Cloud, |transaction| {
-                let mut statement = transaction.prepare_cached(
-                    "UPDATE cloud_journal SET expanded_at_ms = ?2
-                     WHERE journal_id = ?1 AND expanded_at_ms IS NULL",
-                )?;
-                for journal_id in journal_ids {
-                    let journal_id = i64::try_from(*journal_id).map_err(|_| {
-                        LibraryError::InvalidInput("cloud journal ID exceeds SQLite range".into())
-                    })?;
-                    statement.execute(rusqlite::params![journal_id, expanded_at_ms])?;
-                }
-                Ok(())
-            })
-    }
-
     pub fn settle_fts(&self, limit: usize) -> Result<Option<MutationReceipt>> {
         if limit == 0 {
             return Ok(None);
@@ -1103,23 +958,16 @@ impl Library {
         &self,
         media_id: MediaId,
         update: &MediaFactsUpdate,
-        changed_at_ms: i64,
     ) -> Result<MutationReceipt> {
-        self.update_media_facts_and_content(media_id, update, None, changed_at_ms)
+        self.update_media_facts_and_content(media_id, update, None)
     }
 
     pub fn repair_media_content(
         &self,
         media_id: MediaId,
         content: &crate::model::RepairedMediaContent,
-        changed_at_ms: i64,
     ) -> Result<MutationReceipt> {
-        self.update_media_facts_and_content(
-            media_id,
-            &MediaFactsUpdate::default(),
-            Some(content),
-            changed_at_ms,
-        )
+        self.update_media_facts_and_content(media_id, &MediaFactsUpdate::default(), Some(content))
     }
 
     fn update_media_facts_and_content(
@@ -1127,7 +975,6 @@ impl Library {
         media_id: MediaId,
         update: &MediaFactsUpdate,
         content: Option<&crate::model::RepairedMediaContent>,
-        changed_at_ms: i64,
     ) -> Result<MutationReceipt> {
         if update == &MediaFactsUpdate::default() && content.is_none() {
             return Err(LibraryError::InvalidInput(
@@ -1206,10 +1053,6 @@ impl Library {
                 palette = value;
             }
             if let Some(content) = content {
-                // Pending changes name the picture by its root and get the
-                // file's hash when they become entries. They belong to the
-                // old file, so they become entries before the hash changes.
-                settle_in(transaction, &snapshot, usize::MAX)?;
                 if content.content_hash.len() != 64 || !content.content_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                     return Err(LibraryError::InvalidInput("Invalid repaired content hash".into()));
                 }
@@ -1219,10 +1062,6 @@ impl Library {
                 if actual_hash != content.expected_hash {
                     return Err(LibraryError::InvalidState("Media changed during repair".into()));
                 }
-                // Remote bytes belong to the old hash. Never mark repaired bytes as uploaded.
-                transaction.execute("DELETE FROM cloud_blob_state WHERE file_hash = ?1", [&actual_hash])?;
-                // The other computers drop the old file and get the new one.
-                record_replaced_file(transaction, revision, &snapshot, &actual_hash, media_id)?;
                 transaction.execute(
                     "UPDATE media_file SET content_hash = ?2, file_path = ?3, size_bytes = ?4 WHERE file_id = ?1",
                     rusqlite::params![file_id, content.content_hash, content.file_path,
@@ -1251,10 +1090,11 @@ impl Library {
                     serde_json::to_string(&palette)?
                 ],
             )?;
-            // Derivative work fills in one fact at a time. A perceptual
-            // hash is read only by the duplicate scan, and a palette only
-            // by the colour index; neither needs the MIME, image or size
-            // projections rebuilt.
+            // The background media work usually writes one value at a time,
+            // so only the projections that read a changed value are rebuilt.
+            // A perceptual hash is read only by the duplicate scan, and a
+            // palette only by the colour index; neither needs the MIME, image
+            // or size projections rebuilt.
             let shape_changed = content.is_some()
                 || (&before.0, before.1, before.2, before.3, before.4)
                     != (&mime, width, height, duration_ms, frame_count);
@@ -1334,17 +1174,6 @@ impl Library {
                     else { &[crate::predicate::DependencyChange::CoverFacts] },
                 )?;
             }
-            transaction.execute(
-                "INSERT INTO cloud_journal
-                     (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-                 VALUES (?1, 'media.facts', ?2, ?3, ?4)",
-                rusqlite::params![
-                    revision as i64,
-                    crate::bitmap::encode(&affected)?,
-                    serde_json::json!({"media_id": media_id.0, "file_id": file_id}).to_string(),
-                    changed_at_ms
-                ],
-            )?;
             next.revision = revision;
             let resources: Vec<String> = if shape_changed || palette_changed {
                 vec!["media".into(), "roots".into(), "smart-folders".into()]
@@ -1530,18 +1359,6 @@ impl Library {
                 smart_changes.push(crate::predicate::DependencyChange::RootText);
             }
             crate::smart::settle_affected_for(transaction, &mut next, &selection, &smart_changes)?;
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "root.metadata.patch",
-                Some(&selection),
-                serde_json::json!({
-                    "rating": rating.map(|value| value.bitmap_key()),
-                    "notes": notes.is_some(),
-                    "source_urls": source_urls.is_some(),
-                }),
-                modified_at_ms,
-            )?;
             resources.insert("smart-folders".into());
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
@@ -1666,14 +1483,6 @@ impl Library {
                 &changed,
                 &[crate::predicate::DependencyChange::RootText],
             )?;
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "root.rename",
-                Some(&changed),
-                serde_json::json!({"count": changed.len()}),
-                modified_at_ms,
-            )?;
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
                 revision,
@@ -1748,10 +1557,6 @@ impl Library {
         modified_at_ms: i64,
     ) -> Result<MutationReceipt> {
         let target = target.clone();
-        let operation_kind = match &mutation {
-            TextMutation::Notes(_) => "root.notes",
-            TextMutation::SourceUrls(_) => "root.source_urls",
-        };
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some((&self.match_cache, &self.order_cache)))?;
             let mut before = load_root_text(transaction, &selection)?;
@@ -1817,14 +1622,6 @@ impl Library {
                 &selection,
                 &[crate::predicate::DependencyChange::RootText],
             )?;
-            insert_cloud_journal(
-                transaction,
-                revision,
-                operation_kind,
-                Some(&selection),
-                serde_json::json!({}),
-                modified_at_ms,
-            )?;
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
                 revision,
@@ -1864,7 +1661,6 @@ impl Library {
         resources: Vec<String>,
     ) -> Result<MutationReceipt> {
         let target = target.clone();
-        let changed_at_ms = now_ms();
         let receipt = self.publish(priority, |transaction, revision, snapshot| {
             let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some((&self.match_cache, &self.order_cache)))?;
             let mut next = (*snapshot).clone();
@@ -1877,20 +1673,6 @@ impl Library {
                 &partition_keys,
                 &selection,
             )?;
-            if !changes.is_empty() {
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    match domain {
-                        BitmapDomain::Lifecycle => "root.lifecycle",
-                        BitmapDomain::Rating => "root.rating",
-                        BitmapDomain::Tag => "tag.partition",
-                    },
-                    Some(&selection),
-                    serde_json::json!({"destination": destination}),
-                    changed_at_ms,
-                )?;
-            }
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
                 revision,
@@ -2077,8 +1859,9 @@ fn publish_delta(
             .query_versions
             .invalidate_sql(delta.snapshot.revision);
     }
-    // Announce smart folders only when a result actually changed, so edits
-    // that cannot move any folder do not make every listener reload.
+    // Name the resource `smart_folders` only when the result of a smart
+    // folder changed, so that an edit that changes no smart folder does not
+    // make every listener reload.
     if delta.receipt.resources.iter().any(|resource| resource == "smart_folders")
         && Arc::ptr_eq(
             &projections.snapshot().smart_results,
@@ -2142,30 +1925,6 @@ pub(crate) fn load_root_text(
                 .map_err(Into::into)
         })
         .collect()
-}
-
-fn insert_cloud_journal(
-    transaction: &rusqlite::Transaction<'_>,
-    revision: u64,
-    operation_kind: &str,
-    targets: Option<&RoaringBitmap>,
-    payload: serde_json::Value,
-    created_at_ms: i64,
-) -> Result<()> {
-    let target_bitmap = targets.map(crate::bitmap::encode).transpose()?;
-    transaction.execute(
-        "INSERT INTO cloud_journal
-             (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![
-            revision as i64,
-            operation_kind,
-            target_bitmap,
-            payload.to_string(),
-            created_at_ms
-        ],
-    )?;
-    Ok(())
 }
 
 fn now_ms() -> i64 {

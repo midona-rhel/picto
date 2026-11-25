@@ -194,7 +194,7 @@ fn other_library(folder: &Path) -> PathBuf {
         .ensure_tag_definitions(&["series:from-folder".into()])
         .unwrap();
     library
-        .set_folder_auto_tags(deep, auto_tags, IMPORTED_AT)
+        .set_folder_auto_tags(deep, auto_tags)
         .unwrap();
     library
         .ensure_tag_definitions(&["unused-b".into()])

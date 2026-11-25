@@ -71,7 +71,6 @@ Scan complete - no new review pairs
 Auto
 Blue
 Check for a newer version of Picto.
-Choose a cloud folder in Libraries
 Dark
 Gray
 Light
@@ -133,13 +132,6 @@ Restart to finish updating.
 Update checks are available in packaged builds.
 The update could not be downloaded.
 What’s new in
-Picto is updating your library.
-Your library is up to date.
-Working…
-Recovery snapshot created
-Syncing library changes
-Estimating time remaining…
-The library is still in use; nothing was restored.
 The dropped files did not arrive.
 ZIP Archive
 differ at all
@@ -165,7 +157,7 @@ The second library
 1 item
 Cancel…
 Every item, tag, folder, smart folder and collection of both libraries is put into one library. A file that both libraries hold is kept once. Nothing is deleted from the other library.
-Subscriptions, cloud sync settings, watched folders and application settings of the other library are not carried over. A merge cannot be undone with Undo.
+Subscriptions, watched folders and application settings of the other library are not carried over. A merge cannot be undone with Undo.
 A library operation is already in progress.
 The library was closed before the merge started.
 Reading the other library…
@@ -174,9 +166,3 @@ This library is as it was before the merge.
 Cancel the merge
 Keep merging
 Cancel merge
-Delete Cloud Data…
-Deleting Cloud Data…
-Delete Cloud Data
-Delete the cloud data of "{value0}"?\n\nThe library's copy in the cloud folder is deleted. The library on this device is not changed. Other devices that sync this library keep their local libraries and stop syncing.\n\nThis cannot be undone.
-Cloud data deleted. Cloud sync is off for this library.
-Cloud data deleted. Cloud sync is off for this library. The library's folder in the cloud folder was not removed, because it still holds {value0} files or folders that Picto did not write or could not remove: {value1}

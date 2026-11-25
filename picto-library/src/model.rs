@@ -563,8 +563,9 @@ pub struct ClaimedMediaWork {
     pub attempt_count: u32,
 }
 
-/// Tags produced for one visible library root. Collection callers combine
-/// member predictions before submitting this assignment.
+/// The tags that the AI tagger produced for one library root. For a
+/// collection, the caller combines the predictions for its members into one
+/// assignment before it submits it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RootTagAssignment {
     pub root_id: RootId,
@@ -754,23 +755,14 @@ pub struct MediaFactsUpdate {
     pub palette: Option<Vec<LabColor>>,
 }
 
-/// A validated encoding repair; logical media identity and metadata stay intact.
+/// The new file of a media item after its encoding was repaired and the
+/// repair was checked. The media item keeps its identity and its metadata.
 #[derive(Debug, Clone)]
 pub struct RepairedMediaContent {
     pub expected_hash: String,
     pub content_hash: String,
     pub file_path: String,
     pub size_bytes: u64,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CloudJournalRecord {
-    pub journal_id: u64,
-    pub revision: u64,
-    pub operation_kind: String,
-    pub target_root_ids: Option<roaring::RoaringBitmap>,
-    pub payload: serde_json::Value,
-    pub created_at_ms: i64,
 }
 
 #[cfg(test)]
@@ -804,10 +796,11 @@ pub struct TaskId(pub i64);
 pub enum TaskState {
     Running,
     Paused,
-    /// Stop-and-undo is removing what the task added.
+    /// The user stopped the task with undo, and the items that it added
+    /// are being removed.
     Reverting,
     Finished,
-    /// Stopped by the user; what it added stays.
+    /// The user stopped the task, and what it added stays in the library.
     Stopped,
     /// The task was stopped, and what it added was removed.
     Reverted,

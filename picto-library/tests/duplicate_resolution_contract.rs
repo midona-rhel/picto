@@ -465,7 +465,8 @@ fn keep_file_merges_the_losing_item_into_the_kept_one_and_undoes_exactly() {
         assert_eq!(snapshot.tags[&tag("kept:from-loser")].len(), 1);
     };
     merged(&library);
-    // The loser's file waits for the entry to leave history.
+    // The loser's file is not queued for deletion while the undo entry is
+    // still in the history.
     assert!(library.pending_blob_cleanup(10).unwrap().is_empty());
 
     library.undo().unwrap().unwrap();
@@ -555,8 +556,8 @@ fn keep_file_takes_a_losing_member_out_of_its_collection_and_keeps_what_it_carri
     );
     assert_eq!(after.root.cover_media_id, after.media[0].media_id);
     assert_eq!(after.root.name, "Post");
-    // The kept item gains the tags the member had as part of its post, and
-    // the post, which lives on, keeps them.
+    // The kept item gets the tags that the member had as part of its post,
+    // and the post, which still exists, keeps them.
     let post_tag = library.projections().snapshot().tag_ids_by_name["post:only"];
     assert!(library.details(winner).unwrap().tag_ids.contains(&post_tag));
     assert!(after.tag_ids.contains(&post_tag));
@@ -626,7 +627,7 @@ fn keep_file_removes_a_collection_it_empties_and_points_its_post_at_the_kept_ite
     };
     library
         .database()
-        .maintenance_write(picto_library::database::WorkPriority::Cloud, |transaction| {
+        .maintenance_write(picto_library::database::WorkPriority::Maintenance, |transaction| {
             transaction.execute(
                 "INSERT INTO source_post (site_id, post_key, root_item_id, created_at, updated_at)
                  VALUES ('fixture', 'post', ?1, 'now', 'now')",
@@ -851,9 +852,9 @@ fn duplicate_merge_upgrades_collection_members_without_renaming_the_collection()
     );
 }
 
-/// Deleting the picture that a duplicate merge kept removes its file from
-/// the disk like any other. The merge's decision names that file and goes
-/// with it.
+/// Deleting the item whose file a duplicate resolution kept removes that
+/// file from the disk like any other file. The resolved duplicate pair names
+/// the file as the winner and is deleted with it.
 #[test]
 fn the_file_of_a_kept_duplicate_is_removed_after_its_picture_is_deleted() {
     let directory = TempDir::new().unwrap();
@@ -875,7 +876,7 @@ fn the_file_of_a_kept_duplicate_is_removed_after_its_picture_is_deleted() {
         .unwrap();
     let target = SelectionTarget::Explicit { root_ids: vec![winner] };
     library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
-    // A deletion that can't be undone frees its files at once.
+    // A deletion that can't be undone queues its files for removal at once.
     library.permanently_delete(&target, 1_700_000_000_300, 0, false).unwrap();
 
     let mut removed = Vec::new();

@@ -198,7 +198,6 @@ impl Library {
             ));
         }
 
-        let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let history = self.history.clone();
@@ -275,14 +274,6 @@ impl Library {
 
                 if !affected.is_empty() {
                     crate::smart::settle_affected_for(transaction, &mut next, &affected, &smart_changes)?;
-                    insert_cloud_journal(
-                        transaction,
-                        revision,
-                        "tag.ai_batch",
-                        Some(&affected),
-                        serde_json::json!({"assignment_count": assignments.len()}),
-                        changed_at_ms,
-                    )?;
                 }
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
@@ -323,7 +314,6 @@ impl Library {
 
     pub fn rename_tag(&self, tag_id: crate::TagId, name: &str) -> Result<MutationReceipt> {
         let name = ingest::canonical_tag_name(name)?;
-        let changed_at_ms = now_ms();
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let old_name = snapshot
                 .tag_ids_by_name
@@ -341,14 +331,6 @@ impl Library {
             }
             let mut next = (*snapshot).clone();
             rename_tag_definition(transaction, &mut next, tag_id, &name)?;
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "tag.rename",
-                None,
-                serde_json::json!({"tag_id": tag_id.0, "name": name}),
-                changed_at_ms,
-            )?;
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
                 revision,
@@ -395,14 +377,6 @@ impl Library {
             let before = load_namespace_name(transaction, namespace_id)?;
             let mut next = (*snapshot).clone();
             apply_namespace_name(transaction, &mut next, namespace_id, &name)?;
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "tag.namespace.rename",
-                None,
-                serde_json::json!({"namespace_id": namespace_id.0, "name": name}),
-                now_ms(),
-            )?;
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
                 revision,
@@ -464,17 +438,6 @@ impl Library {
                 "INSERT INTO tag_namespace(namespace_id, stable_key, display_name)
                  VALUES (?1, ?2, ?3)",
                 rusqlite::params![state.namespace_id.0, state.stable_key, state.display_name,],
-            )?;
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "tag.namespace.create",
-                None,
-                serde_json::json!({
-                    "namespace_id": namespace_id.0,
-                    "name": name,
-                }),
-                now_ms(),
             )?;
             let mut next = (*snapshot).clone();
             next.revision = revision;
@@ -575,16 +538,6 @@ impl Library {
                     )?;
                 }
             }
-            if !created.is_empty() {
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "tag.definitions.ensure",
-                    None,
-                    serde_json::json!({"names": created}),
-                    now_ms(),
-                )?;
-            }
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
                 revision,
@@ -649,14 +602,6 @@ impl Library {
             let Some(target_id) = target_id else {
                 let mut next = (*snapshot).clone();
                 apply_namespace_name(transaction, &mut next, namespace_id, &name)?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "tag.namespace.rename",
-                    None,
-                    serde_json::json!({"namespace_id": namespace_id.0, "name": name}),
-                    now_ms(),
-                )?;
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
@@ -754,17 +699,6 @@ impl Library {
                 before: Some(source_state),
                 after: None,
             });
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "tag.namespace.merge",
-                Some(&affected),
-                serde_json::json!({
-                    "source_namespace_id": namespace_id.0,
-                    "destination_namespace_id": target_id.0,
-                }),
-                now_ms(),
-            )?;
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
                 revision,
@@ -815,22 +749,21 @@ impl Library {
         self.rename_or_merge_tag_namespace(namespace_id, "")
     }
 
-    pub fn delete_tag(&self, tag_id: crate::TagId, changed_at_ms: i64) -> Result<MutationReceipt> {
-        self.remove_tag_definition(tag_id, None, changed_at_ms)
+    pub fn delete_tag(&self, tag_id: crate::TagId) -> Result<MutationReceipt> {
+        self.remove_tag_definition(tag_id, None)
     }
 
     pub fn merge_tags(
         &self,
         source: crate::TagId,
         destination: crate::TagId,
-        changed_at_ms: i64,
     ) -> Result<MutationReceipt> {
         if source == destination {
             return Err(LibraryError::InvalidInput(
                 "source and destination tags are identical".into(),
             ));
         }
-        self.remove_tag_definition(source, Some(destination), changed_at_ms)
+        self.remove_tag_definition(source, Some(destination))
     }
 
     pub fn delete_unused_tags(&self) -> Result<MutationReceipt> {
@@ -845,7 +778,6 @@ impl Library {
                 .collect::<Vec<_>>();
             let mut next = (*snapshot).clone();
             let mut changes = Vec::new();
-            let mut deleted_names = Vec::new();
             for tag_id in &unused {
                 let (_, tag_changes) = remove_tag_in_transaction(
                     transaction,
@@ -854,7 +786,6 @@ impl Library {
                     None,
                     revision,
                 )?;
-                deleted_names.extend(removed_tag_name(&tag_changes));
                 changes.extend(tag_changes);
             }
             let settings_changed =
@@ -864,15 +795,6 @@ impl Library {
                 } else {
                     false
                 };
-            record_deleted_tags(transaction, revision, &deleted_names)?;
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "tag.delete_unused",
-                None,
-                serde_json::json!({"tag_ids": unused.iter().map(|id| id.0).collect::<Vec<_>>() }),
-                now_ms(),
-            )?;
             next.revision = revision;
             let mut resources =
                 vec!["tags".into(), "navigation".into(), "smart-folders".into()];
@@ -922,7 +844,6 @@ impl Library {
         &self,
         source: crate::TagId,
         destination: Option<crate::TagId>,
-        changed_at_ms: i64,
     ) -> Result<MutationReceipt> {
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let mut next = (*snapshot).clone();
@@ -953,33 +874,6 @@ impl Library {
             } else {
                 false
             };
-            if destination.is_none() {
-                // A deleted tag is deleted on the other devices too. A tag
-                // that was merged into another is not: the other devices
-                // do not get the merge.
-                let names = removed_tag_name(&history_changes).into_iter().collect::<Vec<_>>();
-                record_deleted_tags(transaction, revision, &names)?;
-            }
-            transaction.execute(
-                "INSERT INTO cloud_journal
-                     (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![
-                    revision as i64,
-                    if destination.is_some() {
-                        "tag.merge"
-                    } else {
-                        "tag.delete"
-                    },
-                    crate::bitmap::encode(&source_members)?,
-                    serde_json::json!({
-                        "source_tag_id": source.0,
-                        "destination_tag_id": destination.map(|tag| tag.0),
-                    })
-                    .to_string(),
-                    changed_at_ms
-                ],
-            )?;
             next.revision = revision;
             let mut resources = vec![
                 "roots".into(),
@@ -1028,7 +922,6 @@ impl Library {
         add: bool,
     ) -> Result<MutationReceipt> {
         let target = target.clone();
-        let changed_at_ms = now_ms();
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some((&self.match_cache, &self.order_cache)))?;
             let mut next = (*snapshot).clone();
@@ -1127,14 +1020,6 @@ impl Library {
                 .map(|tag_id| crate::predicate::DependencyChange::Tag(crate::TagId(*tag_id)))
                 .collect::<Vec<_>>();
             crate::smart::settle_affected_for(transaction, &mut next, &affected, &smart_changes)?;
-            insert_cloud_journal(
-                transaction,
-                revision,
-                if add { "tag.add" } else { "tag.remove" },
-                Some(&affected),
-                serde_json::json!({"tag_ids": tag_ids}),
-                changed_at_ms,
-            )?;
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
                 revision,
@@ -1363,19 +1248,6 @@ pub(super) fn remove_unreferenced_tags(
         removed += 1;
     }
     Ok(removed)
-}
-
-/// Returns the stable key of the tag that `remove_tag_in_transaction`
-/// removed, read from the changes it returned.
-pub(super) fn removed_tag_name(changes: &[SemanticChange]) -> Option<String> {
-    changes.iter().find_map(|change| match change {
-        SemanticChange::TagDefinition {
-            before: Some(state),
-            after: None,
-            ..
-        } => Some(state.full_name.clone()),
-        _ => None,
-    })
 }
 
 pub(super) fn prune_deleted_starred_tags(
@@ -1625,9 +1497,12 @@ fn matching_tag_page<'a>(
         }
     }
 
-    // One lower-rank pass. Word starts can displace earlier substrings, so keep
-    // only the substring prefix that could still enter this window + lookahead.
-    // The page uses O(limit) references; this buffer uses at most O(offset + limit).
+    // One pass over the tags for the two lower ranks: word-start matches
+    // (rank 2) and other substring matches (rank 3). A word-start match comes
+    // before every substring match, even one found earlier in the pass, so the
+    // substring matches are buffered and only as many are kept as can still
+    // reach this page and the one entry after it. The page holds at most
+    // `limit` references and the buffer at most `offset + limit`.
     let mut substrings = Vec::new();
     for entry in sorted.iter().filter(in_namespace) {
         match entry.search_rank(search) {
@@ -1657,8 +1532,9 @@ fn tag_rank_ranges(
     search: &str,
     rank: u8,
 ) -> [std::ops::Range<usize>; 2] {
-    // Exact/prefix matches form contiguous ranges in the alphabetical cache.
-    // Lower ranks are scanned only when these cannot fill the page.
+    // Exact and prefix matches are contiguous ranges in the alphabetically
+    // sorted list. The lower ranks are scanned only when these ranges cannot
+    // fill the page.
     let range = |needle: &str| {
         let start = sorted.partition_point(|entry| entry.subname_key.as_str() < needle);
         let end = start + sorted[start..].partition_point(|entry| {
@@ -1677,8 +1553,9 @@ fn tag_rank_ranges(
     if ranges[0].start > ranges[1].start {
         ranges.swap(0, 1);
     }
-    // Qualified text can also be a literal subname. Merge overlapping ranges
-    // so the same tag never appears twice and alphabetical ties stay stable.
+    // A search text of the form `namespace:subname` can also be a subname
+    // that contains a colon. Overlapping ranges are merged, so that the same
+    // tag never appears twice and the alphabetical order stays the same.
     if ranges[0].end >= ranges[1].start {
         ranges[0].end = ranges[0].end.max(ranges[1].end);
         ranges[1] = 0..0;

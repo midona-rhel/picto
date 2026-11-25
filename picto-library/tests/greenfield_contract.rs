@@ -85,13 +85,13 @@ fn video_content_repair_preserves_identity_and_collection_metadata_across_reopen
         size_bytes: 500,
     };
     let receipt = library
-        .repair_media_content(picto_library::MediaId(first.0), &content, 30)
+        .repair_media_content(picto_library::MediaId(first.0), &content)
         .unwrap();
     assert_eq!(receipt.revision, before.revision + 1);
     assert_eq!(receipt.item_ids, vec![collection]);
     let revision = library.database().revision().unwrap();
     assert!(library
-        .repair_media_content(picto_library::MediaId(first.0), &content, 31)
+        .repair_media_content(picto_library::MediaId(first.0), &content)
         .is_err());
     assert_eq!(library.database().revision().unwrap(), revision);
     drop(library);
@@ -892,8 +892,9 @@ fn query_caches_survive_unrelated_writes_but_refresh_membership_order_and_summar
         library.query_window(&named, &window).unwrap().page.items[0].root_id,
         second
     );
-    // This two-root result fits a boundary window, so refreshing its exact
-    // name order no longer requires building a cached full-result order.
+    // This result of two roots fits in one window at the start of the
+    // order, so sorting it by name again after the rename does not build a
+    // cached order of the whole result.
     assert_eq!(library.query_statistics().order_builds, built.order_builds);
 
     let mut filtered = all.clone();
@@ -949,7 +950,6 @@ fn byte_repairs_refresh_aggregates_without_rebuilding_text_membership() {
                 file_path: "/synthetic-repaired.png".into(),
                 size_bytes: 512,
             },
-            42,
         )
         .unwrap();
     let after = library
@@ -1969,7 +1969,7 @@ fn tag_merge_and_delete_rewrite_saved_queries_and_restore_from_memory_history() 
     let destination = snapshot.tag_ids_by_name["destination"];
     let (auto_folder, _) = library.create_folder("Auto source", None).unwrap();
     library
-        .set_folder_auto_tags(auto_folder, vec![source], 1_700_000_000_650)
+        .set_folder_auto_tags(auto_folder, vec![source])
         .unwrap();
     let (smart_folder, _) = library
         .create_smart_folder(smart_input(
@@ -1992,7 +1992,7 @@ fn tag_merge_and_delete_rewrite_saved_queries_and_restore_from_memory_history() 
     };
 
     library
-        .merge_tags(source, destination, 1_700_000_000_700)
+        .merge_tags(source, destination)
         .unwrap();
     let merged = library.projections().snapshot();
     assert!(!merged.tags.contains_key(&source));
@@ -2024,7 +2024,7 @@ fn tag_merge_and_delete_rewrite_saved_queries_and_restore_from_memory_history() 
     );
     library.redo().unwrap().unwrap();
 
-    library.delete_tag(destination, 1_700_000_000_800).unwrap();
+    library.delete_tag(destination).unwrap();
     assert_eq!(root_tag_count(&library, first), 0);
     assert_eq!(root_tag_count(&library, second), 0);
     assert_eq!(
@@ -2060,7 +2060,7 @@ fn deleting_a_starred_tag_prunes_settings_and_undo_restores_both() {
         )
         .unwrap();
 
-    let receipt = library.delete_tag(tag_id, 1_700_000_000_900).unwrap();
+    let receipt = library.delete_tag(tag_id).unwrap();
     assert!(receipt
         .resources
         .iter()
@@ -2223,41 +2223,6 @@ fn background_ai_tags_stay_out_of_undo_and_do_not_block_it() {
     assert_eq!(root_tag_count(&library, mine), 0, "undo reverts the user's edit");
     assert_eq!(root_tag_count(&library, imported_later), 1, "and leaves the AI tag alone");
     assert!(library.undo().unwrap().is_none(), "the AI tag never entered the history");
-}
-
-#[test]
-fn cloud_reads_compact_semantic_journal_without_advancing_library_revision() {
-    let directory = TempDir::new().unwrap();
-    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
-    let (root, _) = library
-        .ingest(&imported("cloud-journal", Lifecycle::Active, &[]))
-        .unwrap();
-    library
-        .add_tag(
-            &SelectionTarget::Explicit {
-                root_ids: vec![root],
-            },
-            "cloud:tag",
-        )
-        .unwrap();
-    let revision = library.database().revision().unwrap();
-    let pending = library.pending_cloud_journal(10).unwrap();
-    assert_eq!(
-        pending
-            .iter()
-            .map(|record| record.operation_kind.as_str())
-            .collect::<Vec<_>>(),
-        vec!["root.ingest", "tag.add"]
-    );
-    assert!(pending[1]
-        .target_root_ids
-        .as_ref()
-        .is_some_and(|roots| roots.contains(root.0)));
-    library
-        .mark_cloud_journal_expanded(&[pending[0].journal_id], 1_700_000_005_000)
-        .unwrap();
-    assert_eq!(library.database().revision().unwrap(), revision);
-    assert_eq!(library.pending_cloud_journal(10).unwrap().len(), 1);
 }
 
 fn root_tag_count(library: &Library, root_id: picto_library::RootId) -> usize {
@@ -2739,7 +2704,7 @@ fn folder_auto_tags_apply_once_on_assignment_and_participate_in_memory_history()
     let tag_id = library.projections().snapshot().tag_ids_by_name["auto:folder"];
     let (folder, _) = library.create_folder("Automatic", None).unwrap();
     library
-        .set_folder_auto_tags(folder, vec![tag_id], 1_700_000_003_000)
+        .set_folder_auto_tags(folder, vec![tag_id])
         .unwrap();
 
     let mut imported_into_folder = imported("auto-ingest", Lifecycle::Active, &[]);
@@ -3156,40 +3121,6 @@ fn smart_folders_use_the_grid_predicate_and_settle_with_mutations() {
 }
 
 #[test]
-fn new_imports_register_pending_cloud_files_without_requeueing_duplicates() {
-    let directory = TempDir::new().unwrap();
-    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
-    let queued = || library.auxiliary_read(
-        picto_library::database::WorkPriority::VisibleRead,
-        |connection| Ok(connection.query_row(
-            "SELECT COUNT(*) FROM cloud_blob_state WHERE state = 'queued'",
-            [], |row| row.get::<_, i64>(0),
-        )?),
-    ).unwrap();
-    library.ingest(&imported("disabled", Lifecycle::Active, &[])).unwrap();
-    assert_eq!(queued(), 0);
-    library.database().maintenance_write(
-        picto_library::database::WorkPriority::Cloud,
-        |transaction| {
-            transaction.execute("UPDATE cloud_state SET provider = 'dropbox', paused = 1 WHERE singleton = 1", [])?;
-            Ok(())
-        },
-    ).unwrap();
-    let input = imported("new-cloud-file", Lifecycle::Active, &[]);
-    library.ingest(&input).unwrap();
-    assert_eq!(queued(), 1);
-    library.database().maintenance_write(
-        picto_library::database::WorkPriority::Cloud,
-        |transaction| {
-            transaction.execute("UPDATE cloud_blob_state SET state = 'available', remote_present = 1", [])?;
-            Ok(())
-        },
-    ).unwrap();
-    library.ingest(&input).unwrap();
-    assert_eq!(queued(), 0);
-}
-
-#[test]
 fn smart_folder_rating_undo_and_redo_publish_changed_counts() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
@@ -3581,21 +3512,8 @@ fn bounded_ingest_batch_publishes_once_and_fts_respects_each_scope() {
         .iter()
         .all(|(_, receipt)| receipt.revision == outputs[0].1.revision));
     assert_eq!(outputs[0].1.revision, before + 1);
-    library
-        .database()
-        .read(
-            picto_library::database::WorkPriority::VisibleRead,
-            |connection| {
-                assert_eq!(
-                    connection.query_row("SELECT COUNT(*) FROM cloud_journal", [], |row| {
-                        row.get::<_, i64>(0)
-                    })?,
-                    1
-                );
-                Ok(())
-            },
-        )
-        .unwrap();
+    // The library's revision grows by one for each publication.
+    assert_eq!(library.database().revision().unwrap(), before + 1);
 
     assert!(library.settle_fts(64).unwrap().is_some());
     let text_view = ViewQuerySpec {
@@ -3714,24 +3632,13 @@ fn prepared_collection_import_never_publishes_standalone_members() {
                     })?,
                     2
                 );
-                assert_eq!(
-                    connection.query_row(
-                        "SELECT COUNT(DISTINCT revision) FROM cloud_journal",
-                        [],
-                        |row| row.get::<_, i64>(0),
-                    )?,
-                    1
-                );
-                assert_eq!(
-                    connection.query_row("SELECT COUNT(*) FROM cloud_journal", [], |row| {
-                        row.get::<_, i64>(0)
-                    })?,
-                    1
-                );
                 Ok(())
             },
         )
         .unwrap();
+    // The library's revision grows by one for each publication, so the
+    // collection and its members were published once.
+    assert_eq!(library.database().revision().unwrap(), before + 1);
 }
 
 #[test]
@@ -4725,7 +4632,6 @@ fn collections_are_one_root_and_mime_filters_include_every_member() {
                 picto_library::MediaId(video.0),
                 picto_library::MediaId(image.0),
             ],
-            1_700_000_000_150,
         )
         .unwrap();
     assert_eq!(
@@ -4750,7 +4656,6 @@ fn collections_are_one_root_and_mime_filters_include_every_member() {
         .set_collection_cover(
             collection,
             picto_library::MediaId(video.0),
-            1_700_000_000_175,
         )
         .unwrap();
     assert_eq!(
@@ -4973,7 +4878,6 @@ fn derivative_updates_refresh_only_roots_using_the_changed_file_as_cover() {
                 mime: Some("audio/mpeg".into()),
                 ..Default::default()
             },
-            1_700_000_001_100,
         )
         .unwrap();
     assert_eq!(
@@ -5001,7 +4905,6 @@ fn derivative_updates_refresh_only_roots_using_the_changed_file_as_cover() {
                 height: Some(None),
                 ..Default::default()
             },
-            1_700_000_001_200,
         )
         .unwrap();
     assert_eq!(
@@ -5365,7 +5268,6 @@ fn collection_members_retain_notes_through_group_cover_undo_and_ungroup() {
         .set_collection_cover(
             collection,
             picto_library::MediaId(second.0),
-            1_700_000_004_100,
         )
         .unwrap();
     assert_eq!(
@@ -5440,7 +5342,8 @@ fn recent_views_are_active_only_timestamp_ordered_and_clear_is_session_undoable(
         vec![newer, older]
     );
 
-    // Timestamp resolution must not leave fast navigation tied and ordered by ID.
+    // Two views recorded with the same timestamp must not be ordered by id:
+    // the view that was recorded last comes first.
     library.record_recent_view(older, 200).unwrap();
     let retouched = library
         .query(
@@ -5502,28 +5405,12 @@ fn permanent_delete_past_the_undo_limit_queues_its_blobs_at_once() {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("library.sqlite");
     let library = Library::create(&path).unwrap();
-    let shared_hash = "shared-content";
     let mut first_import = imported("delete-first", Lifecycle::Active, &["creator:one"]);
     first_import.facts.content_hash = "first-content".into();
     let mut second_import = imported("delete-second", Lifecycle::Active, &["creator:two"]);
-    second_import.facts.content_hash = shared_hash.into();
+    second_import.facts.content_hash = "second-content".into();
     let converted = library
         .ingest_batch(&[first_import.clone(), second_import.clone()])
-        .unwrap();
-    library
-        .database()
-        .maintenance_write(
-            picto_library::database::WorkPriority::Cloud,
-            |transaction| {
-                transaction.execute(
-                    "INSERT INTO cloud_blob_state
-                         (file_hash, state, remote_present, remote_extension, updated_at)
-                     VALUES (?1, 'available', 1, 'png', '2026-08-31T00:00:00Z')",
-                    [shared_hash],
-                )?;
-                Ok(())
-            },
-        )
         .unwrap();
     let first = converted[0].0;
     let second = converted[1].0;
@@ -5586,15 +5473,6 @@ fn permanent_delete_past_the_undo_limit_queues_its_blobs_at_once() {
                     })?,
                     2
                 );
-                let (object_key, retention_days): (String, i64) = connection.query_row(
-                    "SELECT file_name,
-                            CAST(julianday(purge_after) - julianday(deleted_at) AS INTEGER)
-                     FROM cloud_deleted_original",
-                    [],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )?;
-                assert_eq!(object_key, format!("{shared_hash}.png"));
-                assert_eq!(retention_days, 7);
                 Ok(())
             },
         )
@@ -5614,7 +5492,7 @@ fn permanent_delete_past_the_undo_limit_queues_its_blobs_at_once() {
             .unwrap(),
         2
     );
-    assert_eq!(removed, vec!["first-content", shared_hash]);
+    assert_eq!(removed, vec!["first-content", "second-content"]);
     assert!(reopened.pending_blob_cleanup(10).unwrap().is_empty());
 }
 
@@ -5914,7 +5792,8 @@ fn permanent_delete_guard_rejects_query_growth_without_changing_anything() {
             excluded_root_ids: vec![],
         };
         assert_eq!(library.selection_summary(&target).unwrap().media_count, 1);
-        // The query grows after the renderer's preflight, before the writer resolves it.
+        // A second item matches the query after the app counted the
+        // selection and before the write resolves the query.
         let second = library.ingest(&imported("second", lifecycle, &[])).unwrap().0;
         library.history().clear();
         let revision = library.database().revision().unwrap();
@@ -5928,7 +5807,8 @@ fn permanent_delete_guard_rejects_query_growth_without_changing_anything() {
         assert!(library.details(second).is_ok());
         assert!(library.history().state().undo.is_none());
         assert!(library.pending_blob_cleanup(10).unwrap().is_empty());
-        // Only a separately confirmed retry may drop the constraint.
+        // Only a second call that the user confirmed, without
+        // `require_undoable`, deletes items that cannot be undone.
         delete(false).unwrap();
         assert!(library.details(first).is_err());
         assert!(library.details(second).is_err());

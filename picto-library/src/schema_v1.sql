@@ -249,8 +249,10 @@ CREATE TABLE subscription_run_source_item (
     PRIMARY KEY(run_query_id, source_item_id)
 ) WITHOUT ROWID, STRICT;
 
--- Run-local source state. Stable source_post/source_item rows describe provider
--- identity only; attempts are the sole authority for progress and outcomes.
+-- What each subscription run did with each post and file. The rows of
+-- source_post and source_item only identify a post and its files at the
+-- provider; the progress and the result of a run are stored only in the
+-- attempt tables below.
 CREATE TABLE source_post_attempt (
     attempt_id INTEGER PRIMARY KEY,
     run_query_id INTEGER NOT NULL REFERENCES subscription_run_query(run_query_id) ON DELETE CASCADE,
@@ -363,164 +365,6 @@ CREATE TABLE setting (
     value_json TEXT NOT NULL
 ) WITHOUT ROWID, STRICT;
 
-CREATE TABLE cloud_state (
-    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-    library_id TEXT NOT NULL UNIQUE,
-    device_id TEXT NOT NULL,
-    provider TEXT CHECK (provider IN ('google_drive', 'dropbox')),
-    account_label TEXT,
-    remote_root TEXT,
-    paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1)),
-    state TEXT NOT NULL DEFAULT 'disabled',
-    phase TEXT NOT NULL DEFAULT 'idle',
-    blocking INTEGER NOT NULL DEFAULT 0 CHECK (blocking IN (0, 1)),
-    completed_units INTEGER NOT NULL DEFAULT 0,
-    total_units INTEGER,
-    message TEXT NOT NULL DEFAULT '',
-    last_sync_at TEXT,
-    last_snapshot_at TEXT,
-    pending_blobs INTEGER NOT NULL DEFAULT 0,
-    missing_blobs INTEGER NOT NULL DEFAULT 0,
-    schema_generation INTEGER NOT NULL DEFAULT 1,
-    hlc_physical_ms INTEGER NOT NULL DEFAULT 0,
-    hlc_logical INTEGER NOT NULL DEFAULT 0,
-    retention_json TEXT NOT NULL DEFAULT '{"daily":30,"weekly":26,"yearly":5,"epochs_days":30,"deleted_blobs_days":7,"full_media_history":false}'
-) STRICT;
-
-CREATE TABLE cloud_device_frontier (
-    device_id TEXT PRIMARY KEY,
-    hlc_physical_ms INTEGER NOT NULL,
-    hlc_logical INTEGER NOT NULL,
-    updated_at TEXT NOT NULL
-) WITHOUT ROWID, STRICT;
-
--- The entries that the computers of a library send each other through cloud
--- sync. An entry says what one computer did to one picture, tag or folder,
--- and when, by the time of that computer's clock. Only the latest entry per
--- key is kept; `picto-library/src/mutation/shared.rs` explains the kinds.
--- `subject_key` is the content hash of a file, except for `tag_delete`,
--- where it's the tag's name, and `folder_delete`, where it's the folder's
--- stable key. `second_key` is the computer's id for `add`, the tag's name for
--- `item_tag`, the folder's stable key for `folder_item`, and empty for the
--- other kinds. `value` is the picture's record as JSON for `add`, and the new
--- value for the other kinds. The key starts with `subject_key`, so all
--- entries of one file are read as one range.
-CREATE TABLE shared_entry (
-    subject_key TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    second_key TEXT NOT NULL DEFAULT '',
-    value TEXT,
-    clock_ms INTEGER NOT NULL,
-    clock_counter INTEGER NOT NULL,
-    device_id TEXT NOT NULL,
-    PRIMARY KEY(subject_key, kind, second_key)
-) WITHOUT ROWID, STRICT;
-
--- The single row exists once the library records entries. `started_ms` and
--- `started_counter` are the clock time at which recording started. The
--- pictures the library held then get an `add` entry with that time, written
--- in batches: `start_next_root` is the first root that hasn't got one yet
--- (NULL when all are written), and `start_end_root` is the first root id
--- that didn't exist when recording started. The `action_` columns hold the
--- revision and clock time of the last write that recorded something, so
--- that everything one write records gets the same time.
-CREATE TABLE entry_recording (
-    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-    started_ms INTEGER NOT NULL,
-    started_counter INTEGER NOT NULL,
-    start_next_root INTEGER,
-    start_end_root INTEGER NOT NULL,
-    action_revision INTEGER NOT NULL DEFAULT 0,
-    action_ms INTEGER NOT NULL DEFAULT 0,
-    action_counter INTEGER NOT NULL DEFAULT 0
-) STRICT;
-
--- Changes this computer made that aren't entries yet. One row holds one kind
--- of change that one write made to any number of pictures: the kind, second
--- key and value as in `shared_entry`, the clock time of the write, and the
--- changed roots as a serialized Roaring bitmap. Tagging a million pictures is
--- one row. `Library::settle_entries` turns the rows into entries in batches.
-CREATE TABLE pending_entry (
-    pending_id INTEGER PRIMARY KEY,
-    kind TEXT NOT NULL,
-    second_key TEXT NOT NULL DEFAULT '',
-    value TEXT,
-    clock_ms INTEGER NOT NULL,
-    clock_counter INTEGER NOT NULL,
-    root_bitmap BLOB NOT NULL
-) STRICT;
-
--- Files, tags and folders whose entries a merge has stored and that the
--- library doesn't match yet. `subject_kind` is `file`, `tag` or `folder`,
--- and `subject_key` is the content hash, the tag's name or the folder's
--- stable key. `Library::apply_merged` changes the library and removes them.
-CREATE TABLE merge_touched (
-    subject_kind TEXT NOT NULL,
-    subject_key TEXT NOT NULL,
-    PRIMARY KEY(subject_kind, subject_key)
-) WITHOUT ROWID, STRICT;
-
--- Files that exist by the entries and that this library doesn't hold yet.
-CREATE TABLE wanted_file (
-    content_hash TEXT PRIMARY KEY
-) WITHOUT ROWID, STRICT;
-
--- Files of pictures that a merge deleted. The file and its `media_file` row
--- stay on this computer until `remove_after_ms`, which is the time of the
--- merge plus "Keep deleted files", and at least 7 days. When the entries say
--- that the picture exists again in that time, the picture is imported again
--- from this file. After that time the file goes to `blob_cleanup_queue`
--- unless the picture exists by the entries. These files are not files of
--- the library: statistics, the duplicate scan and cloud sync leave them out.
-CREATE TABLE kept_deleted_file (
-    content_hash TEXT PRIMARY KEY,
-    remove_after_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX idx_kept_deleted_file_remove_after ON kept_deleted_file(remove_after_ms);
-
--- Original files in the cloud folder whose picture this computer deleted.
--- `file_name` is the content hash, a dot and the extension. The original is
--- removed from the cloud folder after `purge_after`; the row then stays with
--- `purge_after` NULL.
-CREATE TABLE cloud_deleted_original (
-    file_name TEXT PRIMARY KEY,
-    deleted_at TEXT NOT NULL,
-    purge_after TEXT
-) WITHOUT ROWID, STRICT;
-
-CREATE TABLE cloud_quarantine (
-    quarantine_id INTEGER PRIMARY KEY,
-    mutation_id TEXT NOT NULL UNIQUE,
-    reason TEXT NOT NULL,
-    envelope_json TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    resolved_at TEXT
-) STRICT;
-
-CREATE TABLE cloud_snapshot (
-    snapshot_id TEXT PRIMARY KEY,
-    frontier_json TEXT NOT NULL,
-    database_sha256 TEXT NOT NULL,
-    artifact_sha256 TEXT NOT NULL,
-    size_bytes INTEGER NOT NULL,
-    verified INTEGER NOT NULL DEFAULT 0 CHECK (verified IN (0, 1)),
-    created_at TEXT NOT NULL,
-    remote_path TEXT,
-    published_at TEXT
-) WITHOUT ROWID, STRICT;
-
-CREATE TABLE cloud_blob_state (
-    file_hash TEXT PRIMARY KEY REFERENCES media_file(content_hash) ON DELETE CASCADE,
-    state TEXT NOT NULL CHECK (state IN ('available', 'queued', 'downloading', 'missing_remote', 'corrupt')),
-    priority INTEGER NOT NULL DEFAULT 0,
-    remote_present INTEGER NOT NULL DEFAULT 0 CHECK (remote_present IN (0, 1)),
-    remote_extension TEXT,
-    last_error TEXT,
-    uploaded_at TEXT,
-    updated_at TEXT NOT NULL
-) WITHOUT ROWID, STRICT;
-
 CREATE TABLE fts_dirty (
     root_id INTEGER NOT NULL REFERENCES library_root(root_id) ON DELETE CASCADE,
     category INTEGER NOT NULL,
@@ -528,8 +372,8 @@ CREATE TABLE fts_dirty (
     PRIMARY KEY(root_id, category)
 ) WITHOUT ROWID, STRICT;
 
--- rowid = root_id. Separate columns preserve field-scoped contains semantics;
--- values are normalized to lowercase before insertion.
+-- The rowid is the root_id. Each field has its own column, so that a search
+-- can look for text inside one field only. Values are written in lowercase.
 CREATE VIRTUAL TABLE root_fts USING fts5(
     name,
     notes,
@@ -539,16 +383,6 @@ CREATE VIRTUAL TABLE root_fts USING fts5(
     detail = 'none',
     columnsize = 0
 );
-
-CREATE TABLE cloud_journal (
-    journal_id INTEGER PRIMARY KEY,
-    revision INTEGER NOT NULL,
-    operation_kind TEXT NOT NULL,
-    target_bitmap BLOB,
-    payload_json TEXT NOT NULL,
-    created_at_ms INTEGER NOT NULL,
-    expanded_at_ms INTEGER
-) STRICT;
 
 CREATE TABLE deletion_tombstone (
     stable_key TEXT PRIMARY KEY,
@@ -585,7 +419,6 @@ CREATE INDEX idx_folder_parent_order ON folder_definition(parent_id, display_ord
 CREATE INDEX idx_recent_viewed ON recent_view(viewed_at_ms DESC, root_id);
 CREATE INDEX idx_source_media ON source_provenance(media_id, source_key, source_item_key);
 CREATE INDEX idx_fts_dirty_order ON fts_dirty(category, queued_at_ms, root_id);
-CREATE INDEX idx_cloud_pending ON cloud_journal(expanded_at_ms, journal_id);
 CREATE INDEX idx_subscription_due ON subscription(paused, next_run_at, subscription_id);
 CREATE INDEX idx_subscription_query_subscription ON subscription_query(subscription_id, query_id);
 CREATE INDEX idx_subscription_run_subscription ON subscription_run(subscription_id, created_at, run_id);

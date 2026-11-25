@@ -509,9 +509,6 @@ pub struct Session {
     /// The folder of the open library. It is either a disposable copy or a
     /// library the user keeps.
     root: PathBuf,
-    /// The cloud sync state of the library. The shell creates it and sets this
-    /// field.
-    pub cloud: Option<Entity<crate::cloud::Cloud>>,
     /// The key under which this library's recent folders are stored in the
     /// app's state. For a disposable copy it is the path of the library the
     /// copy was made from, so the recent folders are still there when a new
@@ -749,7 +746,6 @@ impl Session {
             view_patch: None,
             blobs,
             root,
-            cloud: None,
             disposable,
             library_key,
             library_cover: None,

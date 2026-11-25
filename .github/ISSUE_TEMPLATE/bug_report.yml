@@ -34,7 +34,6 @@ body:
         - Tags / folders / smart folders
         - Duplicates
         - AI tagging
-        - Cloud sync
         - Updates / install
         - Other
     validations:
@@ -43,8 +42,8 @@ body:
     id: library
     attributes:
       label: Library size
-      description: Roughly how many items, and whether it uses cloud sync.
-      placeholder: ~40k items, no sync
+      description: Roughly how many items.
+      placeholder: ~40k items
   - type: textarea
     id: steps
     attributes:

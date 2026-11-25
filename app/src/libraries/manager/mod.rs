@@ -2,10 +2,10 @@
 //! not resizable. Its left side lists the libraries on this device. Its
 //! right side shows the library chosen in the list: its cover, name and
 //! folder, the Open Library button and the actions menu, whether it is
-//! open, pinned or missing, its appearance, its statistics and its cloud
-//! sync. When the user asks for it, the right side shows the form for a new
-//! library or the Open from Cloud… pane instead. The footer holds New
-//! Library…, Open Existing… and Open from Cloud….
+//! open, pinned or missing, its appearance and its statistics. When the
+//! user asks for it, the right side shows the form for a new library
+//! instead. The footer holds Merge Libraries…, New Library… and Open
+//! Existing….
 //!
 //! The list is this app's own (`state.json`). Only the libraries that this
 //! process may open are listed (`libraries::listed`), so a process that may
@@ -25,7 +25,6 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use std::path::{Path, PathBuf};
 
-mod cloud;
 mod dialogs;
 mod merge;
 mod panes;
@@ -134,8 +133,6 @@ enum Act {
 enum Pane {
     Library,
     Create,
-    /// The Open from Cloud… pane.
-    Cloud,
 }
 
 struct ManagerGlobal(WindowHandle<Manager>);
@@ -236,32 +233,6 @@ pub struct Manager {
     /// The temporary folder that holds the cropped covers of the listed
     /// libraries.
     scratch: Option<tempfile::TempDir>,
-    /// The open library's cloud sync state, and the subscription that
-    /// redraws this window when the state changes.
-    cloud: Option<(Entity<crate::cloud::Cloud>, Subscription)>,
-    /// The cloud providers' folders that were detected on this device or
-    /// chosen by the user. `choices` holds the Picto libraries found in
-    /// those folders.
-    roots: Vec<crate::cloud::Root>,
-    choices: Vec<crate::cloud::Choice>,
-    /// The index in `choices` of the cloud library chosen in the Open from
-    /// Cloud… pane. `cloud_name` is the field for the name that the library
-    /// gets on this device.
-    chosen: Option<usize>,
-    cloud_name: Entity<TextInput>,
-    /// The name of the cloud operation that is running, or `None` when none
-    /// is running.
-    working: Option<&'static str>,
-    /// The measurements from which the remaining time of the sync is
-    /// estimated (`cloud::track`). `work_key` identifies the work that is
-    /// measured, and `eta` is the estimate in seconds.
-    samples: Vec<crate::cloud::Sample>,
-    work_key: Option<String>,
-    eta: Option<u64>,
-    /// The Stop Syncing question.
-    stopping: ui::modal::Host<()>,
-    /// The Delete Cloud Data… question.
-    deleting_cloud: ui::modal::Host<()>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -273,14 +244,8 @@ impl Manager {
                 .submits()
         });
         let host = host::host(cx);
-        let cloud_name = cx.new(|cx| TextInput::new(InputKind::Form, cx).submits());
         let subscriptions = vec![
             cx.observe(&name, |_, _, cx| cx.notify()),
-            cx.observe(&cloud_name, |_, _, cx| cx.notify()),
-            cx.subscribe(
-                &cloud_name,
-                |this, _, _: &crate::ui::text_input::Submitted, cx| this.join(cx),
-            ),
             // Enter in the name field does what the Choose Location… button
             // does.
             cx.subscribe(
@@ -331,21 +296,9 @@ impl Manager {
                 .prefix("picto-gpui-covers.")
                 .tempdir()
                 .ok(),
-            cloud: None,
-            roots: Vec::new(),
-            choices: Vec::new(),
-            chosen: None,
-            cloud_name,
-            working: None,
-            samples: Vec::new(),
-            work_key: None,
-            eta: None,
-            stopping: Default::default(),
-            deleting_cloud: Default::default(),
             _subscriptions: subscriptions,
         };
         this.read(cx);
-        this.refresh_cloud(cx);
         this
     }
 
@@ -415,7 +368,6 @@ impl Manager {
         }
         self.rows = rows;
         self.read_stats(cx);
-        self.follow_cloud(cx);
         cx.notify();
     }
 
@@ -445,7 +397,6 @@ impl Manager {
     fn choose(&mut self, path: String, cx: &mut Context<Self>) {
         self.selected = Some(path);
         self.pane = Pane::Library;
-        self.chosen = None;
         self.renaming = None;
         self.icons = None;
         cx.notify();
@@ -744,13 +695,6 @@ impl Manager {
                 .icon("menu-git-merge")
                 .disabled(self.busy || !self.can_merge(&row) || !(real || row.current))
                 .into(),
-        ];
-        let mut entries = entries;
-        if row.current {
-            entries.push(menu::Entry::Separator);
-            entries.extend(self.cloud_rows(cx));
-        }
-        entries.extend([
             menu::Entry::Separator,
             menu::item("remove", t("Remove from List"))
                 .icon("menu-x")
@@ -764,7 +708,7 @@ impl Manager {
                 .danger(true)
                 .disabled(row.current || row.missing || self.busy || !real)
                 .into(),
-        ]);
+        ];
         let menu = cx.new(|cx| {
             Menu::new(entries, position, cx)
                 .width(236.)
@@ -799,7 +743,7 @@ impl Manager {
                     this.removing
                         .open(path.clone(), ui::menu::Return::Opener, cx);
                 }
-                action => this.cloud_action(action, cx),
+                _ => {}
             },
         );
     }
@@ -843,7 +787,6 @@ impl Render for Manager {
         self.busy = host::host(cx).read(cx).busy();
         let detail = match (self.pane, self.selected_row().cloned()) {
             (Pane::Create, _) => self.create_pane(cx),
-            (Pane::Cloud, _) => self.cloud_pane(cx),
             (Pane::Library, Some(row)) => self.library_pane(&row, window, cx),
             (Pane::Library, None) => div()
                 .flex()
@@ -860,14 +803,8 @@ impl Render for Manager {
                         .text(theme::TEXT_MD)
                         .text_color(theme.text_secondary())
                         .child(t(
-                            "Create a library on this device or connect an existing cloud folder.",
+                            "Create a new Picto library or open one already on this device.",
                         )),
-                )
-                .child(
-                    div()
-                        .mt(px(8.))
-                        .w_full()
-                        .child(self.connect_buttons("library-start-cloud", cx)),
                 )
                 .into_any_element(),
         };
@@ -936,8 +873,6 @@ impl Render for Manager {
             .children(self.deletion(window, cx))
             .children(self.merge_dialog(window, cx))
             .children(self.consent(window, cx))
-            .children(self.stop_question(window, cx))
-            .children(self.delete_cloud_question(window, cx))
             .children(ui::window_chrome::rim(window, cx))
     }
 }

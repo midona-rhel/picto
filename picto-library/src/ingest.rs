@@ -203,28 +203,13 @@ pub(crate) fn insert_one(
         if input.imported_at_ms <= deleted_at_ms {
             return Err(LibraryError::ImportDeleted);
         }
-        // The import is later than the deletion, so the tombstone goes.
+        // The import is later than the deletion, so the tombstone is
+        // removed and the item is imported.
         crate::mutation::remove_item_tombstones(
             transaction,
             std::slice::from_ref(&input.stable_key),
         )?;
     }
-
-    // The file is imported again, so its original in the cloud folder is no
-    // longer waiting to be removed. Originals are stored there under their
-    // content hash, and the cloud worker finds the one that is still there
-    // and doesn't upload the file a second time.
-    transaction
-        .prepare_cached(
-            "DELETE FROM cloud_deleted_original
-             WHERE file_name = ?1 OR file_name LIKE ?1 || '.%'",
-        )?
-        .execute([&input.facts.content_hash])?;
-    // A file that was kept on this computer after a merge deleted its
-    // picture belongs to a picture again.
-    transaction
-        .prepare_cached("DELETE FROM kept_deleted_file WHERE content_hash = ?1")?
-        .execute([&input.facts.content_hash])?;
 
     let existing_file = transaction
         .prepare_cached(
@@ -267,13 +252,6 @@ pub(crate) fn insert_one(
                     input.facts.perceptual_hash,
                     serde_json::to_string(&input.facts.palette)?,
                 ])?;
-            transaction
-                .prepare_cached(
-                    "INSERT INTO cloud_blob_state (file_hash, state, updated_at)
-                     SELECT ?1, 'queued', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                     FROM cloud_state WHERE singleton = 1 AND provider IS NOT NULL",
-                )?
-                .execute([&input.facts.content_hash])?;
             (file_id, input.facts.perceptual_hash.is_some())
         };
 

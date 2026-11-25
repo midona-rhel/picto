@@ -159,7 +159,6 @@ mod tests {
               "libraryHistory": ["/home/me/Pictures/Main.library", "/Volumes/Art/Art.library",
                                  "relative.library", 3, "/home/me/Pictures/Main.library"],
               "pinnedLibraries": ["/Volumes/Art/Art.library"],
-              "cloudLocations": {},
               "lastLibrary": "/home/me/Pictures/Main.library",
               "windowState": { "main": null },
               "libraryMeta": {
@@ -190,7 +189,6 @@ mod tests {
                 crate::state::LibraryLook {
                     color: Some("#40C057".into()),
                     icon: Some("IconStar".into()),
-                    cloud_library_id: None,
                 }
             )]
         );

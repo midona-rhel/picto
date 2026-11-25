@@ -25,10 +25,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-mod cloud;
 mod disk;
 mod view;
-pub use cloud::{join, restore};
 pub use disk::{Denied, agree, consent_message, delete, move_library, permit, rename};
 
 /// The library open in the main window.
@@ -210,21 +208,6 @@ pub fn application(cx: &App) -> Option<Arc<Application>> {
 pub fn shell(cx: &mut App) -> Option<Entity<Shell>> {
     let main = host(cx).read(cx).main?;
     main.read(cx).ok()?.shell.clone()
-}
-
-/// Runs `change` on the open library's shell, in the main window.
-pub fn update_shell(
-    cx: &mut App,
-    change: impl FnOnce(&mut Shell, &mut Window, &mut Context<Shell>),
-) {
-    let Some(main) = host(cx).read(cx).main else {
-        return;
-    };
-    let _ = main.update(cx, |main, window, cx| {
-        if let Some(shell) = main.shell.clone() {
-            shell.update(cx, |shell, cx| change(shell, window, cx));
-        }
-    });
 }
 
 /// Does Open Library…. The user chooses a folder in the system's dialog. A
@@ -573,19 +556,6 @@ pub fn start(
     main: WindowHandle<Main>,
     cx: &mut App,
 ) {
-    start_with(root, kind, instance, main, false, cx);
-}
-
-/// Does the work of [`start`]. With `keep_cloud` set, a copy that is opened
-/// again after a restore keeps its cloud folder (`Application::keep_cloud`).
-fn start_with(
-    root: PathBuf,
-    kind: Kind,
-    instance: Option<Arc<crate::opening::instance::Instance>>,
-    main: WindowHandle<Main>,
-    keep_cloud: bool,
-    cx: &mut App,
-) {
     let host = host(cx);
     host.update(cx, |host, _| {
         host.busy = true;
@@ -602,9 +572,6 @@ fn start_with(
         }
         let (events, delivered) = std::sync::mpsc::channel();
         let application = Application::new(root.clone(), kind, events);
-        if keep_cloud {
-            application.keep_cloud();
-        }
         let mut opened = application.opened();
         let shown = cx.update(|cx| {
             let made = main.update(cx, |main, window, cx| {

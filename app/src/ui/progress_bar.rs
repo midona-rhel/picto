@@ -55,8 +55,8 @@ pub struct ProgressBar {
     /// state of the fill's animation is kept.
     filled: Option<(ElementId, f32)>,
     /// The corner radius of the track and of the fill. Some callers, such as
-    /// the cloud bar and the progress dialog, set a larger radius, and their
-    /// own colours in `track` and `fill`.
+    /// the import task view, set another radius, and their own colours in
+    /// `track` and `fill`.
     radius: f32,
     track: Option<Rgba>,
     fill: Option<Rgba>,

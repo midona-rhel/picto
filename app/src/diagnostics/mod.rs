@@ -263,12 +263,11 @@ pub fn accept_core(payload: &str) {
 /// less than 16 ms, a DEBUG line when it took less than 100 ms, and a WARN
 /// line otherwise.
 ///
-/// Three cases are expected and are treated differently. The command
+/// Two cases are expected and are treated differently. The command
 /// `diagnostics.snapshot`, which the log window itself runs every 750 ms,
 /// never gets a line. An `items.window` that failed with `query superseded`,
 /// because a newer read of the grid replaced it, gets a DEBUG line when it
-/// took 16 ms or more and no line otherwise. A `cloud.status.get` that
-/// failed because no library is open gets no line.
+/// took 16 ms or more and no line otherwise.
 pub fn ipc_line(command: &str, duration_ms: f64, error: Option<&str>) -> Option<Line> {
     if command == "diagnostics.snapshot" {
         return None;
@@ -284,21 +283,6 @@ pub fn ipc_line(command: &str, duration_ms: f64, error: Option<&str>) -> Option<
     if command == "items.window" && error == Some("query superseded") {
         return (duration_ms >= 16.)
             .then(|| line(Level::Debug, "Superseded by a newer grid request"));
-    }
-    if command == "cloud.status.get"
-        && error.is_some_and(|error| {
-            // The error starts with `no library is open`, ignoring case, and
-            // the character after these words, if there is one, is not a
-            // letter, a digit or an underscore.
-            let lower = error.to_ascii_lowercase();
-            lower.starts_with("no library is open")
-                && lower[18..]
-                    .chars()
-                    .next()
-                    .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
-        })
-    {
-        return None;
     }
     match error {
         Some(error) => Some(line(Level::Error, error)),
@@ -440,21 +424,6 @@ mod tests {
     fn does_not_log_the_diagnostics_observer_itself() {
         assert!(ipc_line("diagnostics.snapshot", 200., None).is_none());
         assert!(ipc_line("diagnostics.snapshot", 1., Some("unavailable")).is_none());
-    }
-
-    #[test]
-    fn does_not_surface_expected_cloud_status_polling_before_a_library_opens() {
-        assert!(
-            ipc_line(
-                "cloud.status.get",
-                3.,
-                Some("No library is open. Call open_library() first.")
-            )
-            .is_none()
-        );
-        let failed = ipc_line("cloud.status.get", 3., Some("Cloud provider failed")).unwrap();
-        assert_eq!(failed.level, Level::Error);
-        assert_eq!(failed.message, "Cloud provider failed");
     }
 
     #[test]

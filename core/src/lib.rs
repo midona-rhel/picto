@@ -6,7 +6,6 @@ pub mod ai_runtime;
 pub mod ai_tagger;
 pub mod auth;
 pub mod blob_store;
-pub mod cloud;
 pub mod constants;
 pub mod credential_store;
 pub mod diagnostics;

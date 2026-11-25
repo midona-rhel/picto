@@ -6,8 +6,8 @@
 //! recent folders and the recent Quick Search choices, the keyboard preset
 //! and the changed shortcuts, the language, the audio visualization, the
 //! interface zoom and the list of libraries. The settings that belong to a
-//! library are in the settings model (`settings::model`), and they travel
-//! with the library.
+//! library are in the settings model (`settings::model`), which stores them
+//! in the library itself.
 //!
 //! The state is one JSON file, `state.json`, in this app's own folder. That
 //! folder is "Picto GPUI" in the platform's configuration folder, or the
@@ -185,10 +185,6 @@ pub struct State {
     /// Manager sets them. A library's cover is not here: it is kept in the
     /// library's own folder.
     pub library_meta: BTreeMap<String, LibraryLook>,
-    /// For each cloud provider, the provider's folder that the user chose
-    /// last. The app offers that folder again for as long as it is still a
-    /// folder of that provider.
-    pub cloud_locations: BTreeMap<String, crate::cloud::Root>,
 }
 
 /// A library's colour, written as `#RRGGBB`, and its icon, which is a name
@@ -197,17 +193,13 @@ pub struct State {
 pub struct LibraryLook {
     pub color: Option<String>,
     pub icon: Option<String>,
-    /// The id of the cloud library that this library was opened from. Open
-    /// from Cloud… uses it to say that the library is already added.
-    pub cloud_library_id: Option<String>,
 }
 
 impl LibraryLook {
-    /// Reads the colour, the icon and the cloud library id from one entry of
-    /// `libraryMeta`. The entry comes from this app's state file, or from the
-    /// `config.json` of an Electron-based Picto (version 0.6.19 or earlier),
-    /// which has the same three fields (`libraries::seed`). The entry's other
-    /// fields are not read.
+    /// Reads the colour and the icon from one entry of `libraryMeta`. The
+    /// entry comes from this app's state file, or from the `config.json` of an
+    /// Electron-based Picto (version 0.6.19 or earlier), which has the same
+    /// two fields (`libraries::seed`). The entry's other fields are not read.
     pub fn from_value(value: &Value) -> Self {
         let text = |key: &str| {
             value
@@ -219,12 +211,11 @@ impl LibraryLook {
         Self {
             color: text("color"),
             icon: text("icon"),
-            cloud_library_id: text("cloudLibraryId"),
         }
     }
 
     pub fn is_default(&self) -> bool {
-        self.color.is_none() && self.icon.is_none() && self.cloud_library_id.is_none()
+        self.color.is_none() && self.icon.is_none()
     }
 }
 
@@ -257,7 +248,6 @@ impl Default for State {
             library_consents: Vec::new(),
             libraries_seeded: false,
             library_meta: BTreeMap::new(),
-            cloud_locations: BTreeMap::new(),
         }
     }
 }
@@ -459,15 +449,6 @@ impl State {
             }
             state.library_meta = looks;
         }
-        if let Some(locations) = get("cloudLocations").and_then(Value::as_object) {
-            state.cloud_locations = locations
-                .iter()
-                .filter_map(|(provider, root)| {
-                    let root: crate::cloud::Root = serde_json::from_value(root.clone()).ok()?;
-                    (root.provider == *provider).then(|| (provider.clone(), root))
-                })
-                .collect();
-        }
         if let Some(seeded) = get("librariesSeeded").and_then(Value::as_bool) {
             state.libraries_seeded = seeded;
         }
@@ -570,16 +551,11 @@ impl State {
                             json!({
                                 "color": look.color,
                                 "icon": look.icon,
-                                "cloudLibraryId": look.cloud_library_id,
                             }),
                         )
                     })
                     .collect(),
             ),
-        );
-        put(
-            "cloudLocations",
-            serde_json::to_value(&self.cloud_locations).unwrap_or_default(),
         );
         Value::Object(object)
     }
@@ -593,7 +569,7 @@ impl State {
 }
 
 /// The names of the fields that this version reads and writes.
-const KNOWN: [&str; 26] = [
+const KNOWN: [&str; 25] = [
     "version",
     "window",
     "sidebarWidth",
@@ -619,15 +595,20 @@ const KNOWN: [&str; 26] = [
     "libraryConsents",
     "librariesSeeded",
     "libraryMeta",
-    "cloudLocations",
 ];
 
 /// Converts the contents of a file that an earlier version wrote to this
 /// version's layout, one version at a time. Version 1 is the first layout,
-/// so there is no conversion yet. A file that has no `version` field is read
-/// as version 1. A later layout adds its conversion here, and applies it
-/// according to the file's `version` field.
-fn migrate(object: Map<String, Value>) -> Map<String, Value> {
+/// so there is no conversion of the layout yet. A file that has no `version`
+/// field is read as version 1. A later layout adds its conversion here, and
+/// applies it according to the file's `version` field.
+///
+/// A version 1 file that an earlier build wrote can hold the field
+/// `cloudLocations`, the folders that the earlier cloud sync used. This
+/// version does not read it, so it is dropped here. Otherwise it would be
+/// kept and written back like a field that a newer version wrote.
+fn migrate(mut object: Map<String, Value>) -> Map<String, Value> {
+    object.remove("cloudLocations");
     object
 }
 
@@ -878,7 +859,6 @@ mod tests {
                 super::LibraryLook {
                     color: Some("#FA5252".into()),
                     icon: Some("IconStar".into()),
-                    cloud_library_id: None,
                 },
             )]),
             ..State::default()

@@ -32,18 +32,6 @@ impl Library {
                     pair.file_id_a,
                     pair.file_id_b,
                 )?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "duplicate.detect",
-                    (!affected.is_empty()).then_some(&affected),
-                    serde_json::json!({
-                        "file_id_a": pair.file_id_a.0,
-                        "file_id_b": pair.file_id_b.0,
-                        "distance": pair.distance,
-                    }),
-                    detected_at_ms,
-                )?;
                 let mut next = (*snapshot).clone();
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
@@ -85,14 +73,6 @@ impl Library {
                 [],
                 |row| row.get::<_, i64>(0),
             )? as usize;
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "duplicate.scan",
-                (!affected.is_empty()).then_some(&affected),
-                serde_json::json!({"candidate_count": candidate_count}),
-                detected_at_ms,
-            )?;
             let mut next = (*snapshot).clone();
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
@@ -131,10 +111,11 @@ impl Library {
         self.duplicate_candidates_from(0, limit)
     }
 
-    /// The pairs still to review at least `min_distance` apart, least
-    /// apart first: with 1, the similar pairs past every identical one,
-    /// which the first window of [`Library::duplicate_candidates`] may
-    /// not reach.
+    /// Returns the pairs that are still to be reviewed and whose distance is
+    /// at least `min_distance`, the smallest distance first. With 1, it
+    /// returns the similar pairs and leaves out every identical pair, so it
+    /// reaches similar pairs that the first page of
+    /// [`Library::duplicate_candidates`] may not include.
     pub fn duplicate_candidates_from(
         &self,
         min_distance: u32,
@@ -201,7 +182,8 @@ impl Library {
     /// one undoable step labelled `label`: a set of files reviewed together
     /// (one kept, the rest merged into it pair by pair; or every pair of the
     /// set kept apart). A later step sees what the earlier ones changed, so
-    /// a file merged into another can in turn be merged on.
+    /// the file that one step kept can be merged into another file by a
+    /// later step.
     pub fn resolve_duplicates(
         &self,
         steps: &[(FileId, FileId, DuplicateResolutionChoice)],
@@ -261,18 +243,6 @@ impl Library {
                         }
                         resources.extend(merge.resources.iter().cloned());
                     }
-                    insert_cloud_journal(
-                        transaction,
-                        revision,
-                        "duplicate.resolve",
-                        (!output.affected_roots.is_empty()).then_some(&output.affected_roots),
-                        serde_json::json!({
-                            "file_id_a": output.history.file_id_a().0,
-                            "file_id_b": output.history.file_id_b().0,
-                            "choice": choice,
-                        }),
-                        decided_at_ms,
-                    )?;
                     affected_roots |= &output.affected_roots;
                     snapshot = output.snapshot;
                     changes.push(if merge.changes.is_empty() {

@@ -147,7 +147,7 @@ pub async fn drain_batch(
     };
     let mut completed = Vec::new();
     for item in work {
-        match execute(application, &item, now.timestamp_millis()).await {
+        match execute(application, &item).await {
             Ok((perceptual_hash_updated, thumbnail_changed)) => {
                 completed.push(item.work_id);
                 report.succeeded += 1;
@@ -223,7 +223,6 @@ pub async fn render_thumbnail_now(
 async fn execute(
     application: &LibraryApplication,
     work: &ClaimedMediaWork,
-    changed_at_ms: i64,
 ) -> Result<(bool, Option<String>), String> {
     let file_id = work
         .file_id
@@ -270,7 +269,6 @@ async fn execute(
                         palette: Some(palette),
                         ..Default::default()
                     },
-                    changed_at_ms,
                 )
                 .map_err(|error| error.to_string())?;
             Ok((false, None))
@@ -290,7 +288,6 @@ async fn execute(
                         perceptual_hash: Some(Some(hash)),
                         ..Default::default()
                     },
-                    changed_at_ms,
                 )
                 .map_err(|error| error.to_string())?;
             Ok((true, None))

@@ -1,16 +1,18 @@
-//! One file, one media item: merging two items that hold the same file (or a
-//! duplicate's file) into the one that stays.
+//! Merges two media items into one, the item that stays. This is done when
+//! two items hold the same file, because each file has exactly one media
+//! item, and when a duplicate is resolved by keeping one of the two files.
 //!
 //! A merge is a sequence of ordinary undoable changes, so a duplicate
 //! resolution can be undone exactly:
-//! 1. a merged-away collection member leaves its collection (a structural
-//!    detach) carrying the collection's tags, folders, rating and links; a
-//!    collection it leaves empty is removed, and what pointed at the
-//!    collection points at the item that stays;
-//! 2. a loose item hands its tags, folders, rating, lifecycle, notes and source
-//!    links to the root that stays;
-//! 3. its source links and stable key move to the item that stays;
-//! 4. it is deleted (its file stays when the item that stays uses it).
+//! 1. When the merged-away item is a member of a collection, it is taken out
+//!    of the collection and gets the collection's tags, folders, rating and
+//!    links. A collection that this leaves empty is removed, and the rows
+//!    that pointed at the collection then point at the item that stays.
+//! 2. The merged-away item, now outside any collection, gives its tags,
+//!    folders, rating, lifecycle, notes and source links to the root that
+//!    stays.
+//! 3. Its source rows and its stable key are moved to the item that stays.
+//! 4. It is deleted. Its file stays when the item that stays uses it.
 
 use super::*;
 use crate::history::{RelinkState, RelinkedProvenance, RootTextState};
@@ -35,8 +37,9 @@ fn owner(snapshot: &ProjectionSnapshot, media: MediaId) -> Result<RootId> {
         .ok_or_else(|| LibraryError::InvalidState(format!("media {} has no owning root", media.0)))
 }
 
-/// Combine overlapping sets before removing shared media. Reuse ordinary
-/// grouping, but preserve metadata and references from every absorbed root.
+/// Combines collections that share media into `winner`, before the shared
+/// media items are merged. Each other root in `roots` gives its metadata to
+/// `winner`, and the rows that pointed at it are moved to `winner`.
 pub(super) fn combine_overlapping_roots(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
@@ -95,8 +98,8 @@ fn rating_rank(rating: Rating) -> usize {
         .unwrap_or(0)
 }
 
-/// Merge `loser` into `survivor`, inside a publication. `now_ms` stamps what
-/// the merge modifies.
+/// Merges `loser` into `survivor`, inside a publication. `now_ms` is written
+/// as the modification time of what the merge changes.
 pub(super) fn merge_media(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
@@ -119,11 +122,13 @@ pub(super) fn merge_media(
             .collection_orders
             .get(&collection)
             .map_or(0, |members| members.len());
-        // A member leaves its collection carrying what it had as part of it
-        // (the collection's tags, folders, rating and links, and its own
-        // notes) and hands that on like any merged item; a collection that
-        // lives on keeps its own. A collection it empties goes, and what
-        // pointed at it points at the item that stays.
+        // The member is taken out of its collection and keeps what it had as
+        // part of it (the collection's tags, folders, rating and links, and
+        // its own notes). It then gives these to the item that stays, like
+        // any merged item. A collection that still has other members keeps
+        // its own metadata. A collection that the member leaves empty is
+        // removed, and the rows that pointed at it then point at the item
+        // that stays.
         if members == 1 {
             let relink = relink_root(transaction, collection, survivor_root)?;
             push_relink(transaction, relink, merge)?;
@@ -184,12 +189,11 @@ pub(super) fn merge_media(
     let roots = RoaringBitmap::from_iter([loser_root.0]);
     let state = merge
         .record
-        .then(|| {
-            capture_deleted_roots(transaction, snapshot, &roots, DeletionOrigin::MergedDuplicate)
-        })
+        .then(|| capture_deleted_roots(transaction, snapshot, &roots))
         .transpose()?;
-    // The merged-away file (a duplicate's) is freed by the cleanup worker once
-    // no history entry needs it; nothing is removed here.
+    // The file of the merged-away item, when it is a duplicate's file, is
+    // deleted by the cleanup worker once no undo history entry needs it. No
+    // file is deleted here.
     let protected = std::collections::BTreeSet::new();
     let (next, _, receipt) = delete_roots(
         transaction,
@@ -198,7 +202,6 @@ pub(super) fn merge_media(
         &roots,
         now_ms,
         &protected,
-        DeletionOrigin::MergedDuplicate,
     )?;
     *snapshot = next;
     merge.affected |= &roots;
@@ -309,11 +312,16 @@ fn hand_over(
     Ok(changes)
 }
 
-/// The notes an item keeps when another's are handed to it: its own when
-/// the other has none or says nothing they do not, the other's when they
-/// say all its own do, else both, its own first. Whitespace and line breaks
-/// do not count in the comparison, so a note copied with other spacing is
-/// kept once.
+/// Returns the notes that the item `target` keeps when it gets the notes of
+/// the item `source`:
+/// - its own notes, when `source` has none or when its own notes contain
+///   the text of `source`'s notes;
+/// - `source`'s notes, when it has none or when they contain the text of its
+///   own notes;
+/// - otherwise both, its own first, separated by an empty line.
+///
+/// Whitespace and line breaks do not count in the comparison, so a note that
+/// was copied with other spacing is kept once.
 pub fn merged_notes(target: Option<&str>, source: Option<&str>) -> Option<String> {
     fn present(notes: Option<&str>) -> Option<&str> {
         notes.map(str::trim).filter(|notes| !notes.is_empty())

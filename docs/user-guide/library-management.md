@@ -15,8 +15,8 @@ My Library.library/
     └── t/           ← thumbnails
 ```
 
-Picto also creates working folders in the library, for example `blobs/tmp/` and `temp/`, and
-`cloud/` when cloud sync is on. Do not change anything inside a library folder by hand.
+Picto also creates working folders in the library, for example `blobs/tmp/` and `temp/`. Do not
+change anything inside a library folder by hand.
 
 ## Open the Library Manager
 
@@ -26,8 +26,7 @@ Open the Library Manager in one of these ways:
 - Click the library switcher at the top of the sidebar and choose **Library Manager…**.
 
 The left column lists the libraries on this device, with the pinned libraries first. Select a
-library to see its appearance and its statistics. For the open library the Library Manager also
-shows the state of cloud sync.
+library to see its appearance and its statistics.
 
 ## Create a library
 
@@ -58,9 +57,6 @@ Picto does not open a library in these cases:
   Picto was started. Picto opens a library only from the Library Manager, from **Open Library…**,
   from **Recent Libraries** and from the library switcher in the sidebar.
 
-To open a library that is stored in a synced Google Drive or Dropbox folder, use **Open from
-Cloud…**. Cloud sync is experimental. See [Cloud Sync](cloud-sync.md).
-
 ## Switch libraries
 
 Each of these closes the current library and opens the other one:
@@ -87,8 +83,6 @@ Select a library and click the **⋯** (Library actions) button.
 | Merge with Another Library… | It opens the dialog that puts everything of two libraries into one of them, as the **Merge Libraries…** button in the bottom bar does. See [Merge two libraries](#merge-two-libraries). The row is disabled while the list has no other library whose folder exists. |
 | Remove from List | It removes the library from the list. The library folder stays on disk, and **Open Existing…** opens it again. The row is disabled for the open library. |
 | Delete… | After a question, it permanently deletes the library folder and everything in it. This cannot be undone. The row is disabled for the open library, so switch to another library first. Picto deletes only a `.library` folder that holds `library.sqlite` and that no program has open. |
-
-For the open library the menu also has the commands of cloud sync, which is experimental.
 
 ## Merge two libraries
 
@@ -129,8 +123,8 @@ What the primary library holds afterwards:
 - Smart folders are added. A smart folder with the same name and the same rules as one of the
   primary library is not added again. One with the same name and other rules is added with the other
   library's name in brackets.
-- Subscriptions, cloud sync settings, watched folders, application settings, view settings,
-  Recently Viewed and duplicate decisions of the other library are not carried over.
+- Subscriptions, watched folders, application settings, view settings, Recently Viewed and
+  duplicate decisions of the other library are not carried over.
 
 A merge brings everything or changes nothing. When you cancel it, when a file of the other
 library cannot be copied, or when the other library can no longer be read, Picto removes what the

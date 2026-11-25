@@ -596,7 +596,7 @@ impl TagsScreen {
             Report::default(),
             move |library| {
                 library
-                    .merge_tags(source, destination, crate::now_ms())
+                    .merge_tags(source, destination)
                     .map(|_| ())
                     .map_err(|error| error.to_string())
             },
@@ -611,7 +611,7 @@ impl TagsScreen {
             Report::announce("tags.delete"),
             move |library| {
                 library
-                    .delete_tag(tag_id, crate::now_ms())
+                    .delete_tag(tag_id)
                     .map(|_| ())
                     .map_err(|error| error.to_string())
             },
