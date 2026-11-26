@@ -1,4 +1,5 @@
-//! Filesystem import adapter for the canonical library ingest queue.
+//! Imports from the file system: turns the files of an import or of a watched
+//! folder into jobs of the library's ingest queue.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -37,7 +38,8 @@ pub struct ManualImportInput {
     pub delete_after_ingest: bool,
     #[serde(default)]
     pub group_files: bool,
-    /// Import without showing a task (tutorial seeding).
+    /// Imports without showing a task. The tutorial fills its library this
+    /// way.
     #[serde(default)]
     pub background: bool,
 }
@@ -341,6 +343,12 @@ fn collect_watched_candidates(
     let mut report = ImportEnqueueReport::default();
     let mut pending = Vec::new();
     for watch in watches {
+        // Watched folders sync between computers, and the path of one
+        // exists only on some of them. Each computer scans the watched
+        // folders whose path it has.
+        if !watch.path.is_dir() {
+            continue;
+        }
         for candidate in collect_directory(
             &watch.path,
             watch.recursive,
@@ -546,8 +554,10 @@ pub(crate) fn ensure_relative_folder_for_task(
     Ok(current)
 }
 
-/// Visit files and directories without retaining the selection. The queue's
-/// stable job keys deduplicate overlapping paths and interrupted scans.
+/// Visits the files and folders of an import one at a time, without keeping
+/// a list of them. Each file's job key stays the same, so a file that two of
+/// the paths name, or that a scan run again after an interruption finds
+/// again, is queued once.
 pub(crate) fn walk_manual_candidates(
     library_root: &Path,
     input: &ManualImportInput,
@@ -601,7 +611,9 @@ pub(crate) fn walk_manual_candidates(
                 fs::read_dir(directory)
                     .map_err(|error| format!("Failed to read {}: {error}", directory.display()))
             };
-            // Keep iterators, not directory listings: memory scales with depth.
+            // The walk keeps one open listing for each folder on its path, not
+            // whole listings, so its memory grows with the depth of the tree
+            // and not with the number of files.
             let mut stack = vec![read(&path)?];
             while !stack.is_empty() {
                 if !checkpoint()? {

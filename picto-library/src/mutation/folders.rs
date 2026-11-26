@@ -455,6 +455,19 @@ impl Library {
             folder_id,
             task,
             move |transaction| {
+                // The schema does not keep watched paths unique, because
+                // synced folders come from several computers. A folder the
+                // user watches must not repeat another folder's path.
+                let taken = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM folder_definition WHERE watch_path = ?2 AND folder_id <> ?1)",
+                    rusqlite::params![folder_id.0, path],
+                    |row| row.get::<_, bool>(0),
+                )?;
+                if taken {
+                    return Err(LibraryError::InvalidInput(format!(
+                        "another folder already watches {path}"
+                    )));
+                }
                 if transaction.execute(
                     "UPDATE folder_definition
                      SET watch_path = ?2, watch_enabled = 1, watch_subfolders = ?3,
@@ -1386,7 +1399,7 @@ pub(super) fn rename_folder_definition(
     Ok(())
 }
 
-pub(super) fn load_folder_definition(
+pub(crate) fn load_folder_definition(
     connection: &rusqlite::Connection,
     folder_id: FolderId,
 ) -> Result<Option<FolderDefinitionState>> {

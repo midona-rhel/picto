@@ -40,6 +40,7 @@ mod structure;
 mod merge;
 mod library_merge;
 mod undo;
+mod sync;
 pub(crate) mod tasks;
 use tags::*;
 use folders::*;
@@ -49,6 +50,12 @@ use merge::*;
 pub use merge::{SharedFileMerge, merged_notes};
 pub use library_merge::{MergeTaskInput, translate_view, MERGE_BACKUP, MERGE_LIBRARY};
 pub use structure::remove_item_tombstones;
+// The sync module writes synced values into the library with the code that
+// undo, Delete Permanently and tag deletion use.
+pub(crate) use folders::load_folder_definition;
+pub(crate) use structure::{capture_structure, delete_roots, restore_structure};
+pub(crate) use tags::remove_tag_in_transaction;
+pub(crate) use undo::apply_semantic_change;
 use undo::*;
 
 struct PublishedDelta {
@@ -57,19 +64,23 @@ struct PublishedDelta {
     history: Option<HistoryEntry>,
 }
 
-/// This is the one place that brings the derived state in memory up to date.
-/// Every transaction that publishes runs it before it commits. The journal
-/// of changed roots names every root whose facts for browsing changed, and
-/// the receipt names the auxiliary tables that changed. A failed transaction
-/// publishes nothing, so the state in memory never differs from what readers
-/// can see.
+/// This is the one place that brings the derived state in memory up to date,
+/// and the one place that records changes for cloud sync. Every transaction
+/// that publishes runs it before it commits. The journal of changed roots
+/// names every root whose facts for browsing changed, and the receipt names
+/// the auxiliary tables that changed. While sync is on, the entities that the
+/// write changed are then compared with the synced values and every
+/// difference is recorded (`crate::sync::record`). A failed transaction
+/// publishes and records nothing, so the state in memory never differs from
+/// what readers can see.
 impl crate::database::PublicationDelta<Arc<ProjectionSnapshot>> for PublishedDelta {
     fn settle(
         &mut self,
         transaction: &rusqlite::Transaction<'_>,
-        _before: &Arc<ProjectionSnapshot>,
+        before: &Arc<ProjectionSnapshot>,
     ) -> Result<()> {
-        self.settle_projection(transaction)
+        self.settle_projection(transaction)?;
+        crate::sync::record(transaction, before, &self.snapshot)
     }
 }
 
@@ -133,10 +144,10 @@ impl Library {
         Self::open_with(path, &OpenCancellation::default(), &mut |_| {})
     }
 
-    /// Open under a cancellation handle, reporting each stage in order. The
-    /// handle is checked at every stage boundary and inside the migration and
-    /// resident scans; a cancelled open returns `OpenCancelled` having
-    /// committed nothing. `progress` runs on the opening thread while
+    /// Opens the library under a cancellation handle and reports each stage
+    /// in order. The handle is checked between stages, inside the migration
+    /// and inside the scans that build the state in memory; a cancelled open
+    /// returns `OpenCancelled` and has committed nothing. `progress` runs on the opening thread while
     /// database connections are held, so it must not block.
     pub fn open_with(
         path: impl AsRef<Path>,
@@ -207,6 +218,11 @@ impl Library {
             // so the journal rows that an earlier session left behind are not
             // needed.
             transaction.execute("DELETE FROM browsing_dirty_root", [])?;
+            // A library whose sync is on records its changes from the first
+            // write on.
+            if crate::sync::recording(transaction)? {
+                crate::sync::install_triggers(transaction)?;
+            }
             Ok(())
         })?;
         let projections = Arc::new(ProjectionStore::load_with(&database, progress)?);
@@ -346,8 +362,9 @@ impl Library {
         self.update_auxiliary_json(command, label, table, key, true, move |_| Ok(value))
     }
 
-    /// Read-modify-write of one auxiliary JSON value inside a single writer
-    /// transaction, so concurrent patches cannot overwrite each other.
+    /// Reads, changes and writes one JSON value of `setting` or `view_pref`
+    /// in one writer transaction, so that two changes made at the same time
+    /// cannot overwrite each other.
     /// `undoable` decides whether the change enters session history; view
     /// preferences (sort, zoom, layout) are not edits and stay out of it.
     pub fn update_auxiliary_json(
@@ -486,8 +503,8 @@ impl Library {
         self.match_cache.statistics()
     }
 
-    /// Retain the open database/projections but discard all browsing result
-    /// caches. Only benchmark binaries expose this operation.
+    /// Keeps the open database and projections and drops the caches of query
+    /// results. Only benchmark programs can call it.
     #[cfg(feature = "benchmark-internals")]
     pub fn reset_browsing_caches_for_benchmark(&mut self) {
         self.match_cache = Arc::new(crate::query::MatchCache::default());

@@ -31,6 +31,7 @@ pub mod schema;
 pub mod selection;
 pub mod smart;
 pub mod subscription_counts;
+mod sync;
 pub mod text_index;
 pub mod work_queue;
 
@@ -52,3 +53,4 @@ pub use projection::{ProjectionSnapshot, ProjectionStore};
 pub use publication::{LibraryChanged, MutationReceipt};
 pub use query_request::{LoadStage, OpenCancellation, OpenStage};
 pub use smart::SmartFolderRecord;
+pub use sync::{SyncKind, SyncRecord, SyncTimestamp};

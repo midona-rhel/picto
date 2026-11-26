@@ -268,8 +268,43 @@ merge has finished or has been undone. The other library's subscriptions, watche
 settings, recent views and duplicate decisions are not read.
 
 `picto-library/examples/library_ops_benchmark.rs` measures these operations on a synthetic library
-(`-- [roots] [runs] [smart_folders]`, default 1M roots and 100 smart folders). Its output is local and
-never committed.
+(`-- [roots] [runs] [smart_folders]`, default 1M roots and 100 smart folders; `--sync` measures
+them with sync recording on, and applying change records). Its output is local and never committed.
+
+### Recording changes for sync
+
+Cloud sync (`picto-library/src/sync/`) describes the library as entities with sync keys that are
+the same on every computer: an item is keyed by the content hash of its file, a collection and a
+folder by their stable UUID, a tag by its full name and a tag group by its name. Each entity has
+fields (an item's name, rating, `tag:<name>` and `folder:<uuid>` with a position key, a folder's
+`place`, and so on), and a change to a field is a change record with a hybrid logical clock
+timestamp. `sync_value` keeps, for each field, the record with the latest timestamp; the library is
+what those values show. `sync_outbox` keeps this computer's records until a change file holds them,
+and `sync_identity` remembers the key each local entity had, so that a deleted or renamed entity
+can be recorded under its old key. Nothing is recorded, and no write costs anything extra, until
+`Library::start_sync_recording` records the library's full state; `stop_sync_recording` clears the
+sync tables.
+
+Recording happens in `PublishedDelta::settle`, in the transaction of the write. Temporary
+triggers on the writer connection note the local ids of the items, collections, tags, tag groups
+and folders whose rows changed; the differences between the projection before and after the write
+name the roots whose lifecycle, rating or tags changed and the folder and collection lists whose
+order changed. Each of those entities is compared with what the synced values show for it, and
+every field that differs is recorded. A renamed or merged tag also records `renamed_to`, so that a
+tag that another computer adds under the old name ends up under the new one. Lists keep the
+position keys of the longest run of members that is already in order; the others get keys between
+their neighbours. When a record makes an entity appear or disappear, the entities that refer to it
+are compared a second time.
+
+`Library::apply_sync_records` merges records from other computers into `sync_value` and writes
+what changed into the library in one write: it creates and removes tags, tag groups and folders,
+writes the folder tree as a whole, and writes items and collections with `restore_structure`, the
+code that undo uses for collections. Items that the synced values no longer show are deleted as
+Delete Permanently deletes them. The recorder that runs at the end of that write then finds
+nothing to record. An undo of Delete Permanently writes the latest synced values over the items it
+brings back. A watched folder syncs with its path, and each computer scans only the watched folders
+whose path exists on it; the path is therefore not unique in the database, and `set_folder_watch`
+checks it instead.
 
 ## Stored files and the pictures made from them
 

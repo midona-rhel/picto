@@ -209,7 +209,8 @@ impl Library {
             },
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
-                // Check only the requested roots instead of unioning every root.
+                // Only the requested roots are checked; the roots of every tag
+                // are not joined into one set.
                 let missing = requested_roots
                     .iter()
                     .filter(|root_id| {
@@ -854,8 +855,9 @@ impl Library {
                 destination,
                 revision,
             )?;
-            // Members moved to the destination (or lost a tag): folders on
-            // either tag, and Exact-mode folders, must see the new membership.
+            // The members moved to the destination or lost the tag, so the
+            // smart folders whose rules name either tag, and those that match
+            // tags exactly, are checked again for them.
             let mut smart_changes = vec![crate::predicate::DependencyChange::Tag(source)];
             smart_changes.extend(destination.map(crate::predicate::DependencyChange::Tag));
             crate::smart::settle_affected_for(
@@ -1081,7 +1083,7 @@ pub(super) fn rename_tag_definition(
     Ok(())
 }
 
-pub(super) fn remove_tag_in_transaction(
+pub(crate) fn remove_tag_in_transaction(
     transaction: &rusqlite::Transaction<'_>,
     snapshot: &mut ProjectionSnapshot,
     source: crate::TagId,
@@ -1091,9 +1093,12 @@ pub(super) fn remove_tag_in_transaction(
     let source_state = load_tag_definition(transaction, source)?
         .ok_or_else(|| LibraryError::NotFound(format!("tag {}", source.0)))?;
     if let Some(destination) = destination {
-        if load_tag_definition(transaction, destination)?.is_none() {
+        let Some(destination_state) = load_tag_definition(transaction, destination)? else {
             return Err(LibraryError::NotFound(format!("tag {}", destination.0)));
-        }
+        };
+        // Tags that another computer adds under the old name before this
+        // merge reaches it end up under the destination.
+        crate::sync::note_tag_merge(transaction, &source_state.full_name, &destination_state.full_name)?;
     }
     let source_members = snapshot
         .tags
@@ -1441,9 +1446,9 @@ pub(super) fn tag_subname(name: &str) -> &str {
 }
 
 /// Every tag definition, sorted the way the tag lists show them, with
-/// lowercased keys computed once. Rebuilt only after the library changes, so
-/// typing in a tag search filters a resident list instead of reading,
-/// lowercasing and sorting every definition on each keystroke.
+/// lowercased keys computed once. It is rebuilt only after the library
+/// changes, so typing in a tag search filters a list kept in memory instead
+/// of reading, lowercasing and sorting every definition on each keystroke.
 #[derive(Default)]
 pub(crate) struct TagListCache(parking_lot::Mutex<Option<(u64, Arc<Vec<SortedTag>>)>>);
 

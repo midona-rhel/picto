@@ -12,6 +12,10 @@
 //! Add `--delete-only` to measure only permanent delete and its undo.
 //! Add `--tag-pages-only` to measure paging and search with 200k tag
 //! definitions after the import.
+//! Add `--sync` to turn cloud sync recording on after the fixture is built,
+//! so that every write below also records its changes, and to measure
+//! applying change records from another computer. Run once with and once
+//! without it to compare the write rows.
 use std::time::Instant;
 
 use picto_library::predicate::{
@@ -22,7 +26,7 @@ use picto_library::selection::{RangeSpan, SelectionTarget};
 use picto_library::{
     LabColor,
     FolderId, GroupRequest, ImmutableMediaFacts, Library, Lifecycle, PreparedImport, Rating,
-    RootId, SmartFolderId, SmartFolderInput,
+    RootId, SmartFolderId, SmartFolderInput, SyncKind, SyncRecord, SyncTimestamp,
 };
 
 type R<T> = Result<T, Box<dyn std::error::Error>>;
@@ -35,7 +39,7 @@ mod subscriptions;
 fn main() -> R<()> {
     let roots = arg(1, 1_000_000);
     let runs = arg(2, 5);
-    // Leave room for the folders the smart-folder benches create.
+    // Room is left for the smart folders that the measurements create.
     let smart_total = arg(3, 100).clamp(10, picto_library::smart::MAX_SMART_FOLDERS - 20);
     let at = |n: usize| n * roots / 1_000_000;
     let dir = tempfile::tempdir()?;
@@ -66,7 +70,7 @@ fn main() -> R<()> {
         return subscriptions::run(library, roots, runs);
     }
 
-    // --- fixture: settle FTS so name text filters see every root ---
+    // --- fixture: index the search text, so that name filters see every root ---
     let t = Instant::now();
     while library.settle_fts(20_000)?.is_some() {}
     println!("FIXTURE settle_fts_s={:.1}", t.elapsed().as_secs_f64());
@@ -205,6 +209,12 @@ fn main() -> R<()> {
     library.history().clear();
     println!("FIXTURE total_s={:.1}", fixture_started.elapsed().as_secs_f64());
     print_memory(&library, "after_fixture");
+    let sync = std::env::args().any(|arg| arg == "--sync");
+    if sync {
+        let t = Instant::now();
+        library.start_sync_recording()?;
+        println!("ROW|start_sync_recording (records the full state)|{roots} roots|{:.1}|-|1 run", ms(t));
+    }
 
     // --- selections ---
     let range_query = |scope: ItemScope, lo: usize, n: usize| SelectionTarget::Query {
@@ -235,7 +245,7 @@ fn main() -> R<()> {
         library.apply_tags(&sel_200k, &[format!("audit:a{k}")], true)?;
         Ok(())
     }, Some(|| Ok(())))?;
-    // remove the tags just added, timed separately
+    // The tags just added are removed, and the removal is timed on its own.
     let mut kr = 0usize;
     bench("apply_tags remove 200k", "200000", runs, || {
         kr += 1;
@@ -272,7 +282,7 @@ fn main() -> R<()> {
     emit("set_lifecycle Trash 200k", "200000", &mut trash_ms);
     emit("set_lifecycle restore Trash->Active 200k", "200000", &mut restore_ms);
 
-    // folder (200k members) operations; root 600_000 is outside it
+    // Operations on the folder of 200k members; root 600,000 is not in it.
     let outsider = explicit(&ids[at(600_000)..at(600_000) + 1]);
     bench("add_to_folder 1 -> 200k folder", "1", runs * 2, || {
         library.add_to_folder(&outsider, big_folder)?;
@@ -283,7 +293,8 @@ fn main() -> R<()> {
         Ok(())
     }, Some(|| { library.add_to_folder(&outsider, big_folder)?; Ok(()) }))?;
     library.remove_from_folder(&outsider, big_folder)?;
-    // move one item inside a loaded 1,500-item window (send the window with one item moved)
+    // One item moves inside a loaded window of 1,500 items: the window is
+    // sent with one item moved.
     let order = library.projections().snapshot().folder_orders[&big_folder].clone();
     let window: Vec<RootId> = order[1_000..2_500].to_vec();
     let mut flip = false;
@@ -334,7 +345,7 @@ fn main() -> R<()> {
         last_collection = Some(cid);
         Ok(())
     }, None::<fn() -> R<()>>)?;
-    // ungroup the collections just created (each sample a fresh one)
+    // The collections just created are ungrouped, a new one for each sample.
     let mut fresh = Vec::new();
     for c in 0..runs {
         let start = at(960_000) + c * 10;
@@ -347,7 +358,7 @@ fn main() -> R<()> {
     }, None::<fn() -> R<()>>)?;
     let _ = last_collection;
 
-    // undo / redo of a 200k tag op
+    // Undo and redo of a tag added to 200k roots.
     let mut undo_ms = Vec::new();
     let mut redo_ms = Vec::new();
     for i in 0..runs {
@@ -382,6 +393,9 @@ fn main() -> R<()> {
         del_ms.push(ms(t));
     }
     emit("permanently_delete 1k (from Trash)", "1000", &mut del_ms);
+    if sync {
+        bench_apply(&library, roots, runs, &at)?;
+    }
     while library.settle_fts(20_000)?.is_some() {}
 
     // --- reads ---
@@ -584,6 +598,57 @@ fn main() -> R<()> {
     let first = library.query_window(&windows[0].1, &WindowRequest::at(0, 500))?;
     println!("ROW|first window after reopen (All)|{}|{:.1}|-|1 run, cold caches", first.page.total, ms(t));
     print_memory(&library, "after_reopen");
+    Ok(())
+}
+
+/// Applies change records that another computer made: a rating of one item,
+/// a tag on 1,000 items, and a new item. Each run uses later timestamps, so
+/// that the records replace the stored ones.
+fn bench_apply(library: &Library, roots: usize, runs: usize, at: &dyn Fn(usize) -> usize) -> R<()> {
+    let mut wall_ms = now() + 60_000;
+    let mut record = |key: String, field: &str, value: serde_json::Value| {
+        wall_ms += 1;
+        SyncRecord {
+            kind: SyncKind::Item,
+            key,
+            field: field.into(),
+            value,
+            timestamp: SyncTimestamp { wall_ms, counter: 0, device: "benchmark".into() },
+        }
+    };
+    let mut samples = Vec::new();
+    for run in 0..runs * 2 {
+        let records = vec![record(format!("hash-{}", at(500_000)), "rating", serde_json::json!(run % 5 + 1))];
+        let t = Instant::now();
+        library.apply_sync_records(&records)?;
+        samples.push(ms(t));
+    }
+    emit("apply_sync_records rating of 1 item", "1", &mut samples);
+    let mut samples = Vec::new();
+    for run in 0..runs {
+        let records = (0..1_000)
+            .map(|index| record(format!("hash-{}", at(400_000) + index), "tag:vocab:1", serde_json::json!(run % 2 == 0)))
+            .collect::<Vec<_>>();
+        let t = Instant::now();
+        library.apply_sync_records(&records)?;
+        samples.push(ms(t));
+    }
+    emit("apply_sync_records tag on 1k items", "1000", &mut samples);
+    let mut samples = Vec::new();
+    for run in 0..runs * 2 {
+        let key = format!("remote-{run}");
+        let records = vec![
+            record(key.clone(), "deleted", serde_json::json!(false)),
+            record(key.clone(), "file", serde_json::json!({"mime": "image/png", "size": 1000, "width": 10, "height": 10})),
+            record(key.clone(), "name", serde_json::json!(format!("remote-{run}.png"))),
+            record(key.clone(), "lifecycle", serde_json::json!("active")),
+            record(key, "tag:vocab:2", serde_json::json!(true)),
+        ];
+        let t = Instant::now();
+        library.apply_sync_records(&records)?;
+        samples.push(ms(t));
+    }
+    emit("apply_sync_records new item", &format!("{roots} roots"), &mut samples);
     Ok(())
 }
 

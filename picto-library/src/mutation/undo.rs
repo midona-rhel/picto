@@ -111,7 +111,7 @@ pub(super) fn history_dependencies(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn apply_semantic_change(
+pub(crate) fn apply_semantic_change(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
     snapshot: &mut ProjectionSnapshot,
@@ -236,6 +236,18 @@ pub(super) fn apply_semantic_change(
                             "cannot replay history because folder {owner_id} changed"
                         )));
                     }
+                    // Roots deleted since the entry was recorded are left
+                    // out. Changes applied from another computer can delete
+                    // them.
+                    let existing = snapshot
+                        .root_kinds
+                        .values()
+                        .fold(RoaringBitmap::new(), |roots, kind| roots | &**kind);
+                    let replacement = &replacement
+                        .iter()
+                        .copied()
+                        .filter(|root| existing.contains(*root))
+                        .collect::<Vec<_>>();
                     ordering::replace(transaction, revision, *owner_kind, *owner_id, replacement)?;
                     let old_bitmap = expected.iter().copied().collect::<RoaringBitmap>();
                     let new_bitmap = replacement.iter().copied().collect::<RoaringBitmap>();
@@ -749,7 +761,11 @@ pub(super) fn apply_semantic_change(
                             folder.color,
                             folder.notes,
                             folder.auto_tag_ids,
-                            folder.cover_root_id.map(|id| id.0),
+                            // A cover root deleted since, which changes
+                            // from another computer can do, is left out.
+                            folder.cover_root_id.map(|id| id.0).filter(|root| {
+                                snapshot.root_kinds.values().any(|kind| kind.contains(*root))
+                            }),
                             folder.watch_path,
                             folder.watch_enabled,
                             folder.watch_subfolders,
@@ -925,6 +941,23 @@ pub(super) fn apply_semantic_change(
                 resources.extend(receipt.resources);
             } else {
                 super::structure::restore_deleted_roots(transaction, revision, snapshot, state)?;
+                // While sync is on, the latest synced values of the items are
+                // written over the rows that come back, so that changes made
+                // on other computers since the deletion are kept. The recorder
+                // then records the items' full state, because the synced
+                // values hold them as deleted.
+                if crate::sync::recording(transaction)? {
+                    let keys = super::structure::deleted_root_keys(transaction, state)?;
+                    let projected = crate::sync::project(
+                        transaction,
+                        revision,
+                        snapshot,
+                        keys.iter().cloned().collect(),
+                        keys.into_iter().collect(),
+                        &std::collections::BTreeSet::new(),
+                    )?;
+                    *affected |= projected.roots;
+                }
                 resources.extend(
                     ["roots", "media", "sidebar", "tags", "folders", "collections", "search", "navigation", "recently_viewed", "tasks"]
                         .map(str::to_owned),
