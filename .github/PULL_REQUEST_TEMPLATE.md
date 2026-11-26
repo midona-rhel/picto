@@ -1,26 +1,25 @@
 Closes #
 
-## Summary
+## Issue
 
 
-## What changed
+## What this changes
 
-<!-- For refactors: net production lines added/removed, and which old paths were deleted. -->
 
 ## Schema / data
 
 - [ ] No schema change
 - [ ] Schema change with migration, backup, and a reopen test
 
-## How I tested it
+## How it was checked
 
-<!-- Commands run and results. CI runs `verify` on this PR. -->
+<!-- Say what was tried in the running app and what was only built or read in the code. CI runs `verify` on this pull request. -->
 
-## Manual test needed
+## How to try it
 
-<!-- Test card: starting state, actions, expected result. "None" if not needed. -->
+<!-- Where to start, what to press, and what should be seen. -->
 
-## Risks or notes
+## Notes
 
 
 - [ ] I will not merge this before review.
