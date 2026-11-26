@@ -1,26 +1,19 @@
 # Agent rules
 
-- Follow [CONTRIBUTING.md](CONTRIBUTING.md). Track work as GitHub issues, not
-  PBI files.
-- Branch from `dev`, named by purpose (`feature/`, `bug/`, `perf/`,
-  `refactor/`, `ui/`, `docs/`, `test/`, `chore/`, `deps/`) plus the issue
-  number. Never commit to `dev` directly. The branch `main` is not used; never
-  open a pull request into it.
-- Open the pull request into `dev` and stop. Do not merge, push a release
-  branch, or push a tag without explicit approval from the user.
-- Before writing code, find the existing owner of the behavior: the
-  `published_write` path for library mutations, the existing work queues for
-  background jobs, `NativeSourceAdapter` for sources. Extend it; do not add a
-  parallel path. Delete superseded code in the same pull request.
-- Report results honestly: list the checks you actually ran, their output,
-  and what remains unverified. Compilation is not runtime proof; the user
-  accepts behavior in the running app with a test card (starting state,
-  actions, expected result, evidence to report).
-- Do not add a document per module. Extend the existing normative home
-  (`docs/architecture.md`, `docs/RELEASE_READINESS.md`, the user guide) and
-  delete superseded prose; Git keeps history.
-- Never commit library data, credentials, cookies, local absolute paths,
-  benchmark output or build artifacts.
+[CONTRIBUTING.md](CONTRIBUTING.md) describes how work is done in this
+repository: issues, branches, pull requests, releases and the engineering
+rules. Follow it. This file adds what an agent must do on top of it, and the
+guidelines that the automated review checks.
+
+- Open the pull request into `dev` and stop there. Do not merge it, push a
+  release branch or push a tag until the user says so.
+- Do the plainest thing that solves the issue. Do not add options, layers,
+  test harnesses or tests for situations that no user meets.
+- Write new code in Rust. Do not add Python.
+- Report what you actually checked: the commands you ran, their output, and
+  what you did not check. A build that compiles does not show that the
+  behavior works; the user accepts behavior in the running app with the test
+  card of the issue.
 
 ## Write so that a person can understand it
 
