@@ -1,4 +1,5 @@
-//! Explicit repair of full-range VP9 encodes, retaining original bytes for recovery.
+//! Repairs full-range VP9 videos when the user asks for it, and keeps a copy
+//! of the original file so that it can be restored.
 use std::{path::Path, process::Output, time::Duration};
 
 use picto_library::{database::WorkPriority, MediaId, RepairedMediaContent};
@@ -211,7 +212,6 @@ pub async fn repair(
                     .map_err(|e| e.to_string())?
                     .len(),
             },
-            chrono::Utc::now().timestamp_millis(),
         )
         .map_err(|e| e.to_string())?;
     tracing::info!(original_hash = hash, %repaired_hash, "Repaired VP9 video; original bytes retained");

@@ -9,7 +9,8 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-11-23-kept-deleted-files";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-11-25-no-cloud-sync";
+const KEPT_DELETED_FILES_PREDECESSOR: &str = "picto-library-schema-1-2026-11-23-kept-deleted-files";
 const TOMBSTONE_ENTRIES_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-task-rollback-aliases";
 const COMBINED_IMPORT_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-media-aliases-import-tasks";
 const TASK_ROLLBACK_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-task-rollback";
@@ -31,6 +32,28 @@ const PREVIOUS_SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-30-nat
 const LEGACY_SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-29-fts-substring";
 
 const SCHEMA: &str = include_str!("schema_v1.sql");
+/// The tables of the cloud sync that earlier schemas had. The migration drops
+/// each of them that exists, and with it its indexes.
+const CLOUD_SYNC_TABLES: [&str; 18] = [
+    "cloud_state",
+    "cloud_device_frontier",
+    "shared_entry",
+    "entry_recording",
+    "pending_entry",
+    "merge_touched",
+    "wanted_file",
+    "kept_deleted_file",
+    "cloud_deleted_original",
+    "cloud_quarantine",
+    "cloud_snapshot",
+    "cloud_blob_state",
+    "cloud_journal",
+    "cloud_tombstone",
+    "cloud_outbox",
+    "cloud_applied_mutation",
+    "cloud_field_clock",
+    "cloud_membership_clock",
+];
 const TASK_SCHEMA: &str = include_str!("task_schema.sql");
 const ACCELERATOR_INDEXES: &str = include_str!("accelerator_indexes.sql");
 const ALIAS_SCHEMA: &str = include_str!("alias_schema.sql");
@@ -62,14 +85,6 @@ pub fn create(connection: &mut Connection) -> Result<()> {
                  (singleton, schema_generation, schema_fingerprint, revision, next_local_id)
              VALUES (1, ?1, ?2, 1, 1)",
             rusqlite::params![SCHEMA_GENERATION, SCHEMA_FINGERPRINT],
-        )?;
-        connection.execute(
-            "INSERT INTO cloud_state (singleton, library_id, device_id)
-             VALUES (1, ?1, ?2)",
-            rusqlite::params![
-                uuid::Uuid::new_v4().to_string(),
-                uuid::Uuid::new_v4().to_string()
-            ],
         )?;
         Ok::<_, LibraryError>(())
     })();
@@ -132,7 +147,8 @@ pub fn migrate_for_open(
     if generation != SCHEMA_GENERATION
         || !matches!(
             fingerprint.as_str(),
-            TOMBSTONE_ENTRIES_PREDECESSOR
+            KEPT_DELETED_FILES_PREDECESSOR
+                | TOMBSTONE_ENTRIES_PREDECESSOR
                 | COMBINED_IMPORT_PREDECESSOR
                 | TASK_ROLLBACK_PREDECESSOR
                 | MEDIA_ALIASES_PREDECESSOR
@@ -213,6 +229,7 @@ pub fn migrate_for_open(
             )?;
             }
             if ![
+                KEPT_DELETED_FILES_PREDECESSOR,
                 TOMBSTONE_ENTRIES_PREDECESSOR,
                 COMBINED_IMPORT_PREDECESSOR,
                 TASK_ROLLBACK_PREDECESSOR,
@@ -269,6 +286,7 @@ pub fn migrate_for_open(
             // journal of changed roots and its triggers are kept, defined
             // once for every earlier schema.
             if ![
+                KEPT_DELETED_FILES_PREDECESSOR,
                 TOMBSTONE_ENTRIES_PREDECESSOR,
                 COMBINED_IMPORT_PREDECESSOR,
                 TASK_ROLLBACK_PREDECESSOR,
@@ -304,9 +322,12 @@ pub fn migrate_for_open(
                 connection.execute_batch(include_str!("browsing_schema.sql"))?;
                 connection.execute_batch("DELETE FROM browsing_dirty_root")?;
             }
-            // These predecessors change only derived storage. Their canonical
-            // data and existing checkpoint representation are unchanged.
+            // The migration from these predecessors changes no table that
+            // the projection is built from, and it does not change the
+            // revision, so a saved projection checkpoint stays valid and
+            // gets the new fingerprint.
             if [
+                KEPT_DELETED_FILES_PREDECESSOR,
                 TOMBSTONE_ENTRIES_PREDECESSOR,
                 COMBINED_IMPORT_PREDECESSOR,
                 TASK_ROLLBACK_PREDECESSOR,
@@ -364,8 +385,8 @@ pub fn migrate_for_open(
             )?;
             // An attempt from before this column does not say whether it
             // created a root. The column is 0 for it. It is not guessed from
-            // the files that were kept, and no counts for notifications are
-            // filled in from a guess.
+            // the files that the attempt retained, and no counts for
+            // notifications are filled in from a guess.
             if !has_column(connection, "source_attempt_root", "created_root")? {
                 connection.execute_batch(
                     "ALTER TABLE source_attempt_root ADD COLUMN created_root INTEGER NOT NULL DEFAULT 0 CHECK (created_root IN (0, 1));"
@@ -400,20 +421,7 @@ pub fn migrate_for_open(
             // merge itself, and the one-item-per-file index after it, run
             // once the library is open (`Library::merge_shared_files`).
             connection.execute_batch(ALIAS_SCHEMA)?;
-            // No version of the application ever wrote these cloud tables, so
-            // they are dropped.
-            connection.execute_batch(
-                "DROP INDEX IF EXISTS idx_cloud_outbox_pending;
-                 DROP TABLE IF EXISTS cloud_outbox;
-                 DROP TABLE IF EXISTS cloud_applied_mutation;
-                 DROP TABLE IF EXISTS cloud_field_clock;
-                 DROP TABLE IF EXISTS cloud_membership_clock;",
-            )?;
-            // Every earlier schema keeps shared deletions in
-            // `cloud_tombstone`, which the entry tables replace.
-            if has_table(connection, "cloud_tombstone")? {
-                migrate_shared_entries(connection)?;
-            }
+            drop_cloud_sync_tables(connection)?;
             connection.execute(
                 "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
                 [SCHEMA_FINGERPRINT],
@@ -450,36 +458,32 @@ pub fn migrate_for_open(
     }
 }
 
-/// Replaces `cloud_tombstone` with the tables of the shared entries.
+/// Drops the tables of the cloud sync (`CLOUD_SYNC_TABLES`) that the library
+/// has.
 ///
-/// The `blob` rows of `cloud_tombstone` are originals in the cloud folder
-/// that wait to be removed, and they move into `cloud_deleted_original`. The
-/// other rows were keyed by the stable keys of items, which entries no longer
-/// use, so they're dropped. `cloud_device_frontier` is cleared because none of
-/// the new entries has been written to a cloud folder. The library records
-/// nothing until `Library::start_recording` is called.
-fn migrate_shared_entries(connection: &Connection) -> Result<()> {
-    let tables = SCHEMA
-        .split(";\n")
-        .filter(|statement| {
-            ["shared_entry", "entry_recording", "pending_entry", "merge_touched", "wanted_file",
-             "kept_deleted_file", "cloud_deleted_original"]
-                .iter()
-                .any(|table| {
-                    statement.contains(&format!("CREATE TABLE {table} ("))
-                        || statement.contains(&format!("CREATE INDEX idx_{table}_"))
-                })
-        })
-        .map(|statement| format!("{statement};"))
-        .collect::<String>();
-    connection.execute_batch(&tables)?;
-    connection.execute_batch(
-        "INSERT INTO cloud_deleted_original (file_name, deleted_at, purge_after)
-         SELECT object_key, deleted_at, purge_after
-         FROM cloud_tombstone WHERE object_kind = 'blob';
-         DROP TABLE cloud_tombstone;
-         DELETE FROM cloud_device_frontier;",
-    )?;
+/// A file in `kept_deleted_file` is the original of an item that a cloud sync
+/// merge deleted. Its `media_file` row and the file on disk were kept for a
+/// few days in case the item came back. Before the table is dropped, each of
+/// these files that no media item uses is added to `blob_cleanup_queue`, so
+/// the blob cleanup removes it from the disk like the file of any other
+/// deleted item.
+fn drop_cloud_sync_tables(connection: &Connection) -> Result<()> {
+    if has_table(connection, "kept_deleted_file")? {
+        connection.execute_batch(
+            "INSERT INTO blob_cleanup_queue (file_id, file_path, enqueued_revision)
+             SELECT file.file_id, file.file_path,
+                    (SELECT revision FROM library_meta WHERE singleton = 1)
+             FROM kept_deleted_file kept
+             JOIN media_file file ON file.content_hash = kept.content_hash
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM media_item media WHERE media.file_id = file.file_id
+             )
+             ON CONFLICT(file_id) DO NOTHING;",
+        )?;
+    }
+    for table in CLOUD_SYNC_TABLES {
+        connection.execute_batch(&format!("DROP TABLE IF EXISTS {table};"))?;
+    }
     Ok(())
 }
 
@@ -803,81 +807,224 @@ mod tests {
         );
     }
 
-    /// Returns the definitions of the tables `names` as SQLite stores them,
-    /// with every run of white space made one space.
-    fn table_definitions(connection: &Connection, names: &[&str]) -> Vec<String> {
-        names
+    /// The cloud sync tables of the schema `KEPT_DELETED_FILES_PREDECESSOR`,
+    /// as that schema created them.
+    const KEPT_DELETED_FILES_CLOUD_TABLES: &str = "
+        CREATE TABLE cloud_state (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            library_id TEXT NOT NULL UNIQUE,
+            device_id TEXT NOT NULL,
+            provider TEXT CHECK (provider IN ('google_drive', 'dropbox')),
+            account_label TEXT,
+            remote_root TEXT,
+            paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1)),
+            state TEXT NOT NULL DEFAULT 'disabled',
+            phase TEXT NOT NULL DEFAULT 'idle',
+            blocking INTEGER NOT NULL DEFAULT 0 CHECK (blocking IN (0, 1)),
+            completed_units INTEGER NOT NULL DEFAULT 0,
+            total_units INTEGER,
+            message TEXT NOT NULL DEFAULT '',
+            last_sync_at TEXT,
+            last_snapshot_at TEXT,
+            pending_blobs INTEGER NOT NULL DEFAULT 0,
+            missing_blobs INTEGER NOT NULL DEFAULT 0,
+            schema_generation INTEGER NOT NULL DEFAULT 1,
+            hlc_physical_ms INTEGER NOT NULL DEFAULT 0,
+            hlc_logical INTEGER NOT NULL DEFAULT 0,
+            retention_json TEXT NOT NULL DEFAULT '{}'
+        ) STRICT;
+        CREATE TABLE cloud_device_frontier (
+            device_id TEXT PRIMARY KEY,
+            hlc_physical_ms INTEGER NOT NULL,
+            hlc_logical INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        ) WITHOUT ROWID, STRICT;
+        CREATE TABLE shared_entry (
+            subject_key TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            second_key TEXT NOT NULL DEFAULT '',
+            value TEXT,
+            clock_ms INTEGER NOT NULL,
+            clock_counter INTEGER NOT NULL,
+            device_id TEXT NOT NULL,
+            PRIMARY KEY(subject_key, kind, second_key)
+        ) WITHOUT ROWID, STRICT;
+        CREATE TABLE entry_recording (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            started_ms INTEGER NOT NULL,
+            started_counter INTEGER NOT NULL,
+            start_next_root INTEGER,
+            start_end_root INTEGER NOT NULL,
+            action_revision INTEGER NOT NULL DEFAULT 0,
+            action_ms INTEGER NOT NULL DEFAULT 0,
+            action_counter INTEGER NOT NULL DEFAULT 0
+        ) STRICT;
+        CREATE TABLE pending_entry (
+            pending_id INTEGER PRIMARY KEY,
+            kind TEXT NOT NULL,
+            second_key TEXT NOT NULL DEFAULT '',
+            value TEXT,
+            clock_ms INTEGER NOT NULL,
+            clock_counter INTEGER NOT NULL,
+            root_bitmap BLOB NOT NULL
+        ) STRICT;
+        CREATE TABLE merge_touched (
+            subject_kind TEXT NOT NULL,
+            subject_key TEXT NOT NULL,
+            PRIMARY KEY(subject_kind, subject_key)
+        ) WITHOUT ROWID, STRICT;
+        CREATE TABLE wanted_file (content_hash TEXT PRIMARY KEY) WITHOUT ROWID, STRICT;
+        CREATE TABLE kept_deleted_file (
+            content_hash TEXT PRIMARY KEY,
+            remove_after_ms INTEGER NOT NULL
+        ) STRICT;
+        CREATE INDEX idx_kept_deleted_file_remove_after ON kept_deleted_file(remove_after_ms);
+        CREATE TABLE cloud_deleted_original (
+            file_name TEXT PRIMARY KEY,
+            deleted_at TEXT NOT NULL,
+            purge_after TEXT
+        ) WITHOUT ROWID, STRICT;
+        CREATE TABLE cloud_quarantine (
+            quarantine_id INTEGER PRIMARY KEY,
+            mutation_id TEXT NOT NULL UNIQUE,
+            reason TEXT NOT NULL,
+            envelope_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            resolved_at TEXT
+        ) STRICT;
+        CREATE TABLE cloud_snapshot (
+            snapshot_id TEXT PRIMARY KEY,
+            frontier_json TEXT NOT NULL,
+            database_sha256 TEXT NOT NULL,
+            artifact_sha256 TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            verified INTEGER NOT NULL DEFAULT 0 CHECK (verified IN (0, 1)),
+            created_at TEXT NOT NULL,
+            remote_path TEXT,
+            published_at TEXT
+        ) WITHOUT ROWID, STRICT;
+        CREATE TABLE cloud_blob_state (
+            file_hash TEXT PRIMARY KEY REFERENCES media_file(content_hash) ON DELETE CASCADE,
+            state TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 0,
+            remote_present INTEGER NOT NULL DEFAULT 0 CHECK (remote_present IN (0, 1)),
+            remote_extension TEXT,
+            last_error TEXT,
+            uploaded_at TEXT,
+            updated_at TEXT NOT NULL
+        ) WITHOUT ROWID, STRICT;
+        CREATE INDEX idx_cloud_blob_state_state ON cloud_blob_state(state, remote_present);
+        CREATE TABLE cloud_journal (
+            journal_id INTEGER PRIMARY KEY,
+            revision INTEGER NOT NULL,
+            operation_kind TEXT NOT NULL,
+            target_bitmap BLOB,
+            payload_json TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            expanded_at_ms INTEGER
+        ) STRICT;
+        CREATE INDEX idx_cloud_pending ON cloud_journal(expanded_at_ms, journal_id);";
+
+    /// Returns the names of the tables, indexes and triggers in the
+    /// database that belong to cloud sync.
+    fn cloud_sync_objects(connection: &Connection) -> Vec<String> {
+        let names = super::CLOUD_SYNC_TABLES
             .iter()
-            .map(|name| {
-                connection
-                    .query_row(
-                        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
-                        [name],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .unwrap()
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .collect()
+            .map(|table| format!("'{table}'"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT name FROM sqlite_master
+                 WHERE name LIKE '%cloud%' OR name IN ({names}) OR tbl_name IN ({names})"
+            ))
+            .unwrap();
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
     }
 
+    /// Adds a media item `id` with its own file whose content hash is
+    /// `hash`, or only the file when `item` is false.
+    fn add_file(connection: &Connection, id: u32, hash: &str, item: bool) {
+        connection
+            .execute(
+                "INSERT INTO media_file(file_id, content_hash, file_path, mime, size_bytes)
+                 VALUES (?1, ?2, 'blobs/f/' || ?2, 'image/png', 10)",
+                rusqlite::params![id, hash],
+            )
+            .unwrap();
+        if item {
+            connection
+                .execute_batch(&format!(
+                    "INSERT INTO library_item VALUES ({id}, 'item-{id}', 1);
+                     INSERT INTO media_item VALUES ({id}, 'Item {id}', NULL, {id});
+                     INSERT INTO library_root(root_id, name, cover_media_id, imported_at_ms,
+                                              modified_at_ms, media_count, total_size_bytes)
+                         VALUES ({id}, 'Item {id}', {id}, 1, 1, 1, 10);"
+                ))
+                .unwrap();
+        }
+    }
+
+    fn queued_files(connection: &Connection) -> Vec<u32> {
+        let mut statement = connection
+            .prepare("SELECT file_id FROM blob_cleanup_queue ORDER BY file_id")
+            .unwrap();
+        statement
+            .query_map([], |row| row.get::<_, u32>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    }
+
+    /// A library of the schema just before this one has every cloud sync
+    /// table, with rows. The migration drops them all, queues the kept files
+    /// that no item uses for removal from the disk, keeps the projection
+    /// checkpoint and keeps a backup of the database as it was.
     #[test]
-    fn the_entry_tables_replace_the_tombstone_table_and_the_library_opens_again() {
-        const TABLES: [&str; 7] = [
-            "shared_entry",
-            "entry_recording",
-            "pending_entry",
-            "merge_touched",
-            "wanted_file",
-            "kept_deleted_file",
-            "cloud_deleted_original",
-        ];
+    fn the_migration_drops_the_cloud_sync_tables_and_queues_the_kept_files() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("library.sqlite");
         drop(LibraryDatabase::create(&path).unwrap());
         let connection = Connection::open(&path).unwrap();
-        let created = table_definitions(&connection, &TABLES);
-        // The database is made into one of the earlier schema: the new
-        // tables are dropped and the tombstone table is created with rows.
+        connection.execute_batch(KEPT_DELETED_FILES_CLOUD_TABLES).unwrap();
+        // File 1 is used by an item, file 2 is a kept file that no item
+        // uses, and file 3 is the file of an item that is not kept.
+        add_file(&connection, 1, "used", true);
+        add_file(&connection, 2, "kept", false);
+        add_file(&connection, 3, "other", true);
         connection
             .execute_batch(
-                "DROP TABLE shared_entry;
-                 DROP TABLE entry_recording;
-                 DROP TABLE pending_entry;
-                 DROP TABLE merge_touched;
-                 DROP TABLE wanted_file;
-                 DROP TABLE kept_deleted_file;
-                 DROP TABLE cloud_deleted_original;
-                 CREATE TABLE cloud_tombstone (
-                     object_kind TEXT NOT NULL,
-                     object_key TEXT NOT NULL,
-                     mutation_id TEXT NOT NULL,
-                     hlc_physical_ms INTEGER NOT NULL,
-                     hlc_logical INTEGER NOT NULL,
-                     device_id TEXT NOT NULL,
-                     causal_frontier_json TEXT NOT NULL,
-                     deleted_at TEXT NOT NULL,
-                     purge_after TEXT,
-                     PRIMARY KEY(object_kind, object_key)
-                 ) WITHOUT ROWID, STRICT;
-                 INSERT INTO cloud_tombstone VALUES
-                     ('item', 'deleted-item', 'delete', 70, 2, 'device-a',
-                      '{\"file\":\"abc\"}', '2026-11-01T00:00:00Z', NULL),
-                     ('status', 'trashed-item', 'trash', 71, 0, 'device-b',
-                      '{}', '2026-11-01T00:00:00Z', NULL),
-                     ('blob', 'abc.png', 'delete-1', 1, 0, 'device-a',
-                      '{}', '2026-11-01T00:00:00Z', '2026-11-08T00:00:00Z');
-                 UPDATE cloud_state SET provider = 'dropbox', remote_root = 'folder';
-                 INSERT INTO cloud_device_frontier VALUES
-                     ('device-b', 5, 0, '2026-11-01T00:00:00Z');",
+                "INSERT INTO cloud_state (singleton, library_id, device_id, provider)
+                     VALUES (1, 'library', 'device', 'dropbox');
+                 INSERT INTO cloud_device_frontier VALUES ('device', 5, 0, 'now');
+                 INSERT INTO shared_entry VALUES ('kept', 'delete', '', NULL, 5, 0, 'device');
+                 INSERT INTO entry_recording (singleton, started_ms, started_counter, start_end_root)
+                     VALUES (1, 1, 0, 4);
+                 INSERT INTO pending_entry VALUES (1, 'rating', '', '3', 5, 0, X'00');
+                 INSERT INTO merge_touched VALUES ('file', 'kept');
+                 INSERT INTO wanted_file VALUES ('wanted');
+                 INSERT INTO kept_deleted_file VALUES ('used', 1), ('kept', 1), ('missing', 1);
+                 INSERT INTO cloud_deleted_original VALUES ('gone.png', 'now', NULL);
+                 INSERT INTO cloud_quarantine VALUES (1, 'mutation', 'reason', '{}', 'now', NULL);
+                 INSERT INTO cloud_snapshot (snapshot_id, frontier_json, database_sha256,
+                                             artifact_sha256, size_bytes, created_at)
+                     VALUES ('snapshot', '{}', 'a', 'b', 1, 'now');
+                 INSERT INTO cloud_blob_state (file_hash, state, updated_at)
+                     VALUES ('used', 'available', 'now');
+                 INSERT INTO cloud_journal (revision, operation_kind, payload_json, created_at_ms)
+                     VALUES (1, 'root.ingest', '{}', 1);
+                 INSERT INTO projection_checkpoint VALUES
+                     (1, 'picto-library-schema-1-2026-11-23-kept-deleted-files', 'hash', 1, X'00', X'00');",
             )
             .unwrap();
         connection
             .execute(
-                "UPDATE library_meta SET schema_fingerprint=?1",
-                [super::TOMBSTONE_ENTRIES_PREDECESSOR],
+                "UPDATE library_meta SET schema_fingerprint = ?1",
+                [super::KEPT_DELETED_FILES_PREDECESSOR],
             )
             .unwrap();
         drop(connection);
@@ -888,55 +1035,106 @@ mod tests {
 
         let connection = Connection::open(&path).unwrap();
         super::validate(&connection).unwrap();
-        assert_eq!(table_definitions(&connection, &TABLES), created);
+        assert_eq!(cloud_sync_objects(&connection), Vec::<String>::new());
+        assert_eq!(queued_files(&connection), [2]);
+        assert_eq!(count(&connection, "SELECT COUNT(*) FROM media_file"), 3);
+        assert_eq!(count(&connection, "SELECT COUNT(*) FROM media_item"), 2);
         assert_eq!(
-            count(
-                &connection,
-                "SELECT COUNT(*) FROM sqlite_master
-                 WHERE name = 'idx_kept_deleted_file_remove_after'"
-            ),
-            1
+            connection
+                .query_row(
+                    "SELECT schema_fingerprint FROM projection_checkpoint",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            SCHEMA_FINGERPRINT
         );
-        assert_eq!(
-            count(
-                &connection,
-                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'cloud_tombstone'"
-            ),
-            0
-        );
-        // The tombstones of the earlier keys are not kept, and the library
-        // does not record entries.
-        assert_eq!(count(&connection, "SELECT COUNT(*) FROM shared_entry"), 0);
-        assert_eq!(count(&connection, "SELECT COUNT(*) FROM entry_recording"), 0);
-        assert_eq!(count(&connection, "SELECT COUNT(*) FROM cloud_device_frontier"), 0);
-        let waiting: (String, String, Option<String>) = connection
-            .query_row(
-                "SELECT file_name, deleted_at, purge_after FROM cloud_deleted_original",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(
-            waiting,
-            (
-                "abc.png".into(),
-                "2026-11-01T00:00:00Z".into(),
-                Some("2026-11-08T00:00:00Z".into())
-            )
-        );
-
-        let backups = std::fs::read_dir(directory.path())
+        assert_eq!(backups_in(directory.path()), 1);
+        let backup = std::fs::read_dir(directory.path())
             .unwrap()
             .map(|entry| entry.unwrap().path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "backup"))
-            .collect::<Vec<_>>();
-        assert_eq!(backups.len(), 1);
-        let backup = Connection::open(&backups[0]).unwrap();
+            .find(|path| path.extension().is_some_and(|ext| ext == "backup"))
+            .unwrap();
+        let backup = Connection::open(backup).unwrap();
         assert_eq!(
             super::metadata(&backup).unwrap().1,
-            super::TOMBSTONE_ENTRIES_PREDECESSOR
+            super::KEPT_DELETED_FILES_PREDECESSOR
         );
-        assert_eq!(count(&backup, "SELECT COUNT(*) FROM cloud_tombstone"), 3);
+        assert_eq!(count(&backup, "SELECT COUNT(*) FROM kept_deleted_file"), 3);
+        assert_eq!(count(&backup, "SELECT COUNT(*) FROM cloud_journal"), 1);
+    }
+
+    /// A library of the oldest schema that this version still migrates has
+    /// the cloud sync tables of that time, which are dropped as well.
+    #[test]
+    fn the_oldest_supported_schema_migrates_without_cloud_sync_tables() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        remove_browsing_schema(&connection);
+        add_obsolete_browsing_schema(&connection);
+        connection
+            .execute_batch(
+                "DROP TABLE source_attempt_root;
+                 DROP TABLE source_file_attempt;
+                 DROP TABLE source_post_attempt;",
+            )
+            .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE cloud_state (
+                     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                     library_id TEXT NOT NULL UNIQUE,
+                     device_id TEXT NOT NULL
+                 ) STRICT;
+                 CREATE TABLE cloud_outbox (
+                     mutation_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL,
+                     created_at TEXT NOT NULL, published_at TEXT
+                 ) WITHOUT ROWID, STRICT;
+                 CREATE INDEX idx_cloud_outbox_pending
+                     ON cloud_outbox(published_at, created_at, mutation_id);
+                 CREATE TABLE cloud_applied_mutation (mutation_id TEXT PRIMARY KEY) WITHOUT ROWID, STRICT;
+                 CREATE TABLE cloud_device_frontier (device_id TEXT PRIMARY KEY) WITHOUT ROWID, STRICT;
+                 CREATE TABLE cloud_field_clock (object_key TEXT PRIMARY KEY) WITHOUT ROWID, STRICT;
+                 CREATE TABLE cloud_membership_clock (owner_key TEXT PRIMARY KEY) WITHOUT ROWID, STRICT;
+                 CREATE TABLE cloud_tombstone (
+                     object_kind TEXT NOT NULL, object_key TEXT NOT NULL,
+                     deleted_at TEXT NOT NULL, purge_after TEXT,
+                     PRIMARY KEY(object_kind, object_key)
+                 ) WITHOUT ROWID, STRICT;
+                 CREATE TABLE cloud_quarantine (quarantine_id INTEGER PRIMARY KEY) STRICT;
+                 CREATE TABLE cloud_snapshot (snapshot_id TEXT PRIMARY KEY) WITHOUT ROWID, STRICT;
+                 CREATE TABLE cloud_blob_state (
+                     file_hash TEXT PRIMARY KEY REFERENCES media_file(content_hash) ON DELETE CASCADE
+                 ) WITHOUT ROWID, STRICT;
+                 CREATE TABLE cloud_journal (journal_id INTEGER PRIMARY KEY, revision INTEGER NOT NULL) STRICT;
+                 CREATE INDEX idx_cloud_pending ON cloud_journal(revision, journal_id);
+                 INSERT INTO cloud_state VALUES (1, 'library', 'device');
+                 INSERT INTO cloud_outbox VALUES ('mutation', '{}', 'now', NULL);
+                 INSERT INTO cloud_tombstone VALUES ('blob', 'abc.png', 'now', NULL);
+                 INSERT INTO cloud_journal VALUES (1, 1);",
+            )
+            .unwrap();
+        add_file(&connection, 7, "hash", true);
+        connection
+            .execute(
+                "UPDATE library_meta SET schema_fingerprint = ?1",
+                [LEGACY_SCHEMA_FINGERPRINT],
+            )
+            .unwrap();
+        drop(connection);
+
+        drop(LibraryDatabase::open(&path).unwrap());
+        drop(LibraryDatabase::open(&path).unwrap());
+
+        let connection = Connection::open(&path).unwrap();
+        super::validate(&connection).unwrap();
+        assert_resident_browsing_schema(&connection);
+        assert_eq!(cloud_sync_objects(&connection), Vec::<String>::new());
+        assert_eq!(queued_files(&connection), Vec::<u32>::new());
+        assert_eq!(count(&connection, "SELECT COUNT(*) FROM library_root"), 1);
+        assert_eq!(backups_in(directory.path()), 1);
     }
 
     #[test]
@@ -1101,7 +1299,8 @@ mod tests {
                 .unwrap(),
             SCHEMA_FINGERPRINT
         );
-        // The redefined triggers journal canonical changes exactly as before.
+        // The triggers that the migration defined again write a row to the
+        // journal of changed roots for each change, as before.
         connection
             .execute("UPDATE library_root SET name='犬' WHERE root_id=7", [])
             .unwrap();
@@ -1476,13 +1675,11 @@ mod tests {
         );
     }
 
-    /// A library whose schema fingerprint is none that this version knows is
-    /// not opened and not changed. The second fingerprint is the one that
-    /// an unreleased build of the cloud sync entries wrote before the table
-    /// `kept_deleted_file` was added.
+    /// A library whose schema fingerprint is none that this version knows,
+    /// such as one that a newer version wrote, is not opened and not changed.
     #[test]
     fn open_rejects_an_unknown_schema_without_mutating_it() {
-        for fingerprint in ["unknown", "picto-library-schema-1-2026-11-23-shared-entries"] {
+        for fingerprint in ["unknown", "picto-library-schema-1-2027-01-01-from-a-newer-version"] {
             let directory = tempfile::tempdir().unwrap();
             let database_path = directory.path().join("library.sqlite");
             drop(LibraryDatabase::create(&database_path).unwrap());

@@ -457,9 +457,8 @@ impl RenderOnce for Modal {
 /// Returns a dialog's glass panel with the corner radius `radius`. Assistive
 /// technology is told that it is a modal dialog named `label`. A press inside
 /// the panel is stopped there, so it is not a press on the [`backdrop`].
-/// [`Modal`] uses this panel. A dialog with no title bar
-/// ([`super::progress_dialog`], the import task dialog) lays out its own
-/// contents in one.
+/// [`Modal`] uses this panel. A dialog with no title bar, such as the import
+/// task dialog, lays out its own contents in one.
 pub fn dialog_panel(
     id: impl Into<ElementId>,
     radius: f32,

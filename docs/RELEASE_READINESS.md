@@ -31,8 +31,6 @@ What the gates do not prove:
 - No check opens a window or a library in a packaged program. The checks of the `Package` workflow
   start the packaged program with `--version` only, which ends before a window opens. The windows
   of the app are drawn and photographed by `verify:app`, which runs a debug build.
-- Cloud Sync (experimental) is checked by the step `Cloud` of `verify:app`, against a plain folder
-  that stands in for the desktop folder of Dropbox. It is not checked against a real provider.
 
 ## Repository hygiene
 

@@ -26,12 +26,14 @@ separate lifecycle scopes.
 One file is exactly one media item, enforced by a unique index on `media_item(file_id)`. Every
 import resolves a file it already holds to that item: a standalone import adds its tags and
 provenance to it, a loose item joins a new collection that contains it, and an item already in
-another collection causes the overlapping sets to combine. Chained overlaps also combine,
-retaining every unique media item and merging tags, folders, notes, source links and the highest rating. Resolving a duplicate by
-keeping one file merges the other item into the kept one (tags, folder places, the higher rating,
-the lifecycle that keeps it most, notes and source links), undoably. A merged-away item's stable
-key stays in `library_item_alias`, so re-imports, Picto Packs and cloud copies resolve to the item
-that stays. Libraries from before the rule merge their shared files once at open
+another collection causes the overlapping sets to combine. When several collections overlap one
+after another, they all combine into one, which keeps every distinct media item and gets the
+tags, folders, notes and source links of all of them and the highest rating. Resolving a duplicate
+by keeping one file merges the other item into the kept one (tags, folder places, the higher
+rating, the higher-ranked lifecycle of Active, Inbox and Trash, notes and source links), and the
+resolution can be undone. A merged-away item's stable
+key stays in `library_item_alias`, so re-imports and Picto Packs resolve to the item that
+stays. Libraries from before the rule merge their shared files once at open
 (`Library::merge_shared_files`), after the schema migration's backup.
 
 Manual imports, watched folders, subscriptions, and retries enter one durable ingest path. See
@@ -57,16 +59,18 @@ Manual imports, watched folders, subscriptions, and retries enter one durable in
 
 ## Prepared library views
 
-`items.window` prepares an ordinal or normalized-scroll destination on one captured projection
-snapshot and never opens a SQLite read for it: matching, ordering, aggregates, summaries and
-previews all come from the resident library model described below. The result owns the window,
-its resolved start, the first four query results, exact counts and one revision. Sequential consumers retain
-`items.query` cursors; grid navigation and refreshes do not fetch a separate preview page.
+`items.window` answers a request for a window of a view, given as a position in the order or as a
+scroll fraction between 0 and 1. It reads one captured projection snapshot and never opens a
+SQLite read: the matching, the ordering, the totals, the summaries and the previews all come from
+the in-memory library model described below. The answer holds the window, the position at which
+it starts, the first four results of the query, exact counts and one revision. Code that reads a
+view page by page from the start keeps using `items.query` cursors; grid navigation and refreshes
+do not fetch a separate preview page.
 
-Window cancellation has one scoped backend execution context: Rust text/tree/numeric ordering,
-resident summary hydration and JSON serialization observe it. Parallel text workers explicitly
-receive the token. Match membership and aggregates have independent cache dependencies;
-changing byte totals does not invalidate unrelated text membership.
+A window request is cancelled through one cancellation token. The text, tree and numeric ordering
+in Rust, the building of the summaries and the JSON serialization check it, and the token is
+passed explicitly to the parallel text workers. Which roots match and the totals are cached
+separately, so a change of the byte totals does not invalidate the cached text matches.
 
 Text filters and text-based smart folders share one matching contract: the trimmed, lowercased
 literal of at least three characters is a byte substring of the requested lowercased fields.
@@ -77,13 +81,13 @@ resuming at the next row in scope; shards with no root in scope are skipped, and
 under 3% of its rows in scope looks those rows up instead. A query that contains a recent
 selective query (typing one more letter) searches only that query's matches. FTS settlement takes
 the oldest 256 dirty roots per batch through an index, so its cost does not grow with the
-backlog. There is no admission budget, no
-trigram candidate probe and no SQL fallback; a common term over a million items is a visible
-resident scan, not a hidden slower path. Every byte of the settled text is ordinary, including an
+backlog. There is no limit on how many roots a search may scan, no
+trigram pre-selection of candidates and no fallback to SQL; a common term over a million items is
+an ordinary scan of the in-memory text, not a hidden slower path. Every byte of the settled text is ordinary, including an
 embedded NUL: text after it stays searchable and a query containing one matches the fields that
 contain that byte sequence, while alphabetical order keeps SQLite's NOCASE rule of stopping at a
-NUL. The canonical `root_fts` table remains the settled-text source, and a full-table `instr()`
-scan of it is the exactness oracle the resident matcher is tested against.
+NUL. The `root_fts` table remains the source of the settled text, and the in-memory matcher is
+tested against a full-table `instr()` scan of it, which gives the exact expected result.
 
 Captured/imported date windows use signed bit-sliced projections, retaining pre-epoch
 timestamps rather than clamping their ordering keys. Missing captured dates share the `-1`
@@ -112,7 +116,7 @@ ownership; cover palettes; the settled search text; the alphabetical name tree; 
 for every root; recently viewed roots in display order; and folder parents for tree scopes.
 Drawing facts live in immutable 1,024-root shards that intern each shard's content hashes and
 MIME strings; names come from the alphabetical index rather than a second copy. A window
-hydrates its summaries from these records and the bitmaps alone. Detail requests, media
+builds its summaries from these records and the bitmaps alone. Detail requests, media
 records and duplicate inspection still read canonical tables, the last inside a consistent read
 that captures the snapshot it will combine with.
 
@@ -123,11 +127,12 @@ deadline: a later open, a close or process shutdown cancels it, the migration's 
 interrupted through SQLite's progress handler, and the resident scans stop at their existing
 check points. A cancelled open commits nothing, removes the backup its migration attempt took,
 and reports `library open cancelled`; the core reports the stage that is running (migrating,
-loading, starting) through `library.open_status`, so that a loading screen can name it. Nothing else is persisted as derived state: there are no
-drawing pages, text chunks or name nodes on disk, no per-domain format versions, generations or
-repair passes, and no helper reader connections. The supported predecessor migration backs up
-the database, drops those tables and redefines the one journal; a first open after migration or
-after any open pays the resident build, which the startup statistics report stage by stage.
+loading, starting) through `library.open_status`, so that a loading screen can name it. Nothing
+else is stored as derived state: there are no drawing pages, text chunks or name nodes on disk,
+no format versions, generations or repair passes for each kind of state, and no helper reader
+connections. The migration from the supported earlier schema backs up the database, drops those
+tables and defines the journal of changed roots again. Every open builds the in-memory state,
+and the startup statistics report the time of each stage.
 
 SQLite triggers on roots, cover media and cover files journal affected root IDs in
 `browsing_dirty_root`. Every publishing transaction settles that journal before commit and in
@@ -140,9 +145,9 @@ leave the journal dirty. Shards, tree nodes and bitmaps are shared between conse
 so readers that captured an older snapshot finish on it and a mutation copies only what changed.
 Session history retains canonical records for affected roots, never library-wide snapshots.
 
-Resident memory is a measured tradeoff, not a quota: the snapshot's own estimate counts each
-shared allocation once per snapshot it appears in, and the memory probe reports retained
-snapshots separately from the live model.
+The memory that the in-memory model uses is measured, not limited. The snapshot's own estimate
+counts each shared allocation once for every snapshot that it is part of, and the memory probe
+reports the older snapshots that readers still hold separately from the current model.
 
 ### Structural history ownership
 
@@ -158,7 +163,7 @@ Smart-folder results are stored per folder and settled incrementally. A write na
 changed (a tag, ratings, root text, cover facts, folders, lifecycle); only folders whose rules can
 observe that change are re-evaluated, and only over the roots the write touched, with every clause
 intersecting that set before it reads a full index. A folder's result and its cache version change
-only when its membership actually moved. `smart_settle_oracle` checks this against a fresh
+only when its membership actually changed. `smart_settle_oracle` checks this against a fresh
 evaluation of every folder after each step of a random edit sequence.
 Results cover roots in every lifecycle; a smart-folder scope and its sidebar count intersect them
 with Active on read, as every other scope does. Trashing, restoring or accepting Inbox items
@@ -166,14 +171,16 @@ therefore re-checks no smart folder, however many exist.
 
 Every SQLite connection sets its own page cache (64 MB for the writer, 16 MB per reader) instead
 of relying on the operating system's file cache, which differs widely between Linux, Windows and
-macOS; memory-mapped I/O is off. Indexes that only accelerate queries live in `accelerator_indexes.sql` and are created at create
-and open; adding one needs no fingerprint migration. Autocheckpoint is off: the runtime folds the
-WAL back every minute and truncates it on close.
+macOS; memory-mapped I/O is off. Indexes that only make queries faster are in
+`accelerator_indexes.sql` and are created when a library is created and when it is opened;
+adding one needs no fingerprint migration. SQLite's automatic checkpoint is off: the runtime
+checkpoints the WAL into the database every minute and truncates it on close.
 
 ### Writes, history and background work
 
 Every canonical write goes through `Library::publish` (in `picto-library/src/mutation/`, one file
-per aggregate: tags, folders, smart folders, imports, duplicates, structure, undo). It opens the
+for each kind of thing written: tags, folders, smart folders, imports, duplicates, structure,
+undo). It opens the
 writer transaction, settles the delta, publishes the snapshot and records any history entry.
 
 Persistence follows the change, not the size of the thing changed. Bitmaps are stored in 64k-id
@@ -192,25 +199,27 @@ collection members; zero disables delete undo. Its history entry
 keeps the deleted roots' structure and every row that pointed at them, and its files stay on disk
 while the entry is in history: `protected_cleanup_files` keeps them out of the blob cleanup, which
 removes them once the entry leaves history, at the latest when the app closes. A larger delete
-records no entry and frees its files at once; the app asks the user to confirm a reject that
+records no entry and queues its files for removal at once; the app asks the user to confirm a reject that
 cannot be undone, and it counts the items with the selection that the library resolved, not with
 the items the grid has loaded. History protection is registered
 before releasing the writer, and cleanup reads it after acquiring the same writer. Undo restores
 recent views and cascaded queue jobs, assigning new queue IDs and requeuing interrupted running jobs.
 When the app has told the user that a delete can be undone, it passes `require_undoable`; the
 serialized writer checks the resolved selection against the limit and refuses the delete if it
-no longer fits. Only a fresh
-nonundoable confirmation permits a retry without that constraint. Delete requests await both
-confirmation and persistence, returning success only after the mutation commits; cancellation
-or failure never advances Inbox review.
+no longer fits. The delete is then retried without `require_undoable` only after the user has
+confirmed again that it cannot be undone. A delete request waits for the confirmation and for the
+write, and reports success only after the write commits; when it is cancelled or fails, Inbox
+review does not move to the next item.
 
-Receipts stay precise. Item ids qualify only `library`; bookkeeping receipts (tasks,
-subscriptions, settings) never widen a frame to a broad change. `smart_folders` is announced only
-when a folder's result or rule actually changed. Derivative facts publish narrowly: a perceptual
-hash announces nothing and a palette refreshes only the colour index. The core's response cache for
-`items.query` and `items.mime_facets` is keyed on the query epoch, which bookkeeping does not move.
+A receipt names only what the write changed. Item ids are sent only with the resource `library`,
+and a receipt of bookkeeping (tasks, subscriptions, settings) never makes the change event of a
+frame report a change of the whole library. `smart_folders` is named only when the result or the
+rules of a smart folder changed. The values that the media work computes are announced as
+narrowly: a perceptual hash announces nothing, and a palette refreshes only the colour index. The
+core caches its answers to `items.query` and `items.mime_facets` by the query epoch, which
+bookkeeping does not change.
 
-Background workers (ingest, FTS, derivatives, AI tagging, subscriptions) sleep until the library
+Background workers (ingest, FTS, media work, AI tagging, subscriptions) sleep until the library
 publishes a change, with a fallback probe every 2-30 s for work that becomes ready with time alone
 (`core/src/work_wake.rs`). An idle library starts no writer transactions between probes. Imports
 publish prepared items in groups of up to 48, flushed at least every 250 ms so the grid fills
@@ -255,8 +264,8 @@ none. The task records what it created and changed (`TaskUndo`): roots, added ta
 places and ratings of existing roots, folders, smart folders, tags and tag namespaces. A merge
 either brings everything or is undone: `library_merge::settle`, which the ingest worker calls,
 marks a stopped merge and a merge with a failed file for undo, and removes the backup once the
-merge has finished or has been undone. The other library's subscriptions, cloud state, watched
-folders, settings, recent views and duplicate decisions are not read.
+merge has finished or has been undone. The other library's subscriptions, watched folders,
+settings, recent views and duplicate decisions are not read.
 
 `picto-library/examples/library_ops_benchmark.rs` measures these operations on a synthetic library
 (`-- [roots] [runs] [smart_folders]`, default 1M roots and 100 smart folders). Its output is local and
@@ -320,15 +329,10 @@ video is a file whose MIME type starts with `video/`.
 
 Both pictures follow the same rules outside the library's folder and at deletion:
 
-- Cloud sync uploads and downloads only the originals in `blobs/f`
-  (`core/src/cloud/snapshot.rs`). When it has transferred an original that has no thumbnail, it
-  queues `thumbnail` work for it, and that work makes both pictures.
 - A Picto Pack holds only originals (`core/src/picto_pack.rs`). The import of a pack queues
   `thumbnail` work for each file, as every import does.
 - A permanent delete queues the file in `blob_cleanup_queue`, and the cleanup deletes the
-  original, the thumbnail and the first-frame picture together (`BlobStore::delete`). A picture
-  that a cloud sync merge deleted keeps its files for "Keep deleted files", and at least 7 days,
-  first (`kept_deleted_file`).
+  original, the thumbnail and the first-frame picture together (`BlobStore::delete`).
 
 ## Subscriptions
 
@@ -382,135 +386,20 @@ Progress counters: posts traversed (metadata inspected), posts added (complete m
 the library), posts skipped (settled without a new visible item). A post is never reported as
 added before canonical ingest succeeds.
 
-Lifetime catalog counts belong to canonical run outcomes: distinct added source posts and
-retained source items per query (and distinct added posts across a subscription's queries).
-Deleting media or failing a later download does not erase earlier outcomes. Explicit history
-reset does. The library writer builds a disposable TEMP outcome index on open, maintains its
-distinct-member reference counts with transactional triggers, and publishes the small totals
-with the resident snapshot through `published_write`. Successful redownloads add references,
-not counts; workspace refreshes never aggregate historical attempts. Cascades remove the
-original indexed attribution even when the parent has already gone. Rollback/savepoints roll
-back the TEMP index too. The index is neither persisted nor checkpointed, and maintenance
-writes that would change it are rejected. No second canonical counter or schema migration is
-introduced; open pays the history scan once per session.
+The totals that the subscription list shows over all runs are computed from the stored results
+of the runs: the distinct source posts added and source items retained for each query, and the
+distinct posts added across all queries of a subscription. Deleting media or a later failed
+download does not lower these totals; only resetting the subscription's history does. When a
+library opens, its writer builds an index of these results in TEMP tables
+(`picto-library/src/subscription_counts.rs`). Triggers keep a reference count for each distinct
+post and item inside the same transaction as each write, and the small totals are published with
+the in-memory snapshot through `published_write`. A file that is downloaded again successfully
+adds a reference, not a count, and refreshing the subscription list never adds up the stored
+attempts. When a run or query is deleted, the cascade also removes its references, even when the
+parent row has already been deleted. A rolled-back transaction or savepoint also rolls back the
+TEMP tables. The index is never stored in the database or in the checkpoint, and a maintenance
+write that would change it is rejected. There is no second stored counter and no schema
+migration for it; the scan of the stored results is done once at every open.
 
 When a source breaks, follow
 [`SOURCE_INTEGRATION_BREAKAGE_PLAYBOOK.md`](./SOURCE_INTEGRATION_BREAKAGE_PLAYBOOK.md).
-
-## Cloud sync
-
-Cloud sync is experimental. It uses a folder that the Google Drive or Dropbox desktop app syncs;
-Picto has no account service and signs in to nothing. The core owns it (`core/src/cloud/`), and it
-changes a library only through the library's own writes.
-
-A library writes below `picto/<library id>/` in the cloud folder:
-
-| Path | Content | Written |
-| --- | --- | --- |
-| `library.json` | the library's id and name | once, by the first sync |
-| `blobs/f/<aa>/<bb>/<hash>.<ext>` | the original files, by content hash | when a file is missing there |
-| `snapshots/<id>.sqlite.zst`, `<id>.json` | a compressed copy of the whole database, and its manifest with both checksums | by every sync |
-| `entries/<device id>/<xx>.<digest>.jsonl.zst` | the entries that this computer wrote | by a sync after this computer wrote or changed one |
-
-A sync (`snapshot::publish_library`) runs when the library has changed and has been idle for 30
-seconds, and on Sync Now. Every file is written beside its target and then renamed onto it, so a
-reader never sees half a file. Open from Cloud… takes the newest snapshot as the new library's
-database, gives the library a device id of its own and copies the originals. Restore replaces the
-database with one snapshot.
-
-### Entries
-
-Each computer records what is done to its library as entries in `shared_entry`
-(`picto-library/src/mutation/shared.rs`), sends them to the other computers through the cloud
-folder, and changes its library to match the entries of all computers. A picture is identified by
-the content hash of its file. A tag is identified by its namespace and name, and a folder by its
-stable key.
-
-The entry kinds are `add` (one per file and computer, with a record of the picture's name, notes,
-rating, status, tags and folders), `delete`, `name`, `notes`, `rating`, `status`, `item_tag`,
-`folder_item`, `tag_delete` and `folder_delete`. For each kind and key the library keeps only the
-latest entry, so the same entries give the same library in any order. If one computer sets 3 stars
-at 10:00 and another sets 5 stars at 10:05, both end with 5 stars. The clock is the later of the
-wall clock and the latest time the computer has seen (`cloud_state.hlc_physical_ms`,
-`hlc_logical`), and all entries of one action share one time.
-
-`shared_view.rs` works out a picture from its entries. It exists when an `add` is later than its
-`delete`. A field comes from its latest entry after the deletion, or else from the earliest `add`
-that counts. A tag is on the picture when its latest `item_tag` says so, or else when an `add`
-record has it, and it goes when the tag was deleted after it was put on: a tag put on at 9:00 and
-deleted at 10:00 is off, one put on again at 10:05 is on. A deleted folder never holds anything
-again.
-
-An import writes an `add` only when no computer has added the file yet; otherwise the picture is
-changed to look the way the entries say. Undoing a permanent deletion always writes an `add`, and
-so does a repaired video for its new file. Deleting a picture, merging a duplicate away and
-repairing a video write `delete` for the file that goes.
-
-A library starts recording at its first sync (`Library::start_recording`), and every file it holds
-then gets an `add` marked as written at the start, so its tags count as older than any deletion of
-those tags. After that, `record_changes` compares the library before and after each published write
-(from `PublishedDelta::settle`) and stores one `pending_entry` row per kind of change, with the
-changed roots as a bitmap, so tagging a million pictures costs one row. `Library::settle_entries`
-turns the rows and the files of the start into entries in batches of 20,000. Deletions of files,
-tags and folders are written as entries at once.
-
-A merge (`Library::merge_entries`, `shared_merge.rs`) first turns this computer's pending rows into
-entries, keeps the entries that are later than the stored ones, and changes every picture they
-touch through the functions that Undo and Redo use, in one published write without an undo step.
-It writes no entry and doesn't move the clock past the entries it saw. A picture that exists by the
-entries and isn't on this computer is listed by `Library::wanted_files`; fetching those files isn't
-built yet. Pictures in collections, and collections, get no entries and are left alone by a merge.
-
-A merge that deletes a picture keeps its file on this computer for the "Keep deleted files" time,
-counted from the merge and at least 7 days, and notes it in `kept_deleted_file` instead of queuing
-it in `blob_cleanup_queue`. The setting is about the originals in the cloud folder, and this file is
-the copy on this computer, so a setting of 0 days still keeps it for 7. The entries of one action can arrive in two files, for example the deletion
-in one and its undo in another, and a provider's desktop app can download the file with the
-deletion first. When a later merge says that the picture exists again, `Library::apply_stored`
-imports it from the kept file through `Library::ingest_batch`, without fetching it. The file
-exists by the entries, so the import writes no `add`, and the next apply gives the picture its
-tags and folders. Once the time is over, `Library::clean_pending_blobs`
-queues a kept file for removal when its picture doesn't exist by the entries. A kept file is not a
-file of the library: the statistics and the duplicate scan leave it out, its detected duplicate
-pairs are removed, cloud sync doesn't upload it as an original, and a library opened from a
-snapshot that holds it removes it, because the file isn't on that computer. A restore keeps a kept
-file only when the file is on this computer's disk, since the snapshot can come from another
-computer.
-
-A computer's entries are spread over 256 files in `entries/<device id>/` by the first byte of the
-SHA-256 of an entry's key (`core/src/cloud/entries.rs`). A sync rewrites only the files whose
-keys changed since the time in `cloud_device_frontier`. A file's name holds the first 16 hexadecimal
-digits of the SHA-256 of its content, so a file is never changed; a new state is a new file and the
-old one is removed. The content is zstd-compressed JSON lines after a header with the library, the
-computer and the whole SHA-256. If any waiting file doesn't match its name and header, nothing is
-merged and the sync state becomes `error` with the file's name. A file that can't be read yet waits
-for the next round.
-
-The original of a permanently deleted picture is removed from the cloud folder by the computer that
-deleted it, after the "Keep deleted files" time (`cloud_deleted_original`,
-`purge_expired_cloud_blobs`).
-
-`scripts/sync-model/` holds the Python simulation that these rules were checked with, including the
-parts that aren't built yet (collections, import tasks, snapshots, Restore and originals).
-`model2.py` runs three to five computers that act and sync in random order and checks that they end
-with the same library, that nothing is lost that nobody removed, and that the later action wins.
-`round2_runs.sh` and `final_runs.sh` are the searches that were run, and `replay2.py` replays one
-run. Run it with `python3 -I` before changing a rule. `picto-library/tests/shared_entries.rs`
-checks the same properties on three real libraries.
-
-`cloud.data.delete` (Delete Cloud Data… in the Library Manager)
-removes the library's folder from the cloud folder and then switches sync off
-(`DirectoryProvider::remove_library`). It removes `library.json` first, and after it only files
-whose name and place are those of a file that the sync writes. A file of any other name stays, and
-so does every folder that still holds something. A sync, the merge of the entries and the
-removal hold one lock, so the data is not removed while a sync writes into it.
-
-A device whose library has synced with the folder before and no longer finds `library.json` there
-treats the cloud data as removed: it switches its sync off, leaves the message "The cloud data of
-this library was deleted. …" in `cloud_state`, writes nothing into the cloud folder and changes
-nothing else (`cloud::stop_if_cloud_data_removed`). Connecting a library to a cloud folder clears
-the time of the last sync and the clock time up to which the computer's entries were written, so
-the library then writes all of them into the folder's cloud data.
-
-Earlier versions wrote tombstone files into `tombstones/`. This version doesn't read them, and a
-library that it opens drops its tombstones and starts recording at its next sync.

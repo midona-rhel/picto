@@ -12,8 +12,8 @@ use crate::{LibraryError, Result};
 
 const DEFAULT_READERS: usize = 8;
 /// SQLite's own page cache per connection. Without it every connection keeps
-/// about 2 MB and leans on the OS file cache, which Linux keeps generously and
-/// Windows and macOS do not. The cache fills only as pages are read; the
+/// about 2 MB and relies on the operating system's file cache, which Linux
+/// keeps large and Windows and macOS do not. The cache fills only as pages are read; the
 /// resident projection, not SQLite, serves grid reads.
 const WRITER_CACHE_KIB: i64 = 64 * 1024;
 const READER_CACHE_KIB: i64 = 16 * 1024;
@@ -102,11 +102,10 @@ pub enum WorkPriority {
     CorrectnessRecovery = 4,
     Maintenance = 5,
     Fts = 6,
-    Cloud = 7,
 }
 
 impl WorkPriority {
-    const COUNT: usize = 7;
+    const COUNT: usize = 6;
 
     const fn index(self) -> usize {
         self as usize - 1
@@ -268,7 +267,6 @@ impl LibraryDatabase {
 
     fn from_writer(path: PathBuf, writer: Connection) -> Result<Self> {
         crate::subscription_counts::initialize(&writer)?;
-        crate::mutation::install_recording_triggers(&writer)?;
         Ok(Self {
             path: path.clone(),
             writer: Mutex::new(writer),
@@ -451,9 +449,10 @@ impl LibraryDatabase {
         let mut writer = self.writer.lock();
         let transaction = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let output = operation(&transaction)?;
-        // Maintenance writes publish no snapshot, so they must leave every
-        // fact the resident model mirrors untouched. The journal proves it;
-        // returning here rolls the transaction back.
+        // Maintenance writes publish no snapshot, so they must not change
+        // anything that the in-memory projection holds a copy of. The
+        // dirty-root journal and the subscription count triggers show whether
+        // they did; returning the error here rolls the transaction back.
         if crate::browsing::DrawingIndex::journal_is_dirty(&transaction)?
             || crate::subscription_counts::SubscriptionCounts::dirty(&transaction)?
         {
@@ -524,8 +523,8 @@ fn open_connection(path: &Path, create: bool, cache_kib: i64) -> Result<Connecti
         flags |= OpenFlags::SQLITE_OPEN_CREATE;
     }
     let connection = Connection::open_with_flags(path, flags)?;
-    // Canonical ingestion and projection settlement share this connection.
-    // Keep their bounded statement working set resident between small batches.
+    // Ingestion and projection settlement both use this connection. The
+    // cache keeps their prepared statements compiled between small batches.
     connection.set_prepared_statement_cache_capacity(64);
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
     connection.execute_batch(
@@ -537,7 +536,8 @@ fn open_connection(path: &Path, create: bool, cache_kib: i64) -> Result<Connecti
          PRAGMA journal_size_limit = 67108864;
          PRAGMA mmap_size = 0;",
     )?;
-    // Negative = KiB rather than pages, so the budget ignores the page size.
+    // SQLite reads a negative cache_size as KiB rather than as pages, so the
+    // size of the cache does not depend on the page size.
     connection.pragma_update(None, "cache_size", -cache_kib)?;
     Ok(connection)
 }
@@ -570,8 +570,9 @@ mod tests {
                 .unwrap(),
             5000
         );
-        // Observe lock retries directly: copying a large WAL can take over a
-        // second on CI even when SQLite never waits for the pinned reader.
+        // Count the lock retries through the busy handler instead of
+        // measuring time: copying a large WAL can take over a second on CI
+        // even when SQLite never waits for the reader that the test holds.
         static BUSY_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         BUSY_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
         database

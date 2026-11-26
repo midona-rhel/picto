@@ -114,7 +114,6 @@ impl Library {
             ));
         }
         let name = name.trim().to_owned();
-        let changed_at_ms = now_ms();
         let (folder_id, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             if let Some(task) = task {
                 super::tasks::require_running_task(transaction, task)?;
@@ -167,18 +166,6 @@ impl Library {
                     like.and_then(|(folder, _)| normalized_optional(folder.notes.as_deref())),
                     auto_tags
                 ],
-            )?;
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "folder.create",
-                None,
-                serde_json::json!({
-                    "folder_id": folder_id.0,
-                    "parent_id": parent_id.map(|id| id.0),
-                    "name": name,
-                }),
-                changed_at_ms,
             )?;
             let mut next = (*snapshot).clone();
             Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(Vec::new()));
@@ -301,14 +288,6 @@ impl Library {
             let duplicate_id = duplicate_id.ok_or_else(|| {
                 LibraryError::InvalidState("folder clone produced no root".into())
             })?;
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "folder.duplicate",
-                None,
-                serde_json::json!({"source_id": source_id.0, "folder_id": duplicate_id.0}),
-                now_ms(),
-            )?;
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
                 revision,
@@ -614,14 +593,6 @@ impl Library {
                     })
                 })
                 .collect::<Vec<_>>();
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "folder.reorder",
-                None,
-                serde_json::json!({"parent_id": parent_id.map(|id| id.0)}),
-                now_ms(),
-            )?;
             let mut next = (*snapshot).clone();
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
@@ -712,18 +683,6 @@ impl Library {
                     });
                 }
             }
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "folder.sort_tree",
-                None,
-                serde_json::json!({
-                    "folder_id": folder_id.0,
-                    "descending": descending,
-                    "recursive": recursive,
-                }),
-                now_ms(),
-            )?;
             let mut next = (*snapshot).clone();
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
@@ -791,14 +750,6 @@ impl Library {
                 OrderOwnerKind::Folder,
                 folder_id.0,
                 &values,
-            )?;
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "folder.items.reorder",
-                None,
-                serde_json::json!({"folder_id": folder_id.0}),
-                now_ms(),
             )?;
             let mut next = (*snapshot).clone();
             Arc::make_mut(&mut next.folder_orders).insert(
@@ -909,16 +860,6 @@ impl Library {
             .collect::<Vec<_>>();
         let result = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let deleted = delete_folder_subtrees(transaction, revision, &snapshot, &requested)?;
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "folder.delete",
-                None,
-                serde_json::json!({
-                    "folder_ids": deleted.folder_ids.iter().map(|id| id.0).collect::<Vec<_>>()
-                }),
-                now_ms(),
-            )?;
             let receipt = PublicationCoordinator::receipt(
                 revision,
                 vec![
@@ -993,14 +934,6 @@ impl Library {
                     })?;
                 }
             }
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "folder.update",
-                None,
-                serde_json::json!({"folder_id": folder_id.0}),
-                now_ms(),
-            )?;
             let mut next = (*snapshot).clone();
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
@@ -1032,7 +965,6 @@ impl Library {
 
     pub fn rename_folder(&self, folder_id: FolderId, name: &str) -> Result<MutationReceipt> {
         let name = required_name("folder", name)?;
-        let changed_at_ms = now_ms();
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let before = transaction
                 .query_row(
@@ -1047,14 +979,6 @@ impl Library {
                     error => error.into(),
                 })?;
             rename_folder_definition(transaction, folder_id, &name)?;
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "folder.rename",
-                None,
-                serde_json::json!({"folder_id": folder_id.0, "name": name}),
-                changed_at_ms,
-            )?;
             let mut next = (*snapshot).clone();
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
@@ -1088,7 +1012,6 @@ impl Library {
         &self,
         folder_id: FolderId,
         tag_ids: Vec<crate::TagId>,
-        changed_at_ms: i64,
     ) -> Result<MutationReceipt> {
         let after = tag_ids
             .into_iter()
@@ -1109,16 +1032,6 @@ impl Library {
             transaction.execute(
                 "UPDATE folder_definition SET auto_tag_ids = ?2 WHERE folder_id = ?1",
                 rusqlite::params![folder_id.0, ingest::encode_folder_auto_tags(&after)?],
-            )?;
-            transaction.execute(
-                "INSERT INTO cloud_journal
-                     (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-                 VALUES (?1, 'folder.auto_tags', NULL, ?2, ?3)",
-                rusqlite::params![
-                    revision as i64,
-                    serde_json::json!({"folder_id": folder_id.0}).to_string(),
-                    changed_at_ms
-                ],
             )?;
             let mut next = (*snapshot).clone();
             next.revision = revision;
@@ -1169,7 +1082,6 @@ impl Library {
         add: bool,
     ) -> Result<MutationReceipt> {
         let target = target.clone();
-        let changed_at_ms = now_ms();
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let exists = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM folder_definition WHERE folder_id = ?1)",
@@ -1301,14 +1213,6 @@ impl Library {
                     &[crate::predicate::DependencyChange::Folder(folder_id)],
                 )?;
             }
-            insert_cloud_journal(
-                transaction,
-                revision,
-                if add { "folder.add" } else { "folder.remove" },
-                Some(&changed),
-                serde_json::json!({"folder_id": folder_id.0}),
-                changed_at_ms,
-            )?;
             next.revision = revision;
             let mut resources = vec!["roots".into(), "folders".into(), "sidebar".into()];
             if auto_tagged {

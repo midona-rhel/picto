@@ -1,11 +1,7 @@
 //! The library that this process has open. At most one library is open at a
 //! time.
 //!
-//! This file opens and closes the library and sends each command to it. It
-//! also carries out the two commands that replace a library's database while
-//! the library is closed: Restore, which puts a snapshot's database in place
-//! of the current one, and Open from Cloud…, which makes a new library from a
-//! snapshot.
+//! This file opens and closes the library and sends each command to it.
 
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -241,10 +237,11 @@ pub async fn open_tutorial_library(
     open_library_inner(library_root, Some(fixture_root)).await
 }
 
-/// Open one library. The in-flight record exists from before the previous
-/// library is torn down until the new state is published, so a cancel at
-/// any point is honoured at the next stage boundary; the synchronous open
-/// runs on the blocking pool so the runtime keeps answering status reads.
+/// Opens one library. The in-flight record is set before the previous
+/// library is closed and is cleared when the new library is published, so a
+/// cancel at any point stops the open when it reaches its next stage. The
+/// synchronous open runs on the blocking thread pool, so that the runtime
+/// keeps answering `library.open_status` meanwhile.
 async fn open_library_inner(
     library_root: PathBuf,
     tutorial_fixture_root: Option<PathBuf>,
@@ -252,7 +249,7 @@ async fn open_library_inner(
     open_library_stages(library_root, tutorial_fixture_root, None).await
 }
 
-/// Told the library as soon as its database is open.
+/// Called with the library as soon as its database is open.
 type LibraryOpened = Box<dyn FnOnce(Arc<picto_library::Library>) + Send>;
 
 async fn open_library_stages(
@@ -338,8 +335,9 @@ async fn open_library_stages(
     };
     *state.workers.lock().await = workers;
     if cancel.is_cancelled() {
-        // Tear the just-started workers down through their own token; no
-        // checkpoint is written for a library that was never published.
+        // Stop the workers that were just started, through their own
+        // cancellation token. No checkpoint is written for a library that
+        // was never published.
         state.cancel.cancel();
         let workers = std::mem::take(&mut *state.workers.lock().await);
         join_workers(workers).await;
@@ -365,53 +363,15 @@ pub async fn invoke(command: &str, args_json: &str) -> Result<String, String> {
         // Answered from the in-flight record without waiting for the open.
         return serde_json::to_string(&open_status()).map_err(|error| error.to_string());
     }
-    if command == "cloud.providers.detect" {
-        return serde_json::to_string(&crate::cloud::provider::detect_roots())
-            .map_err(|error| error.to_string());
-    }
-    if command == "cloud.libraries.discover" {
-        #[derive(serde::Deserialize)]
-        struct Input {
-            provider: String,
-            root_path: String,
-        }
-        let input: Input = serde_json::from_str(args_json)
-            .map_err(|error| format!("Invalid command arguments: {error}"))?;
-        return serde_json::to_string(
-            &crate::cloud::discover_libraries(&input.provider, &input.root_path).await?,
-        )
-        .map_err(|error| error.to_string());
-    }
-    if command == "cloud.provider.validate" {
-        #[derive(serde::Deserialize)]
-        struct Input {
-            provider: String,
-            root_path: String,
-        }
-        let input: Input = serde_json::from_str(args_json)
-            .map_err(|error| format!("Invalid command arguments: {error}"))?;
-        return serde_json::to_string(&crate::cloud::provider::validate_root(
-            &input.provider,
-            input.root_path,
-        )?)
-        .map_err(|error| error.to_string());
-    }
-    if command == "cloud.restore.start" || command == "cloud.library.join" {
-        let _invocations = invocation_lock().write().await;
-        return match command {
-            "cloud.restore.start" => restore_cloud_snapshot(args_json).await,
-            "cloud.library.join" => join_cloud_library(args_json).await,
-            _ => unreachable!(),
-        };
-    }
-
     let _invocations = invocation_lock().read().await;
     let state = get_state()?;
     let started = Instant::now();
-    // Only snapshot-only reads are cached, keyed on the query epoch: it moves
-    // when anything those reads observe changes, not on queue bookkeeping.
-    // sidebar.counts also reads duplicate pairs from SQL, so it is not cached
-    // (it is cheap since it stopped counting every tag).
+    // Only the commands that read nothing but the in-memory snapshot are
+    // cached. A cached answer is used while the library's query epoch is
+    // unchanged. The query epoch changes when anything these commands read
+    // changes, and not when only the work queues change. `sidebar.counts`
+    // also reads duplicate pairs from SQLite, so it is not cached; it is
+    // fast enough without a cache because it does not count every tag.
     let cache_key = matches!(command, "items.query" | "items.mime_facets")
         .then(|| format!("{command}\0{args_json}"));
     let revision_before = cache_key
@@ -450,470 +410,6 @@ pub async fn invoke(command: &str, args_json: &str) -> Result<String, String> {
         tracing::debug!(target: "picto::ipc", command, duration_ms, succeeded, "Core command completed");
     }
     result
-}
-
-#[derive(serde::Deserialize)]
-struct RestoreCloudSnapshotInput {
-    snapshot_id: String,
-}
-
-#[derive(serde::Deserialize)]
-struct JoinCloudLibraryInput {
-    provider: String,
-    account_label: String,
-    root_path: String,
-    library_id: String,
-    target_root: String,
-}
-
-#[derive(serde::Serialize)]
-struct JoinedCloudLibrary {
-    library_id: String,
-    snapshot_id: String,
-    path: String,
-}
-
-#[derive(serde::Serialize)]
-struct RestoredCloudSnapshot {
-    snapshot_id: String,
-    restored: bool,
-}
-
-/// What a restore keeps of the library that it replaces, because it belongs
-/// to this device and to its sync, and not to the snapshot.
-pub(crate) struct LocalCloudConfiguration {
-    device_id: String,
-    provider: Option<String>,
-    account_label: Option<String>,
-    remote_root: Option<String>,
-    paused: bool,
-    retention_json: String,
-    /// The time of the library's hybrid logical clock.
-    clock: (i64, i64),
-}
-
-/// Reads what a restore keeps of `application`'s library.
-pub(crate) fn local_cloud_configuration(
-    application: &LibraryApplication,
-) -> Result<LocalCloudConfiguration, String> {
-    application
-        .library()
-        .auxiliary_read(
-            picto_library::database::WorkPriority::VisibleRead,
-            |connection| {
-                Ok(connection.query_row(
-                    "SELECT device_id, provider, account_label, remote_root, paused, retention_json,
-                            hlc_physical_ms, hlc_logical
-                     FROM cloud_state WHERE singleton = 1",
-                    [],
-                    |row| {
-                        Ok(LocalCloudConfiguration {
-                            device_id: row.get(0)?,
-                            provider: row.get(1)?,
-                            account_label: row.get(2)?,
-                            remote_root: row.get(3)?,
-                            paused: row.get::<_, i64>(4)? != 0,
-                            retention_json: row.get(5)?,
-                            clock: (row.get(6)?, row.get(7)?),
-                        })
-                    },
-                )?)
-            },
-        )
-        .map_err(|error| error.to_string())
-}
-
-async fn restore_cloud_snapshot(args_json: &str) -> Result<String, String> {
-    let input: RestoreCloudSnapshotInput = serde_json::from_str(args_json)
-        .map_err(|error| format!("Invalid command arguments: {error}"))?;
-    let state = get_state()?;
-    let local = local_cloud_configuration(state.application())?;
-    let provider = crate::cloud::directory_provider_library(state.application())?;
-    let prepared =
-        crate::cloud::snapshot::prepare_restore(state.application(), &provider, &input.snapshot_id)
-            .await?;
-    let library_root = state.application().root().to_path_buf();
-    drop(state);
-    close_library_inner().await?;
-
-    let database_path = library_root.join("library.sqlite");
-    if let Err(error) = consolidate_closed_database(&database_path) {
-        let _ = open_library_inner(library_root, None).await;
-        return Err(error);
-    }
-    if let Some(parent) = prepared.emergency_copy_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("Failed to create emergency restore directory: {error}"))?;
-    }
-    std::fs::rename(&database_path, &prepared.emergency_copy_path)
-        .map_err(|error| format!("Failed to preserve the active database: {error}"))?;
-    if let Err(error) = std::fs::rename(&prepared.database_path, &database_path) {
-        let _ = remove_sqlite_sidecars(&database_path);
-        let _ = std::fs::rename(&prepared.emergency_copy_path, &database_path);
-        let _ = open_library_inner(library_root, None).await;
-        return Err(format!("Failed to activate the restored database: {error}"));
-    }
-
-    let activation = initialize_restored_database(&database_path, &local);
-    if let Err(error) = activation {
-        rollback_database_activation(
-            &database_path,
-            &prepared.emergency_copy_path,
-            "failed-restore",
-        );
-        let _ = open_library_inner(library_root, None).await;
-        return Err(error);
-    }
-    if let Err(error) = open_library_inner(library_root.clone(), None).await {
-        if error == OPEN_CANCELLED_MESSAGE {
-            // The restored database is valid and activated; a cancelled open
-            // (a later open, close or shutdown) must not undo the restore.
-            return Err(error);
-        }
-        rollback_database_activation(
-            &database_path,
-            &prepared.emergency_copy_path,
-            "failed-restore",
-        );
-        let _ = open_library_inner(library_root, None).await;
-        return Err(format!("Restored database failed to open: {error}"));
-    }
-    serde_json::to_string(&RestoredCloudSnapshot {
-        snapshot_id: prepared.snapshot_id,
-        restored: true,
-    })
-    .map_err(|error| error.to_string())
-}
-
-async fn join_cloud_library(args_json: &str) -> Result<String, String> {
-    let input: JoinCloudLibraryInput = serde_json::from_str(args_json)
-        .map_err(|error| format!("Invalid command arguments: {error}"))?;
-    if !matches!(input.provider.as_str(), "google_drive" | "dropbox") {
-        return Err(format!(
-            "Unsupported cloud folder provider: {}",
-            input.provider
-        ));
-    }
-    let target_root = PathBuf::from(&input.target_root);
-    let database_path = target_root.join("library.sqlite");
-    if database_path.exists() {
-        return Err("The destination already contains a Picto library".to_string());
-    }
-    let validated = crate::cloud::provider::validate_root(&input.provider, &input.root_path)?;
-    let provider = crate::cloud::provider::DirectoryProvider::open_existing(&validated.path)?;
-    let prepared =
-        crate::cloud::snapshot::prepare_join(&provider, &input.library_id, &target_root).await?;
-
-    let previous_root = get_state()
-        .ok()
-        .map(|state| state.application().root().to_path_buf());
-    close_library_inner().await?;
-    std::fs::create_dir_all(target_root.join("blobs"))
-        .map_err(|error| format!("Failed to create joined library directory: {error}"))?;
-    if let Err(error) = std::fs::rename(&prepared.database_path, &database_path) {
-        if let Some(previous_root) = previous_root {
-            let _ = open_library_inner(previous_root, None).await;
-        }
-        return Err(format!("Failed to activate joined cloud library: {error}"));
-    }
-
-    if let Err(error) = initialize_joined_database(
-        &database_path,
-        &input.provider,
-        &input.account_label,
-        &validated.path,
-    ) {
-        let failed = target_root.join(format!("failed-cloud-join-{}.sqlite", uuid::Uuid::new_v4()));
-        let _ = std::fs::rename(&database_path, failed);
-        if let Some(previous_root) = previous_root {
-            let _ = open_library_inner(previous_root, None).await;
-        }
-        return Err(error);
-    }
-    if let Err(error) = open_library_inner(target_root.clone(), None).await {
-        if error == OPEN_CANCELLED_MESSAGE {
-            // The joined database is complete and in place; a cancelled open
-            // must not mark it failed or reopen the previous library.
-            return Err(error);
-        }
-        let failed = target_root.join(format!("failed-cloud-join-{}.sqlite", uuid::Uuid::new_v4()));
-        let _ = std::fs::rename(&database_path, failed);
-        if let Some(previous_root) = previous_root {
-            let _ = open_library_inner(previous_root, None).await;
-        }
-        return Err(format!("Joined cloud library failed to open: {error}"));
-    }
-    serde_json::to_string(&JoinedCloudLibrary {
-        library_id: prepared.library_id,
-        snapshot_id: prepared.snapshot_id,
-        path: target_root.to_string_lossy().into_owned(),
-    })
-    .map_err(|error| error.to_string())
-}
-
-/// Turns the database of a snapshot into the database of a new device's
-/// library: it gets a device id of its own and the cloud folder it was made
-/// from, loses what belongs to the device that made the snapshot (watched
-/// folders, view settings, the change journal, and the files that a merge
-/// kept there after deleting their pictures), and queues every original for
-/// download.
-pub(crate) fn initialize_joined_database(
-    database_path: &std::path::Path,
-    provider: &str,
-    account_label: &str,
-    remote_root: &str,
-) -> Result<(), String> {
-    let mut connection = rusqlite::Connection::open(database_path)
-        .map_err(|error| format!("Failed to initialize joined cloud library: {error}"))?;
-    picto_library::schema::validate(&connection).map_err(|error| error.to_string())?;
-    // Deleting a file below also deletes the rows that refer to it.
-    connection
-        .execute_batch("PRAGMA foreign_keys = ON")
-        .map_err(|error| format!("Failed to initialize joined cloud library: {error}"))?;
-    let transaction = connection
-        .transaction()
-        .map_err(|error| format!("Failed to initialize joined cloud library: {error}"))?;
-    let now = chrono::Utc::now().to_rfc3339();
-    // The files that a merge kept on the device that made the snapshot are
-    // not on this device.
-    let kept = kept_file_hashes(&transaction)?;
-    remove_kept_files(&transaction, &kept)?;
-    // The library has just been made from the cloud data, so `last_sync_at`
-    // is set: if the cloud data is removed before this device's first sync,
-    // the device sees that it is gone and does not write it again.
-    transaction
-        .execute(
-            "UPDATE cloud_state SET device_id = ?1, provider = ?2, account_label = ?3,
-                    remote_root = ?4, paused = 0, state = 'idle', phase = 'blobs',
-                    last_sync_at = ?5,
-                    blocking = CASE WHEN EXISTS (SELECT 1 FROM media_file) THEN 1 ELSE 0 END,
-                    completed_units = 0,
-                    total_units = CASE WHEN EXISTS (SELECT 1 FROM media_file)
-                        THEN (SELECT COALESCE(SUM(MAX(size_bytes, 1)), 0) FROM media_file) ELSE NULL END,
-                    message = CASE WHEN EXISTS (SELECT 1 FROM media_file)
-                        THEN 'Restoring library media' ELSE '' END,
-                    pending_blobs = (SELECT COUNT(*) FROM media_file), missing_blobs = 0
-             WHERE singleton = 1",
-            rusqlite::params![
-                uuid::Uuid::new_v4().to_string(),
-                provider,
-                account_label,
-                remote_root,
-                now
-            ],
-        )
-        .map_err(|error| format!("Failed to assign joined device identity: {error}"))?;
-    // The journal rows are the changes of the device that made the snapshot.
-    // This device must not turn the moves among them into tombstones of
-    // its own.
-    transaction
-        .execute("DELETE FROM cloud_journal", [])
-        .map_err(|error| format!("Failed to clear the joined change journal: {error}"))?;
-    transaction
-        .execute(
-            "UPDATE folder_definition
-             SET watch_path = NULL, watch_enabled = 0, watch_subfolders = 0",
-            [],
-        )
-        .map_err(|error| format!("Failed to clear device-local folder watches: {error}"))?;
-    transaction
-        .execute("DELETE FROM view_pref", [])
-        .map_err(|error| format!("Failed to clear device-local views: {error}"))?;
-    transaction
-        .execute(QUEUE_CLOUD_MEDIA_RECOVERY_SQL, [&now])
-        .map_err(|error| format!("Failed to queue cloud media recovery: {error}"))?;
-    transaction
-        .commit()
-        .map_err(|error| format!("Failed to commit joined cloud library: {error}"))
-}
-
-/// Returns the content hashes of the files in `kept_deleted_file`.
-fn kept_file_hashes(connection: &rusqlite::Connection) -> Result<Vec<String>, String> {
-    let read = || -> rusqlite::Result<Vec<String>> {
-        connection
-            .prepare("SELECT content_hash FROM kept_deleted_file")?
-            .query_map([], |row| row.get(0))?
-            .collect()
-    };
-    read().map_err(|error| format!("Failed to read the kept files of the snapshot: {error}"))
-}
-
-/// Removes the files `hashes` of `kept_deleted_file` from the database of a
-/// snapshot, for files that a merge kept and that are not on this device's
-/// disk. No picture uses such a file, so its `media_file` row goes, and with
-/// it, through the foreign keys, the rows that refer to it. A duplicate
-/// decision that names it as the file that stayed is removed first, because
-/// that foreign key doesn't allow the removal. The connection must have
-/// foreign keys switched on.
-fn remove_kept_files(connection: &rusqlite::Connection, hashes: &[String]) -> Result<(), String> {
-    if hashes.is_empty() {
-        return Ok(());
-    }
-    let hashes = serde_json::to_string(hashes).map_err(|error| error.to_string())?;
-    let remove = || -> rusqlite::Result<()> {
-        connection.execute(
-            "CREATE TEMP TABLE removed_kept_file AS
-                 SELECT file.file_id FROM json_each(?1) hashes
-                 CROSS JOIN media_file file ON file.content_hash = hashes.value
-                 WHERE NOT EXISTS (SELECT 1 FROM media_item media
-                                   WHERE media.file_id = file.file_id)",
-            [&hashes],
-        )?;
-        connection.execute_batch(
-            "DELETE FROM duplicate_pair
-             WHERE winner_file_id IN (SELECT file_id FROM temp.removed_kept_file);
-             DELETE FROM media_file
-             WHERE file_id IN (SELECT file_id FROM temp.removed_kept_file);
-             DROP TABLE temp.removed_kept_file;",
-        )?;
-        connection.execute(
-            "DELETE FROM kept_deleted_file
-             WHERE content_hash IN (SELECT value FROM json_each(?1))",
-            [&hashes],
-        )?;
-        Ok(())
-    };
-    remove().map_err(|error| format!("Failed to remove the kept files of the snapshot: {error}"))
-}
-
-// The `WHERE` clause ends the SELECT: after `FROM media_file` SQLite would
-// otherwise read `ON` as a join constraint.
-const QUEUE_CLOUD_MEDIA_RECOVERY_SQL: &str =
-    "INSERT INTO cloud_blob_state (file_hash, state, updated_at)
-     SELECT content_hash, 'queued', ?1 FROM media_file WHERE 1
-     ON CONFLICT(file_hash) DO UPDATE SET
-         state = 'queued', priority = 0, last_error = NULL, updated_at = excluded.updated_at";
-
-/// Turns the database of a snapshot, at `database_path` in the library's
-/// folder, into the database of this device's library: it keeps this
-/// device's id, cloud settings and clock (`local`), and it keeps only those
-/// files that a merge kept (`kept_deleted_file`) that are on this device's
-/// disk. A snapshot can come from another device, whose kept files are not
-/// here.
-pub(crate) fn initialize_restored_database(
-    database_path: &std::path::Path,
-    local: &LocalCloudConfiguration,
-) -> Result<(), String> {
-    let mut connection = rusqlite::Connection::open(database_path)
-        .map_err(|error| format!("Failed to open the restored database: {error}"))?;
-    picto_library::schema::validate(&connection).map_err(|error| error.to_string())?;
-    // Removing a kept file also removes the rows that refer to it.
-    connection
-        .execute_batch("PRAGMA foreign_keys = ON")
-        .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;
-    let connection = connection
-        .transaction()
-        .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;
-    let library_root = database_path
-        .parent()
-        .ok_or_else(|| "The restored database has no library folder".to_string())?;
-    let mut missing = Vec::new();
-    for hash in kept_file_hashes(&connection)? {
-        let present = crate::blob_store::library_has_original(library_root, &hash)
-            .map_err(|error| format!("Failed to look for the kept file {hash}: {error}"))?;
-        if !present {
-            missing.push(hash);
-        }
-    }
-    remove_kept_files(&connection, &missing)?;
-    // The restored library writes all of its own entries into the cloud
-    // folder again at its next sync, and it merges the entries in the cloud
-    // folder again, its own among them: a deletion that was synced after the
-    // snapshot was made is applied to the restored library too. The journal
-    // rows of the snapshot are dropped, because the device that made the
-    // snapshot has settled them. The clock does not go back: the device has
-    // given out the times up to the one it had before the restore.
-    connection
-        .execute_batch("DELETE FROM cloud_device_frontier; DELETE FROM cloud_journal;")
-        .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;
-    connection
-        .execute(
-            "UPDATE cloud_state SET
-                 hlc_logical = CASE WHEN ?1 > hlc_physical_ms THEN ?2
-                                    WHEN ?1 = hlc_physical_ms THEN MAX(hlc_logical, ?2)
-                                    ELSE hlc_logical END,
-                 hlc_physical_ms = MAX(?1, hlc_physical_ms)
-             WHERE singleton = 1",
-            [local.clock.0, local.clock.1],
-        )
-        .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;
-    connection
-        .execute(
-            "UPDATE cloud_state SET device_id = ?1, provider = ?2, account_label = ?3,
-                    remote_root = ?4, paused = ?5, retention_json = ?6,
-                    state = CASE WHEN ?5 THEN 'paused' ELSE 'idle' END,
-                    phase = 'idle', blocking = 0, completed_units = 0,
-                    total_units = NULL, message = ''
-             WHERE singleton = 1",
-            rusqlite::params![
-                local.device_id,
-                local.provider,
-                local.account_label,
-                local.remote_root,
-                i64::from(local.paused),
-                local.retention_json,
-            ],
-        )
-        .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))?;
-    connection
-        .commit()
-        .map_err(|error| format!("Failed to restore device-local cloud settings: {error}"))
-}
-
-fn consolidate_closed_database(database_path: &std::path::Path) -> Result<(), String> {
-    let connection = rusqlite::Connection::open(database_path)
-        .map_err(|error| format!("Failed to open the active database for restore: {error}"))?;
-    connection
-        .busy_timeout(Duration::from_secs(5))
-        .map_err(|error| format!("Failed to configure restore checkpoint: {error}"))?;
-    let (busy, remaining): (i64, i64) = connection
-        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)? - row.get::<_, i64>(2)?,
-            ))
-        })
-        .map_err(|error| {
-            format!("Failed to checkpoint the active database for restore: {error}")
-        })?;
-    if busy != 0 || remaining != 0 {
-        return Err(format!(
-            "Active database could not be checkpointed safely (busy={busy}, remaining={remaining})"
-        ));
-    }
-    drop(connection);
-    remove_sqlite_sidecars(database_path)
-}
-
-fn rollback_database_activation(
-    database_path: &std::path::Path,
-    emergency_copy_path: &std::path::Path,
-    failed_prefix: &str,
-) {
-    let failed =
-        database_path.with_extension(format!("{failed_prefix}-{}.sqlite", uuid::Uuid::new_v4()));
-    let _ = remove_sqlite_sidecars(database_path);
-    let _ = std::fs::rename(database_path, failed);
-    let _ = std::fs::rename(emergency_copy_path, database_path);
-}
-
-fn remove_sqlite_sidecars(database_path: &std::path::Path) -> Result<(), String> {
-    for suffix in ["-wal", "-shm"] {
-        let mut sidecar = database_path.as_os_str().to_os_string();
-        sidecar.push(suffix);
-        let sidecar = PathBuf::from(sidecar);
-        match std::fs::remove_file(&sidecar) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(format!(
-                    "Failed to remove stale SQLite sidecar {}: {error}",
-                    sidecar.display()
-                ));
-            }
-        }
-    }
-    Ok(())
 }
 
 fn audit_successful_mutation(command: &str, args_json: &str, result_json: &str, duration_ms: f64) {
@@ -1067,8 +563,6 @@ async fn join_workers(workers: Vec<WorkerHandle>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{initialize_joined_database, QUEUE_CLOUD_MEDIA_RECOVERY_SQL};
-
     /// The tests that open the one global library take turns.
     static GLOBAL_LIBRARY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -1083,8 +577,9 @@ mod tests {
         let root = directory.path().join("Racing.library");
         let opening = super::open_library(root.clone());
         tokio::pin!(opening);
-        // Poll the real open until it yields with an in-flight record. Keeping
-        // the future here prevents it from publishing before close is polled.
+        // Poll the open until it pauses with its in-flight record set. The
+        // open's future stays in this test, so the open cannot publish the
+        // library before the close below is polled.
         tokio::time::timeout(std::time::Duration::from_secs(30), async {
             tokio::select! {
                 biased;
@@ -1105,7 +600,8 @@ mod tests {
         .expect("cancelled open did not settle");
         closed.unwrap();
         assert!(matches!(opened, Err(error) if error == super::OPEN_CANCELLED_MESSAGE));
-        // Assert before cleanup: a second close would hide a losing first close.
+        // This is checked before the test closes the library again, because
+        // a second close would hide a first close that left a library open.
         assert!(super::get_state().is_err());
         assert_eq!(
             super::invoke("library.open_status", "{}").await.unwrap(),
@@ -1123,12 +619,14 @@ mod tests {
         let _turn = GLOBAL_LIBRARY.lock().await;
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("Reported.library");
-        // Created, closed, and opened again as an existing library.
+        // The library is created and closed, so that the open below opens
+        // an existing library.
         super::open_library(root.clone()).await.unwrap();
         super::close_library().await.unwrap();
         let (sender, handed) = std::sync::mpsc::channel();
         let state = super::open_library_reporting(root, move |library| {
-            // Not yet published: the recovery passes and workers are to come.
+            // The library is not published yet, because the recovery passes
+            // and the workers have not started.
             let published = super::get_state().is_ok();
             sender.send((library, published)).unwrap();
         })
@@ -1160,10 +658,10 @@ mod tests {
             "{refused}"
         );
         super::close_library().await.unwrap();
-        // Free once closed.
+        // Once the library is closed, its lock can be taken.
         drop(super::lock_library(&root).unwrap());
-        // Held by someone else: the open fails, with the message, and
-        // nothing is open.
+        // While another holder has the lock, the open fails with
+        // `LIBRARY_IN_USE_MESSAGE` and no library is open.
         let held = super::lock_library(&root).unwrap();
         let error = super::open_library(root.clone()).await.err().unwrap();
         assert!(error.starts_with(super::LIBRARY_IN_USE_MESSAGE), "{error}");
@@ -1173,72 +671,5 @@ mod tests {
         // Reopening the open library lets go of its own lock first.
         super::open_library(root).await.unwrap();
         super::close_library().await.unwrap();
-    }
-
-    #[test]
-    fn cloud_join_recovery_upsert_is_valid_sqlite() {
-        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
-        picto_library::schema::create(&mut connection).unwrap();
-        connection
-            .execute(QUEUE_CLOUD_MEDIA_RECOVERY_SQL, ["2026-08-31T00:00:00Z"])
-            .unwrap();
-    }
-
-    #[test]
-    fn cloud_join_starts_blocking_byte_accurate_media_recovery() {
-        let directory = tempfile::tempdir().unwrap();
-        let database_path = directory.path().join("library.sqlite");
-        let mut connection = rusqlite::Connection::open(&database_path).unwrap();
-        picto_library::schema::create(&mut connection).unwrap();
-        connection
-            .execute(
-                "INSERT INTO media_file
-                     (file_id, content_hash, file_path, mime, size_bytes)
-                 VALUES (1, ?1, 'blobs/a', 'image/png', 12000)",
-                ["a".repeat(64)],
-            )
-            .unwrap();
-        drop(connection);
-
-        initialize_joined_database(
-            &database_path,
-            "google_drive",
-            "Personal",
-            "/Cloud/My Drive",
-        )
-        .unwrap();
-
-        let connection = rusqlite::Connection::open(database_path).unwrap();
-        let state = connection
-            .query_row(
-                "SELECT state, phase, blocking, completed_units, total_units,
-                        message, pending_blobs
-                 FROM cloud_state WHERE singleton = 1",
-                [],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, i64>(4)?,
-                        row.get::<_, String>(5)?,
-                        row.get::<_, i64>(6)?,
-                    ))
-                },
-            )
-            .unwrap();
-        assert_eq!(
-            state,
-            (
-                "idle".into(),
-                "blobs".into(),
-                1,
-                0,
-                12000,
-                "Restoring library media".into(),
-                1,
-            )
-        );
     }
 }

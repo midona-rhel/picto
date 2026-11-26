@@ -1,9 +1,9 @@
 //! The sections of the Settings window. `SettingsWindow::panel` returns the
 //! rows of one section. The sections and their rows are in the same order
-//! and have the same wording as in Picto 0.6.19 and earlier. One row was
-//! added after those versions: the switch for the frosted material of the
-//! sidebar and the inspector, in the "Appearance" card of the General
-//! section.
+//! and have the same wording as in Picto 0.6.19 and earlier, except that
+//! this app has no Cloud section. One row was added after those versions:
+//! the switch for the frosted material of the sidebar and the inspector, in
+//! the "Appearance" card of the General section.
 use super::model;
 use super::model::NOTIFICATION_TONES;
 use super::pieces::{
@@ -22,11 +22,9 @@ mod about;
 mod ai_models;
 pub(super) use ai_models::AiState;
 mod catalog;
-mod cloud;
 mod controls;
 
 pub use catalog::{PANELS, matched_panels};
-pub use cloud::CloudPanel;
 
 /// The choices of the "Zoom Level" select in the General section. Each pair
 /// is a percentage, which is the select's value for that choice, and the
@@ -84,7 +82,6 @@ impl SettingsWindow {
             "autoimport" => self.auto_import(cx),
             "deleting" => self.deleting(cx),
             "subscriptions" => self.subscriptions(cx),
-            "cloud" => self.cloud(cx),
             "aitagging" => self.ai_models(window, cx),
             "about" => self.about(cx),
             _ => Vec::new(),

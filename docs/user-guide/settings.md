@@ -8,7 +8,7 @@ the top of the window's sidebar to find a setting.
 
 Most changes take effect when you click **Apply** or **Save & Close**. A theme and the switch for
 the translucent sidebar show in the main window at once, and closing the Settings window without
-saving puts the saved choice back. Cloud actions and downloads of AI models happen at once.
+saving puts the saved choice back. Downloads of AI models happen at once.
 
 ## General
 
@@ -132,11 +132,6 @@ successful actions, information, warnings and errors.
   holds that many top-level items.
 
 See [Subscriptions](subscriptions.md).
-
-## Cloud
-
-This section shows the state of the sync, the pending work, the recovery retention and the restore
-history of the open library. See [Cloud Sync](cloud-sync.md).
 
 ## AI Models
 

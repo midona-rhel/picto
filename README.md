@@ -15,9 +15,8 @@ A library's data is stored in a SQLite database, and Roaring bitmaps keep the co
   Smart Merge.
 - **Import** — drag files or folders into the app, point Picto at a directory to watch for new
   content, or import and export Picto Packs.
-- **Own the library** — media and metadata remain in user-owned folders. Cloud sync
-  (**experimental**) uses the Google Drive or Dropbox desktop folder as transport; Picto has no
-  cloud account service.
+- **Own the library** — media and metadata remain in user-owned folders. Picto has no account
+  service.
 
 ### Subscription sources
 
@@ -50,7 +49,7 @@ Linux (x86-64).
 | Folder | What it is |
 |---|---|
 | `app/` | The app: the windows, the views and everything a user sees. It is written on GPUI, the user interface framework of the Zed editor. It is a Cargo workspace of its own, with its own `Cargo.lock`. |
-| `core/` | The application core: the commands, the background workers, the import and media processing, the subscriptions' runs, cloud sync and the AI tagger. |
+| `core/` | The application core: the commands, the background workers, the import and media processing, the subscriptions' runs and the AI tagger. |
 | `picto-library/` | The library: the SQLite database, its schema, its queries and the Roaring bitmap projections. |
 | `picto-sources/` | The subscription sources: one provider for each site. |
 | `scripts/` | The scripts of the build and the release, and the tools that measure the library crates. |

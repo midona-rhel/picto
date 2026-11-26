@@ -10,9 +10,9 @@
 //! desktop only in the real app. In the off-screen checks each request is
 //! recorded instead, and the checks read the records with [`requests`], so
 //! nothing opens on the screen and the clipboard is not changed. Only files
-//! inside the open copy are passed on, whatever path the library stored. For
-//! any other path, these functions, the drag out of the grid and "Copy File
-//! Path" refuse and show a notification.
+//! inside the open library's folder are passed on, whatever path the library
+//! stored. For any other path, these functions, the drag out of the grid and
+//! "Copy File Path" refuse and show a notification.
 use crate::paths::Canonical as _;
 use crate::application::{self, Event};
 use crate::session::{Coalesced, Session};
@@ -256,10 +256,11 @@ impl Desktop {
 // The functions that pass files and links to other parts of the desktop
 // start here.
 
-/// A global that holds the canonical root of the open library copy. Only files
-/// inside it are passed to the desktop. A stored path that still names the
-/// library the copy was made from, or any other path outside the copy, would
-/// let another application edit, move or delete a file the user keeps.
+/// A global that holds the canonical root of the open library. Only files
+/// inside it are passed to the desktop. In a disposable copy, a stored path
+/// can still name the library the copy was made from. Passing that path, or
+/// any other path outside the open library, would let another application
+/// edit, move or delete a file the user keeps.
 struct HandOff(PathBuf);
 
 impl Global for HandOff {}
@@ -296,8 +297,8 @@ pub(crate) fn inside(root: &Path, path: &Path) -> bool {
 }
 
 /// Returns the canonical path of each of `paths` when all of them are files
-/// inside the open copy. Returns an error message when no library is open, or
-/// when one of the paths does not exist or is outside the copy.
+/// inside the open library. Returns an error message when no library is open,
+/// or when one of the paths does not exist or is outside the library.
 fn checked(paths: &[PathBuf], cx: &App) -> Result<Vec<PathBuf>, String> {
     match cx.try_global::<HandOff>() {
         Some(HandOff(root)) => checked_in(root, paths),
@@ -305,7 +306,8 @@ fn checked(paths: &[PathBuf], cx: &App) -> Result<Vec<PathBuf>, String> {
     }
 }
 
-/// Does the work of [`checked`] for the copy whose canonical root is `root`.
+/// Does the work of [`checked`] for the library whose canonical root is
+/// `root`.
 fn checked_in(root: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     paths
         .iter()
@@ -327,8 +329,8 @@ fn checked_one(path: &Path, cx: &App) -> Result<PathBuf, String> {
 
 /// Returns the paths that a drag out of the window gives to the system. Each
 /// path is in the form that [`copy_paths`] writes, without the `\\?\` prefix
-/// on Windows. If any of `paths` is not a file of the open copy, it returns no
-/// paths and shows an error notification.
+/// on Windows. If any of `paths` is not a file of the open library, it returns
+/// no paths and shows an error notification.
 pub fn drag_out(paths: &[PathBuf], cx: &mut App) -> Vec<PathBuf> {
     match checked(paths, cx) {
         Ok(paths) => paths.iter().map(|path| system_path(path)).collect(),
@@ -419,7 +421,7 @@ pub fn open_link(link: &str, cx: &mut App) {
 }
 
 /// Opens the file in its default application, if the file is inside the open
-/// copy. Otherwise it shows an error notification.
+/// library. Otherwise it shows an error notification.
 pub fn open_default(path: &Path, cx: &mut App) {
     let path = match checked_one(path, cx) {
         Ok(path) => path,
@@ -435,8 +437,8 @@ pub fn open_default(path: &Path, cx: &mut App) {
 }
 
 /// Shows the file, selected, in the system's file manager (Finder or
-/// Explorer), if the file is inside the open copy. Otherwise it shows an error
-/// notification.
+/// Explorer), if the file is inside the open library. Otherwise it shows an
+/// error notification.
 pub fn reveal(path: &Path, cx: &mut App) {
     let path = match checked_one(path, cx) {
         Ok(path) => path,
@@ -499,32 +501,8 @@ pub fn reveal_library(path: &Path, cx: &mut App) {
     }
 }
 
-/// Does Show Cloud Folder: shows `path` in the file manager, only when `path`
-/// is the cloud folder that the open library syncs to and that folder exists.
-/// Otherwise it shows an error notification.
-pub fn reveal_cloud_folder(path: &Path, cx: &mut App) {
-    let configured = crate::libraries::host::shell(cx)
-        .and_then(|shell| {
-            let cloud = shell.read(cx).cloud().read(cx);
-            cloud.configuration.as_ref()?.root_path.clone()
-        })
-        .is_some_and(|root| Path::new(&root) == path);
-    if !configured || !path.is_dir() {
-        return crate::ui::notify::error(
-            "Could not show file",
-            format!("{} is not the open library's cloud folder", path.display()),
-            cx,
-        );
-    }
-    if live(cx) {
-        cx.reveal_path(&system_path(path));
-    } else {
-        record(format!("reveal {}", path.display()));
-    }
-}
-
 /// Opens the file in the application at `application`, if the file is inside
-/// the open copy. Only the macOS build can do this. On Windows and Linux the
+/// the open library. Only the macOS build can do this. On Windows and Linux the
 /// function returns an error.
 #[cfg(target_os = "macos")]
 pub fn open_with(application: &Path, file: &Path, cx: &App) -> Result<(), String> {
@@ -548,7 +526,7 @@ pub fn open_with(_application: &Path, _file: &Path, _cx: &App) -> Result<(), Str
 
 /// Puts the files themselves on the clipboard, each one once, so that Finder
 /// or another application can paste them. It does so only if all of them are
-/// inside the open copy.
+/// inside the open library.
 pub fn copy_files(paths: &[PathBuf], cx: &App) -> Result<(), String> {
     let mut unique: Vec<PathBuf> = Vec::new();
     for path in checked(paths, cx)? {
@@ -568,8 +546,8 @@ pub fn copy_files(paths: &[PathBuf], cx: &App) -> Result<(), String> {
 }
 
 /// Does "Copy File Path": puts the paths on the clipboard as text, one path
-/// on each line, if all of them are files inside the open copy. Each path is
-/// written as [`system_path`] gives it, without Windows' `\\?\` prefix.
+/// on each line, if all of them are files inside the open library. Each path
+/// is written as [`system_path`] gives it, without Windows' `\\?\` prefix.
 pub fn copy_paths(paths: &[PathBuf], cx: &mut App) -> Result<(), String> {
     let paths = checked(paths, cx)?;
     if paths.is_empty() {
@@ -585,8 +563,8 @@ pub fn copy_paths(paths: &[PathBuf], cx: &mut App) -> Result<(), String> {
 }
 
 /// Opens the system's own dialog for choosing an application for the file, if
-/// the file is inside the open copy. Only Windows has such a dialog (its "Open
-/// with" dialog). On macOS and Linux the function returns an error.
+/// the file is inside the open library. Only Windows has such a dialog (its
+/// "Open with" dialog). On macOS and Linux the function returns an error.
 #[cfg(target_os = "windows")]
 pub fn open_with_chooser(file: &Path, cx: &App) -> Result<(), String> {
     let file = checked_one(file, cx)?;

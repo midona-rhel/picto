@@ -1,16 +1,17 @@
-//! Cost of library operations on a large synthetic library.
+//! Measures how long library operations take on a large generated library.
 //!
 //! `cargo run --release -p picto_library --example library_ops_benchmark -- [roots] [runs] [smart_folders]`
 //! (defaults: 1,000,000 roots, 5 runs, 100 smart folders; up to 1,000 smart folders).
-//! Prints `ROW|operation|size|median ms|p95 ms|samples`. Local measurement only:
-//! never commit its output.
-//! Add `--membership-only` after the numeric arguments to stop after the focused membership rows.
-//! Add `--subscriptions-only` for the catalog SQL with 10 then 100 runs of
-//! growing retained outcomes (unique and successful redownloads), and tags on 20% of roots.
-//! Use `--delete-only` for bounded permanent-delete and undo rows.
-//! Add `--tag-pages-only` to measure paging/search with 200k tag definitions after ingest.
-//! Add `--sync-only` for the cost of recording cloud sync entries: the start of
-//! recording and one tag on every root, then an import and a merge of 100,000 items.
+//! Prints `ROW|operation|size|median ms|p95 ms|samples`. The output is a local
+//! measurement; never commit it.
+//! Add `--membership-only` after the numeric arguments to stop after the
+//! membership rows.
+//! Add `--subscriptions-only` to measure the SQL of the subscription list
+//! after 10 and then 100 runs, whose stored downloads grow with each run (new
+//! files and files downloaded again successfully), with tags on 20% of roots.
+//! Add `--delete-only` to measure only permanent delete and its undo.
+//! Add `--tag-pages-only` to measure paging and search with 200k tag
+//! definitions after the import.
 use std::time::Instant;
 
 use picto_library::predicate::{
@@ -30,8 +31,6 @@ const BASE_MS: u64 = 1_700_000_000_000;
 
 #[path = "library_ops_benchmark/subscriptions.rs"]
 mod subscriptions;
-#[path = "library_ops_benchmark/sync.rs"]
-mod sync;
 
 fn main() -> R<()> {
     let roots = arg(1, 1_000_000);
@@ -66,9 +65,6 @@ fn main() -> R<()> {
     if subscriptions_only {
         return subscriptions::run(library, roots, runs);
     }
-    if std::env::args().any(|arg| arg == "--sync-only") {
-        return sync::run(library, &ids, dir.path());
-    }
 
     // --- fixture: settle FTS so name text filters see every root ---
     let t = Instant::now();
@@ -102,7 +98,8 @@ fn main() -> R<()> {
         return Ok(());
     }
 
-    // Missing candidates must not force a walk through the complete query order.
+    // Checking candidates that are not in the result must not read through
+    // the whole sorted order of the query.
     let last = *ids.last().expect("non-empty fixture");
     let target = explicit(&[last]);
     let candidates = [ids[0], last, RootId(u32::MAX)];
@@ -124,7 +121,9 @@ fn main() -> R<()> {
     assert_eq!(library.query_statistics().order_builds, before.order_builds);
     library.set_lifecycle(&target, Lifecycle::Active)?;
     if std::env::args().any(|arg| arg == "--membership-only") {
-        // Populate only the closed synthetic fixture, then rebuild its projection normally.
+        // Give every root a recent view by writing to the closed test library
+        // with SQLite, then reopen it so that its projection is rebuilt as on
+        // a normal open.
         drop(library);
         let connection = rusqlite::Connection::open(&path)?;
         connection.execute(
@@ -412,11 +411,11 @@ fn main() -> R<()> {
     for (label, query) in &windows {
         let first = library.query_window(query, &WindowRequest::at(0, 500))?;
         let total = first.page.total as usize;
-        // warm: same revision, cache hit
+        // The same revision again, so the answer comes from the cache.
         bench(&format!("window first 500 warm: {label}"), &total.to_string(), runs * 4, || {
             library.query_window(query, &WindowRequest::at(0, 500))?; Ok(())
         }, None::<fn() -> R<()>>)?;
-        // after an unrelated 1-root tag edit (new revision)
+        // After a tag edit on one root, which makes a new revision.
         let mut b = false;
         bench(&format!("window first 500 after 1-root edit: {label}"), &total.to_string(), runs * 2, || {
             library.query_window(query, &WindowRequest::at(0, 500))?; Ok(())

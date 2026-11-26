@@ -36,7 +36,7 @@ const fn panel(
 }
 
 // i18n: translated where drawn
-pub const PANELS: [PanelDef; 14] = [
+pub const PANELS: [PanelDef; 13] = [
     panel(
         "general",
         "General",
@@ -126,14 +126,6 @@ pub const PANELS: [PanelDef; 14] = [
         false,
     ),
     panel(
-        "cloud",
-        "Cloud",
-        "cloud",
-        "cloud sync backup restore google drive dropbox offline retention snapshots",
-        "Library sync, recovery snapshots, and missing files.",
-        false,
-    ),
-    panel(
         "aitagging",
         "AI Models",
         "box",
@@ -155,7 +147,7 @@ pub const PANELS: [PanelDef; 14] = [
 /// is the setting's label, the English words that the search matches for
 /// the setting, and the id of the section that holds it.
 // i18n: translated where drawn (searched as shown)
-const ALL_SETTINGS: [(&str, &str, &str); 14] = [
+const ALL_SETTINGS: [(&str, &str, &str); 13] = [
     (
         "Appearance",
         "theme color light dark gray blue purple zoom",
@@ -220,11 +212,6 @@ const ALL_SETTINGS: [(&str, &str, &str); 14] = [
         "Subscription Defaults",
         "subscriptions schedule daily weekly monthly posts per run group multi media inbox maximum limit capacity",
         "subscriptions",
-    ),
-    (
-        "Cloud Sync and Recovery",
-        "cloud sync backup restore google drive dropbox snapshots retention offline",
-        "cloud",
     ),
 ];
 

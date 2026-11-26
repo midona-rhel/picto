@@ -36,7 +36,6 @@ keyboard shortcuts is in **Settings → Shortcuts**, where you can also change t
 - [Subscriptions](subscriptions.md) says how to follow artists, tags and accounts on the supported
   sites.
 - [AI Tagging](ai-tagging.md) describes the local models that suggest tags.
-- [Cloud Sync](cloud-sync.md) describes the experimental sync through Google Drive and Dropbox.
 
 ## Reference
 

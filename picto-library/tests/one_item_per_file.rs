@@ -90,7 +90,7 @@ fn a_new_library_refuses_a_second_item_for_a_file() {
     let (second, _) = library.ingest(&imported("second", "second-file")).unwrap();
     let error = library
         .database()
-        .maintenance_write(picto_library::database::WorkPriority::Cloud, |transaction| {
+        .maintenance_write(picto_library::database::WorkPriority::Maintenance, |transaction| {
             transaction.execute(
                 "UPDATE media_item SET file_id = (SELECT file_id FROM media_item WHERE media_id = ?1)
                  WHERE media_id = ?2",
@@ -127,7 +127,8 @@ fn a_collection_import_takes_in_a_loose_copy_of_its_file() {
     assert_eq!(members(&library, post)[0], MediaId(loose_root.0));
     assert_eq!(members(&library, post).len(), 2);
     assert_eq!(snapshot.media_owner.get(loose_root.0), Some(&post));
-    // The set keeps the lifecycle that keeps it most, and the loose tags.
+    // The collection gets the highest-ranked lifecycle of its items (Active,
+    // then Inbox, then Trash) and the tags of the loose item.
     let details = library.details(post).unwrap();
     assert_eq!(details.lifecycle, Lifecycle::Active);
     assert!(details
@@ -305,7 +306,7 @@ fn an_older_library_merges_every_shared_file_once_and_keeps_its_counts() {
         .unwrap();
     library
         .database()
-        .maintenance_write(picto_library::database::WorkPriority::Cloud, |transaction| {
+        .maintenance_write(picto_library::database::WorkPriority::Maintenance, |transaction| {
             transaction.execute(
                 "INSERT INTO source_post (site_id, post_key, root_item_id, created_at, updated_at)
                  VALUES ('fixture', 'newer', ?1, 'now', 'now')",
@@ -349,7 +350,7 @@ fn an_older_library_merges_every_shared_file_once_and_keeps_its_counts() {
     assert_eq!(shared_files(&library), 0);
     assert_eq!(library.history().state().entries, 0);
 
-    // A: the oldest loose copy stays and gathers the rest.
+    // A: the oldest loose copy stays and gets the metadata of the others.
     let kept = library.details(a1).unwrap();
     assert!(library.details(a2_root).is_err());
     assert!(library.details(a3).is_err());
@@ -378,8 +379,8 @@ fn an_older_library_merges_every_shared_file_once_and_keeps_its_counts() {
         .tag_ids
         .contains(&tag("b:loose")));
 
-    // C: the older collection keeps the file; the emptied one is gone and
-    // its post points at the one that stays.
+    // C: the older collection keeps the file. The newer collection, left
+    // empty, is removed, and its post points at the older one.
     assert!(library.details(c_new).is_err());
     assert_eq!(members(&library, c_old)[0], c_kept);
     assert_eq!(
@@ -392,7 +393,8 @@ fn an_older_library_merges_every_shared_file_once_and_keeps_its_counts() {
     assert_eq!(again, a1);
     assert_eq!(shared_files(&library), 0);
 
-    // Once is enough: the next open finds the rule enforced.
+    // The merge is needed only once: at the next open no file has more
+    // than one item, so the merge changes nothing.
     drop(library);
     let library = Library::open(&path).unwrap();
     assert_eq!(library.merge_shared_files().unwrap(), SharedFileMerge::default());
@@ -427,7 +429,7 @@ fn a_post_bridging_two_collections_preserves_their_metadata_and_reopens() {
     let (second, _) = library.ingest_collection(&collection(vec![c, d])).unwrap();
     let second_key = library.database().read(picto_library::database::WorkPriority::VisibleRead,
         |db| Ok(db.query_row("SELECT stable_key FROM library_item WHERE local_id = ?1", [second.0], |row| row.get::<_, String>(0))?)).unwrap();
-    library.database().maintenance_write(picto_library::database::WorkPriority::Cloud, |tx| {
+    library.database().maintenance_write(picto_library::database::WorkPriority::Maintenance, |tx| {
         tx.execute("INSERT INTO source_post(site_id,post_key,root_item_id,created_at,updated_at) VALUES('fixture','bridge-source',?1,'now','now')", [second.0])?;
         Ok(())
     }).unwrap();

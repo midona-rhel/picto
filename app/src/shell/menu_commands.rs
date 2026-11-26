@@ -203,13 +203,6 @@ impl Shell {
         }
     }
 
-    /// Opens the log window if it is not open.
-    pub(crate) fn show_diagnostics(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.diagnostics.is_none() {
-            self.toggle_diagnostics(window, cx);
-        }
-    }
-
     /// Opens the log window, or closes it if it is open. The View menu's
     /// Log Window row runs this.
     pub(crate) fn toggle_diagnostics(&mut self, window: &mut Window, cx: &mut Context<Self>) {

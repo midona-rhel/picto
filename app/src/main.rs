@@ -13,7 +13,6 @@ mod assets;
 mod atlas;
 mod backend;
 mod cover;
-mod cloud;
 mod covered;
 mod desktop;
 mod diagnostics;

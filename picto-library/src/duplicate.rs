@@ -61,14 +61,6 @@ impl DuplicateHistoryState {
         self.loser_file_id
     }
 
-    pub(crate) fn file_id_a(&self) -> FileId {
-        self.file_id_a
-    }
-
-    pub(crate) fn file_id_b(&self) -> FileId {
-        self.file_id_b
-    }
-
     pub(crate) fn rewires_file(&self) -> bool {
         self.loser_file_id.is_some()
     }
@@ -82,8 +74,8 @@ pub(crate) struct ResolutionOutput {
     pub snapshot: ProjectionSnapshot,
     pub affected_roots: RoaringBitmap,
     pub history: DuplicateHistoryState,
-    /// Keep-file resolutions: the winner's item, and the loser's items to
-    /// merge into it.
+    /// Set when the resolution keeps one of the two files: the winner's
+    /// item, and the loser's items that the caller merges into it.
     pub merge: Option<(MediaId, Vec<MediaId>)>,
 }
 
@@ -187,7 +179,8 @@ pub(crate) fn list_pairs(
     list_pairs_from(connection, status, 0, limit)
 }
 
-/// [`list_pairs`] of the pairs at least `min_distance` apart.
+/// Does what [`list_pairs`] does, for only the pairs whose distance is at
+/// least `min_distance`.
 fn list_pairs_from(
     connection: &Connection,
     status: Option<DuplicateStatus>,

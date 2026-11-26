@@ -391,9 +391,8 @@ impl Sidebar {
             } else {
                 library.ensure_tag_definitions(&names)?.0
             };
-            let now = crate::now_ms();
             for folder in folders {
-                library.set_folder_auto_tags(folder, ids.clone(), now)?;
+                library.set_folder_auto_tags(folder, ids.clone())?;
             }
             Ok(())
         };

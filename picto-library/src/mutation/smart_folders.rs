@@ -41,7 +41,6 @@ impl Library {
         let notes = normalized_optional(input.notes.as_deref());
         let view = input.view;
         crate::smart::validate_view(&view)?;
-        let changed_at_ms = now_ms();
         let (smart_folder_id, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             if let Some(task) = task {
                 super::tasks::require_running_task(transaction, task)?;
@@ -71,14 +70,6 @@ impl Library {
                     serde_json::to_string(&view)?,
                     display_order
                 ],
-            )?;
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "smart_folder.create",
-                None,
-                serde_json::json!({"smart_folder_id": smart_folder_id.0}),
-                changed_at_ms,
             )?;
             let mut next = (*snapshot).clone();
             crate::smart::refresh_subtree(transaction, &mut next, smart_folder_id)?;
@@ -134,7 +125,6 @@ impl Library {
         let notes = normalized_optional(input.notes.as_deref());
         let view = input.view;
         crate::smart::validate_view(&view)?;
-        let changed_at_ms = now_ms();
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             validate_smart_parent(transaction, parent_id, Some(smart_folder_id))?;
             let before = load_smart_folder_definition(transaction, smart_folder_id)?
@@ -163,14 +153,6 @@ impl Library {
                     smart_folder_id.0
                 )));
             }
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "smart_folder.update",
-                None,
-                serde_json::json!({"smart_folder_id": smart_folder_id.0}),
-                changed_at_ms,
-            )?;
             let mut next = (*snapshot).clone();
             if query_changed {
                 crate::smart::refresh_subtree(transaction, &mut next, smart_folder_id)?;
@@ -214,22 +196,9 @@ impl Library {
         &self,
         smart_folder_id: SmartFolderId,
     ) -> Result<SmartFolderDeleteResult> {
-        let changed_at_ms = now_ms();
         let result = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let mut next = (*snapshot).clone();
             let deleted = delete_smart_folder_subtree(transaction, &mut next, smart_folder_id)?;
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "smart_folder.delete",
-                None,
-                serde_json::json!({
-                    "smart_folder_ids": deleted.smart_folder_ids.iter()
-                        .map(|id| id.0)
-                        .collect::<Vec<_>>()
-                }),
-                changed_at_ms,
-            )?;
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
                 revision,
@@ -330,14 +299,6 @@ impl Library {
                     })
                 })
                 .collect::<Vec<_>>();
-            insert_cloud_journal(
-                transaction,
-                revision,
-                "smart_folder.reorder",
-                None,
-                serde_json::json!({"parent_id": parent_id.map(|id| id.0)}),
-                now_ms(),
-            )?;
             let mut next = (*snapshot).clone();
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(

@@ -560,7 +560,7 @@ pub fn rename_or_merge(library: &Library, id: TagId, name: &str) -> Result<(), S
         .get(name)
         .copied();
     match target {
-        Some(target) if target != id => library.merge_tags(id, target, crate::now_ms()),
+        Some(target) if target != id => library.merge_tags(id, target),
         _ => library.rename_tag(id, name),
     }
     .map(|_| ())

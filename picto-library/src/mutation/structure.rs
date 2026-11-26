@@ -299,7 +299,6 @@ impl Library {
         &self,
         collection_id: RootId,
         ordered_media_ids: Vec<MediaId>,
-        changed_at_ms: i64,
     ) -> Result<MutationReceipt> {
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let before = snapshot
@@ -337,16 +336,6 @@ impl Library {
                 )?;
                 Arc::make_mut(&mut next.collection_orders)
                     .insert(collection_id, Arc::new(ordered_media_ids.clone()));
-                transaction.execute(
-                    "INSERT INTO cloud_journal
-                         (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-                     VALUES (?1, 'collection.reorder', ?2, '{}', ?3)",
-                    rusqlite::params![
-                        revision as i64,
-                        crate::bitmap::encode(&[collection_id.0].into_iter().collect())?,
-                        changed_at_ms
-                    ],
-                )?;
                 Some(HistoryEntry::for_command(
                     "collections.reorder",
                     "Reorder collection",
@@ -380,7 +369,6 @@ impl Library {
         &self,
         collection_id: RootId,
         cover_media_id: MediaId,
-        changed_at_ms: i64,
     ) -> Result<MutationReceipt> {
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let (before, before_notes) = transaction
@@ -406,17 +394,6 @@ impl Library {
                     "SELECT notes FROM library_root WHERE root_id = ?1",
                     [collection_id.0],
                     |row| row.get::<_, Option<String>>(0),
-                )?;
-                transaction.execute(
-                    "INSERT INTO cloud_journal
-                         (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-                     VALUES (?1, 'collection.cover', ?2, ?3, ?4)",
-                    rusqlite::params![
-                        revision as i64,
-                        crate::bitmap::encode(&affected)?,
-                        serde_json::json!({"cover_media_id": cover_media_id.0}).to_string(),
-                        changed_at_ms
-                    ],
                 )?;
                 Some(HistoryEntry::for_command(
                     "collections.set_cover",
@@ -519,11 +496,10 @@ impl Library {
                 return Err(LibraryError::UndoLimitExceeded);
             }
             let state = undoable
-                .then(|| {
-                    capture_deleted_roots(transaction, &snapshot, &roots, DeletionOrigin::User)
-                })
+                .then(|| capture_deleted_roots(transaction, &snapshot, &roots))
                 .transpose()?;
-            // Files an undoable delete keeps are not freed now.
+            // The files that an undoable delete keeps for its undo are not
+            // deleted now.
             let mut protected = self.history.protected_cleanup_files();
             if let Some(state) = &state {
                 protected.extend(state.files.iter().copied());
@@ -535,7 +511,6 @@ impl Library {
                 &roots,
                 deleted_at_ms,
                 &protected,
-                DeletionOrigin::User,
             )?;
             let history = state.map(|state| {
                 HistoryEntry::for_command(
@@ -572,11 +547,9 @@ impl Library {
     }
 
     /// Removes at most `limit` queued files that no media item uses from the
-    /// disk with `delete`, and then their `media_file` rows. Files that a
-    /// merge kept and whose "Keep deleted files" time is over are queued
-    /// first (`release_kept_files`). All of it happens in one write, so an
-    /// import can't give a file a new media item while the file is removed.
-    /// Reads go on meanwhile.
+    /// disk with `delete`, and then their `media_file` rows. All of it
+    /// happens in one write, so an import can't give a file a new media item
+    /// while the file is removed. Reads go on meanwhile.
     pub fn clean_pending_blobs(
         &self,
         limit: usize,
@@ -585,14 +558,14 @@ impl Library {
         self.database
             .maintenance_write(WorkPriority::Maintenance, |transaction| {
                 let protected = self.history.protected_cleanup_files();
-                super::shared_merge::release_kept_files(transaction, now_ms(), limit)?;
                 let cleanup = crate::duplicate::ready_cleanup(transaction, &protected, limit)?;
                 let mut removed = 0;
                 for pending in cleanup {
-                    // A duplicate merge that kept this file names it as the
-                    // file that stayed. No picture uses the file any more,
-                    // so the decision goes with it. The other pairs of the
-                    // file go with it through their foreign keys.
+                    // A duplicate pair that was resolved by keeping this file
+                    // names it as the winner. No media item uses the file any
+                    // more, so that pair is deleted with the file. The other
+                    // pairs of the file are deleted through their foreign
+                    // keys when the `media_file` row is deleted below.
                     transaction.execute(
                         "DELETE FROM duplicate_pair WHERE winner_file_id = ?1",
                         [pending.file_id.0],
@@ -619,24 +592,13 @@ impl Library {
     }
 }
 
-/// The shortest time, in days, that a file stays on this computer after a
-/// merge deleted its picture.
-const MIN_KEPT_DELETED_FILE_DAYS: i64 = 7;
-
 /// Removes `roots` and their media from the library inside a publication:
-/// their rows, tombstones, projections, orders, smart folders and a row of
-/// the cloud journal. The files that no other media item uses are queued for
-/// removal from the disk and returned, except those that an undo entry still
-/// needs (`protected_cleanup_files`), which are queued but not returned.
-///
-/// `origin` says what cloud sync does with the deletion. A deletion that the
-/// user made gets a `delete` entry for each file (`shared.rs`), so that the
-/// other computers delete the same pictures, and its originals in the cloud
-/// folder are noted for removal. A deletion that came from another computer
-/// gets neither, because the computer that made the deletion removes the
-/// originals. Its files stay on this computer for "Keep deleted files", and
-/// for at least `MIN_KEPT_DELETED_FILE_DAYS`, and are noted in
-/// `kept_deleted_file` instead of being queued.
+/// their rows, projections, orders and smart folder results. Each removed item
+/// gets a row in `deletion_tombstone`, so that an import prepared before the
+/// deletion does not bring it back. The files that no other media item uses
+/// are queued for removal from the disk and returned, except those that an
+/// undo entry still needs (`protected_cleanup_files`), which are queued but
+/// not returned.
 pub(super) fn delete_roots(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
@@ -644,7 +606,6 @@ pub(super) fn delete_roots(
     roots: &RoaringBitmap,
     deleted_at_ms: i64,
     protected_cleanup_files: &std::collections::BTreeSet<crate::FileId>,
-    origin: DeletionOrigin,
 ) -> Result<(ProjectionSnapshot, Vec<crate::PendingBlobCleanup>, MutationReceipt)> {
     let roots = roots.clone();
     let mut media_ids = RoaringBitmap::new();
@@ -664,39 +625,26 @@ pub(super) fn delete_roots(
     stage_delete_ids(transaction, "delete_media", &media_ids)?;
     stage_delete_ids(transaction, "delete_item", &item_ids)?;
 
-    let retention_json = transaction.query_row(
-        "SELECT retention_json FROM cloud_state WHERE singleton = 1",
-        [],
-        |row| row.get::<_, String>(0),
-    )?;
-
-    // One set-based read of the deleted media's files. CROSS JOIN keeps
-    // SQLite walking the staged ids rather than every media item.
+    // The files of the deleted media are read with one query. The CROSS JOIN
+    // makes SQLite read the staged ids first, rather than every media item.
     let mut files = std::collections::HashMap::new();
     {
         let mut statement = transaction.prepare_cached(
-            "SELECT file.file_id, file.content_hash, file.file_path,
-                    CASE WHEN cloud.remote_present = 1
-                         THEN cloud.remote_extension ELSE NULL END
+            "SELECT file.file_id, file.content_hash, file.file_path
              FROM temp.delete_media selected
              CROSS JOIN media_item media ON media.media_id = selected.local_id
-             JOIN media_file file ON file.file_id = media.file_id
-             LEFT JOIN cloud_blob_state cloud
-               ON cloud.file_hash = file.content_hash",
+             JOIN media_file file ON file.file_id = media.file_id",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
                 row.get::<_, u32>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
             ))
         })?;
         for row in rows {
-            let (file_id, content_hash, file_path, remote_extension) = row?;
-            files
-                .entry(file_id)
-                .or_insert((content_hash, file_path, remote_extension));
+            let (file_id, content_hash, file_path) = row?;
+            files.entry(file_id).or_insert((content_hash, file_path));
         }
     }
     transaction.execute(
@@ -710,7 +658,6 @@ pub(super) fn delete_roots(
              deleted_at_ms = excluded.deleted_at_ms",
         rusqlite::params![revision as i64, deleted_at_ms],
     )?;
-    record_deleted_files(transaction, revision, origin)?;
     transaction.execute(
         "DELETE FROM root_fts WHERE rowid IN
              (SELECT local_id FROM temp.delete_root)",
@@ -736,19 +683,8 @@ pub(super) fn delete_roots(
     )?;
 
     let mut cleanup = Vec::new();
-    let retention_days = serde_json::from_str::<serde_json::Value>(&retention_json)
-        .ok()
-        .and_then(|value| value.get("deleted_blobs_days")?.as_i64())
-        .unwrap_or(7)
-        .clamp(0, 3_650);
-    let deleted_at =
-        chrono::DateTime::<chrono::Utc>::from_timestamp_millis(deleted_at_ms)
-            .ok_or_else(|| {
-                LibraryError::InvalidInput("deletion timestamp is outside range".into())
-            })?;
-    let purge_after = deleted_at + chrono::Duration::days(retention_days);
-
-    // Files another media item still uses survive; one query finds them.
+    // The files that another media item still uses are kept; one query
+    // finds them.
     let still_referenced = {
         let ids = serde_json::to_string(&files.keys().collect::<Vec<_>>())?;
         let mut statement = transaction.prepare_cached(
@@ -758,48 +694,9 @@ pub(super) fn delete_roots(
         let rows = statement.query_map([ids], |row| row.get::<_, u32>(0))?;
         rows.collect::<std::result::Result<std::collections::HashSet<_>, _>>()?
     };
-    for (file_id, (content_hash, file_path, remote_extension)) in files {
+    for (file_id, (content_hash, file_path)) in files {
         if still_referenced.contains(&file_id) {
             continue;
-        }
-        if origin == DeletionOrigin::OtherDevice {
-            // The file stays on this computer in case the entries of another
-            // computer add the picture again (`kept_deleted_file`). It stays
-            // for "Keep deleted files", and for at least
-            // `MIN_KEPT_DELETED_FILE_DAYS` even when that setting is shorter,
-            // because the setting is about the originals in the cloud folder
-            // and this file is the copy on this computer.
-            let remove_after = deleted_at
-                + chrono::Duration::days(retention_days.max(MIN_KEPT_DELETED_FILE_DAYS));
-            transaction.execute(
-                "INSERT INTO kept_deleted_file (content_hash, remove_after_ms) VALUES (?1, ?2)
-                 ON CONFLICT(content_hash) DO UPDATE SET
-                     remove_after_ms = excluded.remove_after_ms",
-                rusqlite::params![content_hash, remove_after.timestamp_millis()],
-            )?;
-            transaction.execute("DELETE FROM blob_cleanup_queue WHERE file_id = ?1", [file_id])?;
-            // The file is no picture of the library, so it is no candidate
-            // for duplicate review either. A pair that was decided stays.
-            transaction.execute(
-                "DELETE FROM duplicate_pair
-                 WHERE status = ?2 AND (file_id_a = ?1 OR file_id_b = ?1)",
-                rusqlite::params![file_id, crate::duplicate::STATUS_DETECTED],
-            )?;
-            continue;
-        }
-        if let Some(remote_extension) = remote_extension {
-            transaction.execute(
-                "INSERT INTO cloud_deleted_original (file_name, deleted_at, purge_after)
-                 VALUES (?1, ?2, ?3)
-                 ON CONFLICT(file_name) DO UPDATE SET
-                     deleted_at = excluded.deleted_at,
-                     purge_after = excluded.purge_after",
-                rusqlite::params![
-                    format!("{content_hash}.{remote_extension}"),
-                    deleted_at.to_rfc3339(),
-                    purge_after.to_rfc3339(),
-                ],
-            )?;
         }
         transaction.execute(
             "INSERT INTO blob_cleanup_queue(file_id, file_path, enqueued_revision)
@@ -906,16 +803,6 @@ pub(super) fn delete_roots(
     }
     crate::group::remove_root_projections(&mut next, &roots);
     crate::smart::settle_affected(transaction, &mut next, &roots)?;
-    transaction.execute(
-        "INSERT INTO cloud_journal
-             (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-         VALUES (?1, 'root.permanent_delete', ?2, '{}', ?3)",
-        rusqlite::params![
-            revision as i64,
-            crate::bitmap::encode(&roots)?,
-            deleted_at_ms
-        ],
-    )?;
     next.revision = revision;
     let receipt = PublicationCoordinator::receipt(
         revision,
@@ -938,12 +825,32 @@ fn ids_json(ids: impl IntoIterator<Item = u32>) -> Result<String> {
     Ok(serde_json::to_string(&ids.into_iter().collect::<Vec<_>>())?)
 }
 
+/// Removes the tombstones of the items `keys`, inside the caller's
+/// transaction. A tombstone is a row of `deletion_tombstone`; it stops an
+/// import from bringing back an item that was deleted after the import was
+/// prepared. An import that is later than the deletion, a subscription that
+/// brings an item again, resetting a subscription and undoing a permanent
+/// deletion remove tombstones through this function. Returns how many were
+/// removed.
+pub fn remove_item_tombstones(
+    transaction: &rusqlite::Transaction<'_>,
+    keys: &[String],
+) -> Result<usize> {
+    if keys.is_empty() {
+        return Ok(0);
+    }
+    Ok(transaction.execute(
+        "DELETE FROM deletion_tombstone
+         WHERE stable_key IN (SELECT value FROM json_each(?1))",
+        [serde_json::to_string(keys)?],
+    )?)
+}
+
 /// What a permanent delete of `roots` removes, read before it does.
 pub(super) fn capture_deleted_roots(
     transaction: &rusqlite::Transaction<'_>,
     snapshot: &ProjectionSnapshot,
     roots: &RoaringBitmap,
-    origin: DeletionOrigin,
 ) -> Result<crate::history::DeletedRootsState> {
     let mut media = RoaringBitmap::new();
     for root_id in roots {
@@ -1031,7 +938,6 @@ pub(super) fn capture_deleted_roots(
         .into_iter()
         .collect();
     Ok(crate::history::DeletedRootsState {
-        origin,
         roots: Arc::new(roots.clone()),
         structure: capture_structure(transaction, snapshot, roots, None)?,
         items: Arc::new(items),
@@ -1220,16 +1126,6 @@ pub(super) fn restore_deleted_roots(
             .iter()
             .map(|(_, key, _)| key.clone())
             .collect::<Vec<_>>(),
-    )?;
-    transaction.execute(
-        "DELETE FROM cloud_deleted_original
-         WHERE EXISTS (
-             SELECT 1 FROM media_file file
-             WHERE file.file_id IN (SELECT value FROM json_each(?1))
-               AND (cloud_deleted_original.file_name = file.content_hash
-                    OR cloud_deleted_original.file_name LIKE file.content_hash || '.%')
-         )",
-        [&files_json],
     )?;
     transaction.execute(
         "DELETE FROM blob_cleanup_queue WHERE file_id IN (SELECT value FROM json_each(?1))",
@@ -1577,10 +1473,10 @@ pub(super) fn capture_structure(
     })
 }
 
-/// Every lifecycle, rating and tag membership of `affected`. With `tags`, only
-/// those tags are checked: callers pass the tags captured before an operation
-/// that cannot add a root to any other tag. Without it every tag is checked,
-/// in parallel on large tag sets.
+/// Returns every lifecycle, rating and tag membership of `affected`. With
+/// `tags`, only those tags are checked: callers pass the tags captured before
+/// an operation that cannot add a root to any other tag. Without it every
+/// tag is checked, in parallel on large tag sets.
 pub(super) fn structural_memberships(
     snapshot: &ProjectionSnapshot,
     affected: &RoaringBitmap,

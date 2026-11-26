@@ -529,7 +529,7 @@ impl Manager {
         );
         body = body.child(ui::form::help_text(
             theme,
-            en("Subscriptions, cloud sync settings, watched folders and application settings of the other library are not carried over. A merge cannot be undone with Undo."),
+            en("Subscriptions, watched folders and application settings of the other library are not carried over. A merge cannot be undone with Undo."),
         ));
 
         let close = cx.listener(|this: &mut Self, _: &(), _, cx| this.merging.dismiss(cx));

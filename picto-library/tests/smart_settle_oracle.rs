@@ -186,7 +186,7 @@ fn incremental_smart_folder_results_always_match_a_fresh_evaluation() {
                 // Merge a tag no folder references into one that some do.
                 let source = format!("t{}", 5 + rng.below(3));
                 if let (Some(source), Some(destination)) = (tag_id(&library, &source), tag_id(&library, "t1")) {
-                    drop(library.merge_tags(source, destination, clock).unwrap());
+                    drop(library.merge_tags(source, destination).unwrap());
                 }
             }
             9 => drop(library.undo().unwrap()),

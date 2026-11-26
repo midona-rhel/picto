@@ -108,7 +108,6 @@ impl Manager {
                                     .child(row.dir.clone()),
                             ),
                     )
-                    .children(row.current.then(|| self.row_sync_dot(cx)).flatten())
                     .children(status),
             );
         }
@@ -395,16 +394,6 @@ impl Manager {
         let statistics = Self::card("Library", cx)
             .mt(px(12.))
             .child(self.statistics(row, cx));
-        // i18n: translated where drawn
-        let cloud = Self::card("Cloud Sync", cx).mt(px(12.)).child(if current {
-            self.cloud_card(cx)
-        } else {
-            div()
-                .text(theme::TEXT_SM)
-                .text_color(theme.text_tertiary())
-                .child(t("Open this library to configure its cloud location."))
-                .into_any_element()
-        });
         let _ = window;
         div()
             .flex()
@@ -413,7 +402,6 @@ impl Manager {
             .child(status)
             .child(appearance)
             .child(statistics)
-            .child(cloud)
             .into_any_element()
     }
 
@@ -613,11 +601,10 @@ impl Manager {
             .border_color(theme.border_secondary())
             .bg(theme.footer_surface())
             // "Merge Libraries…" is at the left end of the footer, and the
-            // other three buttons are at its right end. The button is
-            // disabled while the list holds fewer than two libraries whose
-            // folders exist. The locale files have no key for its label.
-            // Each of the four buttons has 14px of padding at its sides, so
-            // that all four fit the window's width of 700 points.
+            // other two buttons are at its right end. The button is disabled
+            // while the list holds fewer than two libraries whose folders
+            // exist. The locale files have no key for its label. Each of the
+            // three buttons has 14px of padding at its sides.
             .child(
                 ui::action_button::action_button(
                     "library-merge",
@@ -655,17 +642,6 @@ impl Manager {
                 .icon("library-folder-open", 14.)
                 .label(t("Open Existing…"))
                 .on_click(|_, _, cx| cx.defer(host::open_dialog)),
-            )
-            .child(
-                ui::action_button::action_button(
-                    "library-open-cloud",
-                    ui::action_button::Look::Standard,
-                )
-                .padding(FOOTER_BUTTON_PADDING)
-                .icon("IconCloud", 14.)
-                .label(t("Open from Cloud…"))
-                .disabled(self.busy || self.working.is_some())
-                .on_click(cx.listener(|this, _, _, cx| this.show_cloud_open(cx))),
             )
     }
 }

@@ -1,8 +1,9 @@
-//! Portable Picto Pack archives.
+//! Export and import of Picto Pack archives, which carry items from one
+//! library to another.
 //!
-//! Packs contain original media bytes and user-owned library metadata only.
-//! Subscription/authentication state and source provenance never cross the
-//! library boundary.
+//! A pack contains the original media files and the metadata that the user
+//! made in the library. It never contains subscriptions, saved sign-ins, or
+//! the record of which source an item was downloaded from.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -834,7 +835,7 @@ fn restore_folder_metadata(
         if !auto_tags.is_empty() {
             application
                 .library()
-                .set_folder_auto_tags(id, auto_tags, chrono::Utc::now().timestamp_millis())
+                .set_folder_auto_tags(id, auto_tags)
                 .map_err(|error| error.to_string())?;
         }
         if let Some(root_id) = folder
@@ -1080,7 +1081,7 @@ mod tests {
             .unwrap();
         source
             .library()
-            .set_folder_auto_tags(folder_id, auto_tags, 1_700_000_000_000)
+            .set_folder_auto_tags(folder_id, auto_tags)
             .unwrap();
 
         let item = prepared(&source, "portable-item", "One", b"one-original", folder_id);

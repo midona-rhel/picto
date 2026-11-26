@@ -1,4 +1,5 @@
-//! Undo and redo: replaying recorded semantic changes.
+//! Undo and redo: applying the changes stored in the undo history backwards
+//! or again.
 
 use super::*;
 
@@ -37,7 +38,6 @@ impl Library {
 
     pub(super) fn replay_history(&self, entry: &HistoryEntry, use_after: bool) -> Result<MutationReceipt> {
         let change = entry.change.clone();
-        let changed_at_ms = now_ms();
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let mut next = (*snapshot).clone();
             let mut affected = RoaringBitmap::new();
@@ -61,27 +61,6 @@ impl Library {
             {
                 resources.insert("smart_folders".into());
             }
-            insert_cloud_journal(
-                transaction,
-                revision,
-                if use_after {
-                    "history.redo"
-                } else {
-                    "history.undo"
-                },
-                (!affected.is_empty()).then_some(&affected),
-                serde_json::json!({"label": entry.label}),
-                changed_at_ms,
-            )?;
-            // Cloud sync records the replay like any other change, through
-            // the delta. Tag renames, deleted folders and deleted tags are
-            // only visible in the history entry, so they're recorded here.
-            record_definition_changes(transaction, revision, &next, &change, use_after)?;
-            mark_restored_files(transaction, &snapshot, &next)?;
-            if use_after && matches!(entry.command.as_str(), "tags.delete" | "tags.delete_unused") {
-                let names = deleted_tag_names(&change);
-                record_deleted_tags(transaction, revision, &names)?;
-            }
             next.revision = revision;
             let receipt = PublicationCoordinator::receipt(
                 revision,
@@ -99,26 +78,6 @@ impl Library {
         })?;
         Ok(receipt)
     }
-}
-
-/// Returns the names of the tags that `change` deletes when it's redone.
-fn deleted_tag_names(change: &SemanticChange) -> Vec<String> {
-    fn collect(change: &SemanticChange, names: &mut Vec<String>) {
-        match change {
-            SemanticChange::Compound(changes) => {
-                for change in changes {
-                    collect(change, names);
-                }
-            }
-            SemanticChange::TagDefinition { before: Some(state), after: None, .. } => {
-                names.push(state.full_name.clone());
-            }
-            _ => {}
-        }
-    }
-    let mut names = Vec::new();
-    collect(change, &mut names);
-    names
 }
 
 pub(super) fn history_dependencies(
@@ -961,7 +920,6 @@ pub(super) fn apply_semantic_change(
                     roots,
                     now_ms(),
                     &std::collections::BTreeSet::new(),
-                    state.origin,
                 )?;
                 *snapshot = next;
                 resources.extend(receipt.resources);

@@ -30,9 +30,9 @@ pub(crate) struct DetachResult {
     pub snapshot: ProjectionSnapshot,
 }
 
-/// Tags holding any of `roots`. `candidates`, when given, already lists every
-/// tag that can hold them (captured by the caller), so the whole tag set is not
-/// scanned again.
+/// Returns the tags that hold any of `roots`. `candidates`, when given,
+/// already lists every tag that can hold them (read by the caller earlier),
+/// so the whole set of tags is not scanned again.
 fn tags_holding(
     snapshot: &ProjectionSnapshot,
     roots: &RoaringBitmap,
@@ -356,22 +356,6 @@ pub(crate) fn detach_many(
     }
     let mut affected = selected.clone();
     affected.insert(collection_id.0);
-    transaction.execute(
-        "INSERT INTO cloud_journal
-             (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-         VALUES (?1, 'collection.detach', ?2, ?3, ?4)",
-        params![
-            revision as i64,
-            crate::bitmap::encode(&affected)?,
-            serde_json::json!({
-                "collection_id": collection_id.0,
-                "media_ids": media_ids.iter().map(|media_id| media_id.0).collect::<Vec<_>>(),
-                "target_lifecycle": target_lifecycle,
-            })
-            .to_string(),
-            modified_at_ms
-        ],
-    )?;
     snapshot.revision = revision;
     Arc::make_mut(&mut snapshot.name_index).refresh(transaction, &affected)?;
     Ok(DetachResult {
@@ -674,17 +658,6 @@ pub(crate) fn ungroup(
             !collection.urls.is_empty(),
         );
     }
-    transaction.execute(
-        "INSERT INTO cloud_journal
-             (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-         VALUES (?1, 'collection.ungroup', ?2, ?3, ?4)",
-        params![
-            revision as i64,
-            crate::bitmap::encode(&new_bitmap)?,
-            serde_json::json!({"collection_id": collection_id.0}).to_string(),
-            modified_at_ms
-        ],
-    )?;
     snapshot.revision = revision;
     let mut affected = new_bitmap;
     affected.insert(collection_id.0);
@@ -936,17 +909,6 @@ pub(crate) fn organize(
     refresh_root_mime_projection(transaction, &mut snapshot, collection_id)?;
 
     crate::fts::mark_one(transaction, collection_id, request.modified_at_ms)?;
-    transaction.execute(
-        "INSERT INTO cloud_journal
-             (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-         VALUES (?1, 'collection.organize', ?2, ?3, ?4)",
-        params![
-            revision as i64,
-            crate::bitmap::encode(&selected)?,
-            serde_json::json!({"collection_id": collection_id.0}).to_string(),
-            request.modified_at_ms
-        ],
-    )?;
     snapshot.revision = revision;
     let mut affected = selected;
     affected.insert(collection_id.0);
@@ -1147,8 +1109,9 @@ fn settle_folders(
             &after.iter().map(|root| root.0).collect::<Vec<_>>(),
         )?;
         Arc::make_mut(&mut snapshot.folder_orders).insert(folder_id, Arc::new(after));
-        // Same members minus the grouped roots plus the collection: bitmap
-        // operations instead of re-inserting every member of a large folder.
+        // The folder keeps its members, without the grouped roots and with
+        // the new collection. This is done with bitmap operations, so that
+        // the members of a large folder are not inserted again one by one.
         let members = Arc::make_mut(&mut snapshot.folders)
             .get_mut(&folder_id)
             .expect("folder bitmap exists for a folder that holds a grouped root");
@@ -1159,8 +1122,9 @@ fn settle_folders(
     Ok(count)
 }
 
-/// Bitmaps that hold none of `roots` are left alone, so they stay shared with
-/// the published snapshot instead of being copied.
+/// Removes `roots` from the projections in `snapshot`. Bitmaps that hold
+/// none of `roots` are not changed, so they stay shared with the published
+/// snapshot instead of being copied.
 pub(crate) fn remove_root_projections(snapshot: &mut ProjectionSnapshot, roots: &RoaringBitmap) {
     Arc::make_mut(&mut snapshot.text_index).remove(roots);
     let names = Arc::make_mut(&mut snapshot.name_index);
@@ -1205,8 +1169,10 @@ pub(crate) fn remove_root_projections(snapshot: &mut ProjectionSnapshot, roots: 
     }
 }
 
-/// Rebuild only changed roots after canonical history replay. Memberships and
-/// collection orders have already settled in this same transaction/snapshot.
+/// Rebuilds the projections of the roots in `affected`, and of no other
+/// roots, after their structure was restored from the undo history. Memberships and
+/// collection orders were already updated earlier in the same transaction
+/// and snapshot.
 pub(crate) fn refresh_structural_projections(
     transaction: &Transaction<'_>,
     snapshot: &mut ProjectionSnapshot,

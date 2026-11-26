@@ -1,6 +1,6 @@
 -- A media item merged into another (two items for one file) leaves its stable
--- key behind as an alias of the item that stays, so re-importing the old item,
--- a Picto Pack that carries it, or a cloud copy resolves to the survivor
+-- key behind as an alias of the item that stays. Re-importing the old item, or
+-- importing a Picto Pack that carries it, then finds the item that stays
 -- instead of bringing the merged-away item back.
 CREATE TABLE IF NOT EXISTS library_item_alias (
     stable_key TEXT PRIMARY KEY,

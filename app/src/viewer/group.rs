@@ -127,7 +127,7 @@ pub fn reorder(
             Report::announce("collections.reorder"),
             move |library| {
                 library
-                    .reorder_collection(collection, order, crate::now_ms())
+                    .reorder_collection(collection, order)
                     .map(|_| ())
             },
             Reread::SELECTION,

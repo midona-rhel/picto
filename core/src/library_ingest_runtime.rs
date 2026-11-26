@@ -1051,7 +1051,8 @@ mod tests {
                 })
                 .unwrap()
         };
-        // Nothing is stranded as running; both wait out the retry delay.
+        // No job is left in the running state. Both jobs are pending again
+        // and cannot be claimed until the retry delay has passed.
         assert_eq!(statuses(), vec![("pending".into(), true), ("pending".into(), true)]);
         assert_eq!(run_batch(&application, 64).unwrap().claimed, 0);
 
@@ -1105,29 +1106,18 @@ mod tests {
                 .unwrap();
         }
 
+        let before = application.library().database().revision().unwrap();
         let report = run_batch(&application, 64).unwrap();
         assert_eq!(report.claimed, 3);
         assert_eq!(report.ingested, 3);
-        let journal = application
-            .library()
-            .auxiliary_read(
-                picto_library::database::WorkPriority::VisibleRead,
-                |connection| {
-                    connection
-                        .query_row(
-                            "SELECT COUNT(*), COUNT(DISTINCT revision)
-                             FROM cloud_journal WHERE operation_kind = 'root.ingest'",
-                            [],
-                            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-                        )
-                        .map_err(Into::into)
-                },
-            )
-            .unwrap();
-        // Three small files are prepared well inside one flush window, so they
-        // land in one publication. Larger imports still appear progressively,
-        // one group at least every PENDING_FLUSH_AFTER.
-        assert_eq!(journal, (1, 1));
+        // Three small files are prepared well within `PENDING_FLUSH_AFTER`,
+        // so they are written in one publication. A larger import is written
+        // in several groups, at least one every `PENDING_FLUSH_AFTER`. The
+        // library's revision grows by one for each publication: one for the
+        // claim of the jobs, one for the import of the three items and one
+        // for the completion of the jobs. Each further group would add an
+        // import and a completion.
+        assert_eq!(application.library().database().revision().unwrap(), before + 3);
     }
 
     #[test]
@@ -1216,7 +1206,8 @@ mod tests {
             .unwrap();
         let first_root = run_batch(&application, 64).unwrap().root_ids[0];
 
-        // A later post mirrors the first file and adds two new ones.
+        // A later post contains the same picture as the first post and two
+        // new ones.
         application
             .library()
             .auxiliary_write(
@@ -1255,7 +1246,8 @@ mod tests {
             .unwrap();
         let report = run_batch(&application, 64).unwrap();
         assert_eq!(report.ingested, 1);
-        // Overlapping collections combine, so the post joins the first one.
+        // Two collections that share a picture become one collection, so the
+        // second post's items are added to the first post's collection.
         assert_eq!(report.root_ids, vec![first_root]);
 
         let first_media = application.library().details(first_root).unwrap().media[0].media_id;

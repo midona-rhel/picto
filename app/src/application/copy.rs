@@ -1,7 +1,7 @@
 //! The rules for disposable copies of a library. [`guard`] decides whether a
 //! folder is a copy that this app may open. [`make_copy`] makes a copy.
-//! [`detach`] stops a copy from continuing the cloud sync, watched folders,
-//! subscription runs and import jobs of the library it was copied from.
+//! [`detach`] stops a copy from continuing the watched folders, subscription
+//! runs and import jobs of the library it was copied from.
 use crate::paths::Canonical as _;
 use std::path::{Path, PathBuf};
 
@@ -14,9 +14,6 @@ const SCRATCH_PREFIX: &str = "picto-gpui-";
 /// The name of the file that [`detach`] writes into a copy after it has
 /// detached the copy for the first time.
 const DETACHED: &str = ".gpui-detached";
-/// The name of the file that [`detach`] writes into a copy after it has given
-/// the copy a library id and a device id of its own for cloud sync.
-const CLOUD_IDENTITY: &str = ".gpui-cloud-identity";
 
 /// Checks that `root` is a marked disposable copy and not the library it was
 /// copied from, nor inside it, and returns its canonical path. This app
@@ -162,7 +159,7 @@ pub fn make_copy(source: &Path) -> Result<PathBuf, String> {
         }
         std::fs::write(copy.join(MARKER), format!("{}\n", source.display()))
             .map_err(|error| format!("write the marker: {error}"))?;
-        detach(&copy, false)
+        detach(&copy)
     })();
     if let Err(error) = made {
         // `scratch` removes the new folder as it drops.
@@ -246,8 +243,6 @@ fn first_link(root: &Path) -> Option<PathBuf> {
 
 /// Stops the copy from continuing work that belongs to the real library. It
 /// runs before the application starts its workers on the copy. It does this:
-/// - It disconnects cloud sync, so no snapshot of the copy is ever written
-///   to the user's cloud folder.
 /// - It switches off watched folders, so nothing outside the copy is
 ///   imported (or deleted after import).
 /// - It cancels the runs that were queued or running in the real library and
@@ -264,18 +259,12 @@ fn first_link(root: &Path) -> Option<PathBuf> {
 ///   own files. Then no file that is opened, revealed, copied or dragged
 ///   out before the application repairs the paths is a file of the real
 ///   library.
-/// - Once only, it gives the copy a new library id and a new device id for
-///   cloud sync, and records that in `.gpui-cloud-identity`. A copy that is
-///   connected to a cloud folder then never writes into, or purges from,
-///   the folder of the library it was copied from.
 ///
 /// Each step can be repeated without changing the result, and the copy is
-/// detached again on every launch. When `keep_cloud` is true, the cloud
-/// folder that the user connected the copy to in this run stays connected.
-/// This is used when a copy is opened again after a restore
-/// (`host::restore`). A folder without the marker is a library the user
-/// keeps, so `detach` returns an error for it before it opens the database.
-pub fn detach(root: &Path, keep_cloud: bool) -> Result<(), String> {
+/// detached again on every launch. A folder without the marker is a library
+/// the user keeps, so `detach` returns an error for it before it opens the
+/// database.
+pub fn detach(root: &Path) -> Result<(), String> {
     if !root.join(MARKER).is_file() {
         return Err(format!(
             "{} is not a disposable copy (no {MARKER}); it is not detached",
@@ -290,28 +279,9 @@ pub fn detach(root: &Path, keep_cloud: bool) -> Result<(), String> {
         .ok()
         .map(|marker| marker.trim().to_owned())
         .filter(|source| Path::new(source).is_absolute());
-    let identified = root.join(CLOUD_IDENTITY).is_file();
     let detached = (|| -> rusqlite::Result<()> {
         let transaction =
             connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        if !keep_cloud {
-            transaction.execute_batch(
-                "UPDATE cloud_state
-                    SET provider = NULL, account_label = NULL, remote_root = NULL,
-                        paused = 1, state = 'disabled', phase = 'idle', blocking = 0,
-                        message = ''
-                  WHERE provider IS NOT NULL OR remote_root IS NOT NULL;",
-            )?;
-        }
-        if !identified {
-            transaction.execute(
-                "UPDATE cloud_state SET library_id = ?1, device_id = ?2 WHERE singleton = 1",
-                [
-                    uuid::Uuid::new_v4().to_string(),
-                    uuid::Uuid::new_v4().to_string(),
-                ],
-            )?;
-        }
         transaction.execute_batch(
             "UPDATE folder_definition SET watch_enabled = 0 WHERE watch_enabled = 1;
              UPDATE subscription SET next_run_at = NULL WHERE next_run_at IS NOT NULL;
@@ -349,10 +319,6 @@ pub fn detach(root: &Path, keep_cloud: bool) -> Result<(), String> {
         transaction.commit()
     })();
     detached.map_err(|error| format!("detach the copy: {error}"))?;
-    if !identified {
-        std::fs::write(root.join(CLOUD_IDENTITY), format!("{now}\n"))
-            .map_err(|error| format!("mark the copy's cloud identity: {error}"))?;
-    }
     if first {
         std::fs::write(root.join(DETACHED), format!("{now}\n"))
             .map_err(|error| format!("mark the copy detached: {error}"))?;
@@ -528,64 +494,13 @@ mod tests {
             )
             .unwrap();
         let before = crate::libraries::admission::tests::snapshot(&root);
-        assert!(detach(&root, false).is_err());
+        assert!(detach(&root).is_err());
         assert_eq!(crate::libraries::admission::tests::snapshot(&root), before);
         assert!(!root.join(super::DETACHED).exists());
     }
 
-    /// A copy that syncs to a cloud folder has a library id and a device id of
-    /// its own, different from those of the library it was copied from. With
-    /// the source's ids, the copy could replace or remove the source's
-    /// snapshots and originals in that folder. The copy keeps its ids across
-    /// launches. A copy that is opened again after a restore (`keep_cloud`)
-    /// keeps the cloud folder the user connected it to.
     #[test]
-    fn a_copy_never_syncs_as_the_library_it_was_copied_from() {
-        let scratch = tempfile::tempdir().unwrap();
-        std::fs::write(scratch.path().join(MARKER), "synthetic:test\n").unwrap();
-        let mut connection =
-            rusqlite::Connection::open(scratch.path().join("library.sqlite")).unwrap();
-        picto_library::schema::create(&mut connection).unwrap();
-        let identity = |connection: &rusqlite::Connection| -> (String, String) {
-            connection
-                .query_row("SELECT library_id, device_id FROM cloud_state", [], |row| {
-                    Ok((row.get(0)?, row.get(1)?))
-                })
-                .unwrap()
-        };
-        let source = identity(&connection);
-        drop(connection);
-        detach(scratch.path(), false).unwrap();
-        let connection = rusqlite::Connection::open(scratch.path().join("library.sqlite")).unwrap();
-        let own = identity(&connection);
-        assert_ne!(own.0, source.0);
-        assert_ne!(own.1, source.1);
-        connection
-            .execute_batch(
-                "UPDATE cloud_state SET provider = 'dropbox', account_label = 'Dropbox',
-                        remote_root = '/fake/Dropbox', state = 'idle', paused = 0;",
-            )
-            .unwrap();
-        drop(connection);
-        detach(scratch.path(), true).unwrap();
-        let connection = rusqlite::Connection::open(scratch.path().join("library.sqlite")).unwrap();
-        assert_eq!(identity(&connection), own);
-        let root: Option<String> = connection
-            .query_row("SELECT remote_root FROM cloud_state", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(root.as_deref(), Some("/fake/Dropbox"));
-        drop(connection);
-        detach(scratch.path(), false).unwrap();
-        let connection = rusqlite::Connection::open(scratch.path().join("library.sqlite")).unwrap();
-        assert_eq!(identity(&connection), own);
-        let root: Option<String> = connection
-            .query_row("SELECT remote_root FROM cloud_state", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(root, None);
-    }
-
-    #[test]
-    fn a_copy_keeps_no_cloud_watch_or_queued_work() {
+    fn a_copy_keeps_no_watch_or_queued_work() {
         let scratch = tempfile::tempdir().unwrap();
         // The copy's marker names the library it was made from. The path is
         // absolute and in the form of the platform the test runs on.
@@ -615,9 +530,7 @@ mod tests {
         picto_library::schema::create(&mut connection).unwrap();
         connection
             .execute_batch(
-                "UPDATE cloud_state SET provider = 'dropbox', account_label = 'me',
-                        remote_root = '/home/me/Dropbox', state = 'idle', paused = 0;
-                 INSERT INTO folder_definition (folder_id, stable_key, name, watch_path, watch_enabled, display_order)
+                "INSERT INTO folder_definition (folder_id, stable_key, name, watch_path, watch_enabled, display_order)
                  VALUES (1, 'f1', 'Watched', '/home/me/Downloads', 1, 0);
                  INSERT INTO subscription (subscription_id, subscription_key, name, schedule, next_run_at, created_at)
                  VALUES (1, 's1', 'Daily', 'daily', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
@@ -641,7 +554,7 @@ mod tests {
                 .unwrap();
         }
         drop(connection);
-        detach(scratch.path(), false).unwrap();
+        detach(scratch.path()).unwrap();
         // An import that the user started in the copy, and that was still
         // queued when the application quit, belongs to the copy. The next
         // launch leaves it queued, but still clears its `delete_after_ingest`,
@@ -655,7 +568,7 @@ mod tests {
             )
             .unwrap();
         // Detach again, as the next launch does.
-        detach(scratch.path(), false).unwrap();
+        detach(scratch.path()).unwrap();
         let connection = rusqlite::Connection::open(scratch.path().join("library.sqlite")).unwrap();
         let one = |sql: &str| -> String {
             connection
@@ -663,8 +576,6 @@ mod tests {
                 .unwrap()
                 .unwrap_or_else(|| "NULL".into())
         };
-        assert_eq!(one("SELECT provider FROM cloud_state"), "NULL");
-        assert_eq!(one("SELECT remote_root FROM cloud_state"), "NULL");
         assert_eq!(
             one("SELECT CAST(watch_enabled AS TEXT) FROM folder_definition"),
             "0"

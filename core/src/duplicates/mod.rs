@@ -757,15 +757,14 @@ struct StoredFile {
     file_path: Option<PathBuf>,
 }
 
-/// Returns the files that have a perceptual hash. A file that a merge kept
-/// after deleting its picture (`kept_deleted_file`) is left out, because no
-/// picture of the library uses it.
+/// Returns the files that have a perceptual hash and are used by an item. A
+/// file that no item uses is waiting for cleanup and is left out.
 fn load_library_files_with_hash(connection: &Connection) -> picto_library::Result<Vec<StoredFile>> {
     let mut statement = connection.prepare(
         "SELECT file_id, content_hash, mime, frame_count, perceptual_hash, file_path
          FROM media_file
          WHERE perceptual_hash IS NOT NULL
-           AND content_hash NOT IN (SELECT content_hash FROM kept_deleted_file)
+           AND EXISTS (SELECT 1 FROM media_item WHERE media_item.file_id = media_file.file_id)
          ORDER BY file_id",
     )?;
     let rows = statement.query_map([], |row| {
@@ -789,68 +788,6 @@ fn invalid(message: impl Into<String>) -> rusqlite::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A file that a merge kept after deleting its picture isn't one of the
-    /// files that the duplicate scan compares.
-    #[test]
-    fn the_scan_leaves_out_a_file_that_a_merge_kept() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("library.sqlite");
-        let library = picto_library::Library::create(&path).unwrap();
-        let hash = |number: u8| format!("{number:064x}");
-        for number in [1, 2] {
-            library
-                .ingest(&picto_library::PreparedImport {
-                    stable_key: format!("item-{number}"),
-                    media_name: format!("item {number}"),
-                    file_path: format!("/picto-test/{number}.png"),
-                    facts: picto_library::ImmutableMediaFacts {
-                        mime: "image/png".into(),
-                        size_bytes: 1_024,
-                        width: Some(10),
-                        height: Some(10),
-                        duration_ms: None,
-                        frame_count: Some(1),
-                        content_hash: hash(number),
-                        perceptual_hash: Some("AAAAAAAAAAA=".into()),
-                        palette: Vec::new(),
-                    },
-                    lifecycle: picto_library::Lifecycle::Active,
-                    rating: picto_library::Rating::Unrated,
-                    notes: None,
-                    tags: Vec::new(),
-                    folders: Vec::new(),
-                    source_urls: Vec::new(),
-                    source_identity: None,
-                    imported_at_ms: 1,
-                    captured_at_ms: None,
-                })
-                .unwrap();
-        }
-        // Another computer deletes the first file later.
-        library.start_recording().unwrap();
-        while library.settle_entries(100).unwrap() {}
-        library
-            .merge_entries(&[picto_library::SharedEntry {
-                kind: picto_library::EntryKind::Delete,
-                subject_key: hash(1),
-                second_key: String::new(),
-                value: None,
-                clock_ms: library.entry_clock().unwrap().now.0 + 60_000,
-                clock_counter: 0,
-                device_id: "ffffffff-0000-4000-8000-000000000099".into(),
-            }])
-            .unwrap();
-        let files = library
-            .auxiliary_read(picto_library::database::WorkPriority::Maintenance, |connection| {
-                load_library_files_with_hash(connection)
-            })
-            .unwrap();
-        assert_eq!(
-            files.into_iter().map(|file| file.file_hash).collect::<Vec<_>>(),
-            [hash(2)]
-        );
-    }
 
     fn stored_file(file_id: i64, hash: &str) -> StoredFile {
         StoredFile {

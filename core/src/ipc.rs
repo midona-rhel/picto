@@ -566,25 +566,6 @@ pub fn dispatch_library(
                 .map_err(|error| error.to_string())?;
             read(crate::tasks::foreground_tasks(application)?)
         }
-        "cloud.providers.detect" => read(crate::cloud::provider::detect_roots()),
-        "cloud.status.get" => read(crate::cloud::status_library(application)?),
-        "cloud.configuration.get" => read(crate::cloud::configuration_library(application)?),
-        "cloud.configure" => {
-            let input: crate::cloud::ConfigureCloudInput = parse(args_json)?;
-            read(crate::cloud::configure_library(application, &input)?)
-        }
-        "cloud.pause" => {
-            let input: CloudPauseInput = parse(args_json)?;
-            read(crate::cloud::set_paused_library(application, input.paused)?)
-        }
-        "cloud.disable" => read(crate::cloud::disable_library(application)?),
-        "cloud.retention.update" => {
-            let input: ValueInput = parse(args_json)?;
-            read(crate::cloud::update_retention_library(
-                application,
-                &input.value,
-            )?)
-        }
         "history.state" => read(application.history_state()),
         "history.undo" => read(application.undo()?),
         "history.redo" => read(application.redo()?),
@@ -599,15 +580,6 @@ pub async fn dispatch_library_async(
     args_json: &str,
 ) -> Result<Option<String>, String> {
     let output = match command {
-        "cloud.reconcile" | "cloud.snapshot.create" => {
-            let provider = crate::cloud::directory_provider_library(application)?;
-            read(crate::cloud::snapshot::publish_library(application, &provider).await?)
-        }
-        "cloud.restore.list" => {
-            let provider = crate::cloud::directory_provider_library(application)?;
-            read(crate::cloud::snapshot::list_remote_for_library(application, &provider).await?)
-        }
-        "cloud.data.delete" => read(crate::cloud::delete_cloud_data_library(application).await?),
         "diagnostics.snapshot" => read(crate::diagnostics::snapshot_library(application)?),
         "ai.status" => read(crate::ai_runtime::model_status_library(application).await?),
         "ai.models.download" => {
@@ -884,12 +856,6 @@ struct PixivOAuthExchangeInput {
     code: String,
     code_verifier: String,
     phpsessid: Option<String>,
-}
-
-#[derive(Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/application/")]
-pub struct CloudPauseInput {
-    paused: bool,
 }
 
 #[derive(Serialize)]

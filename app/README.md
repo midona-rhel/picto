@@ -42,21 +42,17 @@ one:
 - it sits exactly one level inside a folder named `picto-gpui-…` directly in
   a temporary folder: the system's (`std::env::temp_dir()`: `$TMPDIR` on
   macOS, `%TEMP%` on Windows) or, on macOS and Linux, `/tmp` or `/var/tmp`.
-  A marked folder anywhere else is refused, since a marker travels with the
-  files;
+  A marked folder anywhere else is refused, because the marker file is
+  copied and moved along with the other files of a library;
 - none of its top-level entries, none of the entries of `blobs/`, and
   neither `blobs/f` nor `blobs/t` is a symbolic link;
 - its `library.sqlite` is not the source's database reached another way (a
   hard link).
 
-Before the workers start, on every launch, `application::detach` cuts the
-copy loose from the real library's work, in one transaction: cloud sync
-disconnected; a cloud identity of the copy's own given once (a new
-`library_id` and `device_id`, in `.gpui-cloud-identity`), so a copy connected
-to a cloud folder writes and purges only under its own name
-(`a_copy_never_syncs_as_the_library_it_was_copied_from`); every watched
-folder switched off; every subscription's next run cleared and pending or
-running runs and run queries cancelled; "delete after import" cleared on
+Before the workers start, on every launch, `application::detach` stops the
+copy from continuing the real library's work. In one transaction it switches
+every watched folder off, clears every subscription's next run, cancels
+pending or running runs and run queries, and clears "delete after import" on
 every import job. On the first open only (it then writes `.gpui-detached`)
 it also fails import jobs still pending or running, and rewrites every
 `media_file.file_path` that starts with the source's path to start with the
@@ -124,8 +120,8 @@ the test that proves it.
    Windows, and `picto` on Linux, or when it was started from a
    `Picto…AppImage`. Those are the names of a packaged release build of
    this app and of Picto 0.6.19 and earlier. The process that looks is left
-out, and on Linux also the
-   AppImage runtime that serves its own files. A debug build has other names
+   out, and on Linux also the AppImage runtime that serves its own files. A
+   debug build has other names
    (`picto-gpui-spike`, `PictoGPUI`) and is not counted.
 
    A release build looks once when it starts, before it does anything else,
@@ -155,8 +151,8 @@ out, and on Linux also the
    asks, naming the path. The answer is kept in `state.json`
    (`libraryConsents`: canonical path and the database file's identity),
    never in the library; a different library later at the same path is
-   asked about again; New Library here needs no question and a rename
-   carries the consent. A release build is Picto itself and opens a library
+   asked about again; New Library here needs no question, and a rename
+   changes the stored consent to the new path. A release build is Picto itself and opens a library
    without the question
    (`a_debug_build_asks_for_consent_once_per_library_and_its_database`).
 
@@ -215,42 +211,6 @@ application holds that lock, and never creates a file in its folder
 (`core/src/library_merge.rs`, `open_source`). The numbers of items in the
 dialog are read in the same way, and only for a library that `host::permit`
 allows.
-
-### Cloud
-
-Cloud sync signs in to nothing: a library publishes verified
-snapshots of its database, its originals and the tombstones of what the user
-deleted into the folder of a Google Drive or Dropbox desktop app on the
-device, which carries them on. Another device that syncs the library merges
-the tombstones and makes the same deletions. The core owns all of it (`core/src/cloud/`, commands `cloud.*`;
-[`docs/architecture.md`](../docs/architecture.md), "Cloud sync"); the app sends
-those commands and keeps no tokens or secrets. The safety facts:
-
-- A copy's cloud is disconnected at every launch and has its own identity
-  (above), so it never writes or purges as the library it came from.
-- While any automation seam is active only the folders `PICTO_GOOGLE_DRIVE_ROOT`
-  and `PICTO_DROPBOX_ROOT` name are listed or accepted. The core accepts a
-  folder that one of the two variables names before it looks for installed
-  desktop apps, so a check that connects a library to such a folder does not
-  read the home folder.
-- **Delete Cloud Data…** (the button at the end of the Cloud Sync card of the
-  Library Manager, and the same row of the library's actions menu; both open
-  one question, `Manager::delete_cloud_question`) sends `cloud.data.delete`.
-  The core removes from the library's folder in the cloud folder only files
-  that the sync wrote, leaves every other file and every folder that still
-  holds one, and then switches sync off. The library on the device is not
-  changed. The message under the card names what was left.
-- A library whose cloud data is gone switches its own sync off at its next
-  sync and deletes nothing. The core's message about it is shown in the
-  Cloud Sync card above the buttons that connect a folder, in Settings ›
-  Cloud under the State row, and in a notification (`cloud::model::settle`).
-- **Restore** (`host::restore`) closes the library's views, waits until this
-  app holds no connection to the database (at most 15 s, else nothing is
-  restored), has the core keep the current database as an emergency copy and
-  put the snapshot's in place, and opens the library again.
-- **Open from Cloud…** (`host::join`) makes a library the user keeps, so it
-  follows the rules above; a failed join removes the folder it made and
-  reopens the previous library.
 
 ### Making a copy and opening it
 
@@ -455,8 +415,9 @@ release.
 
 ## 4. How it is put together
 
-Each area: what it owns, its main types, and the one rule to know there.
-Details are in each module's `//!` documentation.
+Each paragraph below names one area of the app and says what it owns, its
+main types, and the one rule to know there. Details are in each module's
+`//!` documentation.
 
 **Application and library thread** (`application/`, `backend.rs`).
 `Application` runs `picto_core` on a Tokio runtime of its own, opens the
@@ -481,10 +442,11 @@ change the session through its methods; no view owns another's state.
 by name (`layer.rs`), floating panels (`popover.rs`), focus and tab scopes
 (`focus.rs`), the context menu (`menu.rs`, `menu/`; pop-up windows on macOS,
 drawn in the window elsewhere), dialogs (`modal.rs` with its `Host`, which
-plays a dialog's exit and gives the keyboard back, `modal::backdrop` and
-`modal::dialog_panel`, the one backdrop and panel; `confirm.rs`, `form.rs`),
-the keys of every floating surface (`keys.rs`: Escape, the arrows, Enter and
-Tab, taken by the innermost surface holding the keyboard), rail rows
+plays a dialog's closing animation and then gives the keyboard focus back,
+`modal::backdrop` and `modal::dialog_panel`, the one backdrop and panel;
+`confirm.rs`, `form.rs`), the keys of every floating surface (`keys.rs`:
+Escape, the arrows, Enter and Tab, which the innermost surface that has the
+keyboard focus handles), rail rows
 (`rail_item`),
 the text field (`text_input/`, editing as Chromium does per platform),
 notifications (`notify.rs`), glass (`glass.rs`) and accessibility
@@ -541,11 +503,13 @@ under the theme's rail colour.
 - The Settings window, the detail windows and the Library Manager stay
   opaque.
 
-**Theme, motion, zoom** (`theme.rs`, `motion.rs`, `zoom.rs`). Colours derived from a
-theme's background, contrast and text colours;
-durations and easings; the interface zoom (5% steps between 50% and 200%)
-applied in the vendored GPUI, so views need no change. Rule: anything that
-turns window points into screen points goes through `zoom`'s conversions.
+**Theme, motion, zoom** (`theme.rs`, `motion.rs`, `zoom.rs`). `theme.rs`
+derives every colour from a theme's background, contrast and text colours.
+`motion.rs` holds the durations and easing curves of the animations.
+`zoom.rs` holds the interface zoom, in 5% steps between 50% and 200%. The
+vendored GPUI applies the zoom, so views need no change for it. Rule:
+anything that turns window points into screen points goes through `zoom`'s
+conversions.
 
 **Keys and the application menu** (`settings/registry.rs`, `keymap.rs`,
 `app_menu/`, `shell/menu_commands.rs`, `shell/shortcuts.rs`). The registry
@@ -806,28 +770,34 @@ a scan found to be similar, one pair at a time. It has no rail.
   that lays them out (`ui::sized`), so the screen is drawn correctly in
   every frame while the window is resized.
 
-**Inspector**
-(`inspector/`): the destination, one item, several items, the pickers and
-their dialogs.
+**Inspector** (`inspector/`). The inspector shows the open destination, one
+item or several items. It also holds the tag and folder pickers and their
+dialogs.
 
-**Shell** (`shell/`). The parts of the main window: titlebar,
-sidebar, rails, toolbar, imports and exports, batch rename, permanent
-delete, the Inbox review. Item menus (`item_menu.rs`, `item_menu/actions.rs`)
-record what they act on when they open (`Target`: the grid's selection, or
-the one item the viewer or preview shows) and perform the chosen row; keys
-and application menu rows run the same rows. `GridScope` is the one
-classification of the grid's destination.
+**Shell** (`shell/`). The shell holds the parts of the main window: the
+titlebar, the sidebar, the rails, the toolbar, imports and exports, batch
+rename, permanent delete and the Inbox review. Item menus (`item_menu.rs`,
+`item_menu/actions.rs`) record what they act on when they open (`Target`:
+the grid's selection, or the one item the viewer or preview shows) and
+perform the chosen row; keys and application menu rows run the same rows.
+`GridScope` is the one type that says which kind of destination the grid
+shows.
 
 **Imports, exports, opening files** (`imports/`, `export/`, `opening/`,
-`prompt.rs`). Imports through the core's queue, exports through
-`media.export` and `picto_pack.*`, the command line and opened files, one
-instance per library (a lock plus a Unix socket or named pipe).
+`prompt.rs`). Imports run through the core's import queue. Exports run
+through the core's commands `media.export` and `picto_pack.*`. `opening/`
+handles the command line and the files that the system asks the app to
+open, and keeps one instance of the app per library with a lock and a Unix
+socket or a named pipe.
 
 **Site logins** (`logins/`, `platform/login_window/`). A user signs in on
 the service's own login page, in a sign-in window on the
-system's web view (WKWebView, WebView2, WebKitGTK through `wry`), each on a
-private data store; per-service completion rules in `adapters/`; the session
-as a pure state machine (`machine.rs`). Where logins are kept depends on the
+system's web view (WKWebView, WebView2, WebKitGTK through `wry`). Each
+sign-in window has a private data store. `adapters/` holds one adapter for
+each way in which the app obtains a login, and an adapter decides what a
+page must show before the user counts as signed in. `machine.rs` is the
+state machine of the sign-in that is under way; it returns what to do and
+performs nothing itself. Where logins are kept depends on the
 build (`logins::uses_keychain`). A release build keeps them in the system
 keychain, where the core files each login under the site's name alone, so
 this app and Picto 0.6.19 and earlier share one login per site. A debug or test
@@ -836,21 +806,22 @@ build sets `PICTO_EPHEMERAL_CREDENTIALS=1` in `main`
 they are lost when the app quits; agents, tests and CI only run those
 builds, so they never touch the keychain. Rule: platform calls stay in `platform/login_window/`.
 
-**Libraries** (`libraries/`). Admission (section 2), this app's list and
-consents, the main window's content (`host/`: open, switch, close, rename,
-move, delete, cloud restore and join, the gate and its questions), the
-Library Manager (`manager/`) and the process probe (`platform/`). Rule: every
-open goes through `host::request` (or `host::create`), every change on disk
-through `host::rename`, `move_library` or `delete`.
+**Libraries** (`libraries/`). This area holds the admission rules
+(section 2), this app's list of libraries and the user's consents, the main
+window's content (`host/`: open, switch, close, rename, move, delete, the
+gate and its questions), the Library Manager (`manager/`) and the check for
+other running Picto processes (`platform/`). Rule: every open goes through
+`host::request` (or `host::create`), and every change on disk goes through
+`host::rename`, `move_library` or `delete`.
 
 The Library Manager merges two libraries (`manager/merge.rs`). The dialog
 opens from the "Merge Libraries…" button at the left end of the footer, with
 the library that is selected in the list as the first library, and from the
-row "Merge with Another Library…" of a library's menu. The four buttons of
-the footer have 14 px of padding at their sides, so that they fit the
-window's width of 700 points. The dialog is built from `ui::modal`,
-`ui::form`, `ui::scrollbar` and radio rows of `ui::check`, which can show a
-detail after the label and a text at the right end of the row. From top to
+row "Merge with Another Library…" of a library's menu. The three buttons of
+the footer have 14 px of padding at their sides. The dialog is built from
+`ui::modal`, `ui::form`, `ui::scrollbar` and radio rows of `ui::check`,
+which can show a detail after the label and a text at the right end of the
+row. From top to
 bottom it has: a paragraph that says what a merge does; the list "Merge …
 with" of the other libraries, each row with a radio button, the library's
 avatar, its name over its folder and the number of its items, two rows high
@@ -864,22 +835,25 @@ window's task dialog (`imports/`) shows it with the texts of a merge, and its
 stop question has one choice, which undoes the merge
 (`a_merge_is_named_a_merge_and_can_only_be_cancelled_as_a_whole`).
 
-**Desktop** (`desktop/`). The Inbox badge, the system notification and the
-guarded file hand-offs; `mod.rs` is portable, `macos.rs`, `windows.rs` and
-`linux.rs` hold the platform calls.
+**Desktop** (`desktop/`). This area sets the Inbox badge, shows the system
+notification and passes files to other applications after checking that
+they are inside the open library. `mod.rs` works on every system, and
+`macos.rs`, `windows.rs` and `linux.rs` hold the platform calls.
 
-**Languages** (`i18n/`). Eight catalogs (`i18n/locales/*.json`, included
-at build time) and the rules for using them: `t("English text")`,
-`tf!("… {value0} …", a)`. The language is the one chosen in Settings, else
-the system's, else English, switched live in every window. Numbers and dates
-follow the system's language (`format.rs`, checked against ICU).
+**Languages** (`i18n/`). This area holds eight catalogs
+(`i18n/locales/*.json`, included at build time) and the functions that use
+them: `t("English text")` and `tf!("… {value0} …", a)`. The language is the
+one chosen in Settings, else the system's, else English. A change of
+language is shown at once in every window. Numbers and dates follow the
+system's language (`format.rs`, checked against ICU).
 
-**Settings and state** (`settings/`, `state.rs`). One settings model from the
-library's rows, with a default for every row that is missing, edited as a
-draft. What is kept per machine and not per library is in `state.json` under
-`Picto GPUI` in the platform's configuration folder, never in a library;
-written 250 ms after the last change and on quit; an unreadable
-file is set aside as `state.json.corrupt`.
+**Settings and state** (`settings/`, `state.rs`). One settings model reads
+the settings from the library's rows, gives a default for every row that is
+missing, and is edited as a draft until the user saves. What is kept per
+machine and not per library is in `state.json` under `Picto GPUI` in the
+platform's configuration folder, never in a library. The file is written
+250 ms after the last change and when the app quits. A file that cannot be
+read is renamed to `state.json.corrupt`.
 
 ## 5. Rules of the codebase
 
@@ -891,12 +865,13 @@ file is set aside as `state.json.corrupt`.
 - **Library edits** go through `session::edit_then` (`edit_then_in` when the
   follow-up needs the window) or `Session::edit_reporting`, with a `Report`
   (the failure's title, and a broad change announced with Undo) and a
-`Reread` (what to read again). **Reads** go through
+  `Reread` (what to read again). **Reads** go through
   `session::read_then` (`read_then_in`), or `Session::run` when nothing
-  follows on a view; core commands through `Session::dispatch` or
+  follows on a view; core commands go through `Session::dispatch` or
   `Session::call`.
-- **The selection is addressed, not listed.** An edit of the grid's selection
-  takes `Session::selection_target`; the loaded items stand for it only
+- **An edit of the selection sends a description of the selection, not a
+  list of the loaded items.** An edit of the grid's selection takes
+  `Session::selection_target`; the loaded items are used in its place only
   where every selected item is loaded (names, batch rename).
 - **A view whose content depends on its own size builds that content for
   its bounds in the same frame.** It returns `ui::sized` or
@@ -1054,7 +1029,6 @@ menu's blur nor its pop-in scale.
 | `PICTO_GPUI_FPS` | every build | frame meter in the bottom-left corner (`meter.rs`) |
 | `PICTO_GPUI_STATS` | every build | per-second counters and timings on standard error (`stats.rs`) |
 | `PICTO_FFMPEG_DIR` | every build | the folder that holds `ffmpeg` and `ffprobe`; a program with `ffmpeg` in its own folder sets it itself |
-| `PICTO_DROPBOX_ROOT`, `PICTO_GOOGLE_DRIVE_ROOT` | every build (the core's) | a folder standing in for that app's; the only cloud folders under a seam |
 | `PICTO_GPUI_POINTER` | debug | input lines from a FIFO |
 | `PICTO_GPUI_BACKGROUND` | debug | windows open without the keyboard and draw while covered |
 | `PICTO_GPUI_WINDOW=WxH` | debug, off-screen | exact window size, not remembered |
@@ -1079,11 +1053,11 @@ menu's blur nor its pop-in scale.
 ### CI
 
 The job `verify:app` of `.github/workflows/verify.yml` builds and tests the
-app on Ubuntu 24.04 and Windows. It plays `ci/smoke.txt` and `ci/cloud.txt`
-with the off-screen tool, and it runs the sign-in and network checks in a
-real window. The comment above each step says what the step checks. The
-pictures and logs are the run's artifacts (`gh run download <run> -n
-pictures-linux`). There is no macOS job.
+app on Ubuntu 24.04 and Windows. It plays `ci/smoke.txt` with the off-screen
+tool, and it runs the sign-in and network checks in a real window. The
+comment above each step says what the step checks. The pictures and logs
+are the run's artifacts (`gh run download <run> -n pictures-linux`). There
+is no macOS job.
 
 The job runs for every pull request, for every push to `dev`, and in the
 Alpha Gate of a release. A run on `dev` saves the build cache that the runs
@@ -1171,7 +1145,6 @@ app.
 | Search by Image | `PICTO_GPUI_NET_CHECK` on all three systems' web views; real searches on macOS, where TinEye, SauceNAO, Yandex and Bing gave their results page |
 | Accessibility | tests; off-screen tree dumps |
 | Libraries | tests (each rule); off-screen with generated libraries |
-| Cloud | off-screen against a stand-in folder on macOS and in CI |
 | Languages | tests; pictures in German and Japanese |
 
 ### Per platform
@@ -1208,8 +1181,7 @@ meets these differences.
 - In a debug or test build, logins are kept in memory and are lost when the
   app quits. A release build keeps them in the system keychain, as
   Picto 0.6.19 does.
-- A disposable copy may connect to a cloud folder under its own identity and
-  is disconnected at its next launch.
+- There is no cloud sync.
 - Commands the application menu and the keys share follow the menu's rule:
   Restore and its key work wherever the selection is in the Trash, Accept
   and Reject wherever it is in the Inbox (Picto 0.6.19's keys look at the
@@ -1232,7 +1204,8 @@ meets these differences.
   inspector's button still docks it).
 - PDF, DjVu and comic pages scroll as one continuous column.
 - The interface zoom reaches every window at once.
-- A menu's glass lets more through than other floating surfaces; a window in
+- A menu's glass background is more transparent than that of the other
+  floating surfaces; a window in
   full screen draws no rim; looping indicators draw at 30 frames a second.
 - Word and PowerPoint files have no viewer.
 - Keyboard moves, Home, End and the page keys go across the whole
@@ -1376,10 +1349,6 @@ Not done:
 - Detail window always-on-top on Linux.
 - Logins: FANBOX keeps only the User-Agent as its headers; password fields
   do not turn on secure keyboard entry.
-
-### Open questions
-
-- Whether a disposable copy may connect to a cloud folder at all.
 
 ## 8. Attribution
 

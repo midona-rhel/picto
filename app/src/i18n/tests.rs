@@ -196,13 +196,12 @@ fn counts_are_grouped_as_each_language_groups_them() {
 
 #[test]
 fn dates_are_written_as_each_language_writes_them() {
-    for (locale, (y, m, d, h, mi, s), [date, date_time, short_month, medium, month_year]) in [
+    for (locale, (y, m, d, h, mi, s), [date, short_month, medium, month_year]) in [
         (
             Locale::En,
             (2026, 1, 4, 15, 4, 5),
             [
                 "1/4/2026",
-                "1/4/2026, 3:04:05 PM",
                 "Jan 4, 2026",
                 "Jan 4, 2026, 3:04 PM",
                 "January 2026",
@@ -213,7 +212,6 @@ fn dates_are_written_as_each_language_writes_them() {
             (2026, 1, 14, 9, 4, 5),
             [
                 "1/14/2026",
-                "1/14/2026, 9:04:05 AM",
                 "Jan 14, 2026",
                 "Jan 14, 2026, 9:04 AM",
                 "January 2026",
@@ -224,7 +222,6 @@ fn dates_are_written_as_each_language_writes_them() {
             (2026, 1, 4, 15, 4, 5),
             [
                 "4.1.2026",
-                "4.1.2026, 15:04:05",
                 "4. Jan. 2026",
                 "04.01.2026, 15:04",
                 "Januar 2026",
@@ -235,7 +232,6 @@ fn dates_are_written_as_each_language_writes_them() {
             (2026, 1, 14, 9, 4, 5),
             [
                 "14.1.2026",
-                "14.1.2026, 09:04:05",
                 "14. Jan. 2026",
                 "14.01.2026, 09:04",
                 "Januar 2026",
@@ -246,7 +242,6 @@ fn dates_are_written_as_each_language_writes_them() {
             (2026, 1, 4, 15, 4, 5),
             [
                 "4/1/2026",
-                "4/1/2026, 15:04:05",
                 "4 ene 2026",
                 "4 ene 2026, 15:04",
                 "enero de 2026",
@@ -257,7 +252,6 @@ fn dates_are_written_as_each_language_writes_them() {
             (2026, 1, 14, 9, 4, 5),
             [
                 "14/1/2026",
-                "14/1/2026, 9:04:05",
                 "14 ene 2026",
                 "14 ene 2026, 9:04",
                 "enero de 2026",
@@ -268,7 +262,6 @@ fn dates_are_written_as_each_language_writes_them() {
             (2026, 1, 4, 15, 4, 5),
             [
                 "04/01/2026",
-                "04/01/2026, 15:04:05",
                 "4 de jan. de 2026",
                 "4 de jan. de 2026, 15:04",
                 "janeiro de 2026",
@@ -279,7 +272,6 @@ fn dates_are_written_as_each_language_writes_them() {
             (2026, 1, 14, 9, 4, 5),
             [
                 "14/01/2026",
-                "14/01/2026, 09:04:05",
                 "14 de jan. de 2026",
                 "14 de jan. de 2026, 09:04",
                 "janeiro de 2026",
@@ -290,7 +282,6 @@ fn dates_are_written_as_each_language_writes_them() {
             (2026, 1, 4, 15, 4, 5),
             [
                 "04/01/2026",
-                "04/01/2026 15:04:05",
                 "4 janv. 2026",
                 "4 janv. 2026, 15:04",
                 "janvier 2026",
@@ -301,7 +292,6 @@ fn dates_are_written_as_each_language_writes_them() {
             (2026, 1, 14, 9, 4, 5),
             [
                 "14/01/2026",
-                "14/01/2026 09:04:05",
                 "14 janv. 2026",
                 "14 janv. 2026, 09:04",
                 "janvier 2026",
@@ -312,7 +302,6 @@ fn dates_are_written_as_each_language_writes_them() {
             (2026, 1, 4, 15, 4, 5),
             [
                 "2026/1/4",
-                "2026/1/4 15:04:05",
                 "2026年1月4日",
                 "2026/01/04 15:04",
                 "2026年1月",
@@ -323,7 +312,6 @@ fn dates_are_written_as_each_language_writes_them() {
             (2026, 1, 14, 9, 4, 5),
             [
                 "2026/1/14",
-                "2026/1/14 9:04:05",
                 "2026年1月14日",
                 "2026/01/14 9:04",
                 "2026年1月",
@@ -334,7 +322,6 @@ fn dates_are_written_as_each_language_writes_them() {
             (2026, 1, 4, 15, 4, 5),
             [
                 "2026/1/4",
-                "2026/1/4 15:04:05",
                 "2026年1月4日",
                 "2026年1月4日 15:04",
                 "2026年1月",
@@ -345,7 +332,6 @@ fn dates_are_written_as_each_language_writes_them() {
             (2026, 1, 14, 9, 4, 5),
             [
                 "2026/1/14",
-                "2026/1/14 09:04:05",
                 "2026年1月14日",
                 "2026年1月14日 09:04",
                 "2026年1月",
@@ -356,7 +342,6 @@ fn dates_are_written_as_each_language_writes_them() {
             (2026, 1, 4, 15, 4, 5),
             [
                 "4.1.2026",
-                "4.1.2026 klo 15.04.05",
                 "4.1.2026",
                 "4.1.2026 klo 15.04",
                 "tammikuu 2026",
@@ -367,7 +352,6 @@ fn dates_are_written_as_each_language_writes_them() {
             (2026, 1, 14, 9, 4, 5),
             [
                 "14.1.2026",
-                "14.1.2026 klo 9.04.05",
                 "14.1.2026",
                 "14.1.2026 klo 9.04",
                 "tammikuu 2026",
@@ -384,7 +368,6 @@ fn dates_are_written_as_each_language_writes_them() {
             date,
             "{locale:?}"
         );
-        assert_eq!(format::date_time_in(locale, at), date_time, "{locale:?}");
         assert_eq!(
             format::short_month_date_in(locale, day),
             short_month,

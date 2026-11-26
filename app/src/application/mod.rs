@@ -144,14 +144,6 @@ pub struct Application {
     /// the library opened, with the error message if it did not.
     opened: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
     report: tokio::sync::watch::Sender<Option<Result<(), String>>>,
-    /// Set once this app holds none of the library's connections, which is
-    /// when the library's thread has ended. A restore may then replace the
-    /// library's database.
-    released: tokio::sync::watch::Sender<bool>,
-    /// Set for a copy that is opened again right after a restore. Such a
-    /// copy keeps the cloud folder that the user connected it to in this
-    /// run (see `detach`).
-    keep_cloud: std::sync::atomic::AtomicBool,
 }
 
 impl Application {
@@ -195,64 +187,7 @@ impl Application {
             retired: std::sync::atomic::AtomicBool::new(false),
             opened,
             report,
-            released: tokio::sync::watch::channel(false).0,
-            keep_cloud: std::sync::atomic::AtomicBool::new(false),
         })
-    }
-
-    /// Records that this is a copy that is opened again after a restore, so
-    /// that [`Application::open`] leaves its cloud folder connected.
-    pub fn keep_cloud(&self) {
-        self.keep_cloud
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    /// Records that the library's thread has ended and holds none of the
-    /// library's connections.
-    pub fn release(&self) {
-        self.released.send_replace(true);
-    }
-
-    /// Waits until this app holds none of the library's connections, for at
-    /// most `limit`. Returns whether that happened within `limit`. Blocks
-    /// the calling thread.
-    pub fn wait_released(&self, limit: std::time::Duration) -> bool {
-        let mut released = self.released.subscribe();
-        self.runtime.block_on(async move {
-            tokio::time::timeout(limit, released.wait_for(|released| *released))
-                .await
-                .is_ok_and(|result| result.is_ok())
-        })
-    }
-
-    /// Runs one command on this application's runtime for a library that is
-    /// not open here, and then closes whatever the command left open in the
-    /// core. `cloud.library.join` is such a command: it opens the library
-    /// that it makes. Blocks the calling thread.
-    pub fn run_unopened(&self, command: &str, args: Value) -> Result<Value, String> {
-        let result = self.run_blocking(command, args);
-        if let Err(error) = self.runtime.block_on(picto_core::state::close_library()) {
-            eprintln!("picto: closing after {command}: {error}");
-        }
-        result
-    }
-
-    /// Runs one command on this application's runtime and blocks the calling
-    /// thread until the answer arrives. A restore uses it, on a thread that
-    /// may block. The time the command took is recorded for the log window.
-    pub fn run_blocking(&self, command: &str, args: Value) -> Result<Value, String> {
-        let started = std::time::Instant::now();
-        let result = self.runtime.block_on(async {
-            picto_core::state::invoke(command, &args.to_string())
-                .await
-                .and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string()))
-        });
-        crate::diagnostics::record_ipc(
-            command,
-            started.elapsed().as_secs_f64() * 1000.,
-            result.as_ref().err().map(String::as_str),
-        );
-        result
     }
 
     /// Returns the library's folder.
@@ -284,10 +219,7 @@ impl Application {
         readable: impl FnOnce(Arc<Library>) + Send + 'static,
     ) -> Result<Arc<Library>, String> {
         let detached = match self.kind {
-            Kind::Copy => detach(
-                &self.root,
-                self.keep_cloud.load(std::sync::atomic::Ordering::SeqCst),
-            ),
+            Kind::Copy => detach(&self.root),
             Kind::Real => Ok(()),
         };
         let opened = detached.and_then(|()| {
@@ -424,7 +356,7 @@ mod tests {
             ["library", "tags", "subscriptions", "sidebar"]
         );
         assert_eq!(merged.item_ids, [1, 2, 3]);
-        assert!(touches(&merged, "subscriptions") && !touches(&merged, "cloud"));
+        assert!(touches(&merged, "subscriptions") && !touches(&merged, "folders"));
         assert_eq!(thumbnails, ["a"]);
         assert_eq!(coalesce([]), (None, vec![]));
     }

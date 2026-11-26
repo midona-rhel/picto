@@ -309,12 +309,10 @@ impl LibraryApplication {
         let receipt = finish_subscription_mutation(
             self,
             self.library()
-                .auxiliary_semantic_write_if_changed(
+                .auxiliary_write_if_changed(
                     picto_library::database::WorkPriority::ForegroundMutation,
                     subscription_resources(),
                     [],
-                    "subscriptions.reset",
-                    serde_json::json!({"subscription_id": subscription_id}),
                     |transaction, _| {
                         require_subscription(transaction, subscription_id)?;
                         reject_running_subscription_reset(transaction, subscription_id)?;
@@ -353,8 +351,7 @@ impl LibraryApplication {
                             [subscription_id],
                         )?;
                         // The tombstones of the subscription's items are
-                        // removed, so that a new run brings the items again,
-                        // and the other devices learn of the removal.
+                        // removed, so that a new run imports the items again.
                         let keys = transaction
                             .prepare(
                                 "SELECT 'source:' || post.site_id || ':' || post.post_key || ':' || item.item_key
@@ -404,15 +401,12 @@ impl LibraryApplication {
             .map(prepare_query)
             .collect::<Result<Vec<_>, _>>()?;
         let next_run_at = subscriptions::next_schedule_at(&input.schedule, now)?;
-        let payload = serde_json::json!({"name": input.name.trim()});
         let published = self
             .library()
-            .auxiliary_semantic_write_if_changed(
+            .auxiliary_write_if_changed(
                 picto_library::database::WorkPriority::ForegroundMutation,
                 subscription_resources(),
                 [],
-                "subscriptions.create",
-                payload,
                 |transaction, _| {
                     transaction.execute(
                         "INSERT INTO subscription (
@@ -449,12 +443,10 @@ impl LibraryApplication {
         let query = prepare_query(query)?;
         let published = self
             .library()
-            .auxiliary_semantic_write_if_changed(
+            .auxiliary_write_if_changed(
                 picto_library::database::WorkPriority::ForegroundMutation,
                 subscription_resources(),
                 [],
-                "subscriptions.queries.add",
-                serde_json::json!({"subscription_id": subscription_id}),
                 |transaction, _| {
                     require_subscription(transaction, subscription_id)?;
                     Ok(Some(insert_query(transaction, subscription_id, &query)?))
@@ -474,12 +466,10 @@ impl LibraryApplication {
         finish_subscription_mutation(
             self,
             self.library()
-                .auxiliary_semantic_write_if_changed(
+                .auxiliary_write_if_changed(
                     picto_library::database::WorkPriority::ForegroundMutation,
                     subscription_resources(),
                     [],
-                    "subscriptions.queries.update",
-                    serde_json::json!({"query_id": query_id}),
                     |transaction, _| {
                         reject_active_query_edit(transaction, query_id)?;
                         let changed = transaction.execute(
@@ -522,12 +512,10 @@ impl LibraryApplication {
         finish_subscription_mutation(
             self,
             self.library()
-                .auxiliary_semantic_write_if_changed(
+                .auxiliary_write_if_changed(
                     picto_library::database::WorkPriority::ForegroundMutation,
                     subscription_resources(),
                     [],
-                    "subscriptions.queries.pause",
-                    serde_json::json!({"query_id": query_id, "paused": paused}),
                     |transaction, _| {
                         reject_active_query_edit(transaction, query_id)?;
                         let changed = transaction.execute(
@@ -554,12 +542,10 @@ impl LibraryApplication {
         finish_subscription_mutation(
             self,
             self.library()
-                .auxiliary_semantic_write_if_changed(
+                .auxiliary_write_if_changed(
                     picto_library::database::WorkPriority::ForegroundMutation,
                     subscription_resources(),
                     [],
-                    "subscriptions.queries.grouping",
-                    serde_json::json!({"query_id": query_id, "group_posts": group_posts}),
                     |transaction, _| {
                         reject_active_query_edit(transaction, query_id)?;
                         let changed = transaction.execute(
@@ -585,12 +571,10 @@ impl LibraryApplication {
         let receipt = finish_subscription_mutation(
             self,
             self.library()
-                .auxiliary_semantic_write_if_changed(
+                .auxiliary_write_if_changed(
                     picto_library::database::WorkPriority::ForegroundMutation,
                     subscription_resources(),
                     [],
-                    "subscriptions.queries.delete",
-                    serde_json::json!({"query_id": query_id}),
                     |transaction, _| {
                         reject_active_query_edit(transaction, query_id)?;
                         let changed = transaction.execute(
@@ -620,12 +604,10 @@ impl LibraryApplication {
         finish_subscription_mutation(
             self,
             self.library()
-                .auxiliary_semantic_write_if_changed(
+                .auxiliary_write_if_changed(
                     picto_library::database::WorkPriority::ForegroundMutation,
                     subscription_resources(),
                     [],
-                    "subscriptions.rename",
-                    serde_json::json!({"subscription_id": subscription_id, "name": name}),
                     |transaction, _| {
                         let changed = transaction.execute(
                             "UPDATE subscription SET name = ?1
@@ -651,12 +633,10 @@ impl LibraryApplication {
         finish_subscription_mutation(
             self,
             self.library()
-                .auxiliary_semantic_write_if_changed(
+                .auxiliary_write_if_changed(
                     picto_library::database::WorkPriority::ForegroundMutation,
                     subscription_resources(),
                     [],
-                    "subscriptions.hold",
-                    serde_json::json!({"subscription_id": subscription_id, "held": held}),
                     |transaction, _| {
                         reject_active_subscription_hold(transaction, subscription_id)?;
                         let changed = transaction.execute(
@@ -682,12 +662,10 @@ impl LibraryApplication {
         finish_subscription_mutation(
             self,
             self.library()
-                .auxiliary_semantic_write_if_changed(
+                .auxiliary_write_if_changed(
                     picto_library::database::WorkPriority::ForegroundMutation,
                     subscription_resources(),
                     [],
-                    "subscriptions.run.pause",
-                    serde_json::json!({"subscription_id": subscription_id}),
                     |transaction, _| {
                         require_active_subscription_run(transaction, subscription_id)?;
                         let changed = set_active_subscription_pause_state(
@@ -711,12 +689,10 @@ impl LibraryApplication {
         finish_subscription_mutation(
             self,
             self.library()
-                .auxiliary_semantic_write_if_changed(
+                .auxiliary_write_if_changed(
                     picto_library::database::WorkPriority::ForegroundMutation,
                     subscription_resources(),
                     [],
-                    "subscriptions.run.resume",
-                    serde_json::json!({"subscription_id": subscription_id}),
                     |transaction, _| {
                         require_active_subscription_run(transaction, subscription_id)?;
                         let changed = set_active_subscription_pause_state(
@@ -739,12 +715,10 @@ impl LibraryApplication {
         finish_subscription_mutation(
             self,
             self.library()
-                .auxiliary_semantic_write_if_changed(
+                .auxiliary_write_if_changed(
                     picto_library::database::WorkPriority::ForegroundMutation,
                     subscription_resources(),
                     [],
-                    "subscriptions.pause_all",
-                    serde_json::json!({"paused": paused}),
                     |transaction, _| {
                         let value = if paused { "true" } else { "false" };
                         let changed = transaction.execute(
@@ -771,12 +745,10 @@ impl LibraryApplication {
         finish_subscription_mutation(
             self,
             self.library()
-                .auxiliary_semantic_write_if_changed(
+                .auxiliary_write_if_changed(
                     picto_library::database::WorkPriority::ForegroundMutation,
                     subscription_resources(),
                     [],
-                    "subscriptions.schedule",
-                    serde_json::json!({"subscription_id": subscription_id, "schedule": schedule}),
                     |transaction, _| {
                         let changed = transaction.execute(
                             "UPDATE subscription SET schedule = ?1, next_run_at = ?2
@@ -806,15 +778,10 @@ impl LibraryApplication {
         finish_subscription_mutation(
             self,
             self.library()
-                .auxiliary_semantic_write_if_changed(
+                .auxiliary_write_if_changed(
                     picto_library::database::WorkPriority::ForegroundMutation,
                     subscription_resources(),
                     [],
-                    "subscriptions.posts_per_run",
-                    serde_json::json!({
-                        "subscription_id": subscription_id,
-                        "posts_per_run": posts_per_run
-                    }),
                     |transaction, _| {
                         reject_active_subscription_edit(transaction, subscription_id)?;
                         let changed = transaction.execute(
@@ -847,12 +814,10 @@ impl LibraryApplication {
         finish_subscription_mutation(
             self,
             self.library()
-                .auxiliary_semantic_write_if_changed(
+                .auxiliary_write_if_changed(
                     picto_library::database::WorkPriority::ForegroundMutation,
                     subscription_resources(),
                     [],
-                    "subscriptions.destination",
-                    serde_json::json!({"subscription_id": subscription_id}),
                     |transaction, _| {
                         require_subscription(transaction, subscription_id)?;
                         for folder_id in &policy.target_folder_ids {
@@ -898,12 +863,10 @@ impl LibraryApplication {
         let receipt = finish_subscription_mutation(
             self,
             self.library()
-                .auxiliary_semantic_write_if_changed(
+                .auxiliary_write_if_changed(
                     picto_library::database::WorkPriority::ForegroundMutation,
                     subscription_resources(),
                     [],
-                    "subscriptions.delete",
-                    serde_json::json!({"subscription_id": subscription_id}),
                     |transaction, _| {
                         let changed = transaction.execute(
                             "DELETE FROM subscription WHERE subscription_id = ?1",
@@ -934,12 +897,10 @@ impl LibraryApplication {
     ) -> Result<(CreatedRun, picto_library::MutationReceipt), String> {
         let published = self
             .library()
-            .auxiliary_semantic_write_if_changed(
+            .auxiliary_write_if_changed(
                 picto_library::database::WorkPriority::ForegroundMutation,
                 subscription_resources(),
                 [],
-                "subscriptions.run",
-                serde_json::json!({"subscription_id": subscription_id}),
                 |transaction, _| {
                     let run =
                         subscriptions::create_run_in(transaction, subscription_id, "manual", now)?;
@@ -984,12 +945,10 @@ impl LibraryApplication {
     ) -> Result<(CreatedRun, picto_library::MutationReceipt), String> {
         let published = self
             .library()
-            .auxiliary_semantic_write_if_changed(
+            .auxiliary_write_if_changed(
                 picto_library::database::WorkPriority::ForegroundMutation,
                 subscription_resources(),
                 [],
-                "subscriptions.queries.run",
-                serde_json::json!({"query_id": query_id}),
                 |transaction, _| {
                     let run = subscriptions::create_query_run_in(
                         transaction,
@@ -1045,12 +1004,10 @@ impl LibraryApplication {
         finish_subscription_mutation(
             self,
             self.library()
-                .auxiliary_semantic_write_if_changed(
+                .auxiliary_write_if_changed(
                     picto_library::database::WorkPriority::ForegroundMutation,
                     subscription_resources(),
                     [],
-                    "subscriptions.cancel",
-                    serde_json::json!({"subscription_id": subscription_id}),
                     |transaction, _| {
                         let run_id: i64 = transaction
                             .query_row(
@@ -1134,15 +1091,10 @@ impl LibraryApplication {
         let key = cover_setting_key(subscription_id);
         let published = self
             .library()
-            .auxiliary_semantic_write_if_changed(
+            .auxiliary_write_if_changed(
                 picto_library::database::WorkPriority::ForegroundMutation,
                 subscription_resources(),
                 [],
-                "subscriptions.cover.set",
-                serde_json::json!({
-                    "subscription_id": subscription_id,
-                    "media_item_id": selection.media_item_id
-                }),
                 |transaction, _| {
                     require_subscription(transaction, subscription_id)?;
                     let current_hash: Option<String> = transaction
@@ -1986,11 +1938,13 @@ mod tests {
         let subscriptions = super::query_subscription_views(&connection, &counts).unwrap();
         assert_eq!(subscriptions[0].root_count, 1);
         assert_eq!(subscriptions[1].root_count, 0);
-        // Only the latest run contributes progress; lifetime counts stay distinct.
+        // The progress counts come from the latest run only, not from all
+        // runs of the subscription.
         assert_eq!(subscriptions[0].progress.posts_added, 1);
         assert_eq!(subscriptions[0].progress.ingested, 1);
 
-        // Refresh work must not grow with successful retained history either.
+        // The number of SQLite steps that the two view queries take must not
+        // grow when many older attempts are stored.
         let steps = || {
             [
                 include_str!("subscription_views.sql"),
