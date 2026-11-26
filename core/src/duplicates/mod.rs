@@ -757,12 +757,14 @@ struct StoredFile {
     file_path: Option<PathBuf>,
 }
 
-/// Returns the files that have a perceptual hash.
+/// Returns the files that have a perceptual hash and are used by an item. A
+/// file that no item uses is waiting for cleanup and is left out.
 fn load_library_files_with_hash(connection: &Connection) -> picto_library::Result<Vec<StoredFile>> {
     let mut statement = connection.prepare(
         "SELECT file_id, content_hash, mime, frame_count, perceptual_hash, file_path
          FROM media_file
          WHERE perceptual_hash IS NOT NULL
+           AND EXISTS (SELECT 1 FROM media_item WHERE media_item.file_id = media_file.file_id)
          ORDER BY file_id",
     )?;
     let rows = statement.query_map([], |row| {
