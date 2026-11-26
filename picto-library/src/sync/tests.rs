@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use super::local::Local;
-use super::{SyncKind, SyncRecord, SyncTimestamp};
+use super::{SyncKind, SyncRecord};
 use crate::database::WorkPriority;
 use crate::model::{
     FolderId, GroupRequest, ImmutableMediaFacts, Lifecycle, MediaId, PreparedImport, Rating,
@@ -337,28 +337,7 @@ fn assert_recorded(library: &Library, context: &str) {
 
 /// Every synced value of a library as change records.
 fn synced_records(library: &Library) -> Vec<SyncRecord> {
-    library
-        .database()
-        .read(WorkPriority::VisibleRead, |connection| {
-            let mut statement = connection.prepare(
-                "SELECT kind, key, field, value, clock_ms, clock_counter, device_id FROM sync_value",
-            )?;
-            let rows = statement.query_map([], |row| {
-                Ok(SyncRecord {
-                    kind: SyncKind::parse(&row.get::<_, String>(0)?).unwrap(),
-                    key: row.get(1)?,
-                    field: row.get(2)?,
-                    value: serde_json::from_str(&row.get::<_, String>(3)?).unwrap(),
-                    timestamp: SyncTimestamp {
-                        wall_ms: row.get(4)?,
-                        counter: row.get(5)?,
-                        device: row.get(6)?,
-                    },
-                })
-            })?;
-            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-        })
-        .unwrap()
+    library.database().read(WorkPriority::VisibleRead, super::all_records).unwrap()
 }
 
 /// The library in sync keys: every entity with its state, and every order.

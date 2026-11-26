@@ -87,7 +87,7 @@ pub(crate) fn apply(
         keys.insert((kind, key.clone()));
         let mut forwarding = vec![key];
         while let Some(key) = forwarding.pop() {
-            for (referrer_kind, referrer, field) in synced.referrers(kind, &key)? {
+            for (referrer_kind, referrer, field) in synced.referrers(kind, &key, None)? {
                 if kind == SyncKind::Tag && field == "renamed_to" {
                     if keys.insert((referrer_kind, referrer.clone())) {
                         forwarding.push(referrer);
@@ -330,7 +330,7 @@ fn folder_covers_and_lists(
         }
         let field = format!("folder:{key}");
         let mut members = Vec::new();
-        for (kind, root, referrer_field) in synced.referrers(SyncKind::Folder, key)? {
+        for (kind, root, referrer_field) in synced.referrers(SyncKind::Folder, key, None)? {
             if referrer_field != field {
                 continue;
             }

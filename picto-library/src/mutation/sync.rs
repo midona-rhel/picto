@@ -33,8 +33,8 @@ impl Library {
         self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             crate::sync::remove_triggers(transaction)?;
             transaction.execute_batch(
-                "DELETE FROM sync_state; DELETE FROM sync_value;
-                 DELETE FROM sync_outbox; DELETE FROM sync_identity;",
+                "DELETE FROM sync_state; DELETE FROM sync_value; DELETE FROM sync_outbox;
+                 DELETE FROM sync_identity; DELETE FROM sync_device;",
             )?;
             let mut next = (*snapshot).clone();
             next.revision = revision;
@@ -53,22 +53,7 @@ impl Library {
     /// record of the same field that the library made since stays.
     pub fn remove_from_sync_outbox(&self, records: &[SyncRecord]) -> Result<()> {
         self.database.maintenance_write(WorkPriority::Maintenance, |transaction| {
-            let mut statement = transaction.prepare_cached(
-                "DELETE FROM sync_outbox
-                 WHERE kind = ?1 AND key = ?2 AND field = ?3
-                   AND clock_ms = ?4 AND clock_counter = ?5 AND device_id = ?6",
-            )?;
-            for record in records {
-                statement.execute(rusqlite::params![
-                    record.kind.as_str(),
-                    record.key,
-                    record.field,
-                    record.timestamp.wall_ms,
-                    record.timestamp.counter,
-                    record.timestamp.device,
-                ])?;
-            }
-            Ok(())
+            crate::sync::remove_from_outbox(transaction, records)
         })
     }
 

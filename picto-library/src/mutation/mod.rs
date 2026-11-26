@@ -147,8 +147,9 @@ impl Library {
     /// Opens the library under a cancellation handle and reports each stage
     /// in order. The handle is checked between stages, inside the migration
     /// and inside the scans that build the state in memory; a cancelled open
-    /// returns `OpenCancelled` and has committed nothing. `progress` runs on the opening thread while
-    /// database connections are held, so it must not block.
+    /// returns `OpenCancelled` and has committed nothing. `progress` runs on
+    /// the opening thread while database connections are held, so it must not
+    /// block.
     pub fn open_with(
         path: impl AsRef<Path>,
         cancellation: &OpenCancellation,

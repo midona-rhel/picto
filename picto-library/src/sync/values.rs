@@ -95,8 +95,13 @@ impl<'a> Synced<'a> {
             return Ok(raw.clone());
         }
         let mut statement = self.connection.prepare_cached(
-            "SELECT field, value, clock_ms, clock_counter, device_id
-             FROM sync_value WHERE kind = ?1 AND key = ?2",
+            "SELECT CASE WHEN value.target = 0 THEN value.field ELSE value.field || ':' || target.key END,
+                    value.value, value.clock_ms, value.clock_counter, device.device_id
+             FROM sync_identity entity
+             JOIN sync_value value ON value.entity = entity.entity
+             LEFT JOIN sync_identity target ON target.entity = value.target
+             JOIN sync_device device ON device.device = value.device
+             WHERE entity.kind = ?1 AND entity.key = ?2",
         )?;
         let rows = statement.query_map(rusqlite::params![kind.as_str(), key], |row| {
             Ok((
@@ -126,12 +131,38 @@ impl<'a> Synced<'a> {
     }
 
     /// The entities whose values refer to `kind:key`, with the field that
-    /// refers to it.
-    pub(crate) fn referrers(&self, kind: SyncKind, key: &str) -> Result<Vec<(SyncKind, String, String)>> {
+    /// refers to it. With `until`, `tag:` values recorded after that wall
+    /// time and counter are left out.
+    pub(crate) fn referrers(
+        &self,
+        kind: SyncKind,
+        key: &str,
+        until: Option<(i64, i64)>,
+    ) -> Result<Vec<(SyncKind, String, String)>> {
+        let (until_ms, until_counter) = until.unwrap_or((i64::MAX, i64::MAX));
+        // A `tag:` or `folder:` value names its tag or folder as its target,
+        // which leads its key; every other reference is in `reference`.
         let mut statement = self.connection.prepare_cached(
-            "SELECT kind, key, field FROM sync_value WHERE reference = ?1",
+            "SELECT entity.kind, entity.key,
+                    CASE WHEN value.target = 0 THEN value.field ELSE value.field || ':' || referred.key END
+             FROM sync_identity referred
+             JOIN sync_value value ON value.field = ?3 AND value.target = referred.entity
+             JOIN sync_identity entity ON entity.entity = value.entity
+             WHERE referred.kind = ?1 AND referred.key = ?2
+               AND (value.clock_ms, value.clock_counter) <= (?4, ?5)
+             UNION ALL
+             SELECT entity.kind, entity.key, value.field
+             FROM sync_identity referred
+             JOIN sync_value value ON value.reference = referred.entity
+             JOIN sync_identity entity ON entity.entity = value.entity
+             WHERE referred.kind = ?1 AND referred.key = ?2",
         )?;
-        let rows = statement.query_map([format!("{}:{key}", kind.as_str())], |row| {
+        let field = match kind {
+            SyncKind::Tag => "tag",
+            SyncKind::Folder => "folder",
+            _ => "",
+        };
+        let rows = statement.query_map(rusqlite::params![kind.as_str(), key, field, until_ms, until_counter], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
         })?;
         let mut referrers = Vec::new();
@@ -176,17 +207,19 @@ impl<'a> Synced<'a> {
                 let visible_tag = if key.is_empty() {
                     self.connection
                         .prepare_cached(
-                            "SELECT EXISTS(SELECT 1 FROM sync_value
-                             WHERE kind = 'tag' AND field = 'deleted' AND value = 'false'
-                               AND instr(key, ':') = 0)",
+                            "SELECT EXISTS(SELECT 1 FROM sync_identity tag
+                             CROSS JOIN sync_value value ON value.entity = tag.entity
+                             WHERE tag.kind = 'tag' AND instr(tag.key, ':') = 0
+                               AND value.field = 'deleted' AND value.target = 0 AND value.value = 'false')",
                         )?
                         .query_row([], |row| row.get::<_, bool>(0))?
                 } else {
                     self.connection
                         .prepare_cached(
-                            "SELECT EXISTS(SELECT 1 FROM sync_value
-                             WHERE kind = 'tag' AND key > ?1 AND key < ?2
-                               AND field = 'deleted' AND value = 'false')",
+                            "SELECT EXISTS(SELECT 1 FROM sync_identity tag
+                             CROSS JOIN sync_value value ON value.entity = tag.entity
+                             WHERE tag.kind = 'tag' AND tag.key > ?1 AND tag.key < ?2
+                               AND value.field = 'deleted' AND value.target = 0 AND value.value = 'false')",
                         )?
                         .query_row([format!("{key}:"), format!("{key};")], |row| {
                             row.get::<_, bool>(0)
@@ -242,7 +275,7 @@ impl<'a> Synced<'a> {
     /// order, at most `limit` of them.
     pub(crate) fn members(&mut self, collection: &str, limit: Option<usize>) -> Result<Vec<(String, String)>> {
         let mut members = Vec::new();
-        for (kind, key, field) in self.referrers(SyncKind::Collection, collection)? {
+        for (kind, key, field) in self.referrers(SyncKind::Collection, collection, None)? {
             if kind != SyncKind::Item || field != "collection" || !self.visible(kind, &key)? {
                 continue;
             }
@@ -414,8 +447,12 @@ impl<'a> Synced<'a> {
             return Ok(tree.clone());
         }
         let mut statement = self.connection.prepare_cached(
-            "SELECT key, field, value, clock_ms, clock_counter, device_id FROM sync_value
-             WHERE kind = 'folder' AND field IN ('deleted', 'place')",
+            "SELECT folder.key, value.field, value.value, value.clock_ms, value.clock_counter,
+                    device.device_id
+             FROM sync_identity folder
+             CROSS JOIN sync_value value ON value.entity = folder.entity
+             JOIN sync_device device ON device.device = value.device
+             WHERE folder.kind = 'folder' AND value.field IN ('deleted', 'place') AND value.target = 0",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
@@ -504,7 +541,10 @@ impl<'a> Synced<'a> {
     pub(crate) fn folder_keys(&self) -> Result<Vec<String>> {
         let mut statement = self
             .connection
-            .prepare_cached("SELECT DISTINCT key FROM sync_value WHERE kind = 'folder'")?;
+            .prepare_cached(
+                "SELECT key FROM sync_identity folder WHERE kind = 'folder'
+                 AND EXISTS (SELECT 1 FROM sync_value WHERE entity = folder.entity)",
+            )?;
         let keys = statement
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;

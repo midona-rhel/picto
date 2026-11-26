@@ -9,11 +9,11 @@ use roaring::RoaringBitmap;
 use rusqlite::{Connection, OptionalExtension, Transaction};
 use serde_json::{json, Value};
 
-use super::local::Local;
+use super::local::{lifecycle_name, Local};
 use super::order::{self, Member};
 use super::values::{Synced, View, ROOT_FIELDS};
 use super::{recording, Clock, SyncKind};
-use crate::model::{FolderId, RootId};
+use crate::model::{FolderId, Lifecycle, Rating, RootId, TagId};
 use crate::projection::{ProjectionSnapshot, SharedBitmap};
 use crate::Result;
 
@@ -24,15 +24,45 @@ const SECOND_PASSES: usize = 8;
 
 type Records = BTreeMap<(SyncKind, String, String), Value>;
 
-/// What a write touched: local entities, and the lists whose order is
-/// compared. A list marked `true` is compared as a whole; otherwise only the
-/// part that differs from the list before the write.
+/// What a write touched: local entities that are compared one by one, the
+/// lists whose order is compared, and the roots that entered or left a
+/// lifecycle, rating, tag or folder. A list marked `true` is compared as a
+/// whole; otherwise only the part that differs from the list before the
+/// write.
 #[derive(Default)]
 struct Touched {
     ids: BTreeSet<u32>,
     folder_lists: BTreeMap<FolderId, bool>,
     collection_lists: BTreeMap<RootId, bool>,
     folder_tree: bool,
+    changes: Vec<Change>,
+}
+
+/// The roots that entered or left one lifecycle, rating, tag or folder.
+struct Change {
+    membership: Membership,
+    added: RoaringBitmap,
+    removed: RoaringBitmap,
+}
+
+#[derive(Clone, Copy)]
+enum Membership {
+    Lifecycle(Lifecycle),
+    Rating(Rating),
+    Tag(TagId),
+    Folder(FolderId),
+}
+
+/// One field recorded for a set of roots: `value` for each root in `roots`
+/// whose shown value (the stored one, or `default` when there is none)
+/// differs from it, or for every root when `compare` is false.
+struct SetRecord {
+    roots: RoaringBitmap,
+    field: &'static str,
+    target: i64,
+    value: String,
+    default: &'static str,
+    compare: bool,
 }
 
 /// Records the changes of the write that turned `before` into `after`.
@@ -44,10 +74,11 @@ pub(crate) fn record(
     if !recording(transaction)? {
         return Ok(());
     }
-    let touched = touched(transaction, before, after)?;
+    let mut touched = touched(transaction, before, after)?;
     if touched.ids.is_empty()
         && touched.folder_lists.is_empty()
         && touched.collection_lists.is_empty()
+        && touched.changes.is_empty()
     {
         return Ok(());
     }
@@ -58,7 +89,8 @@ pub(crate) fn record(
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
     transaction.execute("DELETE FROM temp.sync_tag_merge", [])?;
-    recorder.run(touched, &mut clock, true)?;
+    let sets = recorder.split_sets(&mut touched)?;
+    recorder.run(touched, &sets, &mut clock)?;
     clock.save(transaction)
 }
 
@@ -119,7 +151,9 @@ pub(crate) fn differences(
     recorder.compare(touched)?;
     // Entities that the synced values show but the library lacks.
     let mut statement = transaction.prepare(
-        "SELECT kind, key FROM sync_value WHERE field = 'deleted' AND value = 'false'",
+        "SELECT entity.kind, entity.key FROM sync_value value
+         JOIN sync_identity entity ON entity.entity = value.entity
+         WHERE value.field = 'deleted' AND value.target = 0 AND value.value = 'false'",
     )?;
     let alive = statement
         .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
@@ -174,47 +208,55 @@ fn touched(
         }
     }
     transaction.execute("DELETE FROM temp.sync_touched", [])?;
-    let mut roots = RoaringBitmap::new();
-    let mut partitions = |before: Option<&SharedBitmap>, after: Option<&SharedBitmap>| {
-        match (before, after) {
-            (Some(before), Some(after)) if before.allocation_id() == after.allocation_id() => {}
-            (before, after) => {
-                let empty = RoaringBitmap::new();
-                let before: &RoaringBitmap = before.map_or(&empty, |value| value);
-                let after: &RoaringBitmap = after.map_or(&empty, |value| value);
-                roots |= before ^ after;
+    let mut change = |membership, before: Option<&SharedBitmap>, after: Option<&SharedBitmap>| {
+        if let (Some(before), Some(after)) = (before, after) {
+            if before.allocation_id() == after.allocation_id() {
+                return;
             }
+        }
+        let empty = RoaringBitmap::new();
+        let before: &RoaringBitmap = before.map_or(&empty, |value| value);
+        let after: &RoaringBitmap = after.map_or(&empty, |value| value);
+        if before != after {
+            touched.changes.push(Change { membership, added: after - before, removed: before - after });
         }
     };
     if !Arc::ptr_eq(&before.lifecycle, &after.lifecycle) {
         for (key, value) in after.lifecycle.iter() {
-            partitions(before.lifecycle.get(key), Some(value));
+            change(Membership::Lifecycle(*key), before.lifecycle.get(key), Some(value));
         }
     }
     if !Arc::ptr_eq(&before.ratings, &after.ratings) {
         for (key, value) in after.ratings.iter() {
-            partitions(before.ratings.get(key), Some(value));
+            change(Membership::Rating(*key), before.ratings.get(key), Some(value));
         }
     }
     if !Arc::ptr_eq(&before.tags, &after.tags) {
         for (key, value) in after.tags.iter() {
-            partitions(before.tags.get(key), Some(value));
+            change(Membership::Tag(*key), before.tags.get(key), Some(value));
         }
         for (key, value) in before.tags.iter() {
             if !after.tags.contains_key(key) {
-                partitions(Some(value), None);
+                change(Membership::Tag(*key), Some(value), None);
             }
         }
     }
-    touched.ids.extend(roots.iter());
     if !Arc::ptr_eq(&before.folder_orders, &after.folder_orders) {
         for (folder, order) in after.folder_orders.iter() {
             let previous = before.folder_orders.get(folder);
             if previous.is_none_or(|previous| !Arc::ptr_eq(previous, order)) {
                 touched.folder_lists.insert(*folder, false);
-                let old = previous.map(|order| order.iter().map(|root| root.0).collect::<RoaringBitmap>());
+                let old = previous
+                    .map(|order| order.iter().map(|root| root.0).collect::<RoaringBitmap>())
+                    .unwrap_or_default();
                 let new = order.iter().map(|root| root.0).collect::<RoaringBitmap>();
-                touched.ids.extend((&old.unwrap_or_default() ^ &new).iter());
+                if old != new {
+                    touched.changes.push(Change {
+                        membership: Membership::Folder(*folder),
+                        added: &new - &old,
+                        removed: &old - &new,
+                    });
+                }
             }
         }
         for (folder, order) in before.folder_orders.iter() {
@@ -277,6 +319,10 @@ struct Recorder<'a> {
     /// Whether the positions of every list are already in the synced
     /// values, as when sync is turned on; a full state then leaves them out.
     written_positions: bool,
+    /// The clock before the first record of this write.
+    written_after: Option<(i64, i64)>,
+    /// The tags that the last records written made visible.
+    appeared_tags: BTreeSet<String>,
 }
 
 impl<'a> Recorder<'a> {
@@ -294,6 +340,8 @@ impl<'a> Recorder<'a> {
             records: Records::new(),
             positions: Records::new(),
             written_positions: false,
+            written_after: None,
+            appeared_tags: BTreeSet::new(),
         })
     }
 
@@ -301,11 +349,15 @@ impl<'a> Recorder<'a> {
         self.records.insert((kind, key.to_owned(), field.to_owned()), value);
     }
 
-    fn run(&mut self, touched: Touched, clock: &mut Clock, outbox: bool) -> Result<()> {
+    /// Compares one by one what needs it, records `sets`, writes everything
+    /// together and runs the second comparison, which sees all of it.
+    fn run(&mut self, touched: Touched, sets: &[SetRecord], clock: &mut Clock) -> Result<()> {
         let entities = self.compare(touched)?;
         self.update_identities(&entities)?;
-        for _ in 0..SECOND_PASSES {
-            if self.records.is_empty() {
+        self.record_sets(sets)?;
+        self.written_after = Some(clock.position());
+        for pass in 0..SECOND_PASSES {
+            if pass > 0 && self.records.is_empty() {
                 break;
             }
             let records = std::mem::take(&mut self.records);
@@ -313,7 +365,7 @@ impl<'a> Recorder<'a> {
             let moved = records
                 .keys()
                 .any(|(kind, _, field)| *kind == SyncKind::Folder && matches!(field.as_str(), "place" | "deleted"));
-            let changed = self.write(records, clock, outbox)?;
+            let changed = self.write(records, clock, true)?;
             if changed.is_empty() && !moved {
                 break;
             }
@@ -479,27 +531,162 @@ impl<'a> Recorder<'a> {
         Ok(entities)
     }
 
+    /// Decides which roots of the membership changes are recorded as a set:
+    /// those that the write changed only through memberships. The others are
+    /// compared one by one, and so are the roots of a tag that was renamed or
+    /// that another key forwards to, because what the synced values show for
+    /// those needs the rules of projection. Returns the fields to record for
+    /// the set.
+    fn split_sets(&mut self, touched: &mut Touched) -> Result<Vec<SetRecord>> {
+        let ids = touched.ids.iter().copied().collect::<RoaringBitmap>();
+        let mut single = RoaringBitmap::new();
+        let mut sets = Vec::new();
+        for change in std::mem::take(&mut touched.changes) {
+            let set = |roots, field, target, value: String, default| SetRecord {
+                roots,
+                field,
+                target,
+                value,
+                default,
+                compare: true,
+            };
+            match change.membership {
+                Membership::Lifecycle(lifecycle) => sets.push(set(
+                    change.added,
+                    "lifecycle",
+                    0,
+                    json!(lifecycle_name(lifecycle)).to_string(),
+                    "\"inbox\"",
+                )),
+                Membership::Rating(rating) => {
+                    sets.push(set(change.added, "rating", 0, rating.bitmap_key().to_string(), "0"));
+                }
+                Membership::Tag(tag) => match self.plain_tag(tag)? {
+                    Some((target, shown)) => {
+                        // A tag that the synced values do not show is not
+                        // shown under its own name on any root, so every
+                        // root that gets it records it.
+                        sets.push(SetRecord { compare: shown, ..set(change.added, "tag", target, "true".into(), "false") });
+                        if shown {
+                            sets.push(set(change.removed, "tag", target, "false".into(), "false"));
+                        }
+                    }
+                    None => {
+                        single |= &change.added;
+                        single |= &change.removed;
+                    }
+                },
+                // A root added to a folder gets its position from the
+                // comparison of the folder's list.
+                Membership::Folder(folder) => {
+                    if let Some(target) = self.shown_folder(folder)? {
+                        sets.push(set(change.removed, "folder", target, "null".into(), "null"));
+                    }
+                }
+            }
+        }
+        single -= &ids;
+        for set in &mut sets {
+            set.roots -= &ids;
+            set.roots -= &single;
+        }
+        touched.ids.extend(single.iter());
+        Ok(sets)
+    }
+
+    /// The entity of a tag whose roots can be recorded as a set, and whether
+    /// the synced values show it. They can when no other key forwards to the
+    /// tag and the tag kept its name: a root then shows the tag exactly when
+    /// the synced values show the tag and the root's stored `tag:` value is
+    /// `true`.
+    fn plain_tag(&mut self, tag: TagId) -> Result<Option<(i64, bool)>> {
+        let known = self.identity(SyncKind::Tag, tag.0)?;
+        let key = match (&known, self.local.key(SyncKind::Tag, tag.0)?) {
+            (Some((_, old)), Some(now)) if *old != now => return Ok(None),
+            (Some((_, old)), _) => old.clone(),
+            (None, Some(now)) => now,
+            (None, None) => return Ok(None),
+        };
+        let target = match known {
+            Some((entity, _)) => entity,
+            None => super::entity(self.transaction, SyncKind::Tag, &key)?,
+        };
+        let forwarded = self
+            .transaction
+            .prepare_cached(
+                "SELECT EXISTS(SELECT 1 FROM sync_value WHERE reference = ?1 AND field = 'renamed_to')",
+            )?
+            .query_row([target], |row| row.get::<_, bool>(0))?;
+        if forwarded {
+            return Ok(None);
+        }
+        Ok(Some((target, self.synced.visible(SyncKind::Tag, &key)?)))
+    }
+
+    /// The entity of a folder that the library still has and the synced
+    /// values show.
+    fn shown_folder(&mut self, folder: FolderId) -> Result<Option<i64>> {
+        if !self.local.snapshot.folder_orders.contains_key(&folder) {
+            return Ok(None);
+        }
+        let Some((entity, key)) = self.identity(SyncKind::Folder, folder.0)? else { return Ok(None) };
+        Ok(self.synced.visible(SyncKind::Folder, &key)?.then_some(entity))
+    }
+
+    fn identity(&self, kind: SyncKind, local_id: u32) -> Result<Option<(i64, String)>> {
+        Ok(self
+            .transaction
+            .prepare_cached("SELECT entity, key FROM sync_identity WHERE local_id = ?1 AND kind = ?2")?
+            .query_row(rusqlite::params![local_id, kind.as_str()], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()?)
+    }
+
+    /// Records the fields of roots as sets: one statement for each field
+    /// reads the stored values of the whole set and adds a record to
+    /// `temp.sync_new` for each root whose shown value differs. A root that
+    /// is in a set existed before the write, so the synced values know it.
+    /// The records are written with the next records that `write` writes.
+    fn record_sets(&mut self, sets: &[SetRecord]) -> Result<()> {
+        let mut statement = self.transaction.prepare_cached(
+            "INSERT INTO temp.sync_new(entity, field, target, value, reference)
+             SELECT identity.entity, ?2, ?3, ?4, NULL
+             FROM json_each(?1) changed CROSS JOIN sync_identity identity
+                 ON identity.local_id = changed.value
+             WHERE NOT ?6 OR COALESCE(NULLIF((SELECT stored.value FROM sync_value stored
+                                     WHERE stored.entity = identity.entity AND stored.field = ?2
+                                       AND stored.target = ?3), 'null'), ?5) <> ?4",
+        )?;
+        // A tag added to a root is recorded after the tags removed from it,
+        // so that when a merge forwards the removed tag to the added one,
+        // the later record, which decides, is the added tag.
+        let (added, others): (Vec<_>, Vec<_>) = sets.iter().partition(|set| set.value == "true");
+        for set in others.into_iter().chain(added).filter(|set| !set.roots.is_empty()) {
+            statement.execute(rusqlite::params![
+                ids_json(&set.roots)?,
+                set.field,
+                set.target,
+                set.value,
+                set.default,
+                set.compare
+            ])?;
+        }
+        Ok(())
+    }
+
     /// Stores the key of each entity whose key the synced values now know.
     fn update_identities(&self, entities: &[Entity]) -> Result<()> {
         for entity in entities {
             if entity.old == entity.new {
                 continue;
             }
-            match &entity.new {
-                Some(key) => {
-                    self.transaction.execute(
-                        "DELETE FROM sync_identity WHERE kind = ?1 AND key = ?2 AND local_id <> ?3",
-                        rusqlite::params![entity.kind.as_str(), key, entity.local_id],
-                    )?;
-                    self.transaction.execute(
-                        "INSERT OR REPLACE INTO sync_identity(local_id, kind, key) VALUES (?1, ?2, ?3)",
-                        rusqlite::params![entity.local_id, entity.kind.as_str(), key],
-                    )?;
-                }
-                None => {
-                    self.transaction
-                        .execute("DELETE FROM sync_identity WHERE local_id = ?1", [entity.local_id])?;
-                }
+            self.transaction
+                .execute("UPDATE sync_identity SET local_id = NULL WHERE local_id = ?1", [entity.local_id])?;
+            if let Some(key) = &entity.new {
+                self.transaction.execute(
+                    "INSERT INTO sync_identity(kind, key, local_id) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(kind, key) DO UPDATE SET local_id = excluded.local_id",
+                    rusqlite::params![entity.kind.as_str(), key, entity.local_id],
+                )?;
             }
         }
         Ok(())
@@ -869,8 +1056,15 @@ impl<'a> Recorder<'a> {
         super::write_local(self.transaction, clock, rows, outbox)?;
         self.synced.forget();
         let mut changed = Vec::new();
+        self.appeared_tags.clear();
         for ((kind, key), before) in watched.into_iter().zip(before) {
-            if self.synced.state(kind, &key)? != before {
+            let after = self.synced.state(kind, &key)?;
+            if after != before {
+                // A tag that forwarded to another before showed its values
+                // as that tag, so it does not count as appearing.
+                if kind == SyncKind::Tag && after.0 && !before.0 && before.1.is_none() {
+                    self.appeared_tags.insert(key.clone());
+                }
                 changed.push((kind, key));
             }
         }
@@ -895,7 +1089,14 @@ impl<'a> Recorder<'a> {
         let mut keys = changed;
         let mut seen = keys.iter().cloned().collect::<BTreeSet<_>>();
         while let Some((kind, key)) = keys.pop() {
-            for (referrer_kind, referrer, field) in self.synced.referrers(kind, &key)? {
+            // A tag that appears was shown on no entity before this write,
+            // so a `tag:` value that this write recorded for it holds what
+            // the library has, and as the latest record it decides what is
+            // shown. Its entity is not compared again for it.
+            let until = (kind == SyncKind::Tag && self.appeared_tags.contains(&key))
+                .then_some(self.written_after)
+                .flatten();
+            for (referrer_kind, referrer, field) in self.synced.referrers(kind, &key, until)? {
                 // A tag renamed into this one forwards to it, so what refers
                 // to that tag is compared too.
                 if referrer_kind == SyncKind::Tag && field == "renamed_to" {
@@ -981,6 +1182,10 @@ fn fallback(members: &[Member]) -> Vec<(usize, String)> {
         }
     }
     assigned
+}
+
+fn ids_json(ids: &RoaringBitmap) -> Result<String> {
+    Ok(serde_json::to_string(&ids.iter().collect::<Vec<_>>())?)
 }
 
 fn folders_with_auto_tag(connection: &Connection, tag_id: u32) -> Result<Vec<u32>> {

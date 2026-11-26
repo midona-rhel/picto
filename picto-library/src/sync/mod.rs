@@ -100,7 +100,7 @@ pub(crate) fn recording(connection: &Connection) -> Result<bool> {
 /// names the local id of the entity it changed; `record` reads the ids and
 /// clears the table in the same transaction. A merge of one tag into another
 /// names both tags in `sync_tag_merge`, so that the old name forwards to the
-/// new one. The table and triggers exist only while sync is on, so they add
+/// new one. `sync_new` holds the records that wait to be written. The table and triggers exist only while sync is on, so they add
 /// no work to a write while it is off.
 const TRIGGERS: &[(&str, &str, &str)] = &[
     ("item_insert", "AFTER INSERT ON main.library_item", "NEW.local_id"),
@@ -131,7 +131,11 @@ pub(crate) fn install_triggers(connection: &Connection) -> Result<()> {
     };
     let mut sql = String::from(
         "CREATE TEMP TABLE IF NOT EXISTS sync_touched (local_id INTEGER PRIMARY KEY);
-         CREATE TEMP TABLE IF NOT EXISTS sync_tag_merge (source TEXT PRIMARY KEY, destination TEXT NOT NULL);",
+         CREATE TEMP TABLE IF NOT EXISTS sync_tag_merge (source TEXT PRIMARY KEY, destination TEXT NOT NULL);
+         CREATE TEMP TABLE IF NOT EXISTS sync_new (
+             entity INTEGER NOT NULL, field TEXT NOT NULL, target INTEGER NOT NULL,
+             value TEXT NOT NULL, reference INTEGER
+         );",
     );
     for (name, event, id) in TRIGGERS {
         sql.push_str(&format!(
@@ -170,7 +174,9 @@ pub(crate) fn remove_triggers(connection: &Connection) -> Result<()> {
     {
         sql.push_str(&format!("DROP TRIGGER IF EXISTS temp.sync_{name};"));
     }
-    sql.push_str("DROP TABLE IF EXISTS temp.sync_touched; DROP TABLE IF EXISTS temp.sync_tag_merge;");
+    for table in ["sync_touched", "sync_tag_merge", "sync_new"] {
+        sql.push_str(&format!("DROP TABLE IF EXISTS temp.{table};"));
+    }
     connection.execute_batch(&sql)?;
     Ok(())
 }
@@ -205,27 +211,29 @@ pub(crate) fn note_tag_merge(connection: &Connection, source: &str, destination:
 /// at its end. Each timestamp is above every timestamp the library has seen
 /// and above the wall clock.
 pub(crate) struct Clock {
-    device: String,
+    /// The number that stands for this library's device id in `sync_value`.
+    device_number: i64,
     wall_ms: i64,
     counter: i64,
 }
 
 impl Clock {
     pub(crate) fn load(connection: &Connection) -> Result<Self> {
-        Ok(connection.query_row(
+        let (device, wall_ms, counter) = connection.query_row(
             "SELECT device_id, clock_ms, clock_counter FROM sync_state",
             [],
-            |row| {
-                Ok(Self {
-                    device: row.get(0)?,
-                    wall_ms: row.get(1)?,
-                    counter: row.get(2)?,
-                })
-            },
-        )?)
+            |row| Ok((row.get::<_, String>(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        Ok(Self {
+            device_number: device_number(connection, &device)?,
+            wall_ms,
+            counter,
+        })
     }
 
-    pub(crate) fn tick(&mut self) -> SyncTimestamp {
+    /// Takes `count` timestamps in a row and returns the wall time and the
+    /// counter of the first; the others have the counters after it.
+    fn reserve(&mut self, count: i64) -> (i64, i64) {
         let now = now_ms();
         if now > self.wall_ms {
             self.wall_ms = now;
@@ -233,11 +241,14 @@ impl Clock {
         } else {
             self.counter += 1;
         }
-        SyncTimestamp {
-            wall_ms: self.wall_ms,
-            counter: self.counter,
-            device: self.device.clone(),
-        }
+        let first = self.counter;
+        self.counter += count - 1;
+        (self.wall_ms, first)
+    }
+
+    /// The wall time and counter of the latest timestamp taken or seen.
+    pub(crate) fn position(&self) -> (i64, i64) {
+        (self.wall_ms, self.counter)
     }
 
     /// Moves the clock above a timestamp read from another computer.
@@ -263,81 +274,130 @@ fn now_ms() -> i64 {
         .map_or(0, |duration| duration.as_millis() as i64)
 }
 
-/// The entity that a field's value refers to, as `<kind>:<key>`, for the
-/// `reference` column of `sync_value`.
-fn reference(kind: SyncKind, field: &str, value: &Value) -> Option<String> {
-    if let Some(tag) = field.strip_prefix("tag:") {
-        return Some(format!("tag:{tag}"));
-    }
-    if let Some(folder) = field.strip_prefix("folder:") {
-        return Some(format!("folder:{folder}"));
-    }
-    let first = || value.get(0).and_then(Value::as_str);
-    match (kind, field) {
-        (SyncKind::Item, "collection") => first().map(|key| format!("collection:{key}")),
-        (SyncKind::Folder, "place") => first().map(|key| format!("folder:{key}")),
-        (SyncKind::Tag, "renamed_to") => value.as_str().map(|key| format!("tag:{key}")),
-        (SyncKind::Collection, "cover") => value.as_str().map(|key| format!("item:{key}")),
-        (SyncKind::Folder, "cover") => {
-            let kind = first()?;
-            let key = value.get(1).and_then(Value::as_str)?;
-            Some(format!("{kind}:{key}"))
-        }
+/// The number that stands for a device id in `sync_value`, added when new.
+fn device_number(connection: &Connection, device: &str) -> Result<i64> {
+    connection
+        .prepare_cached("INSERT OR IGNORE INTO sync_device(device_id) VALUES (?1)")?
+        .execute([device])?;
+    Ok(connection
+        .prepare_cached("SELECT device FROM sync_device WHERE device_id = ?1")?
+        .query_row([device], |row| row.get(0))?)
+}
+
+/// The number that stands for an entity in `sync_value`: its row in
+/// `sync_identity`, added when the key is new.
+pub(crate) fn entity(connection: &Connection, kind: SyncKind, key: &str) -> Result<i64> {
+    connection
+        .prepare_cached("INSERT OR IGNORE INTO sync_identity(kind, key) VALUES (?1, ?2)")?
+        .execute([kind.as_str(), key])?;
+    Ok(connection
+        .prepare_cached("SELECT entity FROM sync_identity WHERE kind = ?1 AND key = ?2")?
+        .query_row([kind.as_str(), key], |row| row.get(0))?)
+}
+
+/// One record as `sync_value` stores it. A field `tag:<name>` or
+/// `folder:<uuid>` is stored as `tag` or `folder` with the tag or folder as
+/// its target; every other field has the target 0. `reference` is the
+/// entity that the value of a field without a target names.
+struct StoredRow {
+    entity: i64,
+    field: String,
+    target: i64,
+    value: String,
+    reference: Option<i64>,
+}
+
+fn stored_row(connection: &Connection, kind: SyncKind, key: &str, field: &str, value: &Value) -> Result<StoredRow> {
+    let first = value.get(0).and_then(Value::as_str);
+    let (name, target) = if let Some(tag) = field.strip_prefix("tag:") {
+        ("tag", Some((SyncKind::Tag, tag)))
+    } else if let Some(folder) = field.strip_prefix("folder:") {
+        ("folder", Some((SyncKind::Folder, folder)))
+    } else {
+        (field, None)
+    };
+    let referred = match (kind, field) {
+        (_, _) if target.is_some() => None,
+        (SyncKind::Item, "collection") => first.map(|key| (SyncKind::Collection, key)),
+        (SyncKind::Folder, "place") => first.map(|key| (SyncKind::Folder, key)),
+        (SyncKind::Tag, "renamed_to") => value.as_str().map(|key| (SyncKind::Tag, key)),
+        (SyncKind::Collection, "cover") => value.as_str().map(|key| (SyncKind::Item, key)),
+        (SyncKind::Folder, "cover") => first
+            .and_then(SyncKind::parse)
+            .zip(value.get(1).and_then(Value::as_str)),
         _ => None,
-    }
+    };
+    let target = match target {
+        Some((kind, key)) => entity(connection, kind, key)?,
+        None => 0,
+    };
+    let reference = match referred {
+        Some((kind, key)) => Some(entity(connection, kind, key)?),
+        None => None,
+    };
+    Ok(StoredRow {
+        entity: entity(connection, kind, key)?,
+        field: name.to_owned(),
+        target,
+        value: serde_json::to_string(value)?,
+        reference,
+    })
 }
 
 /// Writes change records that this library made, each with a new timestamp:
 /// into the synced values, and into the outbox when `outbox` is true.
-/// `records` holds (kind, key, field, value).
+/// `records` holds (kind, key, field, value). Records already waiting in
+/// `temp.sync_new` are written first.
 pub(crate) fn write_local(
     transaction: &Transaction<'_>,
     clock: &mut Clock,
     records: impl IntoIterator<Item = (SyncKind, String, String, Value)>,
     outbox: bool,
 ) -> Result<usize> {
-    let mut value_statement = transaction.prepare_cached(
-        "INSERT INTO sync_value(kind, key, field, value, clock_ms, clock_counter, device_id, reference)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-         ON CONFLICT(kind, key, field) DO UPDATE SET
-             value = excluded.value, clock_ms = excluded.clock_ms,
-             clock_counter = excluded.clock_counter, device_id = excluded.device_id,
-             reference = excluded.reference",
+    let mut stage = transaction.prepare_cached(
+        "INSERT INTO temp.sync_new(entity, field, target, value, reference) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
-    let mut outbox_statement = transaction.prepare_cached(
-        "INSERT OR REPLACE INTO sync_outbox(kind, key, field, value, clock_ms, clock_counter, device_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-    )?;
-    let mut count = 0;
     for (kind, key, field, value) in records {
-        let stamp = clock.tick();
-        let text = serde_json::to_string(&value)?;
-        value_statement.execute(rusqlite::params![
-            kind.as_str(),
-            key,
-            field,
-            text,
-            stamp.wall_ms,
-            stamp.counter,
-            stamp.device,
-            reference(kind, &field, &value),
-        ])?;
-        if !outbox {
-            count += 1;
-            continue;
-        }
-        outbox_statement.execute(rusqlite::params![
-            kind.as_str(),
-            key,
-            field,
-            text,
-            stamp.wall_ms,
-            stamp.counter,
-            stamp.device
-        ])?;
-        count += 1;
+        let row = stored_row(transaction, kind, &key, &field, &value)?;
+        stage.execute(rusqlite::params![row.entity, row.field, row.target, row.value, row.reference])?;
     }
-    Ok(count)
+    drop(stage);
+    flush(transaction, clock, outbox)
+}
+
+/// Writes the records waiting in `temp.sync_new` into the synced values, and
+/// into the outbox when `outbox` is true, each with its own timestamp in the
+/// order they were added, and empties the table. Returns how many there
+/// were.
+pub(crate) fn flush(transaction: &Transaction<'_>, clock: &mut Clock, outbox: bool) -> Result<usize> {
+    let count = transaction.query_row("SELECT COUNT(*) FROM temp.sync_new", [], |row| row.get::<_, i64>(0))?;
+    if count == 0 {
+        return Ok(0);
+    }
+    // The rowids of the waiting records run from 1, because the table is
+    // emptied after every write.
+    let (wall_ms, first) = clock.reserve(count);
+    transaction
+        .prepare_cached(
+            "INSERT INTO sync_value(entity, field, target, value, clock_ms, clock_counter, device, reference)
+             SELECT entity, field, target, value, ?1, ?2 + rowid - 1, ?3, reference
+             FROM temp.sync_new WHERE true
+             ON CONFLICT(field, target, entity) DO UPDATE SET
+                 value = excluded.value, clock_ms = excluded.clock_ms,
+                 clock_counter = excluded.clock_counter, device = excluded.device,
+                 reference = excluded.reference",
+        )?
+        .execute(rusqlite::params![wall_ms, first, clock.device_number])?;
+    if outbox {
+        transaction
+            .prepare_cached(
+                "INSERT OR REPLACE INTO sync_outbox(entity, field, target, value, clock_ms, clock_counter)
+                 SELECT entity, field, target, value, ?1, ?2 + rowid - 1 FROM temp.sync_new",
+            )?
+            .execute(rusqlite::params![wall_ms, first])?;
+    }
+    transaction.execute("DELETE FROM temp.sync_new", [])?;
+    Ok(count as usize)
 }
 
 /// Merges records from another computer into the synced values. A record
@@ -349,27 +409,39 @@ pub(crate) fn merge<'a>(
     records: &'a [SyncRecord],
 ) -> Result<Vec<&'a SyncRecord>> {
     let mut statement = transaction.prepare_cached(
-        "INSERT INTO sync_value(kind, key, field, value, clock_ms, clock_counter, device_id, reference)
+        "INSERT INTO sync_value(entity, field, target, value, clock_ms, clock_counter, device, reference)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-         ON CONFLICT(kind, key, field) DO UPDATE SET
+         ON CONFLICT(field, target, entity) DO UPDATE SET
              value = excluded.value, clock_ms = excluded.clock_ms,
-             clock_counter = excluded.clock_counter, device_id = excluded.device_id,
+             clock_counter = excluded.clock_counter, device = excluded.device,
              reference = excluded.reference
-         WHERE (excluded.clock_ms, excluded.clock_counter, excluded.device_id)
-             > (sync_value.clock_ms, sync_value.clock_counter, sync_value.device_id)",
+         WHERE (excluded.clock_ms, excluded.clock_counter,
+                (SELECT device_id FROM sync_device WHERE device = excluded.device))
+             > (sync_value.clock_ms, sync_value.clock_counter,
+                (SELECT device_id FROM sync_device WHERE device = sync_value.device))",
     )?;
+    let mut devices = std::collections::HashMap::new();
     let mut merged = Vec::new();
     for record in records {
         clock.observe(&record.timestamp);
+        let device = match devices.get(&record.timestamp.device) {
+            Some(device) => *device,
+            None => {
+                let device = device_number(transaction, &record.timestamp.device)?;
+                devices.insert(record.timestamp.device.clone(), device);
+                device
+            }
+        };
+        let row = stored_row(transaction, record.kind, &record.key, &record.field, &record.value)?;
         let changed = statement.execute(rusqlite::params![
-            record.kind.as_str(),
-            record.key,
-            record.field,
-            serde_json::to_string(&record.value)?,
+            row.entity,
+            row.field,
+            row.target,
+            row.value,
             record.timestamp.wall_ms,
             record.timestamp.counter,
-            record.timestamp.device,
-            reference(record.kind, &record.field, &record.value),
+            device,
+            row.reference,
         ])?;
         if changed > 0 {
             merged.push(record);
@@ -381,10 +453,58 @@ pub(crate) fn merge<'a>(
 /// Reads the outbox: the change records this library made that no change
 /// file holds yet.
 pub(crate) fn outbox(connection: &Connection) -> Result<Vec<SyncRecord>> {
-    let mut statement = connection.prepare(
-        "SELECT kind, key, field, value, clock_ms, clock_counter, device_id
-         FROM sync_outbox ORDER BY clock_ms, clock_counter",
+    read_records(
+        connection,
+        "SELECT entity.kind, entity.key,
+                CASE WHEN outbox.target = 0 THEN outbox.field ELSE outbox.field || ':' || target.key END,
+                outbox.value, outbox.clock_ms, outbox.clock_counter, state.device_id
+         FROM sync_outbox outbox
+         JOIN sync_identity entity ON entity.entity = outbox.entity
+         LEFT JOIN sync_identity target ON target.entity = outbox.target
+         CROSS JOIN sync_state state
+         ORDER BY outbox.clock_ms, outbox.clock_counter",
+    )
+}
+
+/// Removes `records` from the outbox once a change file holds them. A
+/// record of the same field that the library made since stays.
+pub(crate) fn remove_from_outbox(connection: &Connection, records: &[SyncRecord]) -> Result<()> {
+    let mut statement = connection.prepare_cached(
+        "DELETE FROM sync_outbox
+         WHERE entity = ?1 AND field = ?2 AND target = ?3 AND clock_ms = ?4 AND clock_counter = ?5",
     )?;
+    for record in records {
+        let row = stored_row(connection, record.kind, &record.key, &record.field, &record.value)?;
+        statement.execute(rusqlite::params![
+            row.entity,
+            row.field,
+            row.target,
+            record.timestamp.wall_ms,
+            record.timestamp.counter
+        ])?;
+    }
+    Ok(())
+}
+
+/// Every synced value as a change record.
+#[cfg(test)]
+pub(crate) fn all_records(connection: &Connection) -> Result<Vec<SyncRecord>> {
+    read_records(
+        connection,
+        "SELECT entity.kind, entity.key,
+                CASE WHEN value.target = 0 THEN value.field ELSE value.field || ':' || target.key END,
+                value.value, value.clock_ms, value.clock_counter, device.device_id
+         FROM sync_value value
+         JOIN sync_identity entity ON entity.entity = value.entity
+         LEFT JOIN sync_identity target ON target.entity = value.target
+         JOIN sync_device device ON device.device = value.device",
+    )
+}
+
+/// Reads change records with `sql`, whose columns are kind, key, field,
+/// value, wall time, counter and device id.
+fn read_records(connection: &Connection, sql: &str) -> Result<Vec<SyncRecord>> {
+    let mut statement = connection.prepare(sql)?;
     let rows = statement.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,

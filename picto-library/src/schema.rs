@@ -1129,7 +1129,7 @@ mod tests {
         connection
             .execute_batch(&format!(
                 "PRAGMA foreign_keys = OFF;
-                 DROP TABLE sync_state; DROP TABLE sync_identity;
+                 DROP TABLE sync_state; DROP TABLE sync_identity; DROP TABLE sync_device;
                  DROP TABLE sync_value; DROP TABLE sync_outbox;
                  {unique};
                  DROP TABLE folder_definition;
@@ -1155,9 +1155,9 @@ mod tests {
             count(
                 &connection,
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'
-                 AND name IN ('sync_state', 'sync_identity', 'sync_value', 'sync_outbox')"
+                 AND name IN ('sync_state', 'sync_identity', 'sync_device', 'sync_value', 'sync_outbox')"
             ),
-            4
+            5
         );
         assert_eq!(count(&connection, "SELECT COUNT(*) FROM folder_definition WHERE parent_id = 1"), 1);
         connection

@@ -215,6 +215,8 @@ fn main() -> R<()> {
         library.start_sync_recording()?;
         println!("ROW|start_sync_recording (records the full state)|{roots} roots|{:.1}|-|1 run", ms(t));
     }
+    library.database().checkpoint_wal()?;
+    println!("SIZE database file after the fixture, sync {}: {} bytes", if sync { "on" } else { "off" }, std::fs::metadata(&path)?.len());
 
     // --- selections ---
     let range_query = |scope: ItemScope, lo: usize, n: usize| SelectionTarget::Query {

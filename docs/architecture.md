@@ -279,9 +279,10 @@ folder by their stable UUID, a tag by its full name and a tag group by its name.
 fields (an item's name, rating, `tag:<name>` and `folder:<uuid>` with a position key, a folder's
 `place`, and so on), and a change to a field is a change record with a hybrid logical clock
 timestamp. `sync_value` keeps, for each field, the record with the latest timestamp; the library is
-what those values show. `sync_outbox` keeps this computer's records until a change file holds them,
-and `sync_identity` remembers the key each local entity had, so that a deleted or renamed entity
-can be recorded under its old key. Nothing is recorded, and no write costs anything extra, until
+what those values show. `sync_identity` gives every key a number, which `sync_value` stores in
+place of the key, and remembers the key each local entity had, so that a deleted or renamed entity
+can be recorded under its old key. `sync_outbox` keeps this computer's records until a change file
+holds them. Nothing is recorded, and a write costs one query more, until
 `Library::start_sync_recording` records the library's full state; `stop_sync_recording` clears the
 sync tables.
 
@@ -289,9 +290,12 @@ Recording happens in `PublishedDelta::settle`, in the transaction of the write. 
 triggers on the writer connection note the local ids of the items, collections, tags, tag groups
 and folders whose rows changed; the differences between the projection before and after the write
 name the roots whose lifecycle, rating or tags changed and the folder and collection lists whose
-order changed. Each of those entities is compared with what the synced values show for it, and
-every field that differs is recorded. A renamed or merged tag also records `renamed_to`, so that a
-tag that another computer adds under the old name ends up under the new one. Lists keep the
+order changed. A root whose only change is that it entered or left a lifecycle, rating, tag or
+folder is recorded with the others in one statement for each of those fields, which compares the
+stored values of the whole set in SQL. Every other entity is compared with what the synced values
+show for it, and every field that differs is recorded. A renamed or merged tag also records
+`renamed_to`, so that a tag that another computer adds under the old name ends up under the new
+one. Lists keep the
 position keys of the longest run of members that is already in order; the others get keys between
 their neighbours. When a record makes an entity appear or disappear, the entities that refer to it
 are compared a second time.
