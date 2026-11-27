@@ -107,7 +107,7 @@ impl Library {
         let Some(connection) = guard.as_mut() else {
             return Err(LibraryError::InvalidState("sync is off".into()));
         };
-        self.record_pass(connection)?;
+        self.record_pass(connection, None)?;
         let transaction = connection.transaction()?;
         crate::sync::merge_remote(&transaction, records)?;
         transaction.commit()?;
@@ -121,25 +121,30 @@ impl Library {
     /// the recorder runs again first and records the change, so that the
     /// synced values that are written hold it.
     fn catch_up(&self, connection: &mut Connection) -> Result<()> {
+        let mut projected = None;
         loop {
-            self.record_pass(connection)?;
+            self.record_pass(connection, projected)?;
             match self.project_next(connection)? {
                 None => return Ok(()),
-                Some((chunk, written)) => crate::sync::finish_projection(connection, &chunk, &written)?,
+                Some((chunk, written, revision)) => {
+                    crate::sync::finish_projection(connection, &chunk, &written)?;
+                    projected = revision;
+                }
             }
         }
     }
 
     /// Writes the next entities of `sync_pending` into the library in one
     /// transaction, when the library has not changed since the recorder's
-    /// last pass. Returns the entities of `sync_pending` it took and all
-    /// entities it wrote in full, nothing of either when the library had
-    /// changed, and `None` when nothing waits.
+    /// last pass. Returns the entities of `sync_pending` it took, all
+    /// entities it wrote in full, and the revision of the write with whether
+    /// it changed the structure of the library; nothing of these when the
+    /// library had changed, and `None` when nothing waits.
     #[allow(clippy::type_complexity)]
     pub(crate) fn project_next(
         &self,
         connection: &Connection,
-    ) -> Result<Option<(Vec<(i64, crate::sync::SyncKind, String, bool)>, BTreeSet<(crate::sync::SyncKind, String)>)>> {
+    ) -> Result<Option<(Vec<(i64, crate::sync::SyncKind, String, bool)>, BTreeSet<(crate::sync::SyncKind, String)>, Option<(u64, bool)>)>> {
         let (chunk, direct) = crate::sync::pending_projection(connection, DIRECT_CHUNK)?;
         if chunk.is_empty() {
             return Ok(None);
@@ -162,20 +167,23 @@ impl Library {
                     crate::sync::project(transaction, revision, &mut next, connection, keys, revived, direct, &protected)?;
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(revision, projected.resources, projected.roots.iter().map(RootId));
-                Ok(Some((projected.written, PublishedDelta { snapshot: next, receipt, history: None })))
+                Ok(Some(((projected.written, projected.structure), PublishedDelta { snapshot: next, receipt, history: None })))
             },
             move |_, delta| publish_delta(&projections, &publication, delta),
         )?;
         Ok(Some(match written {
-            Some((written, _, _)) => (chunk, written),
-            None => (Vec::new(), BTreeSet::new()),
+            Some(((written, structure), revision, _)) => (chunk, written, Some((revision, structure))),
+            None => (Vec::new(), BTreeSet::new(), None),
         }))
     }
 
-    /// One pass of the recorder.
-    fn record_pass(&self, connection: &mut Connection) -> Result<()> {
+    /// One pass of the recorder. `projected` is the revision of the last
+    /// write of synced values into the library, with whether it changed the
+    /// structure of the library, when that write came right after the
+    /// previous pass.
+    fn record_pass(&self, connection: &mut Connection, projected: Option<(u64, bool)>) -> Result<()> {
         self.consistent(connection, |transaction, snapshot, revision| {
-            crate::sync::record(transaction, snapshot, revision)
+            crate::sync::record(transaction, snapshot, revision, projected)
         })
     }
 
@@ -224,13 +232,13 @@ impl Library {
     pub(crate) fn apply_sync_records_partly(&self, records: &[SyncRecord], writes: usize, crash: bool) -> Result<()> {
         let mut guard = self.sync.lock(false)?;
         let connection = guard.as_mut().expect("sync is on");
-        self.record_pass(connection)?;
+        self.record_pass(connection, None)?;
         let transaction = connection.transaction()?;
         crate::sync::merge_remote(&transaction, records)?;
         transaction.commit()?;
         for write in 1..=writes {
-            self.record_pass(connection)?;
-            let Some((chunk, written)) = self.project_next(connection)? else { break };
+            self.record_pass(connection, None)?;
+            let Some((chunk, written, _)) = self.project_next(connection)? else { break };
             if !(crash && write == writes) {
                 crate::sync::finish_projection(connection, &chunk, &written)?;
             }

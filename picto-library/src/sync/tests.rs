@@ -735,3 +735,34 @@ fn a_change_made_while_records_from_another_computer_are_written_is_kept() {
     }
     assert_same(&first, &second, "after the rating");
 }
+
+/// A folder that never had members and one whose members were all removed
+/// are in the folder maps of a library that was opened again, as they are
+/// in the library before it is closed, and a full comparison after the
+/// library is opened again finds nothing to record.
+#[test]
+fn a_library_with_empty_folders_records_nothing_after_it_is_opened_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("library").join("library.sqlite");
+    let library = open(directory.path(), "library");
+    let (empty, _) = library.create_folder("empty", None).unwrap();
+    let (emptied, _) = library.create_folder("emptied", Some(empty)).unwrap();
+    library.ingest(&prepared(hash(1), Lifecycle::Active, Vec::new(), vec![emptied])).unwrap();
+    library.remove_from_folder(&one(root_of(&library, &hash(1))), emptied).unwrap();
+    assert_recorded(&library, "before the library is opened again");
+    let folder_maps = |library: &Library| {
+        let snapshot = library.projections().snapshot();
+        let members = snapshot.folders.iter().map(|(folder, members)| (*folder, members.len())).collect::<BTreeMap<_, _>>();
+        (snapshot.folder_orders.as_ref().clone(), members)
+    };
+    let before = folder_maps(&library);
+    drop(library);
+    let library = Library::open(&path).unwrap();
+    assert_eq!(folder_maps(&library), before);
+    assert_recorded(&library, "after the library is opened again");
+    let root = one(root_of(&library, &hash(1)));
+    library.add_to_folder(&root, empty).unwrap();
+    library.remove_from_folder(&root, empty).unwrap();
+    library.move_folder(emptied, None).unwrap();
+    assert_recorded(&library, "after the folders are changed");
+}

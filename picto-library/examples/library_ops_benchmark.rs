@@ -405,7 +405,7 @@ fn main() -> R<()> {
     }
     emit_write("permanently_delete 1k (from Trash)", "1000", &mut del_ms, &mut del_recorded);
     if sync {
-        bench_apply(&library, roots, runs, &at)?;
+        bench_apply(&library, roots, runs, &at, &one)?;
         library.database().checkpoint_wal()?;
         print_sizes(&path, sync, "after the writes")?;
     }
@@ -504,7 +504,8 @@ fn main() -> R<()> {
         clause(FilterClause::Width { minimum: Some(800 + i as u64), maximum: None }),
         text(format!("image-0{}", i % 10)),
     ])))?;
-    // What typing feels like: each keystroke of a growing query, end to end.
+    // The time it takes to type a word into the search: one query for each
+    // prefix of three or more characters, added up.
     let mut typed = Vec::new();
     for word in ["image-000", "scene 12", "example.test/post/77"] {
         let t = Instant::now();
@@ -615,9 +616,10 @@ fn main() -> R<()> {
 }
 
 /// Applies change records that another computer made: a rating of one item,
-/// a tag on 1,000 items, and a new item. Each run uses later timestamps, so
-/// that the records replace the stored ones.
-fn bench_apply(library: &Library, roots: usize, runs: usize, at: &dyn Fn(usize) -> usize) -> R<()> {
+/// a tag on 1,000 items, a tag on 1,000 to 200,000 items with and without
+/// writes to `other` at the same time, and a new item. Each run uses later
+/// timestamps, so that the records replace the stored ones.
+fn bench_apply(library: &Library, roots: usize, runs: usize, at: &dyn Fn(usize) -> usize, other: &SelectionTarget) -> R<()> {
     let mut wall_ms = now() + 60_000;
     let mut record = |key: String, field: &str, value: serde_json::Value| {
         wall_ms += 1;
@@ -647,6 +649,57 @@ fn bench_apply(library: &Library, roots: usize, runs: usize, at: &dyn Fn(usize) 
         samples.push(ms(t));
     }
     emit("apply_sync_records tag on 1k items", "1000", &mut samples);
+    // A tag on more items, once for each size, first alone and then with a
+    // thread that adds and removes a tag on one other item every 200 ms. The
+    // longest time that one of those writes takes is how long a write of the
+    // user can wait for a transaction of the apply.
+    for items in [1_000, 10_000, 40_000, 200_000] {
+        for (with_writes, value) in [(false, true), (true, false)] {
+            let records = (0..at(items))
+                .map(|index| record(format!("hash-{}", at(400_000) + index), "tag:vocab:3", serde_json::json!(value)))
+                .collect::<Vec<_>>();
+            let running = std::sync::atomic::AtomicBool::new(with_writes);
+            let applying = std::sync::atomic::AtomicBool::new(true);
+            let (total, longest) = std::thread::scope(|scope| -> R<(f64, f64)> {
+                // The WAL is written into the database every minute, as the
+                // app's checkpoint worker does.
+                scope.spawn(|| {
+                    let mut waited = 0;
+                    while applying.load(std::sync::atomic::Ordering::Relaxed) {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        waited += 100;
+                        if waited >= 60_000 {
+                            waited = 0;
+                            library.database().checkpoint_wal_passive().expect("the checkpoint runs");
+                        }
+                    }
+                });
+                let writes = scope.spawn(|| {
+                    let mut longest = 0.0_f64;
+                    let mut added = false;
+                    while running.load(std::sync::atomic::Ordering::Relaxed) {
+                        added = !added;
+                        let t = Instant::now();
+                        library.apply_tags(other, &["audit:probe".into()], added).expect("the write runs");
+                        longest = longest.max(ms(t));
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                    }
+                    longest
+                });
+                let t = Instant::now();
+                library.apply_sync_records(&records)?;
+                let total = ms(t);
+                running.store(false, std::sync::atomic::Ordering::Relaxed);
+                applying.store(false, std::sync::atomic::Ordering::Relaxed);
+                Ok((total, writes.join().expect("the writes end")))
+            })?;
+            if with_writes {
+                println!("ROW|apply_sync_records tag on {items} items, with a write every 200 ms|{items}|{total:.1}|-|1 run; longest write {longest:.1} ms");
+            } else {
+                println!("ROW|apply_sync_records tag on {items} items|{items}|{total:.1}|-|1 run");
+            }
+        }
+    }
     let mut samples = Vec::new();
     for run in 0..runs * 2 {
         let key = format!("remote-{run}");

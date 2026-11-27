@@ -709,9 +709,10 @@ pub struct ProjectionSnapshot {
     /// The facts the grid draws for every root, so that the grid reads them
     /// without SQLite.
     pub drawing: Arc<crate::browsing::DrawingIndex>,
-    /// Recently viewed roots, most recent first; ties break by descending ID.
+    /// The recently viewed roots, most recent first. Roots viewed at the same
+    /// time are in descending order of id.
     pub recent_views: Arc<RecentViews>,
-    /// Parent of every folder, for folder-tree scopes.
+    /// The parent of every folder, which the folder-tree scopes read.
     pub folder_parents: Arc<HashMap<FolderId, Option<FolderId>>>,
     pub(crate) query_versions: crate::query_dependencies::QueryVersions,
     pub lifecycle: Arc<HashMap<Lifecycle, SharedBitmap>>,
@@ -741,17 +742,20 @@ pub struct ProjectionSnapshot {
     pub modified_at: Arc<NumericIndex>,
     pub notes_present: Arc<RoaringBitmap>,
     pub urls_present: Arc<RoaringBitmap>,
-    /// Each smart folder's own rules evaluated over active roots.
+    /// For each smart folder, the roots of every lifecycle that its own rules
+    /// match.
     pub smart_local_results: Arc<HashMap<u32, SharedBitmap>>,
-    /// Local results intersected with every ancestor result.
+    /// For each smart folder, the roots that its own rules and the rules of
+    /// every folder above it match.
     pub smart_results: Arc<HashMap<u32, SharedBitmap>>,
     /// A version number of each smart folder's result, for this session's
     /// caches. It changes only when that folder's members change, so the
     /// cached results of other folders stay valid.
     pub smart_result_versions: Arc<HashMap<u32, u64>>,
-    /// Definitions exactly as saved by each smart folder.
+    /// The rules of each smart folder as they were saved.
     pub smart_queries: Arc<HashMap<u32, ViewQuerySpec>>,
-    /// Local definitions composed with every ancestor definition.
+    /// The rules of each smart folder combined with the rules of every folder
+    /// above it.
     pub smart_effective_queries: Arc<HashMap<u32, ViewQuerySpec>>,
 }
 
@@ -943,7 +947,35 @@ impl ResidentState {
         snapshot.name_index = self.name_index;
         snapshot.drawing = self.drawing;
         snapshot.recent_views = self.recent_views;
+        // A checkpoint that was written from a projection loaded from the
+        // tables can lack the folders that never had members.
+        let missing = |folder: &FolderId| {
+            !snapshot.folder_orders.contains_key(folder) || !snapshot.folders.contains_key(folder)
+        };
+        if self.folder_parents.keys().any(missing) {
+            add_empty_folders(
+                &self.folder_parents,
+                Arc::make_mut(&mut snapshot.folder_orders),
+                Arc::make_mut(&mut snapshot.folders),
+            );
+        }
         snapshot.folder_parents = self.folder_parents;
+    }
+}
+
+/// Gives every folder without members an empty order and an empty member
+/// bitmap. A folder that never had members has no rows in
+/// `ordered_membership_chunk`, while the write that creates a folder gives
+/// it both, so without this a library that was opened again would hold
+/// fewer folders in these maps than the same library before it was closed.
+fn add_empty_folders(
+    parents: &HashMap<FolderId, Option<FolderId>>,
+    orders: &mut HashMap<FolderId, Arc<Vec<RootId>>>,
+    folders: &mut HashMap<FolderId, SharedBitmap>,
+) {
+    for folder in parents.keys() {
+        orders.entry(*folder).or_insert_with(|| Arc::new(Vec::new()));
+        folders.entry(*folder).or_insert_with(|| RoaringBitmap::new().into());
     }
 }
 
@@ -1160,6 +1192,7 @@ fn load(
         }
         Ok(())
     })?;
+    add_empty_folders(&resident.folder_parents, &mut folder_orders, &mut folders);
 
     let mut root_kinds: HashMap<RootKind, SharedBitmap> = [
         (RootKind::Media, SharedBitmap::default()),

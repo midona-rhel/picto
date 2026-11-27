@@ -85,12 +85,57 @@ struct SetRecord {
 /// Records what changed in the library between the revision in
 /// `sync_state.recorded_revision` and `revision`, which `snapshot` shows.
 /// `transaction` is on the sync file's connection and reads the library at
-/// `revision`.
-pub(crate) fn record(transaction: &Transaction<'_>, snapshot: &ProjectionSnapshot, revision: u64) -> Result<()> {
+/// `revision`. `projected` is the revision of the last write of synced
+/// values into the library, with whether it changed the structure of the
+/// library, when that write came right after the previous pass.
+pub(crate) fn record(
+    transaction: &Transaction<'_>,
+    snapshot: &ProjectionSnapshot,
+    revision: u64,
+    projected: Option<(u64, bool)>,
+) -> Result<()> {
     let since = transaction
         .query_row("SELECT recorded_revision FROM sync_state", [], |row| row.get::<_, i64>(0))
         .optional()?;
     let Some(since) = since else { return Ok(()) };
+    // Whether an entity waits in one of two states, read through the index
+    // on `sync_pending(state)`.
+    let pending_in = |first: i64, second: i64| -> Result<bool> {
+        Ok(transaction
+            .prepare_cached("SELECT EXISTS(SELECT 1 FROM sync_pending WHERE state IN (?1, ?2))")?
+            .query_row([first, second], |row| row.get(0))?)
+    };
+    if since as u64 == revision && !pending_in(RECORD, RECORD)? {
+        return Ok(());
+    }
+    // When the only write since the last pass is the projection of synced
+    // values (`projected`), the library shows what the synced values show
+    // for everything that write changed, so there is nothing to record. The
+    // pass then only stores the keys of the entities that the write created
+    // or renamed and brings the copies up to the library; the lists are
+    // compared with their copies only when the write changed the structure.
+    // Without this, every small transaction of a large projection would be
+    // followed by a full pass that reads every waiting entity. Entities to
+    // revive or to record need the full pass.
+    let projection_only = match projected {
+        Some((projected, structure))
+            if projected == revision && since as u64 + 1 == revision && !pending_in(REVIVE, RECORD)? =>
+        {
+            Some(structure)
+        }
+        _ => None,
+    };
+    if let Some(structure) = projection_only {
+        let mut touched = Touched { ids: changed_ids(transaction, since)?, ..Touched::default() };
+        let mut recorder = Recorder::new(transaction, Before::default(), snapshot);
+        let entities = recorder.entities(&mut touched)?;
+        recorder.update_identities(&entities)?;
+        drop(recorder);
+        let owners = if structure { changed_lists(transaction)?.into_iter().collect() } else { Vec::new() };
+        copy(transaction, since, &owners)?;
+        transaction.execute("UPDATE sync_state SET recorded_revision = ?1", [revision as i64])?;
+        return Ok(());
+    }
     let pending = transaction
         .prepare_cached(
             "SELECT pending.entity, identity.kind, identity.key, identity.local_id, pending.state
@@ -100,9 +145,6 @@ pub(crate) fn record(transaction: &Transaction<'_>, snapshot: &ProjectionSnapsho
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<u32>>(3)?, row.get::<_, i64>(4)?))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    if since as u64 == revision && pending.iter().all(|row| row.4 != RECORD) {
-        return Ok(());
-    }
     let (mut touched, mut before) = touched(transaction, snapshot, since)?;
     let owners = std::mem::take(&mut before.owners);
     let mut recorder = Recorder::new(transaction, before, snapshot);
@@ -319,15 +361,8 @@ fn touched(
     snapshot: &ProjectionSnapshot,
     since: i64,
 ) -> Result<(Touched, Before)> {
-    let mut touched = Touched::default();
+    let mut touched = Touched { ids: changed_ids(transaction, since)?, ..Touched::default() };
     let mut before = Before::default();
-    {
-        let mut statement =
-            transaction.prepare_cached("SELECT local_id FROM library.changed_entity WHERE revision > ?1")?;
-        for id in statement.query_map([since], |row| row.get::<_, u32>(0))? {
-            touched.ids.insert(id?);
-        }
-    }
     let mut statement = transaction.prepare_cached(
         "SELECT now.domain, now.key_id, now.high_bits, now.payload, recorded.payload
          FROM library.canonical_bitmap now
@@ -361,21 +396,7 @@ fn touched(
             touched.changes.push(Change { membership, added, removed });
         }
     }
-    // The lists: their chunks are compared with the copies by checksum.
-    let chunks = |sql: &str| -> Result<BTreeMap<(u8, u32, i64), Vec<u8>>> {
-        let mut statement = transaction.prepare_cached(sql)?;
-        let rows = statement.query_map([], |row| Ok(((row.get(0)?, row.get(1)?, row.get(2)?), row.get(3)?)))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
-    };
-    let now = chunks("SELECT owner_kind, owner_id, chunk_index, checksum FROM library.ordered_membership_chunk")?;
-    let recorded = chunks("SELECT owner_kind, owner_id, chunk_index, checksum FROM recorded_order")?;
-    let owners = now
-        .iter()
-        .filter(|(key, checksum)| recorded.get(*key) != Some(*checksum))
-        .map(|(key, _)| key)
-        .chain(recorded.keys().filter(|key| !now.contains_key(*key)))
-        .map(|(kind, owner, _)| (*kind, *owner))
-        .collect::<BTreeSet<_>>();
+    let owners = changed_lists(transaction)?;
     let mut statement = transaction.prepare_cached(
         "SELECT payload FROM recorded_order WHERE owner_kind = ?1 AND owner_id = ?2 ORDER BY chunk_index",
     )?;
@@ -414,6 +435,32 @@ fn touched(
     }
     before.owners = owners.into_iter().collect();
     Ok((touched, before))
+}
+
+/// The local ids whose own row a write changed after the revision `since`.
+fn changed_ids(transaction: &Transaction<'_>, since: i64) -> Result<BTreeSet<u32>> {
+    let mut statement = transaction.prepare_cached("SELECT local_id FROM library.changed_entity WHERE revision > ?1")?;
+    let ids = statement.query_map([since], |row| row.get::<_, u32>(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(ids)
+}
+
+/// The lists, as (owner kind, owner id), that differ from their copies in
+/// `recorded_order`: their chunks are compared with the copies by checksum.
+fn changed_lists(transaction: &Transaction<'_>) -> Result<BTreeSet<(u8, u32)>> {
+    let chunks = |sql: &str| -> Result<BTreeMap<(u8, u32, i64), Vec<u8>>> {
+        let mut statement = transaction.prepare_cached(sql)?;
+        let rows = statement.query_map([], |row| Ok(((row.get(0)?, row.get(1)?, row.get(2)?), row.get(3)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    };
+    let now = chunks("SELECT owner_kind, owner_id, chunk_index, checksum FROM library.ordered_membership_chunk")?;
+    let recorded = chunks("SELECT owner_kind, owner_id, chunk_index, checksum FROM recorded_order")?;
+    Ok(now
+        .iter()
+        .filter(|(key, checksum)| recorded.get(*key) != Some(*checksum))
+        .map(|(key, _)| key)
+        .chain(recorded.keys().filter(|key| !now.contains_key(*key)))
+        .map(|(kind, owner, _)| (*kind, *owner))
+        .collect())
 }
 
 /// One local entity that changed: the key the synced values knew it by, and
