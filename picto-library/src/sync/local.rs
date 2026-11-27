@@ -21,10 +21,30 @@ pub(crate) const QUICK_ACCESS: &str = "sidebarQuickAccess";
 /// The value of the field `decision` of a "Not duplicate" decision.
 pub(crate) const KEEP_BOTH: &str = "keep_both";
 
+/// The fields of the `application` setting that stay on each computer,
+/// because they describe the computer rather than the library: the window
+/// zoom, the window background effects, trackpad gestures, automatic import
+/// of watched folders, and the switches of AI tagging.
+const LOCAL_SETTINGS: [&str; 11] = [
+    "zoomFactor",
+    "frostedGlassRails",
+    "acrylicRails",
+    "viewerTrackpadGestures",
+    "autoImportEnabled",
+    "aiTaggerWd14Enabled",
+    "aiTaggerE621Enabled",
+    "aiTaggerEva02Enabled",
+    "aiTaggerOppaiOracleEnabled",
+    "aiTaggerAutoOnImport",
+    "aiTaggerWriteRating",
+];
+
 /// Whether the field `name` of the `application` setting stays on this
-/// computer. The subscription fields do, because subscriptions do not sync.
+/// computer: the fields of `LOCAL_SETTINGS`, and the subscription fields,
+/// whose names start with `subscription`, because subscriptions do not
+/// sync. Every other field syncs.
 pub(crate) fn local_setting(name: &str) -> bool {
-    name.starts_with("subscription")
+    name.starts_with("subscription") || LOCAL_SETTINGS.contains(&name)
 }
 
 pub(crate) fn lifecycle_name(lifecycle: Lifecycle) -> &'static str {

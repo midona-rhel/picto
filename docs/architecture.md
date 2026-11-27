@@ -289,9 +289,15 @@ view's scope with the local id in it replaced by the folder's or smart folder's 
 content hashes of its two items, sorted and joined with `:`. Each entity has fields (an item's
 name, rating, sources, the time it was last viewed, `tag:<name>` and `folder:<uuid>` with a
 position key, a folder's `place`, a smart folder's rules with tag names and folder UUIDs in place
-of their ids, one field `setting:<name>` for each field of the `application` setting except the
-subscription fields, which stay on each computer, and so on), and a change to a field is a change
-record with a hybrid logical clock timestamp. The starred tags and the colours of tag groups are
+of their ids, one field `setting:<name>` for each field of the `application` setting except
+those that stay on each computer, and so on), and a change to a field is a change record with a
+hybrid logical clock timestamp. The fields of the settings that stay on each computer are listed in
+`LOCAL_SETTINGS` in `picto-library/src/sync/local.rs`: the window zoom (`zoomFactor`), the window
+background effects (`frostedGlassRails`, `acrylicRails`), trackpad gestures
+(`viewerTrackpadGestures`), automatic import of watched folders (`autoImportEnabled`) and the
+switches of AI tagging (`aiTaggerWd14Enabled`, `aiTaggerE621Enabled`, `aiTaggerEva02Enabled`,
+`aiTaggerOppaiOracleEnabled`, `aiTaggerAutoOnImport`, `aiTaggerWriteRating`), and the subscription
+fields, whose names start with `subscription`. The starred tags and the colours of tag groups are
 fields of the settings and name tags and tag groups by name. The records are in the sync file,
 `sync.sqlite` next to the library database, which exists while sync is on
 (`Library::start_sync_recording`, `stop_sync_recording`). `sync_value` keeps, for each field, the

@@ -467,13 +467,14 @@ fn operate(library: &Library, random: &mut Random, next_hash: &mut u64, time: &m
             }
             31 => {
                 // The settings: a plain field, the starred tags and group
-                // colours by name, the Quick Access list by scope, and a
-                // subscription field that stays on this computer.
-                let value = match random.below(5) {
-                    0 => ("zoomFactor", json!(random.below(3))),
+                // colours by name, the Quick Access list by scope, and two
+                // fields that stay on this computer.
+                let value = match random.below(6) {
+                    0 => ("gridSpacing", json!(random.below(3))),
                     1 => ("starredTags", json!(tag.iter().map(full_name).collect::<Vec<_>>())),
                     2 => ("tagGroupColors", json!({ TAGS[4].split(':').next().unwrap(): NAMES[random.below(3)] })),
                     3 => ("sidebarQuickAccess", json!(random_scopes(random, &folders, &smart_folders))),
+                    4 => ("zoomFactor", json!(random.below(3))),
                     _ => ("subscriptionDefaultSchedule", json!(NAMES[random.below(3)])),
                 };
                 patch(library, "setting", "application", value.0, value.1)?;
