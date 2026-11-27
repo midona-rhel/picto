@@ -29,6 +29,7 @@ const SECOND_PASSES: usize = 8;
 pub(crate) const PROJECT: i64 = 0;
 pub(crate) const REVIVE: i64 = 1;
 const RECORD: i64 = 2;
+pub(crate) const FIELDS: i64 = 3;
 
 type Records = BTreeMap<(SyncKind, String, String), Value>;
 
@@ -86,15 +87,10 @@ struct SetRecord {
 /// `transaction` is on the sync file's connection and reads the library at
 /// `revision`.
 pub(crate) fn record(transaction: &Transaction<'_>, snapshot: &ProjectionSnapshot, revision: u64) -> Result<()> {
-    let state = transaction
-        .query_row("SELECT recorded_revision, projected_revision FROM sync_state", [], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-        })
+    let since = transaction
+        .query_row("SELECT recorded_revision FROM sync_state", [], |row| row.get::<_, i64>(0))
         .optional()?;
-    let Some((since, projected)) = state else { return Ok(()) };
-    // Whether the only write since the last pass wrote synced values into
-    // the library.
-    let only_projection = since + 1 == projected && revision as i64 == projected;
+    let Some(since) = since else { return Ok(()) };
     let pending = transaction
         .prepare_cached(
             "SELECT pending.entity, identity.kind, identity.key, identity.local_id, pending.state
@@ -110,39 +106,57 @@ pub(crate) fn record(transaction: &Transaction<'_>, snapshot: &ProjectionSnapsho
     let (mut touched, mut before) = touched(transaction, snapshot, since)?;
     let owners = std::mem::take(&mut before.owners);
     let mut recorder = Recorder::new(transaction, before, snapshot);
-    // What such a write changed is compared, which stores the keys of the
-    // entities it wrote, but only the entities in `recording` are recorded:
-    // the entities it wrote can refer to entities that wait for the next
-    // write, and show differences that are no change of the library's own.
-    recorder.record_nothing = only_projection;
     // An entity that waits for its synced values to be written is left out,
-    // unless it changed in the library since the last pass: that change is
-    // recorded and the synced values are no longer written over it.
-    let mut changed_roots = touched.ids.iter().copied().collect::<RoaringBitmap>();
-    for change in &touched.changes {
-        changed_roots |= &change.added;
-        changed_roots |= &change.removed;
+    // unless the library changed it since the last pass: that change is
+    // recorded and the synced values are no longer written over it. What the
+    // last write of synced values wrote, which `sync_projection` names, is no
+    // change of the library's own; there is at most one such write that the
+    // recorder has not passed, because one is written only after the
+    // recorder has recorded everything before it.
+    let (projected, written) = transaction
+        .query_row(
+            "SELECT revision, written FROM library.sync_projection WHERE revision > ?1",
+            [since],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .optional()?
+        .unwrap_or_default();
+    let written = if written.is_empty() { RoaringBitmap::new() } else { RoaringBitmap::deserialize_from(&written[..])? };
+    let mut marked = RoaringBitmap::new();
+    let mut changed_roots = RoaringBitmap::new();
+    let mut statement =
+        transaction.prepare_cached("SELECT local_id, revision FROM library.changed_entity WHERE revision > ?1")?;
+    for row in statement.query_map([since], |row| Ok((row.get::<_, u32>(0)?, row.get::<_, i64>(1)?)))? {
+        let (id, row_revision) = row?;
+        marked.insert(id);
+        if row_revision != projected {
+            changed_roots.insert(id);
+        }
     }
+    let mut membership_roots = touched.ids.iter().copied().collect::<RoaringBitmap>() - &marked;
+    for change in &touched.changes {
+        membership_roots |= &change.added;
+        membership_roots |= &change.removed;
+    }
+    changed_roots |= membership_roots - &written;
     let mut done = Vec::new();
     for (entity, kind, key, local_id, state) in pending {
         let Some(kind) = SyncKind::parse(&kind) else { continue };
-        let changed = !only_projection && local_id.is_some_and(|id| changed_roots.contains(id));
+        let changed = local_id.is_some_and(|id| changed_roots.contains(id));
         match state {
             RECORD => {
                 touched.ids.extend(local_id);
                 recorder.recording.insert((kind, key));
                 done.push(entity);
             }
-            PROJECT if changed => done.push(entity),
+            PROJECT | FIELDS if changed => done.push(entity),
             _ => {
                 recorder.skipped.insert((kind, key));
                 recorder.skipped_roots.extend(local_id);
             }
         }
     }
-    if !only_projection {
-        recorder.merges(&touched.changes)?;
-    }
+    recorder.merges(since)?;
     let sets = recorder.split_sets(&mut touched)?;
     let mut clock = Clock::load(transaction)?;
     recorder.run(touched, &sets, &mut clock)?;
@@ -430,9 +444,6 @@ struct Recorder<'a> {
     /// Whether the positions of every list are already in the synced
     /// values, as when sync is turned on; a full state then leaves them out.
     written_positions: bool,
-    /// Whether the records of this pass are dropped instead of written,
-    /// except those of the entities in `recording`.
-    record_nothing: bool,
     /// Whether the synced values hold no position keys yet, as when sync is
     /// turned on; the comparison of lists then reads none.
     fresh: bool,
@@ -457,35 +468,32 @@ impl<'a> Recorder<'a> {
             positions: Records::new(),
             written_positions: false,
             fresh: false,
-            record_nothing: false,
             written_after: None,
             appeared_tags: BTreeSet::new(),
         }
     }
 
-    /// Finds the tags that were merged into another: a tag that is gone
-    /// forwards to the one other tag that now has every root the gone tag
-    /// had and that gained only roots of the gone tag since the last pass.
-    fn merges(&mut self, changes: &[Change]) -> Result<()> {
-        let snapshot = self.local.snapshot;
-        for change in changes {
-            let Membership::Tag(tag) = change.membership else { continue };
-            if snapshot.tags.contains_key(&tag) || change.removed.is_empty() {
-                continue;
-            }
-            let targets = changes
-                .iter()
-                .filter_map(|other| match other.membership {
-                    Membership::Tag(other_tag) if other_tag != tag && !other.added.is_empty() => {
-                        other.added.is_subset(&change.removed).then_some(other_tag)
-                    }
-                    _ => None,
-                })
-                .filter(|other| snapshot.tags.get(other).is_some_and(|members| change.removed.is_subset(members)))
-                .collect::<Vec<_>>();
-            if let ([target], Some((_, source))) = (targets.as_slice(), self.identity(SyncKind::Tag, tag.0)?) {
-                if let Some(target) = self.local.key(SyncKind::Tag, target.0)? {
-                    self.merges.insert(source, target);
+    /// Reads the tags merged into another after the revision `since` from
+    /// `tag_merge`, by the names the synced values know them by. A
+    /// destination that was itself merged later is followed to the tag the
+    /// library has.
+    fn merges(&mut self, since: i64) -> Result<()> {
+        let rows = self
+            .transaction
+            .prepare_cached("SELECT source_tag_id, destination_tag_id FROM library.tag_merge WHERE revision > ?1")?
+            .query_map([since], |row| Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?)))?
+            .collect::<rusqlite::Result<HashMap<_, _>>>()?;
+        for (source, destination) in &rows {
+            let Some((_, source)) = self.identity(SyncKind::Tag, *source)? else { continue };
+            let mut destination = *destination;
+            for _ in 0..rows.len() + 1 {
+                if let Some(name) = self.local.key(SyncKind::Tag, destination)? {
+                    self.merges.insert(source.clone(), name);
+                    break;
+                }
+                match rows.get(&destination) {
+                    Some(next) => destination = *next,
+                    None => break,
                 }
             }
         }
@@ -546,11 +554,11 @@ impl<'a> Recorder<'a> {
                 self.skipped.insert((entity.kind, key));
             }
         }
-        // A write of synced values can create an entity before its own turn,
-        // as a folder is created with the whole tree; its key is stored all
-        // the same, and nothing is recorded in such a pass.
+        // A write of synced values can create an entity before its own turn
+        // to be written, as a folder is created with the whole tree. Its key
+        // is stored all the same; `write` records nothing for it.
         entities.retain(|entity| {
-            (self.record_nothing && entity.old.is_none())
+            entity.old.is_none()
                 || [&entity.old, &entity.new]
                     .into_iter()
                     .flatten()
@@ -792,6 +800,9 @@ impl<'a> Recorder<'a> {
             (None, Some(now)) => now,
             (None, None) => return Ok(None),
         };
+        if self.skipped.contains(&(SyncKind::Tag, key.clone())) {
+            return Ok(None);
+        }
         let target = match known {
             Some((entity, _)) => entity,
             None => super::entity(self.transaction, SyncKind::Tag, &key)?,
@@ -815,6 +826,9 @@ impl<'a> Recorder<'a> {
             return Ok(None);
         }
         let Some((entity, key)) = self.identity(SyncKind::Folder, folder.0)? else { return Ok(None) };
+        if self.skipped.contains(&(SyncKind::Folder, key.clone())) {
+            return Ok(None);
+        }
         Ok(self.synced.visible(SyncKind::Folder, &key)?.then_some(entity))
     }
 
@@ -1061,6 +1075,14 @@ impl<'a> Recorder<'a> {
         Ok(())
     }
 
+    /// Whether a member of `list` waits for its synced values to be written.
+    /// The list is then not in the order the synced values show yet, so its
+    /// positions are compared after that member is written, which changes
+    /// the list again.
+    fn waits(&self, list: &[u32]) -> bool {
+        !self.skipped_roots.is_empty() && list.iter().any(|id| self.skipped_roots.contains(*id))
+    }
+
     /// Compares the item list of a folder with the position keys of its
     /// members. A member that left the folder is touched itself, and the
     /// comparison of its fields (`root_changes`) records `null` for it.
@@ -1070,6 +1092,9 @@ impl<'a> Recorder<'a> {
         };
         let field = format!("folder:{folder_key}");
         let after_ids = self.local.snapshot.folder_orders.get(&folder).map_or_else(Vec::new, |order| order.iter().map(|root| root.0).collect());
+        if self.waits(&after_ids) {
+            return Ok(());
+        }
         let window = match self.before.folder_orders.get(&folder) {
             Some(before) if !whole => changed_window(before, &after_ids),
             _ => (0, after_ids.len()),
@@ -1097,6 +1122,9 @@ impl<'a> Recorder<'a> {
             return Ok(());
         };
         let after_ids = self.local.snapshot.collection_orders.get(&collection).map_or_else(Vec::new, |order| order.iter().map(|media| media.0).collect());
+        if self.waits(&after_ids) {
+            return Ok(());
+        }
         let window = match self.before.collection_orders.get(&collection) {
             Some(before) if !whole => changed_window(before, &after_ids),
             _ => (0, after_ids.len()),
@@ -1135,6 +1163,9 @@ impl<'a> Recorder<'a> {
         }
         let tree = self.synced.folder_tree()?;
         for (parent, list) in children {
+            if self.waits(&list) {
+                continue;
+            }
             let parent_key = match parent {
                 Some(parent) => self.local.folder_key(parent)?,
                 None => None,
@@ -1221,10 +1252,26 @@ impl<'a> Recorder<'a> {
     /// Writes `records` and returns the entities whose visibility, or for
     /// tags whose forwarding, they may have changed.
     fn write(&mut self, mut records: Records, clock: &mut Clock, outbox: bool) -> Result<Vec<(SyncKind, String)>> {
-        records.retain(|(kind, key, _), _| {
-            let entity = (*kind, key.clone());
-            !self.skipped.contains(&entity) && (!self.record_nothing || self.recording.contains(&entity))
-        });
+        // Nothing is recorded for an entity whose synced values wait to be
+        // written, nor a value that names one, as the old or the new value:
+        // the library does not show that entity as the synced values do yet,
+        // so the value can come from a write of synced values that is not
+        // finished.
+        if !self.skipped.is_empty() {
+            let mut dropped = Vec::new();
+            for ((kind, key, field), value) in &records {
+                let stored = self.synced.raw(*kind, key)?.get(field.as_str()).map(|stored| stored.value.clone());
+                let named = references(*kind, field, value)
+                    .into_iter()
+                    .chain(stored.iter().flat_map(|stored| references(*kind, field, stored)));
+                if self.skipped.contains(&(*kind, key.clone())) || named.into_iter().any(|entity| self.skipped.contains(&entity)) {
+                    dropped.push((*kind, key.clone(), field.clone()));
+                }
+            }
+            for record in dropped {
+                records.remove(&record);
+            }
+        }
         let mut watched = BTreeSet::new();
         for ((kind, key, field), value) in &records {
             match field.as_str() {
@@ -1348,6 +1395,34 @@ impl<'a> Recorder<'a> {
             self.records.entry(record).or_insert(value);
         }
         Ok(())
+    }
+}
+
+/// The entities that a value of the field `field` of a `kind` entity names.
+fn references(kind: SyncKind, field: &str, value: &Value) -> Vec<(SyncKind, String)> {
+    let key = |kind: SyncKind, value: Option<&Value>| value.and_then(Value::as_str).map(|key| (kind, key.to_owned()));
+    if let Some(tag) = field.strip_prefix("tag:") {
+        return vec![(SyncKind::Tag, tag.to_owned())];
+    }
+    if let Some(folder) = field.strip_prefix("folder:") {
+        return vec![(SyncKind::Folder, folder.to_owned())];
+    }
+    match (kind, field) {
+        (SyncKind::Item, "collection") => key(SyncKind::Collection, value.get(0)).into_iter().collect(),
+        (SyncKind::Folder, "place") => key(SyncKind::Folder, value.get(0)).into_iter().collect(),
+        (SyncKind::Tag, "renamed_to") => key(SyncKind::Tag, Some(value)).into_iter().collect(),
+        (SyncKind::Collection, "cover") => key(SyncKind::Item, Some(value)).into_iter().collect(),
+        (SyncKind::Folder, "cover") => value
+            .get(0)
+            .and_then(Value::as_str)
+            .and_then(SyncKind::parse)
+            .and_then(|kind| key(kind, value.get(1)))
+            .into_iter()
+            .collect(),
+        (SyncKind::Folder, "auto_tags") => {
+            value.as_array().into_iter().flatten().filter_map(|tag| key(SyncKind::Tag, Some(tag))).collect()
+        }
+        _ => Vec::new(),
     }
 }
 

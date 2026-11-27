@@ -1169,6 +1169,15 @@ pub(crate) fn remove_tag_in_transaction(
         &RoaringBitmap::new(),
     )?;
     transaction.execute("DELETE FROM tag_definition WHERE tag_id = ?1", [source.0])?;
+    // The sync recorder reads this row to record that the old name forwards
+    // to the destination, so that a tag added under the old name on another
+    // computer ends up under the destination.
+    if let Some(destination) = destination {
+        transaction.execute(
+            "INSERT OR REPLACE INTO tag_merge(source_tag_id, destination_tag_id, revision) VALUES (?1, ?2, ?3)",
+            rusqlite::params![source.0, destination.0, revision as i64],
+        )?;
+    }
     Arc::make_mut(&mut snapshot.tags).remove(&source);
     Arc::make_mut(&mut snapshot.tag_ids_by_name).remove(&source_state.full_name);
 

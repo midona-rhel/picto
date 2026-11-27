@@ -147,6 +147,17 @@ impl<'a> Synced<'a> {
         Ok(value.and_then(|value| serde_json::from_str::<Value>(&value).ok()?.as_str().map(str::to_owned)))
     }
 
+    /// The local ids of the entities whose synced values wait to be written
+    /// into the library.
+    pub(crate) fn waiting(&self) -> Result<roaring::RoaringBitmap> {
+        let mut statement = self.connection.prepare_cached(
+            "SELECT identity.local_id FROM sync_pending pending
+             JOIN sync_identity identity ON identity.entity = pending.entity WHERE identity.local_id IS NOT NULL",
+        )?;
+        let ids = statement.query_map([], |row| row.get::<_, u32>(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(ids)
+    }
+
     /// The entities whose values refer to `kind:key`, with the field that
     /// refers to it. With `until`, `tag:` values recorded after that wall
     /// time and counter are left out.

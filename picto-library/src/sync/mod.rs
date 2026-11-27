@@ -207,13 +207,18 @@ fn mark_triggers() -> Vec<(String, String, String)> {
     triggers
 }
 
-/// Adds `changed_entity`, its triggers and the revision index of
-/// `canonical_bitmap` to the library.
+/// Adds `changed_entity`, its triggers, the revision index of
+/// `canonical_bitmap` and `sync_projection` to the library. Each write of
+/// synced values into the library puts its revision and the roots it wrote
+/// in `sync_projection`, in its own transaction, so that the recorder can
+/// tell its changes from the library's own after a crash as well.
 pub(crate) fn start_marking(transaction: &Transaction<'_>) -> Result<()> {
     let mut sql = String::from(
         "CREATE TABLE IF NOT EXISTS changed_entity (local_id INTEGER PRIMARY KEY, revision INTEGER NOT NULL) STRICT;
          CREATE INDEX IF NOT EXISTS changed_entity_revision ON changed_entity(revision);
-         CREATE INDEX IF NOT EXISTS sync_bitmap_revision ON canonical_bitmap(revision);",
+         CREATE INDEX IF NOT EXISTS sync_bitmap_revision ON canonical_bitmap(revision);
+         CREATE TABLE IF NOT EXISTS sync_projection (revision INTEGER PRIMARY KEY, written BLOB NOT NULL) STRICT;
+         DELETE FROM tag_merge;",
     );
     // The upsert keeps one row for each local id; it is not overridden by
     // the conflict policy of the statement that fires the trigger.
@@ -230,7 +235,10 @@ pub(crate) fn start_marking(transaction: &Transaction<'_>) -> Result<()> {
 }
 
 pub(crate) fn stop_marking(transaction: &Transaction<'_>) -> Result<()> {
-    let mut sql = String::from("DROP TABLE IF EXISTS changed_entity; DROP INDEX IF EXISTS sync_bitmap_revision;");
+    let mut sql = String::from(
+        "DROP TABLE IF EXISTS changed_entity; DROP TABLE IF EXISTS sync_projection;
+         DROP INDEX IF EXISTS sync_bitmap_revision;",
+    );
     for (name, _, _) in mark_triggers() {
         sql.push_str(&format!("DROP TRIGGER IF EXISTS sync_{name};"));
     }

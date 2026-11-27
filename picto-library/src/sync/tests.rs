@@ -663,3 +663,35 @@ fn undoing_delete_permanently_keeps_what_another_library_changed() {
     }
     assert_same(&first, &second, "after the undo");
 }
+
+#[test]
+fn a_crash_after_a_write_of_synced_values_records_nothing_that_write_left_unfinished() {
+    let directory = tempfile::tempdir().unwrap();
+    let (first, second) = (open(directory.path(), "first"), open(directory.path(), "second"));
+    let (old, _) = first.create_folder("old", None).unwrap();
+    let (new, _) = first.create_folder("new", None).unwrap();
+    for n in 1..=12 {
+        first.ingest(&prepared(hash(n), Lifecycle::Active, vec!["a".into()], vec![old])).unwrap();
+    }
+    deliver(&first, &second);
+    // Records that take several library transactions to write: the tag is
+    // deleted, which a transaction writes for every item at once, and the
+    // items move to the other folder, which each item's own transaction
+    // writes; the new folder's cover is the last of them.
+    first.delete_tag(first.projections().snapshot().tag_ids_by_name["a"]).unwrap();
+    let items = (1..=12).map(|n| root_of(&first, &hash(n))).collect::<Vec<_>>();
+    let moved = SelectionTarget::Explicit { root_ids: items.clone() };
+    first.add_to_folder(&moved, new).unwrap();
+    first.remove_from_folder(&moved, old).unwrap();
+    first.set_folder_cover(new, items[11]).unwrap();
+    first.record_sync_changes().unwrap();
+    let outbox = first.sync_outbox().unwrap();
+    first.remove_from_sync_outbox(&outbox).unwrap();
+    second.apply_sync_records_until_the_first_write(&outbox).unwrap();
+    drop(second);
+    let second = Library::open(directory.path().join("second").join("library.sqlite")).unwrap();
+    second.record_sync_changes().unwrap();
+    assert_eq!(second.sync_outbox().unwrap(), Vec::new(), "the second library recorded values of its own");
+    assert_recorded(&second, "after the crash");
+    assert_same(&first, &second, "after the crash");
+}

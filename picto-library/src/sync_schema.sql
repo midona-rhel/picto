@@ -6,16 +6,14 @@
 -- hybrid logical clock: wall time in milliseconds, a counter and the device
 -- id of the computer that recorded it, compared in that order.
 
--- The device id and the clock of this library, the library revision that
--- the recorder has recorded up to, and the revision of the last library
--- write that wrote synced values into the library.
+-- The device id and the clock of this library, and the library revision that
+-- the recorder has recorded up to.
 CREATE TABLE IF NOT EXISTS sync_state (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     device_id TEXT NOT NULL,
     clock_ms INTEGER NOT NULL,
     clock_counter INTEGER NOT NULL,
-    recorded_revision INTEGER NOT NULL,
-    projected_revision INTEGER NOT NULL DEFAULT 0
+    recorded_revision INTEGER NOT NULL
 ) STRICT;
 
 -- Every sync key that the synced values or the library know, with the
@@ -81,10 +79,13 @@ CREATE TABLE IF NOT EXISTS sync_outbox (
 -- with the entity counted as visible although the synced values delete it;
 -- this is an item or collection that came back in the library under its old
 -- local id, as an undo of Delete Permanently brings it back. State 2: such an
--- entity was written; the recorder records its full state next.
+-- entity was written; the recorder records its full state next. State 3: the
+-- records merged for the entity change only its lifecycle, rating, tags,
+-- name, notes, links or modification date, which are written into its rows
+-- and bitmaps directly.
 CREATE TABLE IF NOT EXISTS sync_pending (
     entity INTEGER PRIMARY KEY,
-    state INTEGER NOT NULL CHECK (state IN (0, 1, 2))
+    state INTEGER NOT NULL CHECK (state IN (0, 1, 2, 3))
 ) STRICT;
 
 -- Copies of the library's membership bitmaps and ordered lists as the

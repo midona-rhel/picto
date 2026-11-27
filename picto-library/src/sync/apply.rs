@@ -14,7 +14,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction};
 use serde_json::Value;
 
 use super::local::{lifecycle_from_name, rating_from_number, Local};
-use super::record::{PROJECT, REVIVE};
+use super::record::{FIELDS, PROJECT, REVIVE};
 use super::values::{Synced, View};
 use super::{merge, Clock, SyncKind, SyncRecord};
 use crate::bitmap::{BitmapDomain, BitmapKey};
@@ -72,20 +72,27 @@ pub(crate) fn merge_remote(transaction: &Transaction<'_>, records: &[SyncRecord]
     let merged = merge(transaction, &mut clock, records)?;
     clock.save(transaction)?;
     synced.forget();
-    let mut keys = merged
-        .iter()
-        .map(|record| (record.kind, record.key.clone()))
-        .collect::<BTreeSet<_>>();
+    // An item or collection whose merged records are all of `DIRECT_FIELDS`
+    // or tags is written directly (`FIELDS`); everything else is written
+    // with its structure (`PROJECT`).
+    let mut keys = BTreeMap::new();
+    for record in merged {
+        let direct = matches!(record.kind, SyncKind::Item | SyncKind::Collection)
+            && (record.field.starts_with("tag:") || DIRECT_FIELDS.contains(&record.field.as_str()));
+        let state = if direct { FIELDS } else { PROJECT };
+        let entry = keys.entry((record.kind, record.key.clone())).or_insert(state);
+        *entry = (*entry).min(state);
+    }
     for ((kind, key), before) in watched.into_iter().zip(before) {
         if synced.state(kind, &key)? == before {
             continue;
         }
-        keys.insert((kind, key.clone()));
+        keys.insert((kind, key.clone()), PROJECT);
         let mut forwarding = vec![key];
         while let Some(key) = forwarding.pop() {
             for (referrer_kind, referrer, field) in synced.referrers(kind, &key, None)? {
                 if kind == SyncKind::Tag && field == "renamed_to" {
-                    if keys.insert((referrer_kind, referrer.clone())) {
+                    if keys.insert((referrer_kind, referrer.clone()), PROJECT).is_none() {
                         forwarding.push(referrer);
                     }
                     continue;
@@ -93,40 +100,58 @@ pub(crate) fn merge_remote(transaction: &Transaction<'_>, records: &[SyncRecord]
                 // Folders are written as a whole tree, and a folder that
                 // appears or disappears takes its member list with it.
                 if kind != SyncKind::Folder && referrer_kind != SyncKind::Folder {
-                    keys.insert((referrer_kind, referrer));
+                    keys.insert((referrer_kind, referrer), PROJECT);
                 }
             }
         }
     }
-    let mut statement =
-        transaction.prepare_cached("INSERT INTO sync_pending(entity, state) VALUES (?1, ?2) ON CONFLICT DO NOTHING")?;
-    for (kind, key) in keys {
-        statement.execute(rusqlite::params![super::entity(transaction, kind, &key)?, PROJECT])?;
+    let mut statement = transaction.prepare_cached(
+        "INSERT INTO sync_pending(entity, state) VALUES (?1, ?2)
+         ON CONFLICT(entity) DO UPDATE SET state = excluded.state WHERE state = ?3 AND excluded.state = ?4",
+    )?;
+    for ((kind, key), state) in keys {
+        statement.execute(rusqlite::params![super::entity(transaction, kind, &key)?, state, FIELDS, PROJECT])?;
     }
     Ok(())
 }
 
-/// Up to `limit` entities whose synced values wait to be written, as
-/// (entity, kind, key, whether it counts as visible).
-pub(crate) fn pending_projection(connection: &Connection, limit: usize) -> Result<Vec<(i64, SyncKind, String, bool)>> {
+/// The fields of an item or collection that are written into its rows and
+/// bitmaps directly, with its tags, when they are all that changed.
+const DIRECT_FIELDS: [&str; 6] = ["lifecycle", "rating", "name", "notes", "links", "modified_at"];
+
+/// The entities whose synced values are written by the next library
+/// transaction, as (entity, kind, key, whether it counts as visible), and
+/// whether they are written directly: up to `direct_limit` entities of
+/// `FIELDS` when there are any, and otherwise up to `limit` others.
+#[allow(clippy::type_complexity)]
+pub(crate) fn pending_projection(
+    connection: &Connection,
+    direct_limit: usize,
+    limit: usize,
+) -> Result<(Vec<(i64, SyncKind, String, bool)>, bool)> {
     let mut statement = connection.prepare_cached(
-        "SELECT pending.entity, identity.kind, identity.key, pending.state = ?2
+        "SELECT pending.entity, identity.kind, identity.key, pending.state = ?4
          FROM sync_pending pending JOIN sync_identity identity ON identity.entity = pending.entity
          WHERE pending.state IN (?1, ?2) ORDER BY pending.entity LIMIT ?3",
     )?;
-    let rows = statement.query_map(rusqlite::params![PROJECT, REVIVE, limit as i64], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, bool>(3)?))
-    })?;
-    let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows.into_iter().filter_map(|(entity, kind, key, revived)| Some((entity, SyncKind::parse(&kind)?, key, revived))).collect())
+    let mut read = |states: (i64, i64), limit: usize| -> Result<Vec<_>> {
+        let rows = statement.query_map(rusqlite::params![states.0, states.1, limit as i64, REVIVE], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, bool>(3)?))
+        })?;
+        let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows.into_iter().filter_map(|(entity, kind, key, revived)| Some((entity, SyncKind::parse(&kind)?, key, revived))).collect())
+    };
+    let direct = read((FIELDS, FIELDS), direct_limit)?;
+    if !direct.is_empty() {
+        return Ok((direct, true));
+    }
+    Ok((read((PROJECT, REVIVE), limit)?, false))
 }
 
-/// Marks `written` as written into the library by the write that committed
-/// `revision`: an entity that counted as visible is recorded by the next pass
-/// of the recorder, the others are done.
-pub(crate) fn finish_projection(connection: &Connection, written: &[(i64, SyncKind, String, bool)], revision: u64) -> Result<()> {
+/// Marks `written` as written into the library: an entity that counted as
+/// visible is recorded by the next pass of the recorder, the others are done.
+pub(crate) fn finish_projection(connection: &Connection, written: &[(i64, SyncKind, String, bool)]) -> Result<()> {
     let transaction = connection.unchecked_transaction()?;
-    transaction.execute("UPDATE sync_state SET projected_revision = ?1", [revision as i64])?;
     for (entity, _, _, revived) in written {
         let sql = if *revived {
             "UPDATE sync_pending SET state = 2 WHERE entity = ?1"
@@ -139,9 +164,12 @@ pub(crate) fn finish_projection(connection: &Connection, written: &[(i64, SyncKi
 }
 
 /// Writes what the synced values (read through `sync`) show for `keys` into
-/// the library and `snapshot`. The entities in `revived` count as visible
-/// even when the synced values delete them. The folder tree is always
-/// written as a whole.
+/// the library and `snapshot`. With `direct`, the keys are written with
+/// `write_directly` where it can. The entities in `revived` count as visible
+/// even when the synced values delete them. Unless every key was written
+/// directly, the folder tree is written as a whole. The transaction notes its
+/// revision and the roots it wrote in `sync_projection`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn project(
     transaction: &Transaction<'_>,
     revision: u64,
@@ -149,6 +177,7 @@ pub(crate) fn project(
     sync: &Connection,
     keys: BTreeSet<Key>,
     revived: HashSet<Key>,
+    direct: bool,
     protected: &BTreeSet<FileId>,
 ) -> Result<Projected> {
     let mut synced = Synced::new(sync);
@@ -158,11 +187,148 @@ pub(crate) fn project(
         ["roots", "media", "sidebar", "tags", "folders", "collections", "search", "navigation", "smart-folders"]
             .map(str::to_owned),
     );
+    let keys = if direct { write_directly(transaction, revision, snapshot, &mut synced, keys, &mut projected)? } else { keys };
+    if !keys.is_empty() {
+        project_structure(transaction, revision, snapshot, &mut synced, &keys, protected, &mut projected)?;
+    }
+    crate::smart::settle_affected_for(
+        transaction,
+        snapshot,
+        &projected.roots,
+        &[crate::predicate::DependencyChange::All],
+    )?;
+    let mut written = Vec::new();
+    projected.roots.serialize_into(&mut written)?;
+    transaction.execute("DELETE FROM sync_projection", [])?;
+    transaction.execute(
+        "INSERT INTO sync_projection(revision, written) VALUES (?1, ?2)",
+        rusqlite::params![revision as i64, written],
+    )?;
+    snapshot.revision = revision;
+    Ok(projected)
+}
 
+/// Writes the lifecycle, rating, tags, name, notes, links and modification
+/// date that the synced values show for each of `keys` into the library's
+/// rows and bitmaps, with the code that undo uses, when the key is an item
+/// outside a collection or a collection that the library and the synced
+/// values both show and that differs in nothing else. Returns the other
+/// keys.
+fn write_directly(
+    transaction: &Transaction<'_>,
+    revision: u64,
+    snapshot: &mut ProjectionSnapshot,
+    synced: &mut Synced<'_>,
+    keys: BTreeSet<Key>,
+    projected: &mut Projected,
+) -> Result<BTreeSet<Key>> {
+    let mut rest = BTreeSet::new();
+    let (mut texts_before, mut texts_after) = (Vec::new(), Vec::new());
+    let mut members: HashMap<BitmapKey, (RoaringBitmap, RoaringBitmap)> = HashMap::new();
+    // The library's state of every key, with the tags and folders of all of
+    // them read in one pass.
+    let mut views = Vec::new();
+    {
+        let mut local = Local::new(transaction, snapshot);
+        let mut found = Vec::new();
+        for (kind, key) in keys {
+            found.push((local.find(kind, &key)?, kind, key));
+        }
+        local.prepare(&found.iter().filter_map(|(root, _, _)| *root).collect())?;
+        for (root, kind, key) in found {
+            let current = match root {
+                Some(root) => local.view(kind, root)?,
+                None => None,
+            };
+            views.push((kind, key, root, current));
+        }
+    }
+    for (kind, key, root, current) in views {
+        let shown = synced.view(kind, &key)?;
+        let (Some(root), Some(current), Some(shown)) = (root, current, shown) else {
+            rest.insert((kind, key));
+            continue;
+        };
+        let same = |field: &String| DIRECT_FIELDS.contains(&field.as_str()) || current.fields.get(field) == shown.fields.get(field);
+        if current.owner.is_some()
+            || shown.owner.is_some()
+            || current.folders != shown.folders
+            || !current.fields.keys().chain(shown.fields.keys()).all(same)
+        {
+            rest.insert((kind, key));
+            continue;
+        }
+        let text = |view: &View| crate::history::RootTextState {
+            root_id: RootId(root),
+            name: view.fields["name"].as_str().unwrap_or_default().to_owned(),
+            notes: view.fields["notes"].as_str().map(str::to_owned),
+            source_urls: serde_json::from_value(view.fields["links"].clone()).unwrap_or_default(),
+            modified_at_ms: view.fields["modified_at"].as_i64().unwrap_or(0),
+        };
+        if ["name", "notes", "links", "modified_at"].iter().any(|field| current.fields.get(*field) != shown.fields.get(*field)) {
+            texts_before.push(text(&current));
+            texts_after.push(text(&shown));
+        }
+        let partitions = |view: &View| {
+            [
+                BitmapKey { domain: BitmapDomain::Lifecycle, key_id: lifecycle_from_name(view.fields["lifecycle"].as_str().unwrap_or_default()).bitmap_key() },
+                BitmapKey { domain: BitmapDomain::Rating, key_id: rating_from_number(&view.fields["rating"]).bitmap_key() },
+            ]
+        };
+        let mut was = partitions(&current).to_vec();
+        let mut now = partitions(&shown).to_vec();
+        for tag in &current.tags {
+            was.extend(snapshot.tag_ids_by_name.get(tag).map(|tag| BitmapKey { domain: BitmapDomain::Tag, key_id: tag.0 }));
+        }
+        for tag in &shown.tags {
+            now.push(BitmapKey { domain: BitmapDomain::Tag, key_id: ensure_tag(transaction, snapshot, tag)?.0 });
+        }
+        for bitmap_key in &was {
+            if !now.contains(bitmap_key) {
+                members.entry(*bitmap_key).or_default().1.insert(root);
+            }
+        }
+        for bitmap_key in &now {
+            if !was.contains(bitmap_key) {
+                members.entry(*bitmap_key).or_default().0.insert(root);
+            }
+        }
+        projected.roots.insert(root);
+    }
+    if !texts_after.is_empty() {
+        change(transaction, revision, snapshot, SemanticChange::RootText {
+            before: Arc::new(texts_before),
+            after: Arc::new(texts_after),
+        })?;
+    }
+    for (key, (added, removed)) in members {
+        let before = crate::mutation::projection_bitmap(snapshot, key);
+        let after = &(&before - &removed) | &added;
+        change(transaction, revision, snapshot, SemanticChange::Bitmap {
+            key,
+            before: Arc::new(before),
+            after: Arc::new(after),
+        })?;
+    }
+    Ok(rest)
+}
+
+/// Writes what the synced values show for `keys` with the structure of the
+/// library: tags and tag groups, the folder tree, items and collections.
+#[allow(clippy::too_many_arguments)]
+fn project_structure(
+    transaction: &Transaction<'_>,
+    revision: u64,
+    snapshot: &mut ProjectionSnapshot,
+    synced: &mut Synced<'_>,
+    keys: &BTreeSet<Key>,
+    protected: &BTreeSet<FileId>,
+    projected: &mut Projected,
+) -> Result<()> {
     // Tags and tag groups that appear are created first, so that items and
     // folders can name them.
     let mut gone_tags = Vec::new();
-    for (kind, key) in &keys {
+    for (kind, key) in keys {
         match kind {
             SyncKind::Tag => {
                 let exists = snapshot.tag_ids_by_name.get(key).copied();
@@ -181,10 +347,47 @@ pub(crate) fn project(
         }
     }
 
-    let new_folders = folders(transaction, revision, snapshot, &mut synced)?;
-    roots(transaction, revision, snapshot, &mut synced, &keys, protected, &mut projected)?;
-    folder_covers_and_lists(transaction, revision, snapshot, &mut synced, &new_folders, &mut projected)?;
-    remove_folders(transaction, revision, snapshot, &mut synced)?;
+    // The folder tree is written when a folder or a tag, which folders name
+    // as auto-tags, is among the keys. Otherwise only the covers that name
+    // one of the items and collections written are checked.
+    let tree = keys.iter().any(|(kind, _)| matches!(kind, SyncKind::Folder | SyncKind::Tag | SyncKind::TagGroup));
+    let new_folders = if tree { folders(transaction, revision, snapshot, synced)? } else { Vec::new() };
+    roots(transaction, revision, snapshot, synced, keys, protected, projected)?;
+    let covers = if tree {
+        None
+    } else {
+        // A collection is shown, as a cover too, while it has a shown
+        // member, so the collections of the items count as well.
+        let mut covers = BTreeSet::new();
+        let mut named = keys.iter().cloned().collect::<BTreeSet<_>>();
+        for (kind, key) in keys {
+            if *kind == SyncKind::Item {
+                let raw = synced.raw(*kind, key)?;
+                let collection = raw.get("collection").and_then(|stored| stored.value.get(0)).and_then(Value::as_str);
+                named.extend(collection.map(|collection| (SyncKind::Collection, collection.to_owned())));
+            }
+        }
+        for (kind, key) in &named {
+            for (referrer_kind, folder, field) in synced.referrers(*kind, key, None)? {
+                if referrer_kind == SyncKind::Folder && field == "cover" {
+                    covers.insert(folder);
+                }
+            }
+        }
+        let mut statement = transaction
+            .prepare_cached("SELECT stable_key, cover_root_id FROM folder_definition WHERE cover_root_id IS NOT NULL")?;
+        for row in statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?)))? {
+            let (folder, cover) = row?;
+            if projected.roots.contains(cover) {
+                covers.insert(folder);
+            }
+        }
+        Some(covers)
+    };
+    folder_covers_and_lists(transaction, revision, snapshot, synced, &new_folders, covers.as_ref(), projected)?;
+    if tree {
+        remove_folders(transaction, revision, snapshot, synced, projected)?;
+    }
 
     for tag_id in gone_tags {
         if snapshot.tags.contains_key(&tag_id) || snapshot.tag_ids_by_name.values().any(|id| *id == tag_id) {
@@ -208,14 +411,7 @@ pub(crate) fn project(
             transaction.execute("DELETE FROM tag_namespace WHERE namespace_id = ?1", [namespace_id])?;
         }
     }
-    crate::smart::settle_affected_for(
-        transaction,
-        snapshot,
-        &projected.roots,
-        &[crate::predicate::DependencyChange::All],
-    )?;
-    snapshot.revision = revision;
-    Ok(projected)
+    Ok(())
 }
 
 fn ensure_tag(transaction: &Transaction<'_>, snapshot: &mut ProjectionSnapshot, name: &str) -> Result<crate::TagId> {
@@ -321,19 +517,20 @@ fn folders(
     Ok(created.into_iter().map(|(folder_id, _)| folder_id).collect())
 }
 
-/// Sets the cover of every shown folder, and the member list of each folder
-/// that was created: every shown root that the synced values put in it, in
-/// the order of their position keys.
+/// Sets the cover of every shown folder, or of the folders in `only`, and
+/// the member list of each folder that was created: every shown root that
+/// the synced values put in it, in the order of their position keys.
 fn folder_covers_and_lists(
     transaction: &Transaction<'_>,
     revision: u64,
     snapshot: &mut ProjectionSnapshot,
     synced: &mut Synced<'_>,
     created: &[FolderId],
+    only: Option<&BTreeSet<String>>,
     projected: &mut Projected,
 ) -> Result<()> {
     let tree = synced.folder_tree()?;
-    for key in tree.place.keys() {
+    for key in tree.place.keys().filter(|key| only.is_none_or(|only| only.contains(*key))) {
         let (folder_id, cover) = {
             let local = Local::new(transaction, snapshot);
             let Some(folder_id) = local.find(SyncKind::Folder, key)? else { continue };
@@ -402,6 +599,7 @@ fn remove_folders(
     revision: u64,
     snapshot: &mut ProjectionSnapshot,
     synced: &mut Synced<'_>,
+    projected: &mut Projected,
 ) -> Result<()> {
     let tree = synced.folder_tree()?;
     let rows = transaction
@@ -430,6 +628,7 @@ fn remove_folders(
         let folder_id = FolderId(id);
         if let Some(order) = snapshot.folder_orders.get(&folder_id).cloned() {
             if !order.is_empty() {
+                projected.roots.extend(order.iter().map(|root| root.0));
                 change(transaction, revision, snapshot, SemanticChange::Order {
                     owner_kind: OrderOwnerKind::Folder,
                     owner_id: id,
@@ -799,6 +998,7 @@ fn folder_positions(
     targets: BTreeMap<String, Vec<(String, String, u32)>>,
 ) -> Result<BTreeMap<FolderId, Vec<StructuralFolderPosition>>> {
     let local = Local::new(transaction, snapshot);
+    let waiting = synced.waiting()?;
     let mut positions = BTreeMap::new();
     for (folder, mut entries) in targets {
         let Some(folder_id) = local.find(SyncKind::Folder, &folder)?.map(FolderId) else { continue };
@@ -825,27 +1025,32 @@ fn folder_positions(
             }
             Ok(keys[&root] < *target)
         };
+        // Members whose synced values wait to be written can stand where
+        // their new position key does not sort; only the others are
+        // compared, and they are in the order of their keys.
+        let known = (0..retained.len()).filter(|index| !waiting.contains(retained[*index].0)).collect::<Vec<_>>();
         let mut slots = Vec::with_capacity(entries.len());
         for (position, key, root) in &entries {
             let target = (position.clone(), key.clone());
             // A root whose key still sorts between its neighbours keeps its
             // place; the others are found by binary search.
             if let Some(&slot) = current.get(root) {
-                if (slot == 0 || below(slot - 1, &target)?) && (slot == retained.len() || !below(slot, &target)?) {
+                let at = known.partition_point(|index| *index < slot);
+                if (at == 0 || below(known[at - 1], &target)?) && (at == known.len() || !below(known[at], &target)?) {
                     slots.push(slot);
                     continue;
                 }
             }
-            let (mut low, mut high) = (0, retained.len());
+            let (mut low, mut high) = (0, known.len());
             while low < high {
                 let middle = (low + high) / 2;
-                if below(middle, &target)? {
+                if below(known[middle], &target)? {
                     low = middle + 1;
                 } else {
                     high = middle;
                 }
             }
-            slots.push(low);
+            slots.push(if low == 0 { 0 } else { known[low - 1] + 1 });
         }
         let mut list = Vec::new();
         for (index, (slot, (_, _, root))) in slots.iter().zip(&entries).enumerate() {

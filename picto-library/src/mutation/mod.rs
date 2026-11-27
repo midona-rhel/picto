@@ -1801,7 +1801,7 @@ fn move_to_partition(
     Ok(changes)
 }
 
-fn projection_bitmap(snapshot: &ProjectionSnapshot, key: BitmapKey) -> RoaringBitmap {
+pub(crate) fn projection_bitmap(snapshot: &ProjectionSnapshot, key: BitmapKey) -> RoaringBitmap {
     match key.domain {
         BitmapDomain::Lifecycle => snapshot
             .lifecycle

@@ -1108,9 +1108,9 @@ mod tests {
         assert_eq!(count(&backup, "SELECT COUNT(*) FROM cloud_journal"), 1);
     }
 
-    /// A library of the schema whose watched paths were unique loses that
-    /// uniqueness, keeps its folders and a backup, and opens a second time
-    /// without another migration.
+    /// A library of the schema whose watched paths were unique and that had
+    /// no `tag_merge` loses that uniqueness, gets the table, keeps its folders
+    /// and a backup, and opens a second time without another migration.
     #[test]
     fn the_migration_lets_two_folders_watch_one_path() {
         let directory = tempfile::tempdir().unwrap();
@@ -1126,6 +1126,7 @@ mod tests {
         connection
             .execute_batch(&format!(
                 "PRAGMA foreign_keys = OFF;
+                 DROP TABLE tag_merge;
                  {unique};
                  DROP TABLE folder_definition;
                  ALTER TABLE folder_definition_unique RENAME TO folder_definition;
@@ -1147,6 +1148,7 @@ mod tests {
         let connection = Connection::open(&path).unwrap();
         super::validate(&connection).unwrap();
         assert_eq!(count(&connection, "SELECT COUNT(*) FROM folder_definition WHERE parent_id = 1"), 1);
+        assert_eq!(count(&connection, "SELECT COUNT(*) FROM sqlite_master WHERE name = 'tag_merge'"), 1);
         connection
             .execute("UPDATE folder_definition SET watch_path = '/watched' WHERE folder_id = 2", [])
             .unwrap();

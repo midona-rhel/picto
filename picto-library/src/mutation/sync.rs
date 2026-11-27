@@ -5,9 +5,13 @@ use super::*;
 use crate::sync::SyncRecord;
 use rusqlite::Connection;
 
-/// How many entities one library transaction of `apply_sync_records` writes,
-/// so that a write of the user waits for it only a short time.
-const PROJECTION_CHUNK: usize = 16;
+/// How many entities one library transaction of `apply_sync_records` writes
+/// with their structure, and how many it writes directly (`FIELDS` in
+/// `sync_pending`), so that a write of the user waits for it only a few
+/// milliseconds. At 1,000,000 roots one entity written with its structure
+/// takes about 10 ms, and 32 written directly about 3 ms.
+const PROJECTION_CHUNK: usize = 1;
+const DIRECT_CHUNK: usize = 32;
 
 impl Library {
     pub fn sync_on(&self) -> bool {
@@ -121,36 +125,49 @@ impl Library {
     fn catch_up(&self, connection: &mut Connection) -> Result<()> {
         loop {
             self.record_pass(connection)?;
-            let chunk = crate::sync::pending_projection(connection, PROJECTION_CHUNK)?;
-            if chunk.is_empty() {
-                return Ok(());
-            }
-            let recorded = connection.query_row("SELECT recorded_revision FROM sync_state", [], |row| row.get::<_, i64>(0))?;
-            let keys = chunk.iter().map(|(_, kind, key, _)| (*kind, key.clone())).collect();
-            let revived = chunk.iter().filter(|row| row.3).map(|(_, kind, key, _)| (*kind, key.clone())).collect();
-            let protected = self.history.protected_cleanup_files();
-            let projections = self.projections.clone();
-            let publication = self.publication.clone();
-            let sync: &Connection = connection;
-            let written = self.database.published_write_if_changed(
-                WorkPriority::Maintenance,
-                |revision| self.capture_revision(revision),
-                |transaction, base, revision, snapshot| {
-                    if base as i64 != recorded {
-                        return Ok(None);
-                    }
-                    let mut next = (*snapshot).clone();
-                    let projected = crate::sync::project(transaction, revision, &mut next, sync, keys, revived, &protected)?;
-                    next.revision = revision;
-                    let receipt = PublicationCoordinator::receipt(revision, projected.resources, projected.roots.iter().map(RootId));
-                    Ok(Some(((), PublishedDelta { snapshot: next, receipt, history: None })))
-                },
-                move |_, delta| publish_delta(&projections, &publication, delta),
-            )?;
-            if let Some((_, revision, _)) = written {
-                crate::sync::finish_projection(connection, &chunk, revision)?;
+            match self.project_next(connection)? {
+                None => return Ok(()),
+                Some(written) => crate::sync::finish_projection(connection, &written)?,
             }
         }
+    }
+
+    /// Writes the next entities of `sync_pending` into the library in one
+    /// transaction, when the library has not changed since the recorder's
+    /// last pass. Returns the entities written, `Some` of an empty list when
+    /// the library had changed, and `None` when nothing waits.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn project_next(
+        &self,
+        connection: &Connection,
+    ) -> Result<Option<Vec<(i64, crate::sync::SyncKind, String, bool)>>> {
+        let (chunk, direct) = crate::sync::pending_projection(connection, DIRECT_CHUNK, PROJECTION_CHUNK)?;
+        if chunk.is_empty() {
+            return Ok(None);
+        }
+        let recorded = connection.query_row("SELECT recorded_revision FROM sync_state", [], |row| row.get::<_, i64>(0))?;
+        let keys = chunk.iter().map(|(_, kind, key, _)| (*kind, key.clone())).collect();
+        let revived = chunk.iter().filter(|row| row.3).map(|(_, kind, key, _)| (*kind, key.clone())).collect();
+        let protected = self.history.protected_cleanup_files();
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let written = self.database.published_write_if_changed(
+            WorkPriority::Maintenance,
+            |revision| self.capture_revision(revision),
+            |transaction, base, revision, snapshot| {
+                if base as i64 != recorded {
+                    return Ok(None);
+                }
+                let mut next = (*snapshot).clone();
+                let projected =
+                    crate::sync::project(transaction, revision, &mut next, connection, keys, revived, direct, &protected)?;
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(revision, projected.resources, projected.roots.iter().map(RootId));
+                Ok(Some(((), PublishedDelta { snapshot: next, receipt, history: None })))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        Ok(Some(if written.is_some() { chunk } else { Vec::new() }))
     }
 
     /// One pass of the recorder.
@@ -195,6 +212,21 @@ impl Library {
         let mut guard = self.sync.lock(false)?;
         let connection = guard.as_mut().expect("sync is on");
         self.consistent(connection, |transaction, snapshot, _| crate::sync::differences(transaction, snapshot))
+    }
+
+    /// Merges `records` and writes the first library transaction of them,
+    /// without the sync file noting that it was written, as a crash right
+    /// after that transaction leaves the two files.
+    #[cfg(test)]
+    pub(crate) fn apply_sync_records_until_the_first_write(&self, records: &[SyncRecord]) -> Result<()> {
+        let mut guard = self.sync.lock(false)?;
+        let connection = guard.as_mut().expect("sync is on");
+        self.record_pass(connection)?;
+        let transaction = connection.transaction()?;
+        crate::sync::merge_remote(&transaction, records)?;
+        transaction.commit()?;
+        self.project_next(connection)?;
+        Ok(())
     }
 
     /// Every synced value as a change record.
