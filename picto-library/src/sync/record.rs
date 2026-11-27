@@ -5,8 +5,10 @@
 //! through the attached `library` database in the same transaction, and
 //! commits the records, its copies and the revision together.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Cursor;
+use std::rc::Rc;
 
 use roaring::RoaringBitmap;
 use rusqlite::{Connection, OptionalExtension, Transaction};
@@ -136,12 +138,16 @@ pub(crate) fn record(
         transaction.execute("UPDATE sync_state SET recorded_revision = ?1", [revision as i64])?;
         return Ok(());
     }
+    // The entities to revive or to record are few and are read here. The
+    // entities that wait to be written can be many, and are read only where
+    // the pass asks about them (`Waiting`).
     let pending = transaction
         .prepare_cached(
             "SELECT pending.entity, identity.kind, identity.key, identity.local_id, pending.state
-             FROM sync_pending pending JOIN sync_identity identity ON identity.entity = pending.entity",
+             FROM sync_pending pending JOIN sync_identity identity ON identity.entity = pending.entity
+             WHERE pending.state IN (?1, ?2)",
         )?
-        .query_map([], |row| {
+        .query_map([REVIVE, RECORD], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<u32>>(3)?, row.get::<_, i64>(4)?))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -154,43 +160,19 @@ pub(crate) fn record(
     // the records from other computers (`sync_pending_value`). Its other
     // changes are recorded with a later timestamp, so the synced values that
     // are written later hold them.
+    recorder.waiting = Waiting::load(transaction)?;
     let mut done = Vec::new();
     for (entity, kind, key, local_id, state) in pending {
         let Some(kind) = SyncKind::parse(&kind) else { continue };
-        match state {
-            RECORD => {
-                touched.ids.extend(local_id);
-                recorder.recording.insert((kind, key));
-                done.push(entity);
-            }
-            REVIVE => {
-                recorder.skipped.insert((kind, key));
-                recorder.skipped_roots.extend(local_id);
-            }
-            _ => {
-                recorder.waiting.insert((kind, key), HashMap::new());
-                recorder.waiting_roots.extend(local_id);
-            }
+        if state == RECORD {
+            touched.ids.extend(local_id);
+            recorder.recording.insert((kind, key));
+            done.push(entity);
+        } else {
+            recorder.skipped.insert((kind, key));
+            recorder.skipped_roots.extend(local_id);
         }
     }
-    let mut statement = transaction.prepare_cached(
-        "SELECT entity.kind, entity.key,
-                CASE WHEN old.target = 0 THEN old.field ELSE old.field || ':' || target.key END, old.value
-         FROM sync_pending_value old
-         JOIN sync_identity entity ON entity.entity = old.entity
-         LEFT JOIN sync_identity target ON target.entity = old.target",
-    )?;
-    let rows = statement.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?))
-    })?;
-    for row in rows {
-        let (kind, key, field, value) = row?;
-        let Some(kind) = SyncKind::parse(&kind) else { continue };
-        if let Some(fields) = recorder.waiting.get_mut(&(kind, key)) {
-            fields.insert(field, serde_json::from_str(&value)?);
-        }
-    }
-    drop(statement);
     recorder.merges(since)?;
     let sets = recorder.split_sets(&mut touched)?;
     let mut clock = Clock::load(transaction)?;
@@ -472,6 +454,122 @@ struct Entity {
     new: Option<String>,
 }
 
+/// The entities whose synced values wait to be written (`sync_pending` in
+/// the states `PROJECT` and `FIELDS`), each with the values its fields had
+/// before the records from other computers that changed them
+/// (`sync_pending_value`). A pass reads them only for the entities and roots
+/// it asks about, so that its cost follows what changed in the library and
+/// not the number of entities that wait: a large batch of records from
+/// another computer can leave hundreds of thousands of them.
+/// The values from before of the fields of a waiting entity, by field.
+type OldValues = Rc<HashMap<String, Value>>;
+
+#[derive(Default)]
+struct Waiting {
+    /// Whether any entity waits. When none does, nothing is read.
+    any: bool,
+    /// The entities read so far: for each, the values from before when it
+    /// waits, and `None` when it does not.
+    entities: RefCell<HashMap<(SyncKind, String), Option<OldValues>>>,
+    /// The roots that waited when the pass began and that the pass took out
+    /// of the waiting entities (`take`). They still count as waiting roots.
+    taken_roots: RoaringBitmap,
+}
+
+impl Waiting {
+    fn load(connection: &Connection) -> Result<Self> {
+        let any = connection
+            .prepare_cached("SELECT EXISTS(SELECT 1 FROM sync_pending WHERE state IN (?1, ?2))")?
+            .query_row([PROJECT, FIELDS], |row| row.get(0))?;
+        Ok(Self { any, ..Self::default() })
+    }
+
+    /// The values from before of the entity `kind:key` when it waits, and
+    /// `None` when it does not.
+    fn get(&self, connection: &Connection, kind: SyncKind, key: &str) -> Result<Option<OldValues>> {
+        if !self.any {
+            return Ok(None);
+        }
+        let entity_key = (kind, key.to_owned());
+        if let Some(found) = self.entities.borrow().get(&entity_key) {
+            return Ok(found.clone());
+        }
+        let entity = connection
+            .prepare_cached(
+                "SELECT pending.entity FROM sync_identity identity
+                 CROSS JOIN sync_pending pending ON pending.entity = identity.entity
+                 WHERE identity.kind = ?1 AND identity.key = ?2 AND pending.state IN (?3, ?4)",
+            )?
+            .query_row(rusqlite::params![kind.as_str(), key, PROJECT, FIELDS], |row| row.get::<_, i64>(0))
+            .optional()?;
+        let found = match entity {
+            None => None,
+            Some(entity) => {
+                let mut statement = connection.prepare_cached(
+                    "SELECT CASE WHEN old.target = 0 THEN old.field ELSE old.field || ':' || target.key END, old.value
+                     FROM sync_pending_value old
+                     LEFT JOIN sync_identity target ON target.entity = old.target
+                     WHERE old.entity = ?1",
+                )?;
+                let mut fields = HashMap::new();
+                for row in statement.query_map([entity], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))? {
+                    let (field, value) = row?;
+                    fields.insert(field, serde_json::from_str(&value)?);
+                }
+                Some(Rc::new(fields))
+            }
+        };
+        self.entities.borrow_mut().insert(entity_key, found.clone());
+        Ok(found)
+    }
+
+    fn contains(&self, connection: &Connection, kind: SyncKind, key: &str) -> Result<bool> {
+        Ok(self.get(connection, kind, key)?.is_some())
+    }
+
+    /// Takes the entity `kind:key`, whose local id is `local_id`, out of the
+    /// waiting entities for the rest of the pass, and returns its values
+    /// from before when it waited.
+    fn take(&mut self, connection: &Connection, kind: SyncKind, key: &str, local_id: u32) -> Result<Option<OldValues>> {
+        let found = self.get(connection, kind, key)?;
+        if found.is_some() {
+            self.taken_roots.insert(local_id);
+        }
+        self.entities.borrow_mut().insert((kind, key.to_owned()), None);
+        Ok(found)
+    }
+
+    /// Drops the value from before of `field` of the waiting entity
+    /// `kind:key`. Returns whether it had one.
+    fn forget(&self, connection: &Connection, kind: SyncKind, key: &str, field: &str) -> Result<bool> {
+        let Some(mut fields) = self.get(connection, kind, key)? else { return Ok(false) };
+        if !fields.contains_key(field) {
+            return Ok(false);
+        }
+        Rc::make_mut(&mut fields).remove(field);
+        self.entities.borrow_mut().insert((kind, key.to_owned()), Some(fields));
+        Ok(true)
+    }
+
+    /// The roots among `roots` that wait.
+    fn roots(&self, connection: &Connection, roots: &RoaringBitmap) -> Result<RoaringBitmap> {
+        if !self.any || roots.is_empty() {
+            return Ok(RoaringBitmap::new());
+        }
+        let mut waiting = connection
+            .prepare_cached(
+                "SELECT identity.local_id FROM json_each(?1) id
+                 CROSS JOIN sync_identity identity ON identity.local_id = id.value
+                 CROSS JOIN sync_pending pending ON pending.entity = identity.entity
+                 WHERE pending.state IN (?2, ?3)",
+            )?
+            .query_map(rusqlite::params![ids_json(roots)?, PROJECT, FIELDS], |row| row.get::<_, u32>(0))?
+            .collect::<rusqlite::Result<RoaringBitmap>>()?;
+        waiting |= &(&self.taken_roots & roots);
+        Ok(waiting)
+    }
+}
+
 struct Recorder<'a> {
     transaction: &'a Transaction<'a>,
     before: Before,
@@ -483,11 +581,8 @@ struct Recorder<'a> {
     /// items and collections that wait to be written as visible.
     skipped: HashSet<(SyncKind, String)>,
     skipped_roots: RoaringBitmap,
-    /// The entities whose synced values wait to be written, each with the
-    /// values its fields had before the records from other computers that
-    /// changed them.
-    waiting: HashMap<(SyncKind, String), HashMap<String, Value>>,
-    waiting_roots: RoaringBitmap,
+    /// The entities whose synced values wait to be written.
+    waiting: Waiting,
     /// For each waiting root, the tags it entered or left in the library
     /// since the last pass, and the tags of it that were renamed, by their
     /// old and new names.
@@ -524,8 +619,7 @@ impl<'a> Recorder<'a> {
             merges: HashMap::new(),
             skipped: HashSet::new(),
             skipped_roots: RoaringBitmap::new(),
-            waiting: HashMap::new(),
-            waiting_roots: RoaringBitmap::new(),
+            waiting: Waiting::default(),
             waiting_tags: HashMap::new(),
             held: Vec::new(),
             recording: HashSet::new(),
@@ -616,7 +710,7 @@ impl<'a> Recorder<'a> {
                 // A deletion from another computer that waits to be written
                 // is not a revival: the library had the entity before it.
                 let entity_key = (entity.kind, key);
-                let waiting = self.waiting.remove(&entity_key);
+                let waiting = self.waiting.take(self.transaction, entity_key.0, &entity_key.1, entity.local_id)?;
                 if waiting.as_ref().and_then(|fields| fields.get("deleted")) != Some(&json!(false)) {
                     self.transaction
                         .prepare_cached("INSERT OR REPLACE INTO sync_pending(entity, state) VALUES (?1, ?2)")?
@@ -743,7 +837,7 @@ impl<'a> Recorder<'a> {
                     SyncKind::Tag => {
                         if let Some(members) = self.local.snapshot.tags.get(&crate::TagId(local_id)) {
                             referring.extend(members.iter());
-                            let waiting = &**members & &self.waiting_roots;
+                            let waiting = self.waiting.roots(self.transaction, members)?;
                             if !waiting.is_empty() {
                                 self.note_waiting_tag(local_id, &waiting)?;
                             }
@@ -820,7 +914,7 @@ impl<'a> Recorder<'a> {
                     sets.push(set(change.added, "rating", 0, rating.bitmap_key().to_string(), "0"));
                 }
                 Membership::Tag(tag) => {
-                    let waiting = &(&change.added | &change.removed) & &self.waiting_roots;
+                    let waiting = self.waiting.roots(self.transaction, &(&change.added | &change.removed))?;
                     if !waiting.is_empty() {
                         self.note_waiting_tag(tag.0, &waiting)?;
                     }
@@ -848,7 +942,7 @@ impl<'a> Recorder<'a> {
                 // A root added to a folder gets its position from the
                 // comparison of the folder's list.
                 Membership::Folder(folder) => {
-                    let entered = &change.added & &self.waiting_roots;
+                    let entered = self.waiting.roots(self.transaction, &change.added)?;
                     if !entered.is_empty() {
                         self.forget_old_positions(folder, &entered)?;
                     }
@@ -861,7 +955,7 @@ impl<'a> Recorder<'a> {
         // A waiting root is compared on its own, where `write` sees the
         // values its fields had before the records from other computers.
         for set in &sets {
-            single |= &set.roots & &self.waiting_roots;
+            single |= &self.waiting.roots(self.transaction, &set.roots)?;
         }
         single -= &ids;
         single -= &self.skipped_roots;
@@ -924,8 +1018,7 @@ impl<'a> Recorder<'a> {
         let target = super::entity(self.transaction, SyncKind::Folder, &folder_key)?;
         for root in roots {
             let Some((kind, key)) = self.local.root_key(RootId(root))? else { continue };
-            let Some(old) = self.waiting.get_mut(&(kind, key.clone())) else { continue };
-            if old.remove(&field).is_some() {
+            if self.waiting.forget(self.transaction, kind, &key, &field)? {
                 self.transaction
                     .prepare_cached("DELETE FROM sync_pending_value WHERE entity = ?1 AND field = 'folder' AND target = ?2")?
                     .execute(rusqlite::params![super::entity(self.transaction, kind, &key)?, target])?;
@@ -1046,7 +1139,7 @@ impl<'a> Recorder<'a> {
             }
             // An entity that waits to be written while the synced values do
             // not show it is removed from the library when it is written.
-            (Some(_), None) if self.waiting.contains_key(&(kind, key.to_owned())) => {}
+            (Some(_), None) if self.waiting.contains(self.transaction, kind, key)? => {}
             (Some(view), None) => self.full_state(kind, key, view)?,
             (Some(view), Some(shown)) => self.changes(kind, key, view, &shown)?,
             (None, None) => {}
@@ -1066,13 +1159,13 @@ impl<'a> Recorder<'a> {
                 let collection = match &view.owner {
                     Some(collection) => self.position(kind, key, "collection", Some(json!(collection)), || {
                         json!([collection, ""])
-                    }),
+                    })?,
                     None => Value::Null,
                 };
                 fields.insert("collection".into(), collection);
             }
             SyncKind::Folder => {
-                let place = self.position(kind, key, "place", Some(json!(view.owner)), || json!([view.owner, ""]));
+                let place = self.position(kind, key, "place", Some(json!(view.owner)), || json!([view.owner, ""]))?;
                 fields.insert("place".into(), place);
             }
             _ => {}
@@ -1082,7 +1175,7 @@ impl<'a> Recorder<'a> {
         }
         for folder in &view.folders {
             let field = format!("folder:{folder}");
-            let position = self.position(kind, key, &field, None, || json!(""));
+            let position = self.position(kind, key, &field, None, || json!(""))?;
             fields.insert(field, position);
         }
         for field in raw.keys() {
@@ -1109,15 +1202,15 @@ impl<'a> Recorder<'a> {
     /// gave, or the one the synced values hold.
     /// For `collection` and `place`, whose value names the list as well,
     /// the stored value counts only when it names `list`.
-    fn position(&mut self, kind: SyncKind, key: &str, field: &str, list: Option<Value>, fallback: impl FnOnce() -> Value) -> Value {
+    fn position(&mut self, kind: SyncKind, key: &str, field: &str, list: Option<Value>, fallback: impl FnOnce() -> Value) -> Result<Value> {
         if let Some(value) = self.positions.remove(&(kind, key.to_owned(), field.to_owned())) {
-            return value;
+            return Ok(value);
         }
-        let old = self.old_value(kind, key, field).filter(|old| list.as_ref().is_none_or(|list| old.get(0) == Some(list)));
-        old.or_else(|| self.synced.raw(kind, key).ok().and_then(|raw| raw.get(field).map(|stored| stored.value.clone())))
+        let old = self.old_value(kind, key, field)?.filter(|old| list.as_ref().is_none_or(|list| old.get(0) == Some(list)));
+        Ok(        old.or_else(|| self.synced.raw(kind, key).ok().and_then(|raw| raw.get(field).map(|stored| stored.value.clone())))
             .filter(|value| !value.is_null())
             .filter(|value| list.as_ref().is_none_or(|list| value.get(0) == Some(list)))
-            .unwrap_or_else(fallback)
+            .unwrap_or_else(fallback))
     }
 
     fn changes(&mut self, kind: SyncKind, key: &str, view: &View, shown: &View) -> Result<()> {
@@ -1135,7 +1228,7 @@ impl<'a> Recorder<'a> {
                 if view.owner != shown.owner || self.positions.contains_key(&field) {
                     let value = match &view.owner {
                         Some(collection) => {
-                            self.position(kind, key, "collection", Some(json!(collection)), || json!([collection, ""]))
+                            self.position(kind, key, "collection", Some(json!(collection)), || json!([collection, ""]))?
                         }
                         None => Value::Null,
                     };
@@ -1149,7 +1242,7 @@ impl<'a> Recorder<'a> {
             SyncKind::Folder => {
                 let field = (kind, key.to_owned(), "place".to_owned());
                 if view.owner != shown.owner || self.positions.contains_key(&field) {
-                    let value = self.position(kind, key, "place", Some(json!(view.owner)), || json!([view.owner, ""]));
+                    let value = self.position(kind, key, "place", Some(json!(view.owner)), || json!([view.owner, ""]))?;
                     self.put(kind, key, "place", value);
                 }
             }
@@ -1200,8 +1293,8 @@ impl<'a> Recorder<'a> {
     /// other computers changed it, when it had one. The library still holds
     /// the entity in the place that value gives it, so the comparison of
     /// lists reads it instead of the synced value.
-    fn old_value(&self, kind: SyncKind, key: &str, field: &str) -> Option<Value> {
-        self.waiting.get(&(kind, key.to_owned()))?.get(field).filter(|value| !value.is_null()).cloned()
+    fn old_value(&self, kind: SyncKind, key: &str, field: &str) -> Result<Option<Value>> {
+        Ok(self.waiting.get(self.transaction, kind, key)?.and_then(|old| old.get(field).filter(|value| !value.is_null()).cloned()))
     }
 
     /// Compares the item list of a folder with the position keys of its
@@ -1226,7 +1319,7 @@ impl<'a> Recorder<'a> {
             if recorder.fresh {
                 return Ok(Some((kind, key, None)));
             }
-            let value = match recorder.old_value(kind, &key, &field) {
+            let value = match recorder.old_value(kind, &key, &field)? {
                 Some(old) => Some(old),
                 None => recorder.synced.raw(kind, &key)?.get(&field).map(|stored| stored.value.clone()),
             };
@@ -1257,7 +1350,7 @@ impl<'a> Recorder<'a> {
             if recorder.fresh {
                 return Ok(Some((SyncKind::Item, key, None)));
             }
-            let value = match recorder.old_value(SyncKind::Item, &key, "collection") {
+            let value = match recorder.old_value(SyncKind::Item, &key, "collection")? {
                 Some(old) => Some(old),
                 None => recorder.synced.raw(SyncKind::Item, &key)?.get("collection").map(|stored| stored.value.clone()),
             };
@@ -1305,11 +1398,11 @@ impl<'a> Recorder<'a> {
                 // also while that parent waits to be removed; one shown at
                 // the top because its parent is gone keeps the key it is
                 // shown with.
-                let waiting = recorder.waiting.contains_key(&(SyncKind::Folder, key.clone()));
+                let waiting = recorder.waiting.contains(recorder.transaction, SyncKind::Folder, &key)?;
                 let stored = recorder.synced.raw(SyncKind::Folder, &key)?.get("place").map(|stored| stored.value.clone());
                 let stored_key = stored.as_ref().and_then(|place| place.get(1)).and_then(Value::as_str).map(str::to_owned);
                 let stored_parent = stored.as_ref().and_then(|place| place.get(0)).and_then(Value::as_str).map(str::to_owned);
-                let position = match recorder.old_value(SyncKind::Folder, &key, "place") {
+                let position = match recorder.old_value(SyncKind::Folder, &key, "place")? {
                     Some(old) => old.get(1).and_then(Value::as_str).map(str::to_owned),
                     None if waiting || stored_parent == parent_key => stored_key,
                     None => tree.place.get(&key).filter(|place| place.0 == parent_key).map(|place| place.1.clone()),
@@ -1407,25 +1500,29 @@ impl<'a> Recorder<'a> {
         // left that tag in the library since the last pass, because a tag
         // that another tag now forwards to can be shown differently for the
         // same reason.
-        if !self.skipped.is_empty() || !self.waiting.is_empty() {
+        if !self.skipped.is_empty() || self.waiting.any {
             let mut dropped = Vec::new();
             for ((kind, key, field), value) in &records {
                 let entity = (*kind, key.clone());
                 let stored = self.synced.raw(*kind, key)?.get(field.as_str()).map(|stored| stored.value.clone());
-                let names_waiting = references(*kind, field, value).iter().any(|named| self.waiting.contains_key(named));
+                let mut names_waiting = false;
+                for named in references(*kind, field, value) {
+                    names_waiting |= self.waiting.contains(self.transaction, named.0, &named.1)?;
+                }
+                let waiting = self.waiting.get(self.transaction, *kind, key)?;
                 let mut unchanged = false;
                 if let Some(tag) = field.strip_prefix("tag:") {
-                    if self.waiting.contains_key(&entity) {
+                    if waiting.is_some() {
                         let root = self.local.find(*kind, key)?;
                         unchanged = !root.and_then(|root| self.waiting_tags.get(&root)).is_some_and(|tags| tags.contains(tag));
                     }
-                } else if self.waiting.contains_key(&entity) || names_waiting {
+                } else if waiting.is_some() || names_waiting {
                     unchanged = stored.as_ref() == Some(value);
                 }
-                unchanged |= self.waiting.get(&entity).is_some_and(|old| old.get(field) == Some(value));
+                unchanged |= waiting.is_some_and(|old| old.get(field) == Some(value));
                 let mut missing = false;
                 for named in references(*kind, field, value).into_iter().chain(stored.iter().flat_map(|stored| references(*kind, field, stored))) {
-                    if !self.waiting.contains_key(&named) && !self.skipped.contains(&named) {
+                    if !self.waiting.contains(self.transaction, named.0, &named.1)? && !self.skipped.contains(&named) {
                         continue;
                     }
                     match self.local.find(named.0, &named.1)? {
