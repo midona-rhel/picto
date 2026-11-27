@@ -33,7 +33,7 @@ use serde_json::Value;
 
 use crate::Result;
 
-pub(crate) use apply::{finish_projection, merge_remote, pending_projection, project};
+pub(crate) use apply::{finish_projection, merge_remote, pending_projection, project, synced_for_projection};
 #[cfg(test)]
 pub(crate) use record::differences;
 pub(crate) use record::{record, record_full};

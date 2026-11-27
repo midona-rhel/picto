@@ -84,12 +84,25 @@ impl<'a> Local<'a> {
             return Ok(());
         }
         let snapshot = self.snapshot;
-        for (tag_id, members) in snapshot.tags.iter() {
-            if members.is_disjoint(&roots) {
-                continue;
+        // The tags that hold one of the roots are found first, and only
+        // their names are read, so that a write of a few roots does not copy
+        // the name of every tag in the library. A library has tens of
+        // thousands of tags, so they are checked on the thread pool of the
+        // smart folders, as `capture_structure` checks them.
+        let entries = snapshot.tags.iter().collect::<Vec<_>>();
+        let scan = |(tag_id, members): &(&crate::TagId, &crate::projection::SharedBitmap)| {
+            (!members.is_disjoint(&roots)).then(|| (tag_id.0, &***members & &roots))
+        };
+        let held: HashMap<u32, RoaringBitmap> = match crate::smart::smart_folder_pool() {
+            Ok(pool) if entries.len() >= 1_024 => {
+                use rayon::prelude::*;
+                pool.install(|| entries.par_iter().filter_map(scan).collect())
             }
-            if let Some(name) = self.tag_names().get(&tag_id.0).cloned() {
-                for root in members & &roots {
+            _ => entries.iter().filter_map(scan).collect(),
+        };
+        if !held.is_empty() {
+            for (name, tag_id) in snapshot.tag_ids_by_name.iter() {
+                for root in held.get(&tag_id.0).into_iter().flatten() {
                     self.root_tags.entry(root).or_default().push(name.clone());
                 }
             }

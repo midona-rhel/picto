@@ -322,7 +322,10 @@ entity is written. The entities are then written into the library in small trans
 background priority. An item or collection whose new records only change its lifecycle, rating,
 tags, name, notes, links or modification date, and a new item outside collections and folders, are
 written directly into their rows and bitmaps, 32 in one transaction; a new item is created as an
-import creates it. The others are written with their structure, one in each
+import creates it. What the synced values show for these 32 is read from the sync file before the
+transaction starts, and the tags that hold them are found on the thread pool of the smart folders,
+so that the transaction holds the library's writer for only a few milliseconds and a write of the
+user waits no longer than that. The others are written with their structure, one in each
 transaction together with the waiting entities whose position changed in the same folder: tags,
 tag groups and folders are created and removed, the folder tree is written as a whole when a folder
 or a tag is written, and items and collections are written with `restore_structure`, the code that

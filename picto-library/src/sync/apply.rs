@@ -229,32 +229,48 @@ pub(crate) fn finish_projection(
     Ok(transaction.commit()?)
 }
 
-/// Writes what the synced values (read through `sync`) show for `keys` into
-/// the library and `snapshot`. With `direct`, the keys are written with
-/// `write_directly` where it can. The entities in `revived` count as visible
-/// even when the synced values delete them.
-#[allow(clippy::too_many_arguments)]
+/// The synced values (read through `sync`) for a write of `keys`, in which
+/// the entities in `revived` count as visible even when the synced values
+/// delete them. With `direct`, what the synced values show for each key is
+/// read here, before the library transaction, so that the transaction does
+/// not wait for these reads of the sync file. Nothing else writes the sync
+/// file while its connection is held, so the values stay the same.
+pub(crate) fn synced_for_projection<'a>(
+    sync: &'a Connection,
+    keys: &BTreeSet<Key>,
+    revived: HashSet<Key>,
+    direct: bool,
+) -> Result<Synced<'a>> {
+    let mut synced = Synced::new(sync);
+    synced.revived = revived;
+    if direct {
+        for (kind, key) in keys {
+            synced.view(*kind, key)?;
+        }
+    }
+    Ok(synced)
+}
+
+/// Writes what `synced` shows for `keys` into the library and `snapshot`.
+/// With `direct`, the keys are written with `write_directly` where it can.
 pub(crate) fn project(
     transaction: &Transaction<'_>,
     revision: u64,
     snapshot: &mut ProjectionSnapshot,
-    sync: &Connection,
+    synced: &mut Synced<'_>,
     keys: BTreeSet<Key>,
-    revived: HashSet<Key>,
     direct: bool,
     protected: &BTreeSet<FileId>,
 ) -> Result<Projected> {
-    let mut synced = Synced::new(sync);
-    synced.revived = revived;
     let mut projected = Projected::default();
     projected.resources.extend(
         ["roots", "media", "sidebar", "tags", "folders", "collections", "search", "navigation", "smart-folders"]
             .map(str::to_owned),
     );
-    let keys = if direct { write_directly(transaction, revision, snapshot, &mut synced, keys, &mut projected)? } else { keys };
+    let keys = if direct { write_directly(transaction, revision, snapshot, synced, keys, &mut projected)? } else { keys };
     if !keys.is_empty() {
         projected.structure = true;
-        project_structure(transaction, revision, snapshot, &mut synced, &keys, protected, &mut projected)?;
+        project_structure(transaction, revision, snapshot, synced, &keys, protected, &mut projected)?;
     }
     crate::smart::settle_affected_for(
         transaction,

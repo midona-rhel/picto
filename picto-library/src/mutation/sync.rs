@@ -152,6 +152,7 @@ impl Library {
         let recorded = connection.query_row("SELECT recorded_revision FROM sync_state", [], |row| row.get::<_, i64>(0))?;
         let keys = chunk.iter().map(|(_, kind, key, _)| (*kind, key.clone())).collect();
         let revived = chunk.iter().filter(|row| row.3).map(|(_, kind, key, _)| (*kind, key.clone())).collect();
+        let mut synced = crate::sync::synced_for_projection(connection, &keys, revived, direct)?;
         let protected = self.history.protected_cleanup_files();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
@@ -164,7 +165,7 @@ impl Library {
                 }
                 let mut next = (*snapshot).clone();
                 let projected =
-                    crate::sync::project(transaction, revision, &mut next, connection, keys, revived, direct, &protected)?;
+                    crate::sync::project(transaction, revision, &mut next, &mut synced, keys, direct, &protected)?;
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(revision, projected.resources, projected.roots.iter().map(RootId));
                 Ok(Some(((projected.written, projected.structure), PublishedDelta { snapshot: next, receipt, history: None })))
