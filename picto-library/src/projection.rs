@@ -130,8 +130,9 @@ impl Deref for SharedBitmap {
 const ID_MAP_SHARD_SHIFT: u32 = 10;
 const ID_MAP_SHARD_MASK: u32 = (1 << ID_MAP_SHARD_SHIFT) - 1;
 
-/// Signed canonical timestamps, ordered without losing pre-epoch values.
-/// Date filters deliberately retain their existing nonnegative/clamped semantics.
+/// Dates in milliseconds since 1970 for each root, kept with their sign so
+/// that dates before 1970 sort correctly. Date filters treat a date before
+/// 1970 as 0, as they always have.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DateIndex(NumericIndex);
 
@@ -148,12 +149,14 @@ impl DateIndex {
         self.0.remove(id);
     }
 
-    /// The canonical signed timestamp, for cursor keys.
+    /// The date as stored, with its sign, for the keys that page through a
+    /// sorted list.
     pub fn signed_value(&self, id: u32) -> Option<i64> {
         self.0.value(id).map(|key| (key ^ (1u64 << 63)) as i64)
     }
 
-    /// Existing nonnegative scalar consumers retain their pre-epoch clamping.
+    /// The date with a date before 1970 read as 0, for the callers that take
+    /// no negative values.
     pub fn value(&self, id: u32) -> Option<u64> {
         self.0
             .value(id)
@@ -200,8 +203,10 @@ impl DateIndex {
         if absent.is_empty() || !missing {
             return self.0.ordered_window(selection, start, limit, descending);
         }
-        // SQL's COALESCE(date, -1) ties missing dates with actual -1 values.
-        // Select three disjoint ranges; never materialize a full matching order.
+        // SQL sorts a missing date as -1 (COALESCE(date, -1)), so a missing
+        // date ties with a date of -1. The window is taken from three
+        // separate ranges (below -1, equal to -1 or missing, above -1), so
+        // the whole sorted list is never built.
         let below = index.between(None, Some(Self::key(-2)), selection & &index.present);
         let equal = index.between(
             Some(Self::key(-1)),
@@ -387,8 +392,10 @@ impl NumericIndex {
         self.shards.values().map(|shard| shard.sum(selection)).sum()
     }
 
-    /// Radix-select an ordinal window without materializing the matching order.
-    /// Equal values use ID order, reversed together with values for descending.
+    /// The members at positions `start..start + limit` of the selection
+    /// sorted by value, found one bit of the value at a time, without sorting
+    /// the whole selection. Equal values sort by id; a descending sort
+    /// reverses both.
     pub(crate) fn ordered_window(
         &self,
         selection: &RoaringBitmap,
@@ -461,8 +468,9 @@ impl NumericIndex {
     }
 
     fn merged_order(&self) -> Result<&NumericOrderIndex> {
-        // Shared across queries, not across writes. This bounded bit-slice view
-        // avoids re-merging the same projection on every scroll window.
+        // The merged index is kept until the next write and shared by the
+        // queries in between, so that scrolling does not merge it again for
+        // every window.
         if self.order_slices.get().is_none() {
             let mut merged = NumericShard::default();
             for shard in self.shards.values() {
@@ -530,8 +538,9 @@ fn select_numeric_window(
         output.extend(matches);
         return Ok(());
     }
-    // Finish small radix buckets directly. Splitting down to individual IDs
-    // would allocate thousands of tiny bitmaps for a normal 1,500-item window.
+    // A small group of ids is sorted directly. Splitting it one bit at a time
+    // down to single ids would allocate thousands of small bitmaps for an
+    // ordinary window of 1,500 items.
     if matches.len() <= 256 && slices.len() <= 16 {
         let mut values = matches
             .iter()
@@ -668,8 +677,8 @@ impl NumericShard {
     }
 }
 
-/// One immutable recent-view projection: display order and candidate membership
-/// are built together from the same canonical rows.
+/// The Recently viewed list in memory: its order and the set of its roots,
+/// both built from the same rows of `recent_view`.
 #[derive(Debug, Clone, Default)]
 pub struct RecentViews {
     ordered: Vec<(RootId, i64)>,
@@ -697,7 +706,8 @@ pub struct ProjectionSnapshot {
     pub subscription_counts: Arc<crate::subscription_counts::SubscriptionCounts>,
     pub text_index: Arc<crate::text_index::TextIndex>,
     pub name_index: Arc<crate::name_index::NameIndex>,
-    /// Drawing facts of every root, hydrated for grid summaries without SQLite.
+    /// The facts the grid draws for every root, so that the grid reads them
+    /// without SQLite.
     pub drawing: Arc<crate::browsing::DrawingIndex>,
     /// Recently viewed roots, most recent first; ties break by descending ID.
     pub recent_views: Arc<RecentViews>,
@@ -735,8 +745,9 @@ pub struct ProjectionSnapshot {
     pub smart_local_results: Arc<HashMap<u32, SharedBitmap>>,
     /// Local results intersected with every ancestor result.
     pub smart_results: Arc<HashMap<u32, SharedBitmap>>,
-    /// Session-local cache version of each smart folder's result. It moves only
-    /// when that folder's membership changes, so other folders stay cached.
+    /// A version number of each smart folder's result, for this session's
+    /// caches. It changes only when that folder's members change, so the
+    /// cached results of other folders stay valid.
     pub smart_result_versions: Arc<HashMap<u32, u64>>,
     /// Definitions exactly as saved by each smart folder.
     pub smart_queries: Arc<HashMap<u32, ViewQuerySpec>>,
@@ -861,10 +872,11 @@ pub struct ProjectionStore {
     load_statistics: ProjectionLoadStatistics,
 }
 
-/// Non-overlapping startup stages in microseconds. The resident text, name,
-/// drawing and navigation state is rebuilt from canonical rows on every open;
-/// only the bitmap and index checkpoint is reused, and recovery from a missing
-/// or stale checkpoint is reported separately.
+/// How long each stage of opening took, in microseconds; the stages do not
+/// overlap. The search text, names, drawing facts and folder tree are rebuilt
+/// from the library's tables at every open. Only the checkpoint of the
+/// bitmaps and indexes is reused, and the time spent rebuilding when the
+/// checkpoint is missing or out of date is reported on its own.
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct ProjectionLoadStatistics {
     pub total_us: u64,
@@ -882,9 +894,10 @@ pub struct ProjectionLoadStatistics {
     pub checkpoint_reused: bool,
 }
 
-/// Resident state rebuilt from canonical rows on every open and never
-/// checkpointed: one streaming scan each is simpler than another persisted
-/// derived format with its own journal and repair lifecycle.
+/// The state in memory that is rebuilt from the library's tables at every
+/// open and never saved in the checkpoint. One scan of the tables for each
+/// part is simpler than another saved format with a journal and repair code
+/// of its own.
 struct ResidentState {
     text_index: Arc<crate::text_index::TextIndex>,
     name_index: Arc<crate::name_index::NameIndex>,
@@ -968,10 +981,11 @@ impl ProjectionStore {
         Self::load_with(database, &mut |_| {})
     }
 
-    /// Load, reporting each stage. Cancellation is the caller's scoped open
-    /// token: the resident scans and the canonical rebuild check it as they
-    /// run, and the atomic steps (checkpoint read and decode, the recovery
-    /// write) are checked immediately before and after.
+    /// Loads the projection and reports each stage. The open can be
+    /// cancelled through the cancellation that the caller entered: the scans
+    /// of the tables and the rebuild check it as they run, and the steps that
+    /// cannot stop half way (reading and decoding the checkpoint, writing a
+    /// repair) are checked just before and just after.
     pub fn load_with(
         database: &LibraryDatabase,
         progress: &mut dyn FnMut(OpenStage),
@@ -1008,8 +1022,10 @@ impl ProjectionStore {
                         resident.attach(&mut snapshot);
                         return Ok((snapshot, false));
                     }
-                    // A copied or interrupted checkpoint may have a valid checksum and outer
-                    // revision while carrying stale derived state. Rebuild from canonical data.
+                    // A checkpoint that was copied, or whose write was
+                    // interrupted, can have a valid checksum and revision and
+                    // still hold out-of-date state, so the projection is
+                    // rebuilt from the library's tables.
                     progress(OpenStage::Loading(LoadStage::Canonical));
                     let stage = std::time::Instant::now();
                     let recovered = load(connection, Some(&snapshot), resident, progress)?;
@@ -1382,8 +1398,9 @@ fn load(
         smart_queries: Arc::new(HashMap::new()),
         smart_effective_queries: Arc::new(HashMap::new()),
     };
-    // Smart-folder evaluation may run on a worker pool that cannot see the
-    // open token, so it is bracketed by checks rather than checked inside.
+    // Smart folders may be evaluated on a pool of worker threads that cannot
+    // see the cancellation of the open, so it is checked before and after
+    // the evaluation instead of during it.
     progress(OpenStage::Loading(LoadStage::Smart));
     crate::query_request::check()?;
     crate::smart::load(connection, &mut snapshot)?;
@@ -1446,27 +1463,19 @@ fn persist_recovered_partitions(
         crate::database::WorkPriority::CorrectnessRecovery,
         |transaction| {
             let mut changed = 0;
-            for value in Lifecycle::ALL {
-                changed += bitmap::replace(
-                    transaction,
-                    snapshot.revision,
-                    BitmapKey {
-                        domain: BitmapDomain::Lifecycle,
-                        key_id: value.bitmap_key(),
-                    },
-                    snapshot.lifecycle(value),
-                )?;
-            }
-            for value in Rating::ALL {
-                changed += bitmap::replace(
-                    transaction,
-                    snapshot.revision,
-                    BitmapKey {
-                        domain: BitmapDomain::Rating,
-                        key_id: value.bitmap_key(),
-                    },
-                    snapshot.rating(value),
-                )?;
+            let partitions = Lifecycle::ALL
+                .into_iter()
+                .map(|value| (BitmapDomain::Lifecycle, value.bitmap_key(), snapshot.lifecycle(value)))
+                .chain(
+                    Rating::ALL
+                        .into_iter()
+                        .map(|value| (BitmapDomain::Rating, value.bitmap_key(), snapshot.rating(value))),
+                );
+            for (domain, key_id, members) in partitions {
+                let key = BitmapKey { domain, key_id };
+                // The rows get the next revision, as a write would give
+                // them, so that the sync recorder finds them.
+                changed += bitmap::replace(transaction, snapshot.revision + 1, key, members)?;
             }
             if changed != 0 {
                 transaction.execute("DELETE FROM projection_checkpoint WHERE singleton = 1", [])?;
@@ -1572,7 +1581,8 @@ mod tests {
             .filter(|n| n % 7 != 0)
             .map(|n| n * 131 + 1)
             .collect();
-        // Warm a derived order, then retain the snapshot across an update/removal.
+        // Build a sorted order once, then keep the snapshot while a value is
+        // updated and removed.
         index.ordered_window(&selection, 0, 4, false, true).unwrap();
         let previous = index.clone();
         index.insert(132, 1234);

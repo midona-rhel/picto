@@ -12,6 +12,12 @@
 //! Add `--delete-only` to measure only permanent delete and its undo.
 //! Add `--tag-pages-only` to measure paging and search with 200k tag
 //! definitions after the import.
+//! Add `--sync` to turn cloud sync on after the fixture is built. Each write
+//! row then still measures the write alone, and a row after it ending in
+//! "recorder catches up" measures the pass of the sync recorder that records
+//! the write. The rows that apply change records from another computer are
+//! measured too. Run once with and once without it to compare the write
+//! rows.
 use std::time::Instant;
 
 use picto_library::predicate::{
@@ -22,7 +28,7 @@ use picto_library::selection::{RangeSpan, SelectionTarget};
 use picto_library::{
     LabColor,
     FolderId, GroupRequest, ImmutableMediaFacts, Library, Lifecycle, PreparedImport, Rating,
-    RootId, SmartFolderId, SmartFolderInput,
+    RootId, SmartFolderId, SmartFolderInput, SyncKind, SyncRecord, SyncTimestamp,
 };
 
 type R<T> = Result<T, Box<dyn std::error::Error>>;
@@ -35,7 +41,7 @@ mod subscriptions;
 fn main() -> R<()> {
     let roots = arg(1, 1_000_000);
     let runs = arg(2, 5);
-    // Leave room for the folders the smart-folder benches create.
+    // Room is left for the smart folders that the measurements create.
     let smart_total = arg(3, 100).clamp(10, picto_library::smart::MAX_SMART_FOLDERS - 20);
     let at = |n: usize| n * roots / 1_000_000;
     let dir = tempfile::tempdir()?;
@@ -66,7 +72,7 @@ fn main() -> R<()> {
         return subscriptions::run(library, roots, runs);
     }
 
-    // --- fixture: settle FTS so name text filters see every root ---
+    // --- fixture: index the search text, so that name filters see every root ---
     let t = Instant::now();
     while library.settle_fts(20_000)?.is_some() {}
     println!("FIXTURE settle_fts_s={:.1}", t.elapsed().as_secs_f64());
@@ -205,6 +211,14 @@ fn main() -> R<()> {
     library.history().clear();
     println!("FIXTURE total_s={:.1}", fixture_started.elapsed().as_secs_f64());
     print_memory(&library, "after_fixture");
+    let sync = std::env::args().any(|arg| arg == "--sync");
+    if sync {
+        let t = Instant::now();
+        library.start_sync_recording()?;
+        println!("ROW|start_sync_recording (records the full state)|{roots} roots|{:.1}|-|1 run", ms(t));
+    }
+    library.database().checkpoint_wal()?;
+    print_sizes(&path, sync, "after the fixture")?;
 
     // --- selections ---
     let range_query = |scope: ItemScope, lo: usize, n: usize| SelectionTarget::Query {
@@ -230,23 +244,23 @@ fn main() -> R<()> {
 
     // --- mutations ---
     let mut k = 0usize;
-    bench("apply_tags add 200k", "200000", runs, || {
+    bench_write(&library, "apply_tags add 200k", "200000", runs, || {
         k += 1;
         library.apply_tags(&sel_200k, &[format!("audit:a{k}")], true)?;
         Ok(())
     }, Some(|| Ok(())))?;
-    // remove the tags just added, timed separately
+    // The tags just added are removed, and the removal is timed on its own.
     let mut kr = 0usize;
-    bench("apply_tags remove 200k", "200000", runs, || {
+    bench_write(&library, "apply_tags remove 200k", "200000", runs, || {
         kr += 1;
         library.apply_tags(&sel_200k, &[format!("audit:a{kr}")], false)?;
         Ok(())
     }, None::<fn() -> R<()>>)?;
-    bench("apply_tags add 1", "1", runs * 4, || {
+    bench_write(&library, "apply_tags add 1", "1", runs * 4, || {
         library.apply_tags(&one, &["audit:one".into()], true)?;
         Ok(())
     }, Some(|| { library.apply_tags(&one, &["audit:one".into()], false)?; Ok(()) }))?;
-    bench("apply_tags remove 1", "1", runs * 4, || {
+    bench_write(&library, "apply_tags remove 1", "1", runs * 4, || {
         library.apply_tags(&one, &["audit:one".into()], false)?;
         Ok(())
     }, Some(|| { library.apply_tags(&one, &["audit:one".into()], true)?; Ok(()) }))?;
@@ -259,35 +273,38 @@ fn main() -> R<()> {
         |l| { l.set_rating(&one, Rating::Four)?; Ok(()) },
         |l| { l.undo()?; Ok(()) })?;
 
-    let mut trash_ms = Vec::new();
-    let mut restore_ms = Vec::new();
+    let (mut trash_ms, mut trash_recorded) = (Vec::new(), Vec::new());
+    let (mut restore_ms, mut restore_recorded) = (Vec::new(), Vec::new());
     for _ in 0..runs {
         let t = Instant::now();
         library.set_lifecycle(&sel_200k, Lifecycle::Trash)?;
         trash_ms.push(ms(t));
+        catch_up(&library, &mut trash_recorded)?;
         let t = Instant::now();
         library.set_lifecycle(&sel_200k_trash, Lifecycle::Active)?;
         restore_ms.push(ms(t));
+        catch_up(&library, &mut restore_recorded)?;
     }
-    emit("set_lifecycle Trash 200k", "200000", &mut trash_ms);
-    emit("set_lifecycle restore Trash->Active 200k", "200000", &mut restore_ms);
+    emit_write("set_lifecycle Trash 200k", "200000", &mut trash_ms, &mut trash_recorded);
+    emit_write("set_lifecycle restore Trash->Active 200k", "200000", &mut restore_ms, &mut restore_recorded);
 
-    // folder (200k members) operations; root 600_000 is outside it
+    // Operations on the folder of 200k members; root 600,000 is not in it.
     let outsider = explicit(&ids[at(600_000)..at(600_000) + 1]);
-    bench("add_to_folder 1 -> 200k folder", "1", runs * 2, || {
+    bench_write(&library, "add_to_folder 1 -> 200k folder", "1", runs * 2, || {
         library.add_to_folder(&outsider, big_folder)?;
         Ok(())
     }, Some(|| { library.remove_from_folder(&outsider, big_folder)?; Ok(()) }))?;
-    bench("remove_from_folder 1 <- 200k folder", "1", runs * 2, || {
+    bench_write(&library, "remove_from_folder 1 <- 200k folder", "1", runs * 2, || {
         library.remove_from_folder(&outsider, big_folder)?;
         Ok(())
     }, Some(|| { library.add_to_folder(&outsider, big_folder)?; Ok(()) }))?;
     library.remove_from_folder(&outsider, big_folder)?;
-    // move one item inside a loaded 1,500-item window (send the window with one item moved)
+    // One item moves inside a loaded window of 1,500 items: the window is
+    // sent with one item moved.
     let order = library.projections().snapshot().folder_orders[&big_folder].clone();
     let window: Vec<RootId> = order[1_000..2_500].to_vec();
     let mut flip = false;
-    bench("reorder_folder_items move 1 within 1.5k window of 200k folder", "1 (1500 sent)", runs * 2, || {
+    bench_write(&library, "reorder_folder_items move 1 within 1.5k window of 200k folder", "1 (1500 sent)", runs * 2, || {
         flip = !flip;
         let mut moved = window.clone();
         if flip { let x = moved.remove(0); moved.push(x); }
@@ -296,12 +313,12 @@ fn main() -> R<()> {
     }, None::<fn() -> R<()>>)?;
 
     let mut n = 0;
-    bench("rename_root 1", "1", runs * 4, || {
+    bench_write(&library, "rename_root 1", "1", runs * 4, || {
         n += 1;
         library.rename_root(ids[at(500_000)], &format!("renamed-{n}.png"), now())?;
         Ok(())
     }, None::<fn() -> R<()>>)?;
-    bench("set_notes 1", "1", runs * 4, || {
+    bench_write(&library, "set_notes 1", "1", runs * 4, || {
         n += 1;
         library.set_notes(&one, Some(format!("note {n}")), now())?;
         Ok(())
@@ -309,7 +326,7 @@ fn main() -> R<()> {
 
     let mut created: Vec<SmartFolderId> = Vec::new();
     let mut sc = 0;
-    bench("create_smart_folder (tag rule)", "-", runs * 2, || {
+    bench_write(&library, "create_smart_folder (tag rule)", "-", runs * 2, || {
         sc += 1;
         created.push(create_smart(&library, &format!("New smart {sc}"), tag_filter(vocab_ids[60]))?);
         Ok(())
@@ -319,7 +336,7 @@ fn main() -> R<()> {
     }
     let edit_target = smart_ids[0];
     let mut e = 0;
-    bench("update_smart_folder (change tag rule)", "-", runs * 2, || {
+    bench_write(&library, "update_smart_folder (change tag rule)", "-", runs * 2, || {
         e += 1;
         library.update_smart_folder(edit_target, smart_input("Smart tag 0", tag_filter(vocab_ids[if e % 2 == 1 { 60 } else { 0 }])))?;
         Ok(())
@@ -327,61 +344,71 @@ fn main() -> R<()> {
 
     let mut cg = 0usize;
     let mut last_collection = None;
-    bench("organize_into_collection 10", "10", runs, || {
+    bench_write(&library, "organize_into_collection 10", "10", runs, || {
         let start = at(950_000) + cg * 10;
         cg += 1;
         let (cid, _) = library.organize_into_collection(&group(&ids[start..start + 10], 10_000 + cg))?;
         last_collection = Some(cid);
         Ok(())
     }, None::<fn() -> R<()>>)?;
-    // ungroup the collections just created (each sample a fresh one)
+    // The collections just created are ungrouped, a new one for each sample.
     let mut fresh = Vec::new();
     for c in 0..runs {
         let start = at(960_000) + c * 10;
         fresh.push(library.organize_into_collection(&group(&ids[start..start + 10], 20_000 + c))?.0);
     }
     let mut fi = fresh.into_iter();
-    bench("ungroup_collection 10", "10", runs, || {
+    bench_write(&library, "ungroup_collection 10", "10", runs, || {
         library.ungroup_collection(fi.next().unwrap(), now())?;
         Ok(())
     }, None::<fn() -> R<()>>)?;
     let _ = last_collection;
 
-    // undo / redo of a 200k tag op
-    let mut undo_ms = Vec::new();
-    let mut redo_ms = Vec::new();
+    // Undo and redo of a tag added to 200k roots.
+    let (mut undo_ms, mut undo_recorded) = (Vec::new(), Vec::new());
+    let (mut redo_ms, mut redo_recorded) = (Vec::new(), Vec::new());
     for i in 0..runs {
         library.apply_tags(&sel_200k, &[format!("audit:u{i}")], true)?;
+        catch_up(&library, &mut Vec::new())?;
         let t = Instant::now();
         library.undo()?;
         undo_ms.push(ms(t));
+        catch_up(&library, &mut undo_recorded)?;
         let t = Instant::now();
         library.redo()?;
         redo_ms.push(ms(t));
+        catch_up(&library, &mut redo_recorded)?;
         library.apply_tags(&sel_200k, &[format!("audit:u{i}")], false)?;
     }
-    emit("undo apply_tags add 200k", "200000", &mut undo_ms);
-    emit("redo apply_tags add 200k", "200000", &mut redo_ms);
+    emit_write("undo apply_tags add 200k", "200000", &mut undo_ms, &mut undo_recorded);
+    emit_write("redo apply_tags add 200k", "200000", &mut redo_ms, &mut redo_recorded);
     println!("HISTORY entries={} bytes={}", library.history().state().entries, library.history().state().bytes);
 
     let mut next_index = roots;
-    bench("ingest_batch MAX_INGEST_BATCH new roots", &picto_library::ingest::MAX_INGEST_BATCH.to_string(), runs * 2, || {
+    bench_write(&library, "ingest_batch MAX_INGEST_BATCH new roots", &picto_library::ingest::MAX_INGEST_BATCH.to_string(), runs * 2, || {
         let batch = (next_index..next_index + picto_library::ingest::MAX_INGEST_BATCH).map(prepared).collect::<Vec<_>>();
         next_index += picto_library::ingest::MAX_INGEST_BATCH;
         library.ingest_batch(&batch)?;
         Ok(())
     }, None::<fn() -> R<()>>)?;
 
-    let mut del_ms = Vec::new();
+    let (mut del_ms, mut del_recorded) = (Vec::new(), Vec::new());
     for i in 0..runs {
         let start = at(700_000) + i * 1_000;
         let target = explicit(&ids[start..start + 1_000]);
         library.set_lifecycle(&target, Lifecycle::Trash)?;
+        catch_up(&library, &mut Vec::new())?;
         let t = Instant::now();
         library.permanently_delete(&target, now(), 0, false)?;
         del_ms.push(ms(t));
+        catch_up(&library, &mut del_recorded)?;
     }
-    emit("permanently_delete 1k (from Trash)", "1000", &mut del_ms);
+    emit_write("permanently_delete 1k (from Trash)", "1000", &mut del_ms, &mut del_recorded);
+    if sync {
+        bench_apply(&library, roots, runs, &at)?;
+        library.database().checkpoint_wal()?;
+        print_sizes(&path, sync, "after the writes")?;
+    }
     while library.settle_fts(20_000)?.is_some() {}
 
     // --- reads ---
@@ -587,6 +614,57 @@ fn main() -> R<()> {
     Ok(())
 }
 
+/// Applies change records that another computer made: a rating of one item,
+/// a tag on 1,000 items, and a new item. Each run uses later timestamps, so
+/// that the records replace the stored ones.
+fn bench_apply(library: &Library, roots: usize, runs: usize, at: &dyn Fn(usize) -> usize) -> R<()> {
+    let mut wall_ms = now() + 60_000;
+    let mut record = |key: String, field: &str, value: serde_json::Value| {
+        wall_ms += 1;
+        SyncRecord {
+            kind: SyncKind::Item,
+            key,
+            field: field.into(),
+            value,
+            timestamp: SyncTimestamp { wall_ms, counter: 0, device: "benchmark".into() },
+        }
+    };
+    let mut samples = Vec::new();
+    for run in 0..runs * 2 {
+        let records = vec![record(format!("hash-{}", at(500_000)), "rating", serde_json::json!(run % 5 + 1))];
+        let t = Instant::now();
+        library.apply_sync_records(&records)?;
+        samples.push(ms(t));
+    }
+    emit("apply_sync_records rating of 1 item", "1", &mut samples);
+    let mut samples = Vec::new();
+    for run in 0..runs {
+        let records = (0..1_000)
+            .map(|index| record(format!("hash-{}", at(400_000) + index), "tag:vocab:1", serde_json::json!(run % 2 == 0)))
+            .collect::<Vec<_>>();
+        let t = Instant::now();
+        library.apply_sync_records(&records)?;
+        samples.push(ms(t));
+    }
+    emit("apply_sync_records tag on 1k items", "1000", &mut samples);
+    let mut samples = Vec::new();
+    for run in 0..runs * 2 {
+        let key = format!("remote-{run}");
+        let records = vec![
+            record(key.clone(), "deleted", serde_json::json!(false)),
+            record(key.clone(), "file", serde_json::json!({"mime": "image/png", "size": 1000, "width": 10, "height": 10})),
+            record(key.clone(), "name", serde_json::json!(format!("remote-{run}.png"))),
+            record(key.clone(), "lifecycle", serde_json::json!("active")),
+            record(key, "tag:vocab:2", serde_json::json!(true)),
+        ];
+        let t = Instant::now();
+        library.apply_sync_records(&records)?;
+        samples.push(ms(t));
+    }
+    emit("apply_sync_records new item", &format!("{roots} roots"), &mut samples);
+    Ok(())
+}
+
 fn bench_tag_pages(library: &Library, runs: usize) -> R<()> {
     let tag_count = library.projections().snapshot().tag_ids_by_name.len();
     let size = format!("{tag_count} tags");
@@ -628,6 +706,31 @@ fn bench(
     Ok(())
 }
 
+/// Like `bench` for a write: with sync on, the recorder runs after each
+/// write and after `between`, and its passes after the writes are measured.
+fn bench_write(
+    library: &Library,
+    label: &str,
+    size: &str,
+    runs: usize,
+    mut f: impl FnMut() -> R<()>,
+    mut between: Option<impl FnMut() -> R<()>>,
+) -> R<()> {
+    let (mut samples, mut recorded) = (Vec::new(), Vec::new());
+    for _ in 0..runs {
+        if let Some(b) = between.as_mut() {
+            b()?;
+            catch_up(library, &mut Vec::new())?;
+        }
+        let t = Instant::now();
+        f()?;
+        samples.push(ms(t));
+        catch_up(library, &mut recorded)?;
+    }
+    emit_write(label, size, &mut samples, &mut recorded);
+    Ok(())
+}
+
 fn bench_with_reset(
     label: &str,
     size: &str,
@@ -636,14 +739,44 @@ fn bench_with_reset(
     f: impl Fn(&Library) -> R<()>,
     reset: impl Fn(&Library) -> R<()>,
 ) -> R<()> {
-    let mut samples = Vec::new();
+    let (mut samples, mut recorded) = (Vec::new(), Vec::new());
     for _ in 0..runs {
         let t = Instant::now();
         f(library)?;
         samples.push(ms(t));
+        catch_up(library, &mut recorded)?;
         reset(library)?;
+        catch_up(library, &mut Vec::new())?;
     }
-    emit(label, size, &mut samples);
+    emit_write(label, size, &mut samples, &mut recorded);
+    Ok(())
+}
+
+/// With sync on, runs the recorder until it has recorded every write and
+/// adds how long that took to `samples`.
+fn catch_up(library: &Library, samples: &mut Vec<f64>) -> R<()> {
+    if library.sync_on() {
+        let t = Instant::now();
+        library.record_sync_changes()?;
+        samples.push(ms(t));
+    }
+    Ok(())
+}
+
+fn emit_write(label: &str, size: &str, samples: &mut [f64], recorded: &mut [f64]) {
+    emit(label, size, samples);
+    if !recorded.is_empty() {
+        emit(&format!("{label}: recorder catches up"), size, recorded);
+    }
+}
+
+fn print_sizes(path: &std::path::Path, sync: bool, when: &str) -> R<()> {
+    println!("SIZE library database {when}, sync {}: {} bytes", if sync { "on" } else { "off" }, std::fs::metadata(path)?.len());
+    let sync_file = path.with_file_name("sync.sqlite");
+    if sync_file.exists() {
+        let log = std::fs::metadata(path.with_file_name("sync.sqlite-wal")).map_or(0, |metadata| metadata.len());
+        println!("SIZE sync file {when}: {} bytes, and {log} bytes in its WAL", std::fs::metadata(sync_file)?.len());
+    }
     Ok(())
 }
 

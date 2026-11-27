@@ -111,7 +111,7 @@ pub(super) fn history_dependencies(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn apply_semantic_change(
+pub(crate) fn apply_semantic_change(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
     snapshot: &mut ProjectionSnapshot,
@@ -236,6 +236,18 @@ pub(super) fn apply_semantic_change(
                             "cannot replay history because folder {owner_id} changed"
                         )));
                     }
+                    // Roots deleted since the entry was recorded are left
+                    // out. Changes applied from another computer can delete
+                    // them.
+                    let existing = snapshot
+                        .root_kinds
+                        .values()
+                        .fold(RoaringBitmap::new(), |roots, kind| roots | &**kind);
+                    let replacement = &replacement
+                        .iter()
+                        .copied()
+                        .filter(|root| existing.contains(*root))
+                        .collect::<Vec<_>>();
                     ordering::replace(transaction, revision, *owner_kind, *owner_id, replacement)?;
                     let old_bitmap = expected.iter().copied().collect::<RoaringBitmap>();
                     let new_bitmap = replacement.iter().copied().collect::<RoaringBitmap>();
@@ -749,7 +761,11 @@ pub(super) fn apply_semantic_change(
                             folder.color,
                             folder.notes,
                             folder.auto_tag_ids,
-                            folder.cover_root_id.map(|id| id.0),
+                            // A cover root deleted since, which changes
+                            // from another computer can do, is left out.
+                            folder.cover_root_id.map(|id| id.0).filter(|root| {
+                                snapshot.root_kinds.values().any(|kind| kind.contains(*root))
+                            }),
                             folder.watch_path,
                             folder.watch_enabled,
                             folder.watch_subfolders,

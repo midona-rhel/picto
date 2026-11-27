@@ -268,8 +268,80 @@ merge has finished or has been undone. The other library's subscriptions, watche
 settings, recent views and duplicate decisions are not read.
 
 `picto-library/examples/library_ops_benchmark.rs` measures these operations on a synthetic library
-(`-- [roots] [runs] [smart_folders]`, default 1M roots and 100 smart folders). Its output is local and
-never committed.
+(`-- [roots] [runs] [smart_folders]`, default 1M roots and 100 smart folders; `--sync` measures
+them with sync recording on, and applying change records). Its output is local and never committed.
+
+### Recording changes for sync
+
+Cloud sync (`picto-library/src/sync/`) describes the library as entities with sync keys that are
+the same on every computer: an item is keyed by the content hash of its file, a collection and a
+folder by their stable UUID, a tag by its full name and a tag group by its name. Each entity has
+fields (an item's name, rating, `tag:<name>` and `folder:<uuid>` with a position key, a folder's
+`place`, and so on), and a change to a field is a change record with a hybrid logical clock
+timestamp. The records are in the sync file, `sync.sqlite` next to the library database, which
+exists while sync is on (`Library::start_sync_recording`, `stop_sync_recording`). `sync_value`
+keeps, for each field, the record with the latest timestamp; the library is what those values show.
+`sync_identity` gives every key a number, which `sync_value` stores in place of the key, and
+remembers the local id each key had, so that a deleted or renamed entity is recorded under its old
+key. `sync_outbox` keeps this computer's records until a change file holds them. The sync file has
+its own connection, which attaches the library database to read it; library writes never write the
+sync file and never wait for it.
+
+A library write does no sync work apart from one row in `changed_entity` for each item,
+collection, tag, tag group or folder whose own row it changes, written by triggers that exist while
+sync is on, and the index on the revision of `canonical_bitmap` rows that sync adds. The recorder
+(`Library::record_sync_changes`, which the core's sync worker calls about every second) reads the library in a read transaction of the sync file's connection and finds what
+changed after the revision it last recorded: the local ids in `changed_entity`, the
+`canonical_bitmap` rows with a later revision (a shard that becomes empty stays as an empty row, so
+that removals have a revision too), compared with its copies in `recorded_bitmap` to get the roots
+that entered or left each lifecycle, rating and tag, and the `ordered_membership_chunk` rows whose
+checksum differs from its copies in `recorded_order`. A root whose only change is that it entered
+or left a lifecycle, rating, tag or folder is recorded with the others in one statement for each of
+those fields, which compares the stored values of the whole set in SQL. Every other entity is
+compared with what the synced values show for it, and every field that differs is recorded. A
+renamed tag records `renamed_to`, and so does a merged tag: a merge writes one row in `tag_merge`
+that names the tag it went to. So a tag that another computer adds under the old name ends up under
+the new one. Lists keep the position keys of the longest run of
+members that is already in order; the others get keys between their neighbours. When a record makes
+an entity appear or disappear, the entities that refer to it are compared a second time. The
+records, the copies and the recorded revision are committed together, so after a crash the recorder
+starts again from the revision it recorded.
+
+`Library::apply_sync_records` runs the recorder, merges records from other computers into
+`sync_value` and notes the entities whose visible state changed in `sync_pending`, in one
+transaction of the sync file. For each field that the records change on such a waiting entity,
+`sync_pending_value` keeps the value the field had before, which the library holds until the
+entity is written. The entities are then written into the library in small transactions at
+background priority. An item or collection whose new records only change its lifecycle, rating,
+tags, name, notes, links or modification date, and a new item outside collections and folders, are
+written directly into their rows and bitmaps, 32 in one transaction; a new item is created as an
+import creates it. The others are written with their structure, one in each
+transaction together with the waiting entities whose position changed in the same folder: tags,
+tag groups and folders are created and removed, the folder tree is written as a whole when a folder
+or a tag is written, and items and collections are written with `restore_structure`, the code that
+undo uses for collections. The items of a tag that was renamed or merged get the tag it went to in
+the same transaction, also when they still wait. Items that the synced values no longer show are
+deleted as Delete Permanently deletes them. A transaction is written only when the library has not
+changed since the recorder's last pass; otherwise the recorder runs again first.
+
+The recorder compares a waiting entity like any other, so a change that the user makes to it at any
+time, also between two of these transactions, is recorded with a later timestamp, and the synced
+values that are written later hold it. A value of a waiting entity is not recorded when it is still
+the value from before the records (`sync_pending_value`), or when it is the value the synced values
+store but do not show only because other entities that it names wait too, such as a cover that is
+deleted; a tag of a waiting root is recorded only when the root entered or left that tag since the
+last pass. A value that names a waiting entity that the library does not have yet is not recorded
+either. Once the recorder records a field, its value from before is dropped. Lists are compared
+with the positions from before for their waiting members, and the transactions place entities in
+folders the same way. If the computer stops after a transaction and before the sync file notes it,
+the entities stay noted as waiting and are written again; what the transaction wrote is what the
+synced values show, so nothing of it is recorded. An item or collection that comes back under its
+old local id while the synced values delete it, as an undo of Delete Permanently brings it back, is
+written in the same way with the latest synced values counted as visible, so what other computers
+changed since is kept; the recorder records its full state after that, and compares each list that
+holds it as a whole once it is written. A watched folder syncs with its path, and each computer
+scans only the watched folders whose path exists on it; the path is therefore not unique in the
+database, and `set_folder_watch` checks it instead.
 
 ## Stored files and the pictures made from them
 

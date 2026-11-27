@@ -18,7 +18,8 @@ impl Library {
             let selected = crate::selection::resolve_with(transaction, &snapshot, &request.target, Some((&self.match_cache, &self.order_cache)))?;
             let before = capture_structure(transaction, &snapshot, &selected, None)?;
             // Grouping only moves the selection's tags onto the collection, so
-            // the tags found now are the only ones to settle and capture after.
+            // the tags found now are the only ones whose members change and the
+            // only ones the undo entry reads afterwards.
             let tags = captured_tags(&before);
             let output = crate::group::organize(
                 transaction,
@@ -599,7 +600,7 @@ impl Library {
 /// are queued for removal from the disk and returned, except those that an
 /// undo entry still needs (`protected_cleanup_files`), which are queued but
 /// not returned.
-pub(super) fn delete_roots(
+pub(crate) fn delete_roots(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
     snapshot: &ProjectionSnapshot,
@@ -770,8 +771,9 @@ pub(super) fn delete_roots(
             &roots,
         )?;
     }
-    // Folder bitmaps say which orders hold a deleted root; scanning
-    // every order instead walked every membership in the library.
+    // The folder bitmaps show which folder lists hold a deleted root, so
+    // only those lists are read; reading every list would go through every
+    // folder membership in the library.
     let changed_folders = next
         .folders
         .iter()
@@ -975,8 +977,9 @@ pub(super) fn restore_deleted_roots(
             "cannot undo the delete because its items exist again".into(),
         ));
     }
-    // Aliases and primary keys live in separate tables, so their UNIQUE
-    // constraints alone cannot detect an identity reused since deletion.
+    // An alias and a stable key are in different tables, so their UNIQUE
+    // constraints do not show that a saved alias became the stable key of
+    // another item since the deletion.
     if !state.aliases.is_empty() {
         let keys = serde_json::to_string(
             &state.aliases.iter().map(|(key, _)| key).collect::<Vec<_>>(),
@@ -1132,8 +1135,18 @@ pub(super) fn restore_deleted_roots(
         [&files_json],
     )?;
 
-    restore_structure_bitmaps(transaction, revision, snapshot, roots, &state.structure)?;
-    restore_structure_orders(transaction, revision, snapshot, roots, &state.structure)?;
+    // Tags and folders deleted since, which applying changes from another
+    // computer can do, are not linked again.
+    let mut structure = state.structure.clone();
+    let tags = snapshot.tag_ids_by_name.values().map(|tag| tag.0).collect::<HashSet<_>>();
+    structure
+        .memberships
+        .retain(|key, _| key.domain != BitmapDomain::Tag || tags.contains(&key.key_id));
+    structure
+        .folders
+        .retain(|folder, _| snapshot.folder_orders.contains_key(folder));
+    restore_structure_bitmaps(transaction, revision, snapshot, roots, &structure)?;
+    restore_structure_orders(transaction, revision, snapshot, roots, &structure)?;
     for root in state.structure.roots.iter().filter(|root| root.kind == RootKind::Media) {
         Arc::make_mut(&mut snapshot.media_owner).insert(root.root_id.0, root.root_id);
     }
@@ -1148,7 +1161,7 @@ pub(super) fn restore_deleted_roots(
     Ok(())
 }
 
-pub(super) fn restore_structure(
+pub(crate) fn restore_structure(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
     snapshot: &mut ProjectionSnapshot,
@@ -1184,8 +1197,9 @@ pub(super) fn restore_structure(
         ));
     }
 
-    // Keep surviving rows in place: deleting them would cascade recent views,
-    // queued work and stable aliases even though the collection still exists.
+    // The rows of roots that remain are updated, not deleted: deleting them
+    // would also delete their recent views, queued work and aliases through
+    // ON DELETE CASCADE, although the collection still exists.
     let retained = replacement.roots.iter().map(|root| root.root_id.0).collect::<RoaringBitmap>();
     for root_id in affected {
         if snapshot.collection_orders.contains_key(&RootId(root_id)) {
@@ -1346,6 +1360,10 @@ pub(super) fn restore_structure_orders(
                 .map(Vec::as_slice)
                 .unwrap_or_default(),
         );
+        // A list that keeps its order is not written again.
+        if current.folder_orders.get(&folder_id).is_some_and(|order| **order == after) {
+            continue;
+        }
         ordering::replace(
             transaction,
             revision,
@@ -1381,7 +1399,8 @@ pub(super) fn merge_structural_folder_positions(
     retained: &[RootId],
     positions: &[crate::history::StructuralFolderPosition],
 ) -> Vec<RootId> {
-    // Reinsert blocks in one pass rather than repeatedly shifting a large folder.
+    // The members are put back in one pass over the list, not one insertion
+    // at a time, each of which would shift a large folder's list.
     let anchors = retained
         .iter()
         .enumerate()
@@ -1421,7 +1440,7 @@ pub(super) fn merge_structural_folder_positions(
     result
 }
 
-pub(super) fn capture_structure(
+pub(crate) fn capture_structure(
     transaction: &rusqlite::Transaction<'_>,
     snapshot: &ProjectionSnapshot,
     affected: &RoaringBitmap,

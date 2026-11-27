@@ -74,7 +74,7 @@ pub fn load(connection: &Connection, key: BitmapKey) -> Result<RoaringBitmap> {
     let mut statement = connection.prepare_cached(
         "SELECT high_bits, checksum, payload, cardinality, format_version
          FROM canonical_bitmap
-         WHERE domain = ?1 AND key_id = ?2
+         WHERE domain = ?1 AND key_id = ?2 AND cardinality > 0
          ORDER BY high_bits",
     )?;
     let rows = statement.query_map(params![key.domain as u8, key.key_id], |row| {
@@ -110,7 +110,7 @@ pub fn load(connection: &Connection, key: BitmapKey) -> Result<RoaringBitmap> {
 pub fn load_all(connection: &Connection) -> Result<HashMap<BitmapKey, RoaringBitmap>> {
     let mut statement = connection.prepare(
         "SELECT domain, key_id, high_bits, checksum, payload, cardinality, format_version
-         FROM canonical_bitmap ORDER BY domain, key_id, high_bits",
+         FROM canonical_bitmap WHERE cardinality > 0 ORDER BY domain, key_id, high_bits",
     )?;
     let rows = statement.query_map([], |row| {
         Ok((
@@ -152,6 +152,8 @@ pub fn load_all(connection: &Connection) -> Result<HashMap<BitmapKey, RoaringBit
     Ok(bitmaps)
 }
 
+/// Writes `bitmap` as the members of `key`. A shard that becomes empty is
+/// kept as a row without members, so that the change has a revision.
 pub fn replace(
     transaction: &Transaction<'_>,
     revision: u64,
@@ -203,19 +205,24 @@ pub fn replace(
         changed += 1;
     }
 
-    for high in existing.keys().filter(|high| !next.contains_key(high)) {
+    let empty = encode(&RoaringBitmap::new())?;
+    let empty_digest = checksum(&empty);
+    for (high, current) in &existing {
+        if next.contains_key(high) || current.as_slice() == empty_digest {
+            continue;
+        }
         transaction.execute(
-            "DELETE FROM canonical_bitmap
+            "UPDATE canonical_bitmap SET revision = ?4, cardinality = 0, checksum = ?5, payload = ?6
              WHERE domain = ?1 AND key_id = ?2 AND high_bits = ?3",
-            params![key.domain as u8, key.key_id, *high],
+            params![key.domain as u8, key.key_id, *high, revision as i64, empty_digest.as_slice(), empty],
         )?;
         changed += 1;
     }
     Ok(changed)
 }
 
-/// Persist `bitmap` when the caller knows which ids changed: only the shards
-/// holding those ids are encoded, hashed and compared.
+/// Writes `bitmap` when the caller knows which ids changed: only the shards
+/// that hold those ids are encoded, hashed and compared.
 pub fn replace_changed(
     transaction: &Transaction<'_>,
     revision: u64,
@@ -236,9 +243,11 @@ pub fn replace_shards(
     high_bits: impl IntoIterator<Item = u16>,
 ) -> Result<usize> {
     let mut changed = 0;
-    let mut delete = transaction.prepare_cached(
-        "DELETE FROM canonical_bitmap
-         WHERE domain = ?1 AND key_id = ?2 AND high_bits = ?3",
+    // An empty shard stays as a row without members: an update instead of
+    // a delete gives the change a revision that the sync recorder finds.
+    let mut empty = transaction.prepare_cached(
+        "UPDATE canonical_bitmap SET revision = ?4, cardinality = 0, checksum = ?5, payload = ?6
+         WHERE domain = ?1 AND key_id = ?2 AND high_bits = ?3 AND cardinality > 0",
     )?;
     let mut upsert = transaction.prepare_cached(
         "INSERT INTO canonical_bitmap
@@ -260,7 +269,9 @@ pub fn replace_shards(
             .map(|value| value & 0xffff)
             .collect::<RoaringBitmap>();
         if shard.is_empty() {
-            changed += delete.execute(params![key.domain as u8, key.key_id, high])?;
+            let payload = encode(&shard)?;
+            let digest = checksum(&payload);
+            changed += empty.execute(params![key.domain as u8, key.key_id, high, revision as i64, digest.as_slice(), payload])?;
             continue;
         }
         let payload = encode(&shard)?;
@@ -291,9 +302,9 @@ pub fn revision(transaction: &Transaction<'_>, key: BitmapKey) -> Result<Option<
         .map_err(Into::into)
 }
 
-/// Membership of a small id set, checked against long id lists such as folder
-/// orders: a dense bitset up to the largest id, so each check is one load
-/// instead of a roaring container search.
+/// A small set of ids that long id lists, such as folder orders, are checked
+/// against: one bit for each id up to the largest, so that each check reads
+/// one word instead of searching a roaring container.
 pub(crate) struct DenseIds {
     words: Vec<u64>,
 }

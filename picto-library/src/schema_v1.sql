@@ -88,7 +88,10 @@ CREATE TABLE folder_definition (
     notes TEXT,
     auto_tag_ids BLOB NOT NULL DEFAULT X'',
     cover_root_id INTEGER REFERENCES library_root(root_id) ON DELETE SET NULL,
-    watch_path TEXT UNIQUE,
+    -- A path on one computer. Two folders may name the same path, because
+    -- folders from several computers are synced; the app checks that a
+    -- folder the user watches does not repeat another folder's path.
+    watch_path TEXT,
     watch_enabled INTEGER NOT NULL DEFAULT 0 CHECK (watch_enabled IN (0, 1)),
     watch_subfolders INTEGER NOT NULL DEFAULT 0 CHECK (watch_subfolders IN (0, 1)),
     -- Status of files imported by the watcher: 1 = Active, 2 = Inbox.
@@ -109,6 +112,9 @@ CREATE TABLE smart_folder_definition (
     UNIQUE(parent_id, name)
 ) STRICT;
 
+-- The members of each lifecycle, rating and tag, one row for each 65,536 ids
+-- (high_bits). A shard that loses its last member stays as a row with
+-- cardinality 0 and the revision of that write.
 CREATE TABLE canonical_bitmap (
     domain INTEGER NOT NULL,
     key_id INTEGER NOT NULL,
