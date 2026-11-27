@@ -98,10 +98,43 @@ pub struct SyncRecord {
 /// recorded. It has its own connection, which attaches the library database
 /// as `library` and only reads it; library writes never write the sync file
 /// and never wait for it. The file exists while sync is on.
+///
+/// The connection is opened for each use and closed after it. SQLite, as
+/// this crate builds it, keeps the cached pages of all connections of the
+/// process in one pool, and a connection whose cache is full reuses the
+/// pages that the process used least recently, whichever connection they
+/// belong to. A connection to the sync file that stayed open had a full
+/// cache after its first large pass, and every later pass took the cached
+/// pages of the library's writer, which every library write then read
+/// from the file again. A connection that is closed frees its own pages, and
+/// a new one has an empty cache, so a pass takes no other connection's pages
+/// unless it reads more than its cache holds.
 pub(crate) struct SyncStore {
     path: PathBuf,
     library: PathBuf,
-    connection: Mutex<Option<Connection>>,
+    lock: Mutex<()>,
+}
+
+/// The connection to the sync file for one use; `None` while sync is off.
+/// It closes when this is dropped.
+pub(crate) struct SyncConnection<'a> {
+    // The connection closes before the lock is released.
+    connection: Option<Connection>,
+    _lock: MutexGuard<'a, ()>,
+}
+
+impl std::ops::Deref for SyncConnection<'_> {
+    type Target = Option<Connection>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.connection
+    }
+}
+
+impl std::ops::DerefMut for SyncConnection<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.connection
+    }
 }
 
 impl SyncStore {
@@ -109,7 +142,7 @@ impl SyncStore {
         Self {
             path: library.with_file_name("sync.sqlite"),
             library: library.to_owned(),
-            connection: Mutex::new(None),
+            lock: Mutex::new(()),
         }
     }
 
@@ -117,21 +150,18 @@ impl SyncStore {
         self.path.exists()
     }
 
-    /// The connection to the sync file, opened when it is first needed, and
-    /// the file created when `create` is true; `None` while sync is off.
-    /// Holding it keeps every other user of the sync file waiting.
-    pub(crate) fn lock(&self, create: bool) -> Result<MutexGuard<'_, Option<Connection>>> {
-        let mut connection = self.connection.lock();
-        if connection.is_none() && (create || self.on()) {
-            *connection = Some(self.open()?);
-        }
-        Ok(connection)
+    /// Opens the connection to the sync file, and creates the file when
+    /// `create` is true. Holding the connection keeps every other user of
+    /// the sync file waiting.
+    pub(crate) fn lock(&self, create: bool) -> Result<SyncConnection<'_>> {
+        let lock = self.lock.lock();
+        let connection = if create || self.on() { Some(self.open()?) } else { None };
+        Ok(SyncConnection { connection, _lock: lock })
     }
 
-    /// Closes and deletes the sync file.
+    /// Deletes the sync file.
     pub(crate) fn remove(&self) -> Result<()> {
-        let mut connection = self.connection.lock();
-        *connection = None;
+        let _lock = self.lock.lock();
         for suffix in ["", "-wal", "-shm"] {
             let mut path = self.path.clone().into_os_string();
             path.push(suffix);
