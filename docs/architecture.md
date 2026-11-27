@@ -292,7 +292,11 @@ keeps, for each field, the record with the latest timestamp; the library is what
 remembers the local id each key had, so that a deleted or renamed entity is recorded under its old
 key. `sync_outbox` keeps this computer's records until a change file holds them. The sync file has
 its own connection, which attaches the library database to read it; library writes never write the
-sync file and never wait for it.
+sync file and never wait for it. The connection is opened for each use and closed after it. The
+bundled SQLite keeps the cached pages of all connections of the process in one pool, and a
+connection whose cache is full reuses the least recently used pages of any connection, so a sync
+connection that stayed open took the cached pages of the library's writer on every pass, and each
+library write read them from the file again.
 
 A library write does no sync work apart from one row in `changed_entity` for each item,
 collection, tag, tag group or folder whose own row it changes, written by triggers that exist while
