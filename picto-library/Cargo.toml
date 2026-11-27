@@ -5,8 +5,9 @@ edition = "2021"
 license = "MIT"
 
 [features]
-# Test harnesses can reset derived query caches without reopening SQLite.
-# This entry point is absent from production builds.
+# This feature adds `Library::reset_browsing_caches_for_benchmark`, with which
+# a benchmark program drops the caches of query results without opening the
+# database again. The app does not enable it.
 benchmark-internals = []
 
 [[example]]
@@ -27,6 +28,7 @@ serde_json = "1.0"
 sha2 = "0.10"
 thiserror = "1.0"
 uuid = { version = "1", features = ["v4"] }
+zstd = "0.13"
 
 [dev-dependencies]
 tempfile = "3.8"

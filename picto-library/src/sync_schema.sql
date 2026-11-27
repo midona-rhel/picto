@@ -7,13 +7,31 @@
 -- id of the computer that recorded it, compared in that order.
 
 -- The device id and the clock of this library, and the library revision that
--- the recorder has recorded up to.
+-- the recorder has recorded up to. While the library syncs through a cloud
+-- folder, the row also holds the id of the cloud library, the path of the
+-- cloud folder that holds it, the machine id of the computer that last
+-- synced this copy, the sequence number of the last change file this device
+-- wrote, whether sync is paused, and when this device last wrote its
+-- device.json, in milliseconds since 1970.
 CREATE TABLE IF NOT EXISTS sync_state (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     device_id TEXT NOT NULL,
     clock_ms INTEGER NOT NULL,
     clock_counter INTEGER NOT NULL,
-    recorded_revision INTEGER NOT NULL
+    recorded_revision INTEGER NOT NULL,
+    library_id TEXT,
+    cloud_folder TEXT,
+    machine_id TEXT,
+    written_seq INTEGER NOT NULL DEFAULT 0,
+    paused INTEGER NOT NULL DEFAULT 0,
+    synced_at_ms INTEGER
+) STRICT;
+
+-- For each other device, the sequence number of the last of its change files
+-- that this library has read and merged.
+CREATE TABLE IF NOT EXISTS sync_read (
+    device_id TEXT PRIMARY KEY,
+    seq INTEGER NOT NULL
 ) STRICT;
 
 -- Every sync key that the synced values or the library know, with the

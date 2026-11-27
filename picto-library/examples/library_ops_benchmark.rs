@@ -16,8 +16,10 @@
 //! row then still measures the write alone, and a row after it ending in
 //! "recorder catches up" measures the pass of the sync recorder that records
 //! the write. The rows that apply change records from another computer are
-//! measured too. Run once with and once without it to compare the write
-//! rows.
+//! measured too, and so are syncs through a cloud folder in the temporary
+//! directory (`bench_cloud`), with two writes measured in alternating runs
+//! without and with the sync running beside them. Run once with and once
+//! without `--sync` to compare the write rows.
 use std::time::Instant;
 
 use picto_library::predicate::{
@@ -28,7 +30,7 @@ use picto_library::selection::{RangeSpan, SelectionTarget};
 use picto_library::{
     LabColor,
     FolderId, GroupRequest, ImmutableMediaFacts, Library, Lifecycle, PreparedImport, Rating,
-    RootId, SmartFolderId, SmartFolderInput, SyncKind, SyncRecord, SyncTimestamp,
+    RootId, SmartFolderId, SmartFolderInput, SyncComputer, SyncKind, SyncRecord, SyncTimestamp,
 };
 
 type R<T> = Result<T, Box<dyn std::error::Error>>;
@@ -421,6 +423,7 @@ fn main() -> R<()> {
     emit_write("permanently_delete 1k (from Trash)", "1000", &mut del_ms, &mut del_recorded);
     if sync {
         bench_apply(&library, roots, runs, &at, &one, smart_ids[1])?;
+        bench_cloud(&library, dir.path(), &sel_200k, &one, runs, &at)?;
         library.database().checkpoint_wal()?;
         print_sizes(&path, sync, "after the writes")?;
     }
@@ -763,6 +766,138 @@ fn bench_apply(
         samples.push(ms(t));
     }
     emit("apply_sync_records smart folder name (writes the folder trees)", "1", &mut samples);
+    Ok(())
+}
+
+/// The id of the cloud library that `bench_cloud` syncs with, and of the
+/// other computer whose change files it reads.
+const CLOUD_LIBRARY: &str = "0b7e4c52-3f1d-4a8e-9c6b-2d5f8a1e7c40";
+const OTHER_DEVICE: &str = "9a3d6f10-5c2e-4b7a-8e1f-4d6c2b9a0e57";
+
+/// Syncs through a cloud folder in the temporary directory: sends a rating
+/// of one item and a tag added to 200k items, reads the same from change
+/// files that another computer wrote, and syncs with nothing to do, as the
+/// sync worker does every few seconds. Then measures two writes in
+/// alternating runs without and with a thread that records and syncs as the
+/// sync worker does, but every 100 ms instead of every second.
+fn bench_cloud(
+    library: &Library,
+    directory: &std::path::Path,
+    sel_200k: &SelectionTarget,
+    one: &SelectionTarget,
+    runs: usize,
+    at: &dyn Fn(usize) -> usize,
+) -> R<()> {
+    let cloud = directory.join("cloud");
+    std::fs::create_dir_all(&cloud)?;
+    let computer = SyncComputer { machine_id: "benchmark".into(), name: "benchmark".into(), app_version: "benchmark".into() };
+    library.connect_sync_folder(&cloud, CLOUD_LIBRARY, "benchmark", &computer)?;
+    let sync = || -> R<f64> {
+        let t = Instant::now();
+        library.sync_with_cloud(&computer)?.ok_or("the library is not connected to the cloud folder")?;
+        Ok(ms(t))
+    };
+    sync()?;
+
+    let mut samples = Vec::new();
+    for run in 0..runs * 2 {
+        library.set_rating(one, Rating::ALL[run % 5 + 1])?;
+        library.record_sync_changes()?;
+        samples.push(sync()?);
+    }
+    emit("sync_with_cloud sends a rating of 1 item", "1 record", &mut samples);
+    let mut samples = Vec::new();
+    for run in 0..runs {
+        library.apply_tags(sel_200k, &[format!("cloud:{run}")], true)?;
+        library.record_sync_changes()?;
+        samples.push(sync()?);
+    }
+    emit("sync_with_cloud sends apply_tags add 200k", "200000 records, 2 files", &mut samples);
+
+    let changes = cloud.join("picto").join(CLOUD_LIBRARY).join("devices").join(OTHER_DEVICE).join("changes");
+    std::fs::create_dir_all(&changes)?;
+    let mut seq = 0;
+    let mut wall_ms = now() + 120_000;
+    let mut write_file = |lines: &[serde_json::Value]| -> R<()> {
+        seq += 1;
+        let mut text = Vec::new();
+        for line in lines {
+            serde_json::to_writer(&mut text, line)?;
+            text.push(b'\n');
+        }
+        std::fs::write(changes.join(format!("{seq}.jsonl.zst")), zstd::stream::encode_all(&text[..], 3)?)?;
+        Ok(())
+    };
+    let mut samples = Vec::new();
+    for run in 0..runs * 2 {
+        wall_ms += 1;
+        write_file(&[serde_json::json!(["item", format!("hash-{}", at(500_000)), "rating", run % 5 + 1, wall_ms, 0])])?;
+        samples.push(sync()?);
+    }
+    emit("sync_with_cloud reads a rating of 1 item from another computer", "1 record", &mut samples);
+    // A tag on many items from another computer: once on 10k, 40k and 200k
+    // items, to show how the time grows with the number of items. The 200k
+    // run is last, because it takes the longest.
+    let mut read_tag = |items: usize, value: bool| -> R<()> {
+        wall_ms += 1;
+        let lines = (0..items)
+            .map(|index| serde_json::json!(["item", format!("hash-{index}"), "tag:vocab:1", value, wall_ms, index]))
+            .collect::<Vec<_>>();
+        for file in lines.chunks(100_000) {
+            write_file(file)?;
+        }
+        let mut samples = vec![sync()?];
+        emit(&format!("sync_with_cloud reads a tag on {items} items from another computer"), &format!("{items} records"), &mut samples);
+        Ok(())
+    };
+    read_tag(at(10_000), true)?;
+    read_tag(at(40_000), false)?;
+    let mut samples = Vec::new();
+    for _ in 0..runs * 4 {
+        samples.push(sync()?);
+    }
+    emit("sync_with_cloud with nothing to read or send", "-", &mut samples);
+
+    // Alternating runs: the even runs without the thread, the odd runs with
+    // it. Between runs everything is recorded and sent, so that each run
+    // starts from the same state.
+    let (mut tags_off, mut tags_on, mut rating_off, mut rating_on) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for run in 0..runs * 4 {
+        let with_worker = run % 2 == 1;
+        let running = std::sync::atomic::AtomicBool::new(with_worker);
+        std::thread::scope(|scope| -> R<()> {
+            if with_worker {
+                scope.spawn(|| {
+                    while running.load(std::sync::atomic::Ordering::Relaxed) {
+                        library.record_sync_changes().expect("the recorder runs");
+                        library.sync_with_cloud(&computer).expect("the sync runs");
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                });
+            }
+            for _ in 0..4 {
+                let t = Instant::now();
+                library.apply_tags(one, &["audit:worker".into()], true)?;
+                (if with_worker { &mut tags_on } else { &mut tags_off }).push(ms(t));
+                library.apply_tags(one, &["audit:worker".into()], false)?;
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+            let t = Instant::now();
+            library.set_rating(sel_200k, Rating::Four)?;
+            (if with_worker { &mut rating_on } else { &mut rating_off }).push(ms(t));
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            library.undo()?;
+            running.store(false, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        })?;
+        library.record_sync_changes()?;
+        sync()?;
+    }
+    emit("apply_tags add 1, sync worker stopped", "1", &mut tags_off);
+    emit("apply_tags add 1, sync worker running", "1", &mut tags_on);
+    emit("set_rating Four 200k, sync worker stopped", "200000", &mut rating_off);
+    emit("set_rating Four 200k, sync worker running", "200000", &mut rating_on);
+    read_tag(at(200_000), true)?;
     Ok(())
 }
 

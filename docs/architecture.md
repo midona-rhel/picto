@@ -275,8 +275,9 @@ settings, recent views and duplicate decisions are not read.
 `picto-library/examples/library_ops_benchmark.rs` measures these operations on a generated library
 (`-- [roots] [runs] [smart_folders]`, by default 1M roots and 100 smart folders). With `--sync` it
 measures them with sync on, and also measures applying change records from another computer,
-among them a tag on up to 200,000 items with and without writes of the user at the same time. Its
-output is local and never committed.
+among them a tag on up to 200,000 items with and without writes of the user at the same time. It
+also measures syncs through a cloud folder in a temporary directory, and two writes with and
+without the sync running beside them. Its output is local and never committed.
 
 ### Recording changes for sync
 
@@ -407,6 +408,44 @@ scans only the watched folders whose path exists on it; the path is therefore no
 database, and `set_folder_watch` checks it instead. In the same way two smart folders in one parent
 may have the same name in the database, and `create_smart_folder` and `update_smart_folder` check
 the name that the user gives.
+
+### Syncing through a cloud folder
+
+The computers exchange their change records through a folder that the Google Drive or Dropbox
+app copies between them (`picto-library/src/sync/cloud.rs`). `Library::connect_sync_folder`
+stores the cloud library's id and the path of that folder in `sync_state`, and writes
+`picto/<library id>/library.json` when it is not there yet. In that folder, each copy of the
+library writes into `devices/<device id>/`: its change files `changes/<seq>.jsonl.zst`, numbered
+from 1 without gaps, and `device.json` with the name of the computer, the version of Picto and the
+time of its last sync that read or wrote a change file. A change file is JSON Lines compressed with
+zstd, one record `[kind, key, field, value, wall ms, counter]` on each line and at most 100,000
+records; the device id of the timestamps is the name of the folder. Every file is written under a
+temporary name, flushed and renamed. Only `device.json` is ever written over.
+
+`Library::sync_with_cloud` first checks whether the database is a copy: the machine id that the
+caller gives is not the one in `sync_state`, or the device's folder holds the change file after the
+last one the database noted as written. That happens when the library folder was copied to another
+computer, when a backup was restored, and when a sync stopped after it wrote a change file and
+before it noted it. A copy takes a new device id: the records in its outbox take the new id in
+`sync_value`, every other device is read again from its first change file, and the old device id is
+read from the file after the last one the copy wrote. The sync then reads the change files of every
+other device in sequence order and stops at the first one that is missing or cannot be read yet,
+as a file is while the cloud app downloads it. Each file is merged in one transaction of the sync
+file that also moves `sync_read` for that device, so a crash merges the file again or not at all,
+and the merged entities are then written into the library as described above. Last, the outbox is
+written as the next change files; after each file is written, one transaction removes its records
+from the outbox and notes its number. A crash between the two leaves a file that the next sync finds
+after the noted number, so the database takes a new device id and sends the outbox again under it.
+The records are then in two files with the same value and timestamps that differ only in the
+device id, which every computer merges to the same value.
+
+The core's sync worker (`library-sync` in `core/src/library_runtime.rs`) runs the recorder every
+second while sync is on. While the library is connected to a cloud folder and sync is not paused
+(`Library::set_sync_paused`), it also syncs every five seconds, and in the second after the
+recorder recorded changes. The machine id is a random id kept in the file `machine-id` of the
+app's data folder (`core/src/cloud_sync.rs`). The sync uses the sync file's connection; it writes
+the library only in the small background transactions of the projection, so library writes do not
+wait for it.
 
 ## Stored files and the pictures made from them
 
