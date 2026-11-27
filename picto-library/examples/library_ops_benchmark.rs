@@ -323,10 +323,19 @@ fn main() -> R<()> {
         library.set_notes(&one, Some(format!("note {n}")), now())?;
         Ok(())
     }, None::<fn() -> R<()>>)?;
-    // Viewing an item writes the time it was viewed into `recent_view`.
+    // Viewing an item writes the time it was viewed into `recent_view`. The
+    // second row views 200 items one after another, as browsing in the media
+    // view does, with no pass of the recorder between them.
     bench_write(&library, "record_recent_view 1", "1", runs * 4, || {
         n += 1;
         library.record_recent_view(ids[at(500_000) + n % 100], now())?;
+        Ok(())
+    }, None::<fn() -> R<()>>)?;
+    bench_write(&library, "record_recent_view 200 in a row", "200", runs, || {
+        for _ in 0..200 {
+            n += 1;
+            library.record_recent_view(ids[at(500_000) + n % 1_000], now())?;
+        }
         Ok(())
     }, None::<fn() -> R<()>>)?;
 
