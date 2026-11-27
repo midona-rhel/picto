@@ -586,6 +586,15 @@ fn project_structure(
                 named.extend(collection.map(|collection| (SyncKind::Collection, collection.to_owned())));
             }
         }
+        // An item is shown as a cover only outside a collection, so the
+        // items that a write of a collection takes out of it or puts into it
+        // count as well: the roots that the write changed.
+        {
+            let local = Local::new(transaction, snapshot);
+            for root in &projected.roots {
+                named.extend(local.root_key(RootId(root))?);
+            }
+        }
         for (kind, key) in &named {
             for (referrer_kind, folder, field) in synced.referrers(*kind, key, None)? {
                 if referrer_kind == SyncKind::Folder && field == "cover" {
