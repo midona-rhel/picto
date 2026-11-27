@@ -687,11 +687,51 @@ fn a_crash_after_a_write_of_synced_values_records_nothing_that_write_left_unfini
     first.record_sync_changes().unwrap();
     let outbox = first.sync_outbox().unwrap();
     first.remove_from_sync_outbox(&outbox).unwrap();
-    second.apply_sync_records_until_the_first_write(&outbox).unwrap();
+    second.apply_sync_records_partly(&outbox, 1, true).unwrap();
     drop(second);
     let second = Library::open(directory.path().join("second").join("library.sqlite")).unwrap();
     second.record_sync_changes().unwrap();
     assert_eq!(second.sync_outbox().unwrap(), Vec::new(), "the second library recorded values of its own");
     assert_recorded(&second, "after the crash");
     assert_same(&first, &second, "after the crash");
+}
+
+#[test]
+fn a_change_made_while_records_from_another_computer_are_written_is_kept() {
+    let directory = tempfile::tempdir().unwrap();
+    let (first, second) = (open(directory.path(), "first"), open(directory.path(), "second"));
+    let (folder, _) = first.create_folder("folder", None).unwrap();
+    // The tag is known before the items, so that its records are written
+    // first.
+    first.ingest(&prepared(hash(0), Lifecycle::Active, vec!["a".into()], Vec::new())).unwrap();
+    deliver(&first, &second);
+    first.apply_tags(&one(root_of(&first, &hash(0))), &["a".into()], false).unwrap();
+    for n in 1..=3 {
+        first.ingest(&prepared(hash(n), Lifecycle::Active, vec!["a".into()], Vec::new())).unwrap();
+    }
+    deliver(&first, &second);
+    // Records that take several library transactions to write: the tag is
+    // renamed, which changes every item, and the items are added to the
+    // folder, which is written after the rename.
+    first.rename_tag(first.projections().snapshot().tag_ids_by_name["a"], "d").unwrap();
+    let items = (1..=3).map(|n| root_of(&first, &hash(n))).collect::<Vec<_>>();
+    first.add_to_folder(&SelectionTarget::Explicit { root_ids: items }, folder).unwrap();
+    first.record_sync_changes().unwrap();
+    let outbox = first.sync_outbox().unwrap();
+    first.remove_from_sync_outbox(&outbox).unwrap();
+    second.apply_sync_records_partly(&outbox, 2, false).unwrap();
+    // The second library rates the items after the rename was written,
+    // while the items still wait to be added to the folder.
+    let items = (1..=3).map(|n| root_of(&second, &hash(n))).collect::<Vec<_>>();
+    second.set_rating(&SelectionTarget::Explicit { root_ids: items }, Rating::Four).unwrap();
+    second.record_sync_changes().unwrap();
+    deliver(&second, &first);
+    for library in [&first, &second] {
+        for n in 1..=3 {
+            let root = root_of(library, &hash(n));
+            assert!(library.projections().snapshot().rating(Rating::Four).contains(root.0), "item {n} lost its rating");
+            assert_eq!(tag_names(library, root), ["d"]);
+        }
+    }
+    assert_same(&first, &second, "after the rating");
 }

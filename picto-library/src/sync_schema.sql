@@ -88,6 +88,20 @@ CREATE TABLE IF NOT EXISTS sync_pending (
     state INTEGER NOT NULL CHECK (state IN (0, 1, 2, 3))
 ) STRICT;
 
+-- For each field of a waiting entity that records from other computers
+-- changed, the value it had before them, stored as in sync_value. The
+-- library holds that value until the entity is written, so the recorder
+-- does not take a library value that equals it for a change of the
+-- library's own. A value is removed when the entity is written or the
+-- recorder records the field.
+CREATE TABLE IF NOT EXISTS sync_pending_value (
+    entity INTEGER NOT NULL,
+    field TEXT NOT NULL,
+    target INTEGER NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY(entity, field, target)
+) WITHOUT ROWID, STRICT;
+
 -- Copies of the library's membership bitmaps and ordered lists as the
 -- recorder last recorded them. Comparing a changed row of the library with
 -- its copy gives the roots that entered or left a lifecycle, rating, tag,

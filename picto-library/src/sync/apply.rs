@@ -33,6 +33,9 @@ use crate::{LibraryDatabase, LibraryError, Result};
 pub(crate) struct Projected {
     pub roots: RoaringBitmap,
     pub resources: BTreeSet<String>,
+    /// The entities written with everything the synced values show for
+    /// them, which therefore no longer wait to be written.
+    pub written: BTreeSet<Key>,
 }
 
 type Key = (SyncKind, String);
@@ -72,13 +75,17 @@ pub(crate) fn merge_remote(transaction: &Transaction<'_>, records: &[SyncRecord]
     let merged = merge(transaction, &mut clock, records)?;
     clock.save(transaction)?;
     synced.forget();
-    // An item or collection whose merged records are all of `DIRECT_FIELDS`
-    // or tags is written directly (`FIELDS`); everything else is written
-    // with its structure (`PROJECT`).
+    // An item or collection whose merged records are all of `DIRECT_FIELDS`,
+    // tags, or the fields of a new item is written directly (`FIELDS`);
+    // everything else is written with its structure (`PROJECT`).
     let mut keys = BTreeMap::new();
     for record in merged {
+        let field = record.field.as_str();
         let direct = matches!(record.kind, SyncKind::Item | SyncKind::Collection)
-            && (record.field.starts_with("tag:") || DIRECT_FIELDS.contains(&record.field.as_str()));
+            && (field.starts_with("tag:")
+                || DIRECT_FIELDS.contains(&field)
+                || ["file", "imported_at", "captured_at"].contains(&field)
+                || field == "deleted" && record.value == Value::Bool(false));
         let state = if direct { FIELDS } else { PROJECT };
         let entry = keys.entry((record.kind, record.key.clone())).or_insert(state);
         *entry = (*entry).min(state);
@@ -87,7 +94,7 @@ pub(crate) fn merge_remote(transaction: &Transaction<'_>, records: &[SyncRecord]
         if synced.state(kind, &key)? == before {
             continue;
         }
-        keys.insert((kind, key.clone()), PROJECT);
+        keys.entry((kind, key.clone())).or_insert(PROJECT);
         let mut forwarding = vec![key];
         while let Some(key) = forwarding.pop() {
             for (referrer_kind, referrer, field) in synced.referrers(kind, &key, None)? {
@@ -112,6 +119,11 @@ pub(crate) fn merge_remote(transaction: &Transaction<'_>, records: &[SyncRecord]
     for ((kind, key), state) in keys {
         statement.execute(rusqlite::params![super::entity(transaction, kind, &key)?, state, FIELDS, PROJECT])?;
     }
+    transaction.execute(
+        "DELETE FROM sync_pending_value
+         WHERE entity NOT IN (SELECT entity FROM sync_pending WHERE state IN (?1, ?2))",
+        [PROJECT, FIELDS],
+    )?;
     Ok(())
 }
 
@@ -122,12 +134,15 @@ const DIRECT_FIELDS: [&str; 6] = ["lifecycle", "rating", "name", "notes", "links
 /// The entities whose synced values are written by the next library
 /// transaction, as (entity, kind, key, whether it counts as visible), and
 /// whether they are written directly: up to `direct_limit` entities of
-/// `FIELDS` when there are any, and otherwise up to `limit` others.
+/// `FIELDS` when there are any, and otherwise one other entity, together
+/// with every waiting entity whose position changed in a folder where the
+/// first one's position changed. The items of a folder list are written
+/// together, so that the list is never partly in the order of the new
+/// position keys.
 #[allow(clippy::type_complexity)]
 pub(crate) fn pending_projection(
     connection: &Connection,
     direct_limit: usize,
-    limit: usize,
 ) -> Result<(Vec<(i64, SyncKind, String, bool)>, bool)> {
     let mut statement = connection.prepare_cached(
         "SELECT pending.entity, identity.kind, identity.key, pending.state = ?4
@@ -145,14 +160,37 @@ pub(crate) fn pending_projection(
     if !direct.is_empty() {
         return Ok((direct, true));
     }
-    Ok((read((PROJECT, REVIVE), limit)?, false))
+    let mut chunk = read((PROJECT, REVIVE), 1)?;
+    let Some(&(first, _, _, _)) = chunk.first() else { return Ok((chunk, false)) };
+    let mut statement = connection.prepare_cached(
+        "SELECT DISTINCT pending.entity, identity.kind, identity.key, pending.state = ?4
+         FROM sync_pending_value mine
+         JOIN sync_pending_value other ON other.field = 'folder' AND other.target = mine.target
+         JOIN sync_pending pending ON pending.entity = other.entity
+         JOIN sync_identity identity ON identity.entity = pending.entity
+         WHERE mine.entity = ?1 AND mine.field = 'folder' AND other.entity <> ?1 AND pending.state IN (?2, ?3)",
+    )?;
+    let rows = statement.query_map(rusqlite::params![first, PROJECT, REVIVE, REVIVE], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, bool>(3)?))
+    })?;
+    for row in rows {
+        let (entity, kind, key, revived) = row?;
+        chunk.extend(SyncKind::parse(&kind).map(|kind| (entity, kind, key, revived)));
+    }
+    Ok((chunk, false))
 }
 
-/// Marks `written` as written into the library: an entity that counted as
-/// visible is recorded by the next pass of the recorder, the others are done.
-pub(crate) fn finish_projection(connection: &Connection, written: &[(i64, SyncKind, String, bool)]) -> Result<()> {
+/// Marks the entities of `chunk` and `written` as written into the library:
+/// an entity of `chunk` that counted as visible is recorded by the next pass
+/// of the recorder; the others no longer wait, with the values their fields
+/// had before.
+pub(crate) fn finish_projection(
+    connection: &Connection,
+    chunk: &[(i64, SyncKind, String, bool)],
+    written: &BTreeSet<Key>,
+) -> Result<()> {
     let transaction = connection.unchecked_transaction()?;
-    for (entity, _, _, revived) in written {
+    for (entity, _, _, revived) in chunk {
         let sql = if *revived {
             "UPDATE sync_pending SET state = 2 WHERE entity = ?1"
         } else {
@@ -160,15 +198,26 @@ pub(crate) fn finish_projection(connection: &Connection, written: &[(i64, SyncKi
         };
         transaction.prepare_cached(sql)?.execute([entity])?;
     }
+    let mut statement = transaction.prepare_cached(
+        "DELETE FROM sync_pending WHERE state IN (?3, ?4)
+             AND entity = (SELECT entity FROM sync_identity WHERE kind = ?1 AND key = ?2)",
+    )?;
+    for (kind, key) in written {
+        statement.execute(rusqlite::params![kind.as_str(), key, PROJECT, FIELDS])?;
+    }
+    drop(statement);
+    transaction.execute(
+        "DELETE FROM sync_pending_value
+         WHERE entity NOT IN (SELECT entity FROM sync_pending WHERE state IN (?1, ?2))",
+        [PROJECT, FIELDS],
+    )?;
     Ok(transaction.commit()?)
 }
 
 /// Writes what the synced values (read through `sync`) show for `keys` into
 /// the library and `snapshot`. With `direct`, the keys are written with
 /// `write_directly` where it can. The entities in `revived` count as visible
-/// even when the synced values delete them. Unless every key was written
-/// directly, the folder tree is written as a whole. The transaction notes its
-/// revision and the roots it wrote in `sync_projection`.
+/// even when the synced values delete them.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn project(
     transaction: &Transaction<'_>,
@@ -196,13 +245,6 @@ pub(crate) fn project(
         snapshot,
         &projected.roots,
         &[crate::predicate::DependencyChange::All],
-    )?;
-    let mut written = Vec::new();
-    projected.roots.serialize_into(&mut written)?;
-    transaction.execute("DELETE FROM sync_projection", [])?;
-    transaction.execute(
-        "INSERT INTO sync_projection(revision, written) VALUES (?1, ?2)",
-        rusqlite::params![revision as i64, written],
     )?;
     snapshot.revision = revision;
     Ok(projected)
@@ -243,43 +285,61 @@ fn write_directly(
             views.push((kind, key, root, current));
         }
     }
+    let mut created = RoaringBitmap::new();
     for (kind, key, root, current) in views {
-        let shown = synced.view(kind, &key)?;
-        let (Some(root), Some(current), Some(shown)) = (root, current, shown) else {
+        let Some(shown) = synced.view(kind, &key)? else {
             rest.insert((kind, key));
             continue;
         };
-        let same = |field: &String| DIRECT_FIELDS.contains(&field.as_str()) || current.fields.get(field) == shown.fields.get(field);
-        if current.owner.is_some()
-            || shown.owner.is_some()
-            || current.folders != shown.folders
-            || !current.fields.keys().chain(shown.fields.keys()).all(same)
-        {
-            rest.insert((kind, key));
-            continue;
-        }
-        let text = |view: &View| crate::history::RootTextState {
-            root_id: RootId(root),
-            name: view.fields["name"].as_str().unwrap_or_default().to_owned(),
-            notes: view.fields["notes"].as_str().map(str::to_owned),
-            source_urls: serde_json::from_value(view.fields["links"].clone()).unwrap_or_default(),
-            modified_at_ms: view.fields["modified_at"].as_i64().unwrap_or(0),
+        let (root, current) = match (root, current) {
+            (Some(root), Some(current)) => (root, Some(current)),
+            // An item that the library lacks and that the synced values show
+            // outside a collection and outside every folder is added as an
+            // import adds it.
+            (None, _) if kind == SyncKind::Item && shown.owner.is_none() && shown.folders.is_empty() => {
+                let root = create_item(transaction, snapshot, &key, &shown)?;
+                created.insert(root);
+                (root, None)
+            }
+            _ => {
+                rest.insert((kind, key));
+                continue;
+            }
         };
-        if ["name", "notes", "links", "modified_at"].iter().any(|field| current.fields.get(*field) != shown.fields.get(*field)) {
-            texts_before.push(text(&current));
-            texts_after.push(text(&shown));
-        }
         let partitions = |view: &View| {
             [
                 BitmapKey { domain: BitmapDomain::Lifecycle, key_id: lifecycle_from_name(view.fields["lifecycle"].as_str().unwrap_or_default()).bitmap_key() },
                 BitmapKey { domain: BitmapDomain::Rating, key_id: rating_from_number(&view.fields["rating"]).bitmap_key() },
             ]
         };
-        let mut was = partitions(&current).to_vec();
-        let mut now = partitions(&shown).to_vec();
-        for tag in &current.tags {
-            was.extend(snapshot.tag_ids_by_name.get(tag).map(|tag| BitmapKey { domain: BitmapDomain::Tag, key_id: tag.0 }));
+        let mut was = Vec::new();
+        if let Some(current) = &current {
+            let same = |field: &String| DIRECT_FIELDS.contains(&field.as_str()) || current.fields.get(field) == shown.fields.get(field);
+            if current.owner.is_some()
+                || shown.owner.is_some()
+                || current.folders != shown.folders
+                || !current.fields.keys().chain(shown.fields.keys()).all(same)
+            {
+                rest.insert((kind, key));
+                continue;
+            }
+            let text = |view: &View| crate::history::RootTextState {
+                root_id: RootId(root),
+                name: view.fields["name"].as_str().unwrap_or_default().to_owned(),
+                notes: view.fields["notes"].as_str().map(str::to_owned),
+                source_urls: serde_json::from_value(view.fields["links"].clone()).unwrap_or_default(),
+                modified_at_ms: view.fields["modified_at"].as_i64().unwrap_or(0),
+            };
+            if ["name", "notes", "links", "modified_at"].iter().any(|field| current.fields.get(*field) != shown.fields.get(*field)) {
+                texts_before.push(text(current));
+                texts_after.push(text(&shown));
+            }
+            was = partitions(current).to_vec();
+            for tag in &current.tags {
+                was.extend(snapshot.tag_ids_by_name.get(tag).map(|tag| BitmapKey { domain: BitmapDomain::Tag, key_id: tag.0 }));
+            }
         }
+        let mut now = partitions(&shown).to_vec();
         for tag in &shown.tags {
             now.push(BitmapKey { domain: BitmapDomain::Tag, key_id: ensure_tag(transaction, snapshot, tag)?.0 });
         }
@@ -294,6 +354,7 @@ fn write_directly(
             }
         }
         projected.roots.insert(root);
+        projected.written.insert((kind, key));
     }
     if !texts_after.is_empty() {
         change(transaction, revision, snapshot, SemanticChange::RootText {
@@ -310,7 +371,97 @@ fn write_directly(
             after: Arc::new(after),
         })?;
     }
+    // The projections of the added items are built after their memberships,
+    // from which they count tags.
+    if !created.is_empty() {
+        crate::group::refresh_structural_projections(transaction, snapshot, &created)?;
+    }
     Ok(rest)
+}
+
+/// Adds an item that the library lacks as a root, with the name, notes,
+/// links and dates that the synced values show. The caller writes its
+/// lifecycle, rating and tags.
+fn create_item(transaction: &Transaction<'_>, snapshot: &mut ProjectionSnapshot, key: &str, shown: &View) -> Result<u32> {
+    let file = &shown.fields["file"];
+    let root = insert_item(transaction, key, file)?;
+    let name = shown.fields["name"].as_str().unwrap_or_default();
+    let modified = shown.fields["modified_at"].as_i64().unwrap_or(0);
+    transaction.execute("UPDATE media_item SET media_name = ?2 WHERE media_id = ?1", rusqlite::params![root, name])?;
+    transaction.execute(
+        "INSERT INTO library_root
+             (root_id, name, notes, source_urls_json, cover_media_id, imported_at_ms,
+              captured_at_ms, modified_at_ms, media_count, total_size_bytes)
+         VALUES (?1, ?2, ?3, ?4, ?1, ?5, ?6, ?7, 1, ?8)",
+        rusqlite::params![
+            root,
+            name,
+            shown.fields["notes"].as_str(),
+            serde_json::to_string(&shown.fields["links"])?,
+            shown.fields["imported_at"].as_i64().unwrap_or(0),
+            shown.fields["captured_at"].as_i64(),
+            modified,
+            file.get("size").and_then(Value::as_i64).unwrap_or(0).max(0),
+        ],
+    )?;
+    crate::fts::mark_one(transaction, RootId(root), modified)?;
+    Arc::make_mut(&mut snapshot.media_owner).insert(root, RootId(root));
+    if file.get("mime").and_then(Value::as_str).is_some_and(|mime| mime.starts_with("image/")) {
+        Arc::make_mut(&mut snapshot.image_media).insert(root);
+    }
+    Ok(root)
+}
+
+/// Adds the file, library item and media item of an item that the library
+/// lacks, keyed by its content hash `key`, and returns its local id. A file
+/// row that waits for removal is used again; a new one has no path, because
+/// the original is not on this computer yet.
+fn insert_item(transaction: &Transaction<'_>, key: &str, file: &Value) -> Result<u32> {
+    let file_id = transaction
+        .query_row("SELECT file_id FROM media_file WHERE content_hash = ?1", [key], |row| row.get::<_, u32>(0))
+        .optional()?;
+    let file_id = match file_id {
+        Some(file_id) => {
+            transaction.execute("DELETE FROM blob_cleanup_queue WHERE file_id = ?1", [file_id])?;
+            file_id
+        }
+        None => {
+            let file_id = LibraryDatabase::allocate_id(transaction)?;
+            transaction.execute(
+                "INSERT INTO media_file (content_hash, mime, size_bytes, width, height,
+                     duration_ms, frame_count, file_id, file_path)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '')",
+                rusqlite::params![
+                    key,
+                    file.get("mime").and_then(Value::as_str).unwrap_or("application/octet-stream"),
+                    file.get("size").and_then(Value::as_i64).unwrap_or(0).max(0),
+                    file.get("width").and_then(Value::as_i64),
+                    file.get("height").and_then(Value::as_i64),
+                    file.get("duration_ms").and_then(Value::as_i64),
+                    file.get("frames").and_then(Value::as_i64),
+                    file_id
+                ],
+            )?;
+            file_id
+        }
+    };
+    let media = LibraryDatabase::allocate_id(transaction)?;
+    let stable_key = format!("sync:{key}");
+    let taken = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM library_item WHERE stable_key = ?1)",
+        [&stable_key],
+        |row| row.get::<_, bool>(0),
+    )?;
+    let stable_key = if taken { format!("{stable_key}:{media}") } else { stable_key };
+    transaction.execute(
+        "INSERT INTO library_item(local_id, stable_key, item_kind) VALUES (?1, ?2, 1)",
+        rusqlite::params![media, stable_key],
+    )?;
+    transaction.execute(
+        "INSERT INTO media_item(media_id, media_name, media_notes, file_id) VALUES (?1, '', NULL, ?2)",
+        rusqlite::params![media, file_id],
+    )?;
+    Ok(media)
 }
 
 /// Writes what the synced values show for `keys` with the structure of the
@@ -336,7 +487,7 @@ fn project_structure(
                     (true, None) => {
                         ensure_tag(transaction, snapshot, key)?;
                     }
-                    (false, Some(tag_id)) => gone_tags.push(tag_id),
+                    (false, Some(tag_id)) => gone_tags.push((tag_id, key.clone())),
                     _ => {}
                 }
             }
@@ -352,6 +503,9 @@ fn project_structure(
     // one of the items and collections written are checked.
     let tree = keys.iter().any(|(kind, _)| matches!(kind, SyncKind::Folder | SyncKind::Tag | SyncKind::TagGroup));
     let new_folders = if tree { folders(transaction, revision, snapshot, synced)? } else { Vec::new() };
+    if tree {
+        projected.written.extend(synced.folder_tree()?.place.keys().map(|folder| (SyncKind::Folder, folder.clone())));
+    }
     roots(transaction, revision, snapshot, synced, keys, protected, projected)?;
     let covers = if tree {
         None
@@ -389,11 +543,42 @@ fn project_structure(
         remove_folders(transaction, revision, snapshot, synced, projected)?;
     }
 
-    for tag_id in gone_tags {
+    // The items and collections of a tag that was renamed or merged get the
+    // tag it went to, so that one that waits to be written for other fields
+    // does not lose the tag until then. One that waits gets it when its
+    // stored tag values give it, the same way an item in a collection keeps
+    // its tags for when it leaves; for one that does not wait, the synced
+    // values show the tag it went to.
+    for (tag_id, key) in gone_tags {
         if snapshot.tags.contains_key(&tag_id) || snapshot.tag_ids_by_name.values().any(|id| *id == tag_id) {
+            let target = synced.resolve_tag(&key)?;
             let (members, _) =
                 crate::mutation::remove_tag_in_transaction(transaction, snapshot, tag_id, None, revision)?;
-            projected.roots |= members;
+            projected.roots |= &members;
+            let Some(target) = target else { continue };
+            let destination = ensure_tag(transaction, snapshot, &target)?;
+            let waiting = synced.waiting()?;
+            let mut added = &members - &waiting;
+            for root in &members & &waiting {
+                let local = Local::new(transaction, snapshot);
+                if let Some((kind, member)) = local.root_key(RootId(root))? {
+                    let mut view = View::default();
+                    synced.root_view(kind, &member, &mut view)?;
+                    if view.tags.contains(&target) {
+                        added.insert(root);
+                    }
+                }
+            }
+            let bitmap_key = BitmapKey { domain: BitmapDomain::Tag, key_id: destination.0 };
+            let before = crate::mutation::projection_bitmap(snapshot, bitmap_key);
+            let after = &before | &added;
+            if after != before {
+                change(transaction, revision, snapshot, SemanticChange::Bitmap {
+                    key: bitmap_key,
+                    before: Arc::new(before),
+                    after: Arc::new(after),
+                })?;
+            }
         }
     }
     // A tag group without tags that the synced values do not show is
@@ -722,6 +907,7 @@ fn roots(
             for owner in owners {
                 grew |= collections.insert(owner);
             }
+            projected.written.insert((SyncKind::Item, key.clone()));
             item_targets.insert(key, view.map(|view| Target { view, members: Vec::new() }));
         }
         for key in collections.clone() {
@@ -740,6 +926,7 @@ fn roots(
                     }
                 }
             }
+            projected.written.insert((SyncKind::Collection, key.clone()));
             collection_targets.insert(key, view.map(|view| Target { view, members }));
         }
         if !grew && items.iter().all(|key| item_targets.contains_key(key)) {
@@ -782,58 +969,7 @@ fn roots(
                 )?;
                 media
             }
-            None => {
-                let file_id = transaction
-                    .query_row("SELECT file_id FROM media_file WHERE content_hash = ?1", [key], |row| {
-                        row.get::<_, u32>(0)
-                    })
-                    .optional()?;
-                let file_id = match file_id {
-                    Some(file_id) => {
-                        // A file that waits for removal is used again.
-                        transaction.execute("DELETE FROM blob_cleanup_queue WHERE file_id = ?1", [file_id])?;
-                        file_id
-                    }
-                    None => {
-                        // The original is not on this computer yet, so the
-                        // file has no path.
-                        let file_id = LibraryDatabase::allocate_id(transaction)?;
-                        transaction.execute(
-                            "INSERT INTO media_file (content_hash, mime, size_bytes, width, height,
-                                 duration_ms, frame_count, file_id, file_path)
-                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '')",
-                            rusqlite::params![
-                                key,
-                                mime,
-                                size,
-                                file.get("width").and_then(Value::as_i64),
-                                file.get("height").and_then(Value::as_i64),
-                                file.get("duration_ms").and_then(Value::as_i64),
-                                file.get("frames").and_then(Value::as_i64),
-                                file_id
-                            ],
-                        )?;
-                        file_id
-                    }
-                };
-                let media = LibraryDatabase::allocate_id(transaction)?;
-                let stable_key = format!("sync:{key}");
-                let taken = transaction.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM library_item WHERE stable_key = ?1)",
-                    [&stable_key],
-                    |row| row.get::<_, bool>(0),
-                )?;
-                let stable_key = if taken { format!("{stable_key}:{media}") } else { stable_key };
-                transaction.execute(
-                    "INSERT INTO library_item(local_id, stable_key, item_kind) VALUES (?1, ?2, 1)",
-                    rusqlite::params![media, stable_key],
-                )?;
-                transaction.execute(
-                    "INSERT INTO media_item(media_id, media_name, media_notes, file_id) VALUES (?1, '', NULL, ?2)",
-                    rusqlite::params![media, file_id],
-                )?;
-                media
-            }
+            None => insert_item(transaction, key, file)?,
         };
         if mime.starts_with("image/") {
             Arc::make_mut(&mut snapshot.image_media).insert(media);
@@ -998,7 +1134,6 @@ fn folder_positions(
     targets: BTreeMap<String, Vec<(String, String, u32)>>,
 ) -> Result<BTreeMap<FolderId, Vec<StructuralFolderPosition>>> {
     let local = Local::new(transaction, snapshot);
-    let waiting = synced.waiting()?;
     let mut positions = BTreeMap::new();
     for (folder, mut entries) in targets {
         let Some(folder_id) = local.find(SyncKind::Folder, &folder)?.map(FolderId) else { continue };
@@ -1025,32 +1160,27 @@ fn folder_positions(
             }
             Ok(keys[&root] < *target)
         };
-        // Members whose synced values wait to be written can stand where
-        // their new position key does not sort; only the others are
-        // compared, and they are in the order of their keys.
-        let known = (0..retained.len()).filter(|index| !waiting.contains(retained[*index].0)).collect::<Vec<_>>();
         let mut slots = Vec::with_capacity(entries.len());
         for (position, key, root) in &entries {
             let target = (position.clone(), key.clone());
             // A root whose key still sorts between its neighbours keeps its
             // place; the others are found by binary search.
             if let Some(&slot) = current.get(root) {
-                let at = known.partition_point(|index| *index < slot);
-                if (at == 0 || below(known[at - 1], &target)?) && (at == known.len() || !below(known[at], &target)?) {
+                if (slot == 0 || below(slot - 1, &target)?) && (slot == retained.len() || !below(slot, &target)?) {
                     slots.push(slot);
                     continue;
                 }
             }
-            let (mut low, mut high) = (0, known.len());
+            let (mut low, mut high) = (0, retained.len());
             while low < high {
                 let middle = (low + high) / 2;
-                if below(known[middle], &target)? {
+                if below(middle, &target)? {
                     low = middle + 1;
                 } else {
                     high = middle;
                 }
             }
-            slots.push(if low == 0 { 0 } else { known[low - 1] + 1 });
+            slots.push(low);
         }
         let mut list = Vec::new();
         for (index, (slot, (_, _, root))) in slots.iter().zip(&entries).enumerate() {

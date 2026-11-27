@@ -207,17 +207,13 @@ fn mark_triggers() -> Vec<(String, String, String)> {
     triggers
 }
 
-/// Adds `changed_entity`, its triggers, the revision index of
-/// `canonical_bitmap` and `sync_projection` to the library. Each write of
-/// synced values into the library puts its revision and the roots it wrote
-/// in `sync_projection`, in its own transaction, so that the recorder can
-/// tell its changes from the library's own after a crash as well.
+/// Adds `changed_entity`, its triggers and the revision index of
+/// `canonical_bitmap` to the library.
 pub(crate) fn start_marking(transaction: &Transaction<'_>) -> Result<()> {
     let mut sql = String::from(
         "CREATE TABLE IF NOT EXISTS changed_entity (local_id INTEGER PRIMARY KEY, revision INTEGER NOT NULL) STRICT;
          CREATE INDEX IF NOT EXISTS changed_entity_revision ON changed_entity(revision);
          CREATE INDEX IF NOT EXISTS sync_bitmap_revision ON canonical_bitmap(revision);
-         CREATE TABLE IF NOT EXISTS sync_projection (revision INTEGER PRIMARY KEY, written BLOB NOT NULL) STRICT;
          DELETE FROM tag_merge;",
     );
     // The upsert keeps one row for each local id; it is not overridden by
@@ -236,8 +232,7 @@ pub(crate) fn start_marking(transaction: &Transaction<'_>) -> Result<()> {
 
 pub(crate) fn stop_marking(transaction: &Transaction<'_>) -> Result<()> {
     let mut sql = String::from(
-        "DROP TABLE IF EXISTS changed_entity; DROP TABLE IF EXISTS sync_projection;
-         DROP INDEX IF EXISTS sync_bitmap_revision;",
+        "DROP TABLE IF EXISTS changed_entity; DROP INDEX IF EXISTS sync_bitmap_revision;",
     );
     for (name, _, _) in mark_triggers() {
         sql.push_str(&format!("DROP TRIGGER IF EXISTS sync_{name};"));
@@ -426,6 +421,15 @@ pub(crate) fn flush(transaction: &Transaction<'_>, clock: &mut Clock, outbox: bo
                  reference = excluded.reference",
         )?
         .execute(rusqlite::params![wall_ms, first, clock.device_number])?;
+    // The library holds what it recorded, so a value from before the
+    // records of other computers no longer tells what it holds.
+    if transaction.query_row("SELECT EXISTS(SELECT 1 FROM sync_pending_value)", [], |row| row.get::<_, bool>(0))? {
+        transaction.execute(
+            "DELETE FROM sync_pending_value
+             WHERE (entity, field, target) IN (SELECT entity, field, target FROM temp.sync_new)",
+            [],
+        )?;
+    }
     if outbox {
         transaction
             .prepare_cached(
@@ -458,6 +462,16 @@ pub(crate) fn merge<'a>(
              > (sync_value.clock_ms, sync_value.clock_counter,
                 (SELECT device_id FROM sync_device WHERE device = sync_value.device))",
     )?;
+    // The value each field had before the first record merged into it while
+    // the entity waits to be written (`sync_pending_value`). A field without
+    // a value counts as `null`, and the `deleted` field of an entity that the
+    // synced values do not know as `true`.
+    let mut keep = transaction.prepare_cached(
+        "INSERT OR IGNORE INTO sync_pending_value(entity, field, target, value)
+         VALUES (?1, ?2, ?3, COALESCE(
+             (SELECT value FROM sync_value WHERE field = ?2 AND target = ?3 AND entity = ?1),
+             CASE ?2 WHEN 'deleted' THEN 'true' ELSE 'null' END))",
+    )?;
     let mut devices = std::collections::HashMap::new();
     let mut merged = Vec::new();
     for record in records {
@@ -471,6 +485,7 @@ pub(crate) fn merge<'a>(
             }
         };
         let row = stored_row(transaction, record.kind, &record.key, &record.field, &record.value)?;
+        keep.execute(rusqlite::params![row.entity, row.field, row.target])?;
         let changed = statement.execute(rusqlite::params![
             row.entity,
             row.field,

@@ -6,11 +6,10 @@ use crate::sync::SyncRecord;
 use rusqlite::Connection;
 
 /// How many entities one library transaction of `apply_sync_records` writes
-/// with their structure, and how many it writes directly (`FIELDS` in
-/// `sync_pending`), so that a write of the user waits for it only a few
-/// milliseconds. At 1,000,000 roots one entity written with its structure
-/// takes about 10 ms, and 32 written directly about 3 ms.
-const PROJECTION_CHUNK: usize = 1;
+/// directly (`FIELDS` in `sync_pending`), so that a write of the user waits
+/// for it only a few milliseconds: at 1,000,000 roots, 32 new items take
+/// about 7 ms. The others are written one at a time, with the entities
+/// whose positions changed in the same folders.
 const DIRECT_CHUNK: usize = 32;
 
 impl Library {
@@ -116,32 +115,32 @@ impl Library {
     }
 
     /// Runs the recorder, then writes the pending synced values into the
-    /// library in transactions of `PROJECTION_CHUNK` entities at background
-    /// priority. A transaction is written only when the library has not
-    /// changed since the recorder's last pass; otherwise the recorder runs
-    /// again first, which records the change and takes the changed entity out
-    /// of the pending ones, so that the synced values are not written over a
-    /// change that the recorder has not recorded yet.
+    /// library in small transactions at background priority
+    /// (`pending_projection`). A transaction is written only when
+    /// the library has not changed since the recorder's last pass; otherwise
+    /// the recorder runs again first and records the change, so that the
+    /// synced values that are written hold it.
     fn catch_up(&self, connection: &mut Connection) -> Result<()> {
         loop {
             self.record_pass(connection)?;
             match self.project_next(connection)? {
                 None => return Ok(()),
-                Some(written) => crate::sync::finish_projection(connection, &written)?,
+                Some((chunk, written)) => crate::sync::finish_projection(connection, &chunk, &written)?,
             }
         }
     }
 
     /// Writes the next entities of `sync_pending` into the library in one
     /// transaction, when the library has not changed since the recorder's
-    /// last pass. Returns the entities written, `Some` of an empty list when
-    /// the library had changed, and `None` when nothing waits.
+    /// last pass. Returns the entities of `sync_pending` it took and all
+    /// entities it wrote in full, nothing of either when the library had
+    /// changed, and `None` when nothing waits.
     #[allow(clippy::type_complexity)]
     pub(crate) fn project_next(
         &self,
         connection: &Connection,
-    ) -> Result<Option<Vec<(i64, crate::sync::SyncKind, String, bool)>>> {
-        let (chunk, direct) = crate::sync::pending_projection(connection, DIRECT_CHUNK, PROJECTION_CHUNK)?;
+    ) -> Result<Option<(Vec<(i64, crate::sync::SyncKind, String, bool)>, BTreeSet<(crate::sync::SyncKind, String)>)>> {
+        let (chunk, direct) = crate::sync::pending_projection(connection, DIRECT_CHUNK)?;
         if chunk.is_empty() {
             return Ok(None);
         }
@@ -163,11 +162,14 @@ impl Library {
                     crate::sync::project(transaction, revision, &mut next, connection, keys, revived, direct, &protected)?;
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(revision, projected.resources, projected.roots.iter().map(RootId));
-                Ok(Some(((), PublishedDelta { snapshot: next, receipt, history: None })))
+                Ok(Some((projected.written, PublishedDelta { snapshot: next, receipt, history: None })))
             },
             move |_, delta| publish_delta(&projections, &publication, delta),
         )?;
-        Ok(Some(if written.is_some() { chunk } else { Vec::new() }))
+        Ok(Some(match written {
+            Some((written, _, _)) => (chunk, written),
+            None => (Vec::new(), BTreeSet::new()),
+        }))
     }
 
     /// One pass of the recorder.
@@ -214,18 +216,25 @@ impl Library {
         self.consistent(connection, |transaction, snapshot, _| crate::sync::differences(transaction, snapshot))
     }
 
-    /// Merges `records` and writes the first library transaction of them,
-    /// without the sync file noting that it was written, as a crash right
-    /// after that transaction leaves the two files.
+    /// Merges `records` and writes the first `writes` library transactions
+    /// of them. With `crash`, the sync file does not note that the last one
+    /// was written, as a crash right after that transaction leaves the two
+    /// files.
     #[cfg(test)]
-    pub(crate) fn apply_sync_records_until_the_first_write(&self, records: &[SyncRecord]) -> Result<()> {
+    pub(crate) fn apply_sync_records_partly(&self, records: &[SyncRecord], writes: usize, crash: bool) -> Result<()> {
         let mut guard = self.sync.lock(false)?;
         let connection = guard.as_mut().expect("sync is on");
         self.record_pass(connection)?;
         let transaction = connection.transaction()?;
         crate::sync::merge_remote(&transaction, records)?;
         transaction.commit()?;
-        self.project_next(connection)?;
+        for write in 1..=writes {
+            self.record_pass(connection)?;
+            let Some((chunk, written)) = self.project_next(connection)? else { break };
+            if !(crash && write == writes) {
+                crate::sync::finish_projection(connection, &chunk, &written)?;
+            }
+        }
         Ok(())
     }
 

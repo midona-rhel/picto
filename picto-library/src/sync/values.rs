@@ -132,14 +132,18 @@ impl<'a> Synced<'a> {
 
     /// The position key of an entity in the folder `folder`: the value of its
     /// field `folder:<folder>`, read alone, because an item can be in many
-    /// folders.
+    /// folders. For an entity that waits to be written, it is the value the
+    /// field had before the records from other computers, which gives the
+    /// place the library still holds it in.
     pub(crate) fn position(&self, kind: SyncKind, key: &str, folder: &str) -> Result<Option<String>> {
         let value = self
             .connection
             .prepare_cached(
-                "SELECT value.value FROM sync_identity entity, sync_identity target
+                "SELECT COALESCE(old.value, value.value) FROM sync_identity entity, sync_identity target
                  JOIN sync_value value ON value.field = 'folder' AND value.target = target.entity
                      AND value.entity = entity.entity
+                 LEFT JOIN sync_pending_value old ON old.entity = entity.entity AND old.field = 'folder'
+                     AND old.target = target.entity
                  WHERE entity.kind = ?1 AND entity.key = ?2 AND target.kind = 'folder' AND target.key = ?3",
             )?
             .query_row(rusqlite::params![kind.as_str(), key, folder], |row| row.get::<_, String>(0))
