@@ -9,7 +9,7 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-11-26-sync-values";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-11-27-shared-watch-paths";
 const NO_CLOUD_SYNC_PREDECESSOR: &str = "picto-library-schema-1-2026-11-25-no-cloud-sync";
 const KEPT_DELETED_FILES_PREDECESSOR: &str = "picto-library-schema-1-2026-11-23-kept-deleted-files";
 const TOMBSTONE_ENTRIES_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-task-rollback-aliases";
@@ -58,7 +58,6 @@ const CLOUD_SYNC_TABLES: [&str; 18] = [
 const TASK_SCHEMA: &str = include_str!("task_schema.sql");
 const ACCELERATOR_INDEXES: &str = include_str!("accelerator_indexes.sql");
 const ALIAS_SCHEMA: &str = include_str!("alias_schema.sql");
-const SYNC_SCHEMA: &str = include_str!("sync_schema.sql");
 /// The index that allows one media item for each file. A new library is
 /// created with it. An existing library gets it once the items that share a
 /// file are merged (`Library::merge_shared_files`).
@@ -79,7 +78,6 @@ pub fn create(connection: &mut Connection) -> Result<()> {
         connection.execute_batch(SCHEMA)?;
         connection.execute_batch(TASK_SCHEMA)?;
         connection.execute_batch(ALIAS_SCHEMA)?;
-        connection.execute_batch(SYNC_SCHEMA)?;
         connection.execute_batch(ONE_ITEM_PER_FILE)?;
         connection.execute_batch(include_str!("browsing_schema.sql"))?;
         connection.execute_batch(ACCELERATOR_INDEXES)?;
@@ -429,7 +427,6 @@ pub fn migrate_for_open(
             // once the library is open (`Library::merge_shared_files`).
             connection.execute_batch(ALIAS_SCHEMA)?;
             drop_cloud_sync_tables(connection)?;
-            connection.execute_batch(SYNC_SCHEMA)?;
             drop_watch_path_uniqueness(connection)?;
             connection.execute(
                 "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
@@ -1111,11 +1108,11 @@ mod tests {
         assert_eq!(count(&backup, "SELECT COUNT(*) FROM cloud_journal"), 1);
     }
 
-    /// A library of the schema before the synced values gets the sync tables
-    /// and loses the uniqueness of watched paths, keeps its folders and a
-    /// backup, and opens a second time without another migration.
+    /// A library of the schema whose watched paths were unique loses that
+    /// uniqueness, keeps its folders and a backup, and opens a second time
+    /// without another migration.
     #[test]
-    fn the_migration_adds_the_sync_tables_and_lets_two_folders_watch_one_path() {
+    fn the_migration_lets_two_folders_watch_one_path() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("library.sqlite");
         drop(LibraryDatabase::create(&path).unwrap());
@@ -1129,8 +1126,6 @@ mod tests {
         connection
             .execute_batch(&format!(
                 "PRAGMA foreign_keys = OFF;
-                 DROP TABLE sync_state; DROP TABLE sync_identity; DROP TABLE sync_device;
-                 DROP TABLE sync_value; DROP TABLE sync_outbox;
                  {unique};
                  DROP TABLE folder_definition;
                  ALTER TABLE folder_definition_unique RENAME TO folder_definition;
@@ -1151,14 +1146,6 @@ mod tests {
 
         let connection = Connection::open(&path).unwrap();
         super::validate(&connection).unwrap();
-        assert_eq!(
-            count(
-                &connection,
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'
-                 AND name IN ('sync_state', 'sync_identity', 'sync_device', 'sync_value', 'sync_outbox')"
-            ),
-            5
-        );
         assert_eq!(count(&connection, "SELECT COUNT(*) FROM folder_definition WHERE parent_id = 1"), 1);
         connection
             .execute("UPDATE folder_definition SET watch_path = '/watched' WHERE folder_id = 2", [])

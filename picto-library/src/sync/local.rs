@@ -50,15 +50,15 @@ pub(crate) struct Local<'a> {
 }
 
 impl<'a> Local<'a> {
-    pub(crate) fn new(connection: &'a Connection, snapshot: &'a ProjectionSnapshot) -> Result<Self> {
-        Ok(Self {
+    pub(crate) fn new(connection: &'a Connection, snapshot: &'a ProjectionSnapshot) -> Self {
+        Self {
             connection,
             snapshot,
             tag_names: None,
             root_tags: HashMap::new(),
             root_folders: HashMap::new(),
             prepared: RoaringBitmap::new(),
-        })
+        }
     }
 
     fn tag_names(&mut self) -> &HashMap<u32, String> {

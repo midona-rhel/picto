@@ -1093,12 +1093,9 @@ pub(crate) fn remove_tag_in_transaction(
     let source_state = load_tag_definition(transaction, source)?
         .ok_or_else(|| LibraryError::NotFound(format!("tag {}", source.0)))?;
     if let Some(destination) = destination {
-        let Some(destination_state) = load_tag_definition(transaction, destination)? else {
+        if load_tag_definition(transaction, destination)?.is_none() {
             return Err(LibraryError::NotFound(format!("tag {}", destination.0)));
-        };
-        // Tags that another computer adds under the old name before this
-        // merge reaches it end up under the destination.
-        crate::sync::note_tag_merge(transaction, &source_state.full_name, &destination_state.full_name)?;
+        }
     }
     let source_members = snapshot
         .tags

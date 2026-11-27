@@ -1463,7 +1463,6 @@ fn persist_recovered_partitions(
         crate::database::WorkPriority::CorrectnessRecovery,
         |transaction| {
             let mut changed = 0;
-            let mut repaired = RoaringBitmap::new();
             let partitions = Lifecycle::ALL
                 .into_iter()
                 .map(|value| (BitmapDomain::Lifecycle, value.bitmap_key(), snapshot.lifecycle(value)))
@@ -1474,16 +1473,12 @@ fn persist_recovered_partitions(
                 );
             for (domain, key_id, members) in partitions {
                 let key = BitmapKey { domain, key_id };
-                repaired |= &bitmap::load(transaction, key)? ^ members;
-                changed += bitmap::replace(transaction, snapshot.revision, key, members)?;
+                // The rows get the next revision, as a write would give
+                // them, so that the sync recorder finds them.
+                changed += bitmap::replace(transaction, snapshot.revision + 1, key, members)?;
             }
             if changed != 0 {
                 transaction.execute("DELETE FROM projection_checkpoint WHERE singleton = 1", [])?;
-            }
-            // While sync is on, the next write records the repaired
-            // lifecycle and rating of these roots.
-            if crate::sync::recording(transaction)? {
-                crate::sync::touch(transaction, &repaired)?;
             }
             Ok(())
         },

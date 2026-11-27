@@ -941,23 +941,6 @@ pub(crate) fn apply_semantic_change(
                 resources.extend(receipt.resources);
             } else {
                 super::structure::restore_deleted_roots(transaction, revision, snapshot, state)?;
-                // While sync is on, the latest synced values of the items are
-                // written over the rows that come back, so that changes made
-                // on other computers since the deletion are kept. The recorder
-                // then records the items' full state, because the synced
-                // values hold them as deleted.
-                if crate::sync::recording(transaction)? {
-                    let keys = super::structure::deleted_root_keys(transaction, state)?;
-                    let projected = crate::sync::project(
-                        transaction,
-                        revision,
-                        snapshot,
-                        keys.iter().cloned().collect(),
-                        keys.into_iter().collect(),
-                        &std::collections::BTreeSet::new(),
-                    )?;
-                    *affected |= projected.roots;
-                }
                 resources.extend(
                     ["roots", "media", "sidebar", "tags", "folders", "collections", "search", "navigation", "recently_viewed", "tasks"]
                         .map(str::to_owned),

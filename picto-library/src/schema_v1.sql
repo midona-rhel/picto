@@ -112,6 +112,9 @@ CREATE TABLE smart_folder_definition (
     UNIQUE(parent_id, name)
 ) STRICT;
 
+-- The members of each lifecycle, rating and tag, one row for each 65,536 ids
+-- (high_bits). A shard that loses its last member stays as a row with
+-- cardinality 0 and the revision of that write.
 CREATE TABLE canonical_bitmap (
     domain INTEGER NOT NULL,
     key_id INTEGER NOT NULL,

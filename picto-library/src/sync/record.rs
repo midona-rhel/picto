@@ -1,9 +1,12 @@
-//! Recording: after a write, the entities that the write touched are
-//! compared with what the synced values show, and every field that differs
-//! is recorded with a new timestamp, in the same transaction as the write.
+//! Recording: a pass of the recorder finds what changed in the library since
+//! the revision it last recorded, compares those entities with what the
+//! synced values show, and records every field that differs with a new
+//! timestamp. It runs on the sync file's connection, reads the library
+//! through the attached `library` database in the same transaction, and
+//! commits the records, its copies and the revision together.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::io::Cursor;
 
 use roaring::RoaringBitmap;
 use rusqlite::{Connection, OptionalExtension, Transaction};
@@ -12,9 +15,9 @@ use serde_json::{json, Value};
 use super::local::{lifecycle_name, Local};
 use super::order::{self, Member};
 use super::values::{Synced, View, ROOT_FIELDS};
-use super::{recording, Clock, SyncKind};
+use super::{Clock, SyncKind};
 use crate::model::{FolderId, Lifecycle, Rating, RootId, TagId};
-use crate::projection::{ProjectionSnapshot, SharedBitmap};
+use crate::projection::ProjectionSnapshot;
 use crate::Result;
 
 /// A second comparison runs at most this many times. Each one compares the
@@ -22,13 +25,17 @@ use crate::Result;
 /// changed; in practice the second one finds nothing.
 const SECOND_PASSES: usize = 8;
 
+/// The states of `sync_pending`.
+pub(crate) const PROJECT: i64 = 0;
+pub(crate) const REVIVE: i64 = 1;
+const RECORD: i64 = 2;
+
 type Records = BTreeMap<(SyncKind, String, String), Value>;
 
-/// What a write touched: local entities that are compared one by one, the
-/// lists whose order is compared, and the roots that entered or left a
-/// lifecycle, rating, tag or folder. A list marked `true` is compared as a
-/// whole; otherwise only the part that differs from the list before the
-/// write.
+/// What changed: local entities that are compared one by one, the lists
+/// whose order is compared, and the roots that entered or left a lifecycle,
+/// rating, tag or folder. A list marked `true` is compared as a whole;
+/// otherwise only the part that differs from the list before.
 #[derive(Default)]
 struct Touched {
     ids: BTreeSet<u32>,
@@ -38,6 +45,15 @@ struct Touched {
     changes: Vec<Change>,
 }
 
+/// The lists that changed, as (owner kind, owner id), and their order as
+/// the recorder last recorded them.
+#[derive(Default)]
+struct Before {
+    owners: Vec<(u8, u32)>,
+    folder_orders: HashMap<FolderId, Vec<u32>>,
+    collection_orders: HashMap<RootId, Vec<u32>>,
+}
+
 /// The roots that entered or left one lifecycle, rating, tag or folder.
 struct Change {
     membership: Membership,
@@ -45,7 +61,7 @@ struct Change {
     removed: RoaringBitmap,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum Membership {
     Lifecycle(Lifecycle),
     Rating(Rating),
@@ -65,33 +81,100 @@ struct SetRecord {
     compare: bool,
 }
 
-/// Records the changes of the write that turned `before` into `after`.
-pub(crate) fn record(
-    transaction: &Transaction<'_>,
-    before: &ProjectionSnapshot,
-    after: &ProjectionSnapshot,
-) -> Result<()> {
-    if !recording(transaction)? {
+/// Records what changed in the library between the revision in
+/// `sync_state.recorded_revision` and `revision`, which `snapshot` shows.
+/// `transaction` is on the sync file's connection and reads the library at
+/// `revision`.
+pub(crate) fn record(transaction: &Transaction<'_>, snapshot: &ProjectionSnapshot, revision: u64) -> Result<()> {
+    let state = transaction
+        .query_row("SELECT recorded_revision, projected_revision FROM sync_state", [], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })
+        .optional()?;
+    let Some((since, projected)) = state else { return Ok(()) };
+    // Whether the only write since the last pass wrote synced values into
+    // the library.
+    let only_projection = since + 1 == projected && revision as i64 == projected;
+    let pending = transaction
+        .prepare_cached(
+            "SELECT pending.entity, identity.kind, identity.key, identity.local_id, pending.state
+             FROM sync_pending pending JOIN sync_identity identity ON identity.entity = pending.entity",
+        )?
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<u32>>(3)?, row.get::<_, i64>(4)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if since as u64 == revision && pending.iter().all(|row| row.4 != RECORD) {
         return Ok(());
     }
-    let mut touched = touched(transaction, before, after)?;
-    if touched.ids.is_empty()
-        && touched.folder_lists.is_empty()
-        && touched.collection_lists.is_empty()
-        && touched.changes.is_empty()
-    {
-        return Ok(());
+    let (mut touched, mut before) = touched(transaction, snapshot, since)?;
+    let owners = std::mem::take(&mut before.owners);
+    let mut recorder = Recorder::new(transaction, before, snapshot);
+    // What such a write changed is compared, which stores the keys of the
+    // entities it wrote, but only the entities in `recording` are recorded:
+    // the entities it wrote can refer to entities that wait for the next
+    // write, and show differences that are no change of the library's own.
+    recorder.record_nothing = only_projection;
+    // An entity that waits for its synced values to be written is left out,
+    // unless it changed in the library since the last pass: that change is
+    // recorded and the synced values are no longer written over it.
+    let mut changed_roots = touched.ids.iter().copied().collect::<RoaringBitmap>();
+    for change in &touched.changes {
+        changed_roots |= &change.added;
+        changed_roots |= &change.removed;
     }
-    let mut clock = Clock::load(transaction)?;
-    let mut recorder = Recorder::new(transaction, before, after)?;
-    recorder.merges = transaction
-        .prepare_cached("SELECT source, destination FROM temp.sync_tag_merge")?
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-        .collect::<rusqlite::Result<_>>()?;
-    transaction.execute("DELETE FROM temp.sync_tag_merge", [])?;
+    let mut done = Vec::new();
+    for (entity, kind, key, local_id, state) in pending {
+        let Some(kind) = SyncKind::parse(&kind) else { continue };
+        let changed = !only_projection && local_id.is_some_and(|id| changed_roots.contains(id));
+        match state {
+            RECORD => {
+                touched.ids.extend(local_id);
+                recorder.recording.insert((kind, key));
+                done.push(entity);
+            }
+            PROJECT if changed => done.push(entity),
+            _ => {
+                recorder.skipped.insert((kind, key));
+                recorder.skipped_roots.extend(local_id);
+            }
+        }
+    }
+    if !only_projection {
+        recorder.merges(&touched.changes)?;
+    }
     let sets = recorder.split_sets(&mut touched)?;
+    let mut clock = Clock::load(transaction)?;
     recorder.run(touched, &sets, &mut clock)?;
-    clock.save(transaction)
+    clock.save(transaction)?;
+    let mut statement = transaction.prepare_cached("DELETE FROM sync_pending WHERE entity = ?1")?;
+    for entity in done {
+        statement.execute([entity])?;
+    }
+    copy(transaction, since, &owners)?;
+    transaction.execute("UPDATE sync_state SET recorded_revision = ?1", [revision as i64])?;
+    Ok(())
+}
+
+/// Brings the copies of the bitmaps and lists up to the library: every
+/// bitmap row changed after `since`, and every row of the lists of `owners`.
+fn copy(transaction: &Transaction<'_>, since: i64, owners: &[(u8, u32)]) -> Result<()> {
+    transaction.execute(
+        "INSERT OR REPLACE INTO recorded_bitmap(domain, key_id, high_bits, checksum, payload)
+         SELECT domain, key_id, high_bits, checksum, payload FROM library.canonical_bitmap WHERE revision > ?1",
+        [since],
+    )?;
+    let mut remove = transaction.prepare_cached("DELETE FROM recorded_order WHERE owner_kind = ?1 AND owner_id = ?2")?;
+    let mut insert = transaction.prepare_cached(
+        "INSERT INTO recorded_order(owner_kind, owner_id, chunk_index, checksum, payload)
+         SELECT owner_kind, owner_id, chunk_index, checksum, payload FROM library.ordered_membership_chunk
+         WHERE owner_kind = ?1 AND owner_id = ?2",
+    )?;
+    for owner in owners {
+        remove.execute(*owner)?;
+        insert.execute(*owner)?;
+    }
+    Ok(())
 }
 
 /// How many entities turning sync on compares at a time, so that the
@@ -99,16 +182,23 @@ pub(crate) fn record(
 const FULL_STATE_CHUNK: usize = 20_000;
 
 /// Records the full state of the library into empty synced values when sync
-/// is turned on. The records go into the synced values only, not into the
-/// outbox. The position keys of every list are written first; the entities
-/// follow in chunks and take their positions from the synced values. With
-/// empty synced values nothing forwards and nothing is hidden, so no second
-/// comparison is needed.
+/// is turned on, and copies its bitmaps and lists. The records go into the
+/// synced values only, not into the outbox. The position keys of every list
+/// are written first; the entities follow in chunks and take their positions
+/// from the synced values. With empty synced values nothing forwards and
+/// nothing is hidden, so no second comparison is needed.
 pub(crate) fn record_full(transaction: &Transaction<'_>, snapshot: &ProjectionSnapshot) -> Result<()> {
     let mut clock = Clock::load(transaction)?;
     let mut touched = everything(transaction, snapshot)?;
     let ids = std::mem::take(&mut touched.ids).into_iter().collect::<Vec<_>>();
-    let mut recorder = Recorder::new(transaction, snapshot, snapshot)?;
+    let mut recorder = Recorder::new(transaction, Before::default(), snapshot);
+    recorder.fresh = true;
+    let owners = touched
+        .folder_lists
+        .keys()
+        .map(|folder| (crate::ordering::OrderOwnerKind::Folder as u8, folder.0))
+        .chain(touched.collection_lists.keys().map(|root| (crate::ordering::OrderOwnerKind::Collection as u8, root.0)))
+        .collect::<Vec<_>>();
     // Each list is written before the next is compared, so that the
     // positions of a large library are not all held in memory at once.
     let lists = touched
@@ -126,7 +216,7 @@ pub(crate) fn record_full(transaction: &Transaction<'_>, snapshot: &ProjectionSn
         recorder.write(positions, &mut clock, false)?;
     }
     for chunk in ids.chunks(FULL_STATE_CHUNK) {
-        let mut recorder = Recorder::new(transaction, snapshot, snapshot)?;
+        let mut recorder = Recorder::new(transaction, Before::default(), snapshot);
         recorder.written_positions = true;
         let entities = recorder.compare(Touched {
             ids: chunk.iter().copied().collect(),
@@ -136,18 +226,20 @@ pub(crate) fn record_full(transaction: &Transaction<'_>, snapshot: &ProjectionSn
         recorder.write(records, &mut clock, false)?;
         recorder.update_identities(&entities)?;
     }
-    clock.save(transaction)
+    clock.save(transaction)?;
+    copy(transaction, -1, &owners)
 }
 
 /// The records that a full comparison of the library with the synced values
-/// would make, without making them. After any write it must be empty.
+/// would make, without making them. Once the recorder has caught up it is
+/// empty.
 #[cfg(test)]
 pub(crate) fn differences(
     transaction: &Transaction<'_>,
     snapshot: &ProjectionSnapshot,
 ) -> Result<Vec<(SyncKind, String, String, Value)>> {
     let touched = everything(transaction, snapshot)?;
-    let mut recorder = Recorder::new(transaction, snapshot, snapshot)?;
+    let mut recorder = Recorder::new(transaction, Before::default(), snapshot);
     recorder.compare(touched)?;
     // Entities that the synced values show but the library lacks.
     let mut statement = transaction.prepare(
@@ -193,111 +285,123 @@ fn everything(connection: &Connection, snapshot: &ProjectionSnapshot) -> Result<
     Ok(touched)
 }
 
-/// Finds what a write touched: the ids that the triggers noted, and the
-/// differences between the projections before and after the write.
+fn decode_order(payloads: impl IntoIterator<Item = Vec<u8>>) -> Vec<u32> {
+    payloads
+        .into_iter()
+        .flat_map(|payload| {
+            payload.as_chunks::<4>().0.iter().map(|bytes| u32::from_le_bytes(*bytes)).collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Finds what changed in the library after the revision `since`: the local
+/// ids in `changed_entity`, the bitmap rows whose revision is later and
+/// whose checksum differs from the copy, and the lists whose chunks differ
+/// from the copy. Returns the changes and the lists as they were.
 fn touched(
     transaction: &Transaction<'_>,
-    before: &ProjectionSnapshot,
-    after: &ProjectionSnapshot,
-) -> Result<Touched> {
+    snapshot: &ProjectionSnapshot,
+    since: i64,
+) -> Result<(Touched, Before)> {
     let mut touched = Touched::default();
+    let mut before = Before::default();
     {
-        let mut statement = transaction.prepare_cached("SELECT local_id FROM temp.sync_touched")?;
-        for id in statement.query_map([], |row| row.get::<_, u32>(0))? {
+        let mut statement =
+            transaction.prepare_cached("SELECT local_id FROM library.changed_entity WHERE revision > ?1")?;
+        for id in statement.query_map([since], |row| row.get::<_, u32>(0))? {
             touched.ids.insert(id?);
         }
     }
-    transaction.execute("DELETE FROM temp.sync_touched", [])?;
-    let mut change = |membership, before: Option<&SharedBitmap>, after: Option<&SharedBitmap>| {
-        if let (Some(before), Some(after)) = (before, after) {
-            if before.allocation_id() == after.allocation_id() {
-                return;
-            }
+    let mut statement = transaction.prepare_cached(
+        "SELECT now.domain, now.key_id, now.high_bits, now.payload, recorded.payload
+         FROM library.canonical_bitmap now
+         LEFT JOIN recorded_bitmap recorded ON recorded.domain = now.domain
+             AND recorded.key_id = now.key_id AND recorded.high_bits = now.high_bits
+         WHERE now.revision > ?1 AND recorded.checksum IS NOT now.checksum",
+    )?;
+    let rows = statement.query_map([since], |row| {
+        Ok((row.get::<_, u8>(0)?, row.get::<_, u32>(1)?, row.get::<_, u32>(2)?, row.get::<_, Vec<u8>>(3)?, row.get::<_, Option<Vec<u8>>>(4)?))
+    })?;
+    let mut bitmaps: BTreeMap<(u8, u32), (RoaringBitmap, RoaringBitmap)> = BTreeMap::new();
+    for row in rows {
+        let (domain, key, high, now, recorded) = row?;
+        let decode = |payload: &[u8]| -> Result<RoaringBitmap> {
+            let shard = RoaringBitmap::deserialize_from(&mut Cursor::new(payload))?;
+            Ok(shard.iter().map(|low| high << 16 | low).collect())
+        };
+        let now = decode(&now)?;
+        let recorded = recorded.map(|payload| decode(&payload)).transpose()?.unwrap_or_default();
+        let entry = bitmaps.entry((domain, key)).or_default();
+        entry.0 |= &now - &recorded;
+        entry.1 |= &recorded - &now;
+    }
+    for ((domain, key), (added, removed)) in bitmaps {
+        let membership = match domain {
+            1 => Lifecycle::ALL.into_iter().find(|value| value.bitmap_key() == key).map(Membership::Lifecycle),
+            2 => Rating::ALL.into_iter().find(|value| value.bitmap_key() == key).map(Membership::Rating),
+            _ => Some(Membership::Tag(TagId(key))),
+        };
+        if let Some(membership) = membership.filter(|_| !added.is_empty() || !removed.is_empty()) {
+            touched.changes.push(Change { membership, added, removed });
         }
-        let empty = RoaringBitmap::new();
-        let before: &RoaringBitmap = before.map_or(&empty, |value| value);
-        let after: &RoaringBitmap = after.map_or(&empty, |value| value);
-        if before != after {
-            touched.changes.push(Change { membership, added: after - before, removed: before - after });
-        }
+    }
+    // The lists: their chunks are compared with the copies by checksum.
+    let chunks = |sql: &str| -> Result<BTreeMap<(u8, u32, i64), Vec<u8>>> {
+        let mut statement = transaction.prepare_cached(sql)?;
+        let rows = statement.query_map([], |row| Ok(((row.get(0)?, row.get(1)?, row.get(2)?), row.get(3)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     };
-    if !Arc::ptr_eq(&before.lifecycle, &after.lifecycle) {
-        for (key, value) in after.lifecycle.iter() {
-            change(Membership::Lifecycle(*key), before.lifecycle.get(key), Some(value));
-        }
-    }
-    if !Arc::ptr_eq(&before.ratings, &after.ratings) {
-        for (key, value) in after.ratings.iter() {
-            change(Membership::Rating(*key), before.ratings.get(key), Some(value));
-        }
-    }
-    if !Arc::ptr_eq(&before.tags, &after.tags) {
-        for (key, value) in after.tags.iter() {
-            change(Membership::Tag(*key), before.tags.get(key), Some(value));
-        }
-        for (key, value) in before.tags.iter() {
-            if !after.tags.contains_key(key) {
-                change(Membership::Tag(*key), Some(value), None);
-            }
-        }
-    }
-    if !Arc::ptr_eq(&before.folder_orders, &after.folder_orders) {
-        for (folder, order) in after.folder_orders.iter() {
-            let previous = before.folder_orders.get(folder);
-            if previous.is_none_or(|previous| !Arc::ptr_eq(previous, order)) {
-                touched.folder_lists.insert(*folder, false);
-                let old = previous
-                    .map(|order| order.iter().map(|root| root.0).collect::<RoaringBitmap>())
-                    .unwrap_or_default();
-                let new = order.iter().map(|root| root.0).collect::<RoaringBitmap>();
-                if old != new {
-                    touched.changes.push(Change {
-                        membership: Membership::Folder(*folder),
-                        added: &new - &old,
-                        removed: &old - &new,
-                    });
-                }
-            }
-        }
-        for (folder, order) in before.folder_orders.iter() {
-            if !after.folder_orders.contains_key(folder) {
-                touched.ids.extend(order.iter().map(|root| root.0));
+    let now = chunks("SELECT owner_kind, owner_id, chunk_index, checksum FROM library.ordered_membership_chunk")?;
+    let recorded = chunks("SELECT owner_kind, owner_id, chunk_index, checksum FROM recorded_order")?;
+    let owners = now
+        .iter()
+        .filter(|(key, checksum)| recorded.get(*key) != Some(*checksum))
+        .map(|(key, _)| key)
+        .chain(recorded.keys().filter(|key| !now.contains_key(*key)))
+        .map(|(kind, owner, _)| (*kind, *owner))
+        .collect::<BTreeSet<_>>();
+    let mut statement = transaction.prepare_cached(
+        "SELECT payload FROM recorded_order WHERE owner_kind = ?1 AND owner_id = ?2 ORDER BY chunk_index",
+    )?;
+    for (kind, owner) in &owners {
+        let old = decode_order(statement.query_map((kind, owner), |row| row.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?);
+        let folder = *kind == crate::ordering::OrderOwnerKind::Folder as u8;
+        let now = if folder {
+            snapshot.folder_orders.get(&FolderId(*owner)).map(|order| order.iter().map(|root| root.0).collect::<Vec<_>>())
+        } else {
+            snapshot.collection_orders.get(&RootId(*owner)).map(|order| order.iter().map(|media| media.0).collect())
+        };
+        let Some(now) = now else {
+            // The folder or collection is gone; its members are compared.
+            touched.ids.extend(old);
+            if folder {
                 touched.folder_tree = true;
+            } else {
+                touched.ids.insert(*owner);
             }
+            continue;
+        };
+        let (old_set, new_set) = (old.iter().copied().collect::<RoaringBitmap>(), now.iter().copied().collect::<RoaringBitmap>());
+        if folder {
+            touched.folder_lists.insert(FolderId(*owner), false);
+            if old_set != new_set {
+                let (added, removed) = (&new_set - &old_set, &old_set - &new_set);
+                touched.changes.push(Change { membership: Membership::Folder(FolderId(*owner)), added, removed });
+            }
+            before.folder_orders.insert(FolderId(*owner), old);
+        } else {
+            touched.collection_lists.insert(RootId(*owner), false);
+            touched.ids.insert(*owner);
+            touched.ids.extend((&old_set ^ &new_set).iter());
+            before.collection_orders.insert(RootId(*owner), old);
         }
     }
-    if !Arc::ptr_eq(&before.collection_orders, &after.collection_orders) {
-        for (collection, order) in after.collection_orders.iter() {
-            let previous = before.collection_orders.get(collection);
-            if previous.is_none_or(|previous| !Arc::ptr_eq(previous, order)) {
-                touched.collection_lists.insert(*collection, false);
-                touched.ids.insert(collection.0);
-                let old = previous.map(|order| order.iter().map(|media| media.0).collect::<RoaringBitmap>());
-                let new = order.iter().map(|media| media.0).collect::<RoaringBitmap>();
-                touched.ids.extend((&old.unwrap_or_default() ^ &new).iter());
-            }
-        }
-        for (collection, order) in before.collection_orders.iter() {
-            if !after.collection_orders.contains_key(collection) {
-                touched.ids.insert(collection.0);
-                touched.ids.extend(order.iter().map(|media| media.0));
-            }
-        }
-    }
-    if !Arc::ptr_eq(&before.root_kinds, &after.root_kinds) {
-        for (kind, value) in after.root_kinds.iter() {
-            let empty = SharedBitmap::from(RoaringBitmap::new());
-            let previous = before.root_kinds.get(kind).unwrap_or(&empty);
-            if previous.allocation_id() != value.allocation_id() {
-                touched.ids.extend((previous ^ value).iter());
-            }
-        }
-    }
-    Ok(touched)
+    before.owners = owners.into_iter().collect();
+    Ok((touched, before))
 }
 
-/// One local entity that a write touched: the key the synced values knew it
-/// by, and the key the library gives it now (`None` when it is gone).
+/// One local entity that changed: the key the synced values knew it by, and
+/// the key the library gives it now (`None` when it is gone).
 struct Entity {
     kind: SyncKind,
     local_id: u32,
@@ -307,11 +411,18 @@ struct Entity {
 
 struct Recorder<'a> {
     transaction: &'a Transaction<'a>,
-    before: &'a ProjectionSnapshot,
+    before: Before,
     local: Local<'a>,
     synced: Synced<'a>,
-    /// Tags merged in this write: source name to destination name.
+    /// Tags merged since the last pass: source name to destination name.
     merges: HashMap<String, String>,
+    /// Entities that are not compared and get no records in this pass:
+    /// those whose synced values wait to be written into the library.
+    skipped: HashSet<(SyncKind, String)>,
+    skipped_roots: RoaringBitmap,
+    /// Entities whose synced values were written as visible although the
+    /// synced values delete them; their full state is recorded now.
+    recording: HashSet<(SyncKind, String)>,
     records: Records,
     /// Position keys that the comparison of lists gave, for members whose
     /// key changed.
@@ -319,30 +430,66 @@ struct Recorder<'a> {
     /// Whether the positions of every list are already in the synced
     /// values, as when sync is turned on; a full state then leaves them out.
     written_positions: bool,
-    /// The clock before the first record of this write.
+    /// Whether the records of this pass are dropped instead of written,
+    /// except those of the entities in `recording`.
+    record_nothing: bool,
+    /// Whether the synced values hold no position keys yet, as when sync is
+    /// turned on; the comparison of lists then reads none.
+    fresh: bool,
+    /// The clock before the first record of this pass.
     written_after: Option<(i64, i64)>,
     /// The tags that the last records written made visible.
     appeared_tags: BTreeSet<String>,
 }
 
 impl<'a> Recorder<'a> {
-    fn new(
-        transaction: &'a Transaction<'a>,
-        before: &'a ProjectionSnapshot,
-        after: &'a ProjectionSnapshot,
-    ) -> Result<Self> {
-        Ok(Self {
+    fn new(transaction: &'a Transaction<'a>, before: Before, snapshot: &'a ProjectionSnapshot) -> Self {
+        Self {
             transaction,
             before,
-            local: Local::new(transaction, after)?,
+            local: Local::new(transaction, snapshot),
             synced: Synced::new(transaction),
             merges: HashMap::new(),
+            skipped: HashSet::new(),
+            skipped_roots: RoaringBitmap::new(),
+            recording: HashSet::new(),
             records: Records::new(),
             positions: Records::new(),
             written_positions: false,
+            fresh: false,
+            record_nothing: false,
             written_after: None,
             appeared_tags: BTreeSet::new(),
-        })
+        }
+    }
+
+    /// Finds the tags that were merged into another: a tag that is gone
+    /// forwards to the one other tag that now has every root the gone tag
+    /// had and that gained only roots of the gone tag since the last pass.
+    fn merges(&mut self, changes: &[Change]) -> Result<()> {
+        let snapshot = self.local.snapshot;
+        for change in changes {
+            let Membership::Tag(tag) = change.membership else { continue };
+            if snapshot.tags.contains_key(&tag) || change.removed.is_empty() {
+                continue;
+            }
+            let targets = changes
+                .iter()
+                .filter_map(|other| match other.membership {
+                    Membership::Tag(other_tag) if other_tag != tag && !other.added.is_empty() => {
+                        other.added.is_subset(&change.removed).then_some(other_tag)
+                    }
+                    _ => None,
+                })
+                .filter(|other| snapshot.tags.get(other).is_some_and(|members| change.removed.is_subset(members)))
+                .collect::<Vec<_>>();
+            if let ([target], Some((_, source))) = (targets.as_slice(), self.identity(SyncKind::Tag, tag.0)?) {
+                if let Some(target) = self.local.key(SyncKind::Tag, target.0)? {
+                    self.merges.insert(source, target);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn put(&mut self, kind: SyncKind, key: &str, field: &str, value: Value) {
@@ -374,10 +521,41 @@ impl<'a> Recorder<'a> {
         Ok(())
     }
 
-    /// Compares the touched entities and lists and fills `records`. Returns
+    /// Compares the changed entities and lists and fills `records`. Returns
     /// the entities, so that their keys can be stored.
     fn compare(&mut self, mut touched: Touched) -> Result<Vec<Entity>> {
-        let entities = self.entities(&mut touched)?;
+        let mut entities = self.entities(&mut touched)?;
+        // An item or collection that the library has under the local id the
+        // synced values knew it by, while the synced values delete it, came
+        // back, as an undo of Delete Permanently brings it back. The synced
+        // values are written over it first, so that what other computers
+        // changed since is kept, and it is recorded after that.
+        for entity in &entities {
+            let Some(key) = entity.new.clone().filter(|key| entity.old.as_ref() == Some(key)) else { continue };
+            if !matches!(entity.kind, SyncKind::Item | SyncKind::Collection)
+                || self.recording.contains(&(entity.kind, key.clone()))
+                || self.skipped.contains(&(entity.kind, key.clone()))
+            {
+                continue;
+            }
+            let deleted = self.synced.raw(entity.kind, &key)?.get("deleted").is_some_and(|stored| stored.value == json!(true));
+            if deleted {
+                self.transaction
+                    .prepare_cached("INSERT OR REPLACE INTO sync_pending(entity, state) VALUES (?1, ?2)")?
+                    .execute(rusqlite::params![super::entity(self.transaction, entity.kind, &key)?, REVIVE])?;
+                self.skipped.insert((entity.kind, key));
+            }
+        }
+        // A write of synced values can create an entity before its own turn,
+        // as a folder is created with the whole tree; its key is stored all
+        // the same, and nothing is recorded in such a pass.
+        entities.retain(|entity| {
+            (self.record_nothing && entity.old.is_none())
+                || [&entity.old, &entity.new]
+                    .into_iter()
+                    .flatten()
+                    .all(|key| !self.skipped.contains(&(entity.kind, key.clone())))
+        });
         let roots = entities
             .iter()
             .filter(|entity| matches!(entity.kind, SyncKind::Item | SyncKind::Collection))
@@ -460,7 +638,7 @@ impl<'a> Recorder<'a> {
         Ok(())
     }
 
-    /// The touched local ids as entities with their old and new keys. A key
+    /// The changed local ids as entities with their old and new keys. A key
     /// change touches what refers to the entity: the items and folders of a
     /// renamed tag, and the lists and covers that hold an item whose hash
     /// was repaired.
@@ -532,7 +710,7 @@ impl<'a> Recorder<'a> {
     }
 
     /// Decides which roots of the membership changes are recorded as a set:
-    /// those that the write changed only through memberships. The others are
+    /// those that changed only through memberships. The others are
     /// compared one by one, and so are the roots of a tag that was renamed or
     /// that another key forwards to, because what the synced values show for
     /// those needs the rules of projection. Returns the fields to record for
@@ -565,8 +743,13 @@ impl<'a> Recorder<'a> {
                     Some((target, shown)) => {
                         // A tag that the synced values do not show is not
                         // shown under its own name on any root, so every
-                        // root that gets it records it.
-                        sets.push(SetRecord { compare: shown, ..set(change.added, "tag", target, "true".into(), "false") });
+                        // root that gets it records it. Roots added to the
+                        // bitmap of a tag that the library no longer has, as
+                        // an undo can add them after the tag was deleted,
+                        // do not have the tag.
+                        if self.local.key(SyncKind::Tag, tag.0)?.is_some() {
+                            sets.push(SetRecord { compare: shown, ..set(change.added, "tag", target, "true".into(), "false") });
+                        }
                         if shown {
                             sets.push(set(change.removed, "tag", target, "false".into(), "false"));
                         }
@@ -586,7 +769,9 @@ impl<'a> Recorder<'a> {
             }
         }
         single -= &ids;
+        single -= &self.skipped_roots;
         for set in &mut sets {
+            set.roots -= &self.skipped_roots;
             set.roots -= &ids;
             set.roots -= &single;
         }
@@ -674,14 +859,15 @@ impl<'a> Recorder<'a> {
     }
 
     /// Stores the key of each entity whose key the synced values now know.
+    /// A deleted entity keeps its local id.
     fn update_identities(&self, entities: &[Entity]) -> Result<()> {
         for entity in entities {
             if entity.old == entity.new {
                 continue;
             }
-            self.transaction
-                .execute("UPDATE sync_identity SET local_id = NULL WHERE local_id = ?1", [entity.local_id])?;
             if let Some(key) = &entity.new {
+                self.transaction
+                    .execute("UPDATE sync_identity SET local_id = NULL WHERE local_id = ?1", [entity.local_id])?;
                 self.transaction.execute(
                     "INSERT INTO sync_identity(kind, key, local_id) VALUES (?1, ?2, ?3)
                      ON CONFLICT(kind, key) DO UPDATE SET local_id = excluded.local_id",
@@ -702,12 +888,22 @@ impl<'a> Recorder<'a> {
             if kind == SyncKind::Tag {
                 let target = entity.new.clone().or_else(|| self.merges.get(old).cloned());
                 if let Some(target) = target {
-                    self.put(kind, old, "renamed_to", json!(target));
+                    self.forward(old, target)?;
                 }
             }
         }
         if let Some(key) = &entity.new {
             self.diff(kind, key, view)?;
+        }
+        Ok(())
+    }
+
+    /// Records that the tag `key` forwards to `target`, unless the synced
+    /// values already say so.
+    fn forward(&mut self, key: &str, target: String) -> Result<()> {
+        let stored = self.synced.raw(SyncKind::Tag, key)?.get("renamed_to").map(|stored| stored.value.clone());
+        if stored.as_ref().and_then(Value::as_str) != Some(target.as_str()) {
+            self.put(SyncKind::Tag, key, "renamed_to", json!(target));
         }
         Ok(())
     }
@@ -718,10 +914,8 @@ impl<'a> Recorder<'a> {
         match (view, shown) {
             (None, Some(_)) => {
                 self.put(kind, key, "deleted", json!(true));
-                if kind == SyncKind::Tag {
-                    if let Some(target) = self.merges.get(key).cloned() {
-                        self.put(kind, key, "renamed_to", json!(target));
-                    }
+                if let Some(target) = self.merges.get(key).filter(|_| kind == SyncKind::Tag).cloned() {
+                    self.forward(key, target)?;
                 }
             }
             (Some(view), None) => self.full_state(kind, key, view)?,
@@ -875,14 +1069,16 @@ impl<'a> Recorder<'a> {
             return Ok(());
         };
         let field = format!("folder:{folder_key}");
-        let empty = Arc::new(Vec::new());
-        let after = self.local.snapshot.folder_orders.get(&folder).cloned().unwrap_or_else(|| empty.clone());
-        let before = self.before.folder_orders.get(&folder).cloned().unwrap_or(empty);
-        let after_ids = after.iter().map(|root| root.0).collect::<Vec<_>>();
-        let before_ids = before.iter().map(|root| root.0).collect::<Vec<_>>();
-        let window = if whole { (0, after_ids.len()) } else { changed_window(&before_ids, &after_ids) };
+        let after_ids = self.local.snapshot.folder_orders.get(&folder).map_or_else(Vec::new, |order| order.iter().map(|root| root.0).collect());
+        let window = match self.before.folder_orders.get(&folder) {
+            Some(before) if !whole => changed_window(before, &after_ids),
+            _ => (0, after_ids.len()),
+        };
         let mut lookup = |recorder: &mut Self, root: u32| -> Result<Option<(SyncKind, String, Option<String>)>> {
             let Some((kind, key)) = recorder.local.root_key(RootId(root))? else { return Ok(None) };
+            if recorder.fresh {
+                return Ok(Some((kind, key, None)));
+            }
             let position = recorder
                 .synced
                 .raw(kind, &key)?
@@ -900,14 +1096,16 @@ impl<'a> Recorder<'a> {
         let Some(collection_key) = self.local.key(SyncKind::Collection, collection.0)? else {
             return Ok(());
         };
-        let empty = Arc::new(Vec::new());
-        let after = self.local.snapshot.collection_orders.get(&collection).cloned().unwrap_or_else(|| empty.clone());
-        let before = self.before.collection_orders.get(&collection).cloned().unwrap_or(empty);
-        let after_ids = after.iter().map(|media| media.0).collect::<Vec<_>>();
-        let before_ids = before.iter().map(|media| media.0).collect::<Vec<_>>();
-        let window = if whole { (0, after_ids.len()) } else { changed_window(&before_ids, &after_ids) };
+        let after_ids = self.local.snapshot.collection_orders.get(&collection).map_or_else(Vec::new, |order| order.iter().map(|media| media.0).collect());
+        let window = match self.before.collection_orders.get(&collection) {
+            Some(before) if !whole => changed_window(before, &after_ids),
+            _ => (0, after_ids.len()),
+        };
         let mut lookup = |recorder: &mut Self, media: u32| -> Result<Option<(SyncKind, String, Option<String>)>> {
             let Some(key) = recorder.local.key(SyncKind::Item, media)? else { return Ok(None) };
+            if recorder.fresh {
+                return Ok(Some((SyncKind::Item, key, None)));
+            }
             let raw = recorder.synced.raw(SyncKind::Item, &key)?;
             let position = raw
                 .get("collection")
@@ -1022,7 +1220,11 @@ impl<'a> Recorder<'a> {
 
     /// Writes `records` and returns the entities whose visibility, or for
     /// tags whose forwarding, they may have changed.
-    fn write(&mut self, records: Records, clock: &mut Clock, outbox: bool) -> Result<Vec<(SyncKind, String)>> {
+    fn write(&mut self, mut records: Records, clock: &mut Clock, outbox: bool) -> Result<Vec<(SyncKind, String)>> {
+        records.retain(|(kind, key, _), _| {
+            let entity = (*kind, key.clone());
+            !self.skipped.contains(&entity) && (!self.record_nothing || self.recording.contains(&entity))
+        });
         let mut watched = BTreeSet::new();
         for ((kind, key, field), value) in &records {
             match field.as_str() {
@@ -1123,6 +1325,9 @@ impl<'a> Recorder<'a> {
         let mut roots = RoaringBitmap::new();
         let mut found = Vec::new();
         for (kind, key) in referring {
+            if self.skipped.contains(&(kind, key.clone())) {
+                continue;
+            }
             if let Some(local_id) = self.local.find(kind, &key)? {
                 if matches!(kind, SyncKind::Item | SyncKind::Collection) {
                     roots.insert(local_id);

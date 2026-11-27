@@ -43,6 +43,10 @@ pub fn start(
             start_checkpoint_worker(Arc::clone(&application), cancel.child_token()),
         ),
         (
+            "library-sync-recording",
+            start_sync_recording_worker(Arc::clone(&application), cancel.child_token()),
+        ),
+        (
             "library-derivatives",
             start_derivative_worker(Arc::clone(&application), cancel.child_token(), wake.clone()),
         ),
@@ -342,6 +346,33 @@ fn start_checkpoint_worker(
                         Ok(Ok(())) => {}
                         Ok(Err(error)) => tracing::warn!(%error, "Canonical checkpoint failed"),
                         Err(error) => tracing::warn!(%error, "Canonical checkpoint worker stopped"),
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn start_sync_recording_worker(
+    application: Arc<LibraryApplication>,
+    cancel: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        // While sync is on, the recorder records the library's changes about
+        // a second after they are written. A pass returns at once when
+        // nothing was written since the last one.
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                    let library = Arc::clone(application.library());
+                    if !library.sync_on() {
+                        continue;
+                    }
+                    match tokio::task::spawn_blocking(move || library.record_sync_changes()).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => tracing::warn!(%error, "Sync recording failed"),
+                        Err(error) => tracing::warn!(%error, "Sync recording worker stopped"),
                     }
                 }
             }

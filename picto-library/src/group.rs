@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use roaring::RoaringBitmap;
@@ -150,7 +150,8 @@ pub(crate) fn detach_many(
         .checked_sub(detached_size)
         .ok_or_else(|| LibraryError::InvalidState("collection size underflow".into()))?;
     let removes_collection = remaining.is_empty();
-    // Only these ids change membership: persist only the shards holding them.
+    // Only these ids change membership, so only the shards that hold them
+    // are written.
     let mut touched = selected.clone();
     touched.insert(collection_id.0);
     let next_cover = remaining
@@ -1055,8 +1056,9 @@ fn settle_tags(
     for tag_id in tagged {
         let members = Arc::make_mut(&mut snapshot.tags).get_mut(&tag_id).expect("tag exists");
         {
-            // Persist only the shards this tag changed in, not every shard
-            // the selection spans: most tags hold one or two selected roots.
+            // Only the shards in which this tag changed are written, not every
+            // shard that the selection spans: most tags hold one or two of the
+            // selected roots.
             let mut changed = &**members & selected;
             changed.insert(collection_id.0);
             *members -= selected;
@@ -1085,7 +1087,7 @@ fn settle_folders(
     collection_id: RootId,
 ) -> Result<u64> {
     let mut count = 0;
-    // Only folders that hold a selected root need their order scanned.
+    // Only the lists of folders that hold a selected root are read.
     let folder_ids = snapshot
         .folders
         .iter()
@@ -1170,9 +1172,9 @@ pub(crate) fn remove_root_projections(snapshot: &mut ProjectionSnapshot, roots: 
 }
 
 /// Rebuilds the projections of the roots in `affected`, and of no other
-/// roots, after their structure was restored from the undo history. Memberships and
-/// collection orders were already updated earlier in the same transaction
-/// and snapshot.
+/// roots, after their structure was restored by an undo or by writing synced
+/// values. Memberships and collection orders were already updated earlier
+/// in the same transaction and snapshot.
 pub(crate) fn refresh_structural_projections(
     transaction: &Transaction<'_>,
     snapshot: &mut ProjectionSnapshot,
@@ -1187,20 +1189,25 @@ pub(crate) fn refresh_structural_projections(
             ids.push(RootId(id));
         }
     }
+    // The number of tags and folders of each root, counted with one pass
+    // over the tags and the folders rather than one for each root.
+    let count = |sets: &mut dyn Iterator<Item = &RoaringBitmap>| {
+        let mut counts = HashMap::<u32, u64>::new();
+        for members in sets.filter(|members| !members.is_disjoint(affected)) {
+            for id in members & affected {
+                *counts.entry(id).or_default() += 1;
+            }
+        }
+        counts
+    };
+    let tag_counts = count(&mut snapshot.tags.values().map(|members| &**members));
+    let folder_counts = count(&mut snapshot.folders.values().map(|members| &**members));
     for root in load_roots(transaction, &ids)? {
         let id = root.root_id.0;
         let mut cover = load_cover_facts(transaction, root.cover_media_id)?;
         cover.size_bytes = root.total_size_bytes;
-        let tags = snapshot
-            .tags
-            .values()
-            .filter(|ids| ids.contains(id))
-            .count() as u64;
-        let folders = snapshot
-            .folders
-            .values()
-            .filter(|ids| ids.contains(id))
-            .count() as u64;
+        let tags = tag_counts.get(&id).copied().unwrap_or(0);
+        let folders = folder_counts.get(&id).copied().unwrap_or(0);
         let notes = root.notes.as_deref().is_some_and(|value| !value.is_empty());
         if root.kind == RootKind::Collection {
             let has_image = snapshot

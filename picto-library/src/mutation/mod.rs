@@ -64,23 +64,19 @@ struct PublishedDelta {
     history: Option<HistoryEntry>,
 }
 
-/// This is the one place that brings the derived state in memory up to date,
-/// and the one place that records changes for cloud sync. Every transaction
-/// that publishes runs it before it commits. The journal of changed roots
-/// names every root whose facts for browsing changed, and the receipt names
-/// the auxiliary tables that changed. While sync is on, the entities that the
-/// write changed are then compared with the synced values and every
-/// difference is recorded (`crate::sync::record`). A failed transaction
-/// publishes and records nothing, so the state in memory never differs from
-/// what readers can see.
+/// This is the one place that brings the derived state in memory up to date.
+/// Every transaction that publishes runs it before it commits. The journal
+/// of changed roots names every root whose facts for browsing changed, and
+/// the receipt names the auxiliary tables that changed. A failed transaction
+/// publishes nothing, so the state in memory never differs from what readers
+/// can see.
 impl crate::database::PublicationDelta<Arc<ProjectionSnapshot>> for PublishedDelta {
     fn settle(
         &mut self,
         transaction: &rusqlite::Transaction<'_>,
-        before: &Arc<ProjectionSnapshot>,
+        _before: &Arc<ProjectionSnapshot>,
     ) -> Result<()> {
-        self.settle_projection(transaction)?;
-        crate::sync::record(transaction, before, &self.snapshot)
+        self.settle_projection(transaction)
     }
 }
 
@@ -133,6 +129,7 @@ pub struct Library {
     smart_counts: Arc<crate::smart::SmartCountCache>,
     tag_list: Arc<tags::TagListCache>,
     window_requests: crate::query_request::WindowRequests,
+    sync: Arc<crate::sync::SyncStore>,
 }
 
 impl Library {
@@ -219,15 +216,11 @@ impl Library {
             // so the journal rows that an earlier session left behind are not
             // needed.
             transaction.execute("DELETE FROM browsing_dirty_root", [])?;
-            // A library whose sync is on records its changes from the first
-            // write on.
-            if crate::sync::recording(transaction)? {
-                crate::sync::install_triggers(transaction)?;
-            }
             Ok(())
         })?;
         let projections = Arc::new(ProjectionStore::load_with(&database, progress)?);
         Ok(Self {
+            sync: Arc::new(crate::sync::SyncStore::new(database.path())),
             database,
             projections,
             publication: Arc::new(PublicationCoordinator::default()),

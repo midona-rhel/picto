@@ -1161,26 +1161,6 @@ pub(super) fn restore_deleted_roots(
     Ok(())
 }
 
-/// The sync keys of the items and collections that a permanent delete
-/// removed: the content hash of each item and the stable key of each
-/// collection.
-pub(super) fn deleted_root_keys(
-    transaction: &rusqlite::Transaction<'_>,
-    state: &crate::history::DeletedRootsState,
-) -> Result<Vec<(crate::sync::SyncKind, String)>> {
-    let mut keys = Vec::new();
-    let mut hash = transaction.prepare_cached("SELECT content_hash FROM media_file WHERE file_id = ?1")?;
-    for (_, _, _, file_id) in state.media.iter() {
-        keys.push((crate::sync::SyncKind::Item, hash.query_row([file_id], |row| row.get(0))?));
-    }
-    for (_, stable_key, kind) in state.items.iter() {
-        if *kind == 2 {
-            keys.push((crate::sync::SyncKind::Collection, stable_key.clone()));
-        }
-    }
-    Ok(keys)
-}
-
 pub(crate) fn restore_structure(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
@@ -1380,6 +1360,10 @@ pub(super) fn restore_structure_orders(
                 .map(Vec::as_slice)
                 .unwrap_or_default(),
         );
+        // A list that keeps its order is not written again.
+        if current.folder_orders.get(&folder_id).is_some_and(|order| **order == after) {
+            continue;
+        }
         ordering::replace(
             transaction,
             revision,

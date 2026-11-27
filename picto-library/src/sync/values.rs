@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::{json, Value};
 
 use super::{Stored, SyncKind, SyncTimestamp};
@@ -69,8 +69,8 @@ pub(crate) struct Synced<'a> {
     connection: &'a Connection,
     raws: HashMap<(SyncKind, String), Rc<Raw>>,
     /// Entities that count as visible even though the synced values delete
-    /// them: the items and collections that an undo of Delete Permanently
-    /// brings back.
+    /// them: the items and collections that came back in the library under
+    /// their old local id, as an undo of Delete Permanently brings them back.
     pub revived: HashSet<(SyncKind, String)>,
     tree: Option<Rc<FolderTree>>,
 }
@@ -128,6 +128,23 @@ impl<'a> Synced<'a> {
         let raw = Rc::new(raw);
         self.raws.insert((kind, key.to_owned()), raw.clone());
         Ok(raw)
+    }
+
+    /// The position key of an entity in the folder `folder`: the value of its
+    /// field `folder:<folder>`, read alone, because an item can be in many
+    /// folders.
+    pub(crate) fn position(&self, kind: SyncKind, key: &str, folder: &str) -> Result<Option<String>> {
+        let value = self
+            .connection
+            .prepare_cached(
+                "SELECT value.value FROM sync_identity entity, sync_identity target
+                 JOIN sync_value value ON value.field = 'folder' AND value.target = target.entity
+                     AND value.entity = entity.entity
+                 WHERE entity.kind = ?1 AND entity.key = ?2 AND target.kind = 'folder' AND target.key = ?3",
+            )?
+            .query_row(rusqlite::params![kind.as_str(), key, folder], |row| row.get::<_, String>(0))
+            .optional()?;
+        Ok(value.and_then(|value| serde_json::from_str::<Value>(&value).ok()?.as_str().map(str::to_owned)))
     }
 
     /// The entities whose values refer to `kind:key`, with the field that

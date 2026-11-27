@@ -5,14 +5,16 @@
 //! Each entity of the library (item, collection, tag, tag group, folder) has
 //! a sync key that is the same on every computer, and fields. A change to a
 //! field is a change record with a hybrid logical clock timestamp. For each
-//! field the record with the latest timestamp wins. `sync_value` holds those
-//! records, and the library is a projection of them: `values` computes what
-//! the synced values show for an entity, `local` reads what the library
-//! holds, `record` compares the two after every write and records what
+//! field the record with the latest timestamp wins. The sync file
+//! (`SyncStore`) holds those records in `sync_value`, and the library is a
+//! projection of them: `values` computes what the synced values show for an
+//! entity, `local` reads what the library holds, `record` compares the two
+//! for what changed in the library since its last pass and records what
 //! differs, and `apply` writes what the synced values show into the library.
 //!
-//! The library records only while sync is on (`sync_state` has its row).
-//! While it is off, `record` returns after one query.
+//! Library writes do no sync work apart from the triggers of `MARKS`. The
+//! recorder runs in the background after writes, on the sync file's own
+//! connection, and reads the library in a read transaction.
 
 mod apply;
 mod local;
@@ -22,13 +24,16 @@ mod record;
 mod tests;
 mod values;
 
+use std::path::{Path, PathBuf};
+
+use parking_lot::{Mutex, MutexGuard};
 use rusqlite::{Connection, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::Result;
 
-pub(crate) use apply::{apply, project};
+pub(crate) use apply::{finish_projection, merge_remote, pending_projection, project};
 #[cfg(test)]
 pub(crate) use record::differences;
 pub(crate) use record::{record, record_full};
@@ -88,128 +93,153 @@ pub struct SyncRecord {
     pub timestamp: SyncTimestamp,
 }
 
-/// Whether this library records its changes, which it does while sync is on.
-pub(crate) fn recording(connection: &Connection) -> Result<bool> {
-    Ok(connection
-        .prepare_cached("SELECT EXISTS(SELECT 1 FROM sync_state)")?
-        .query_row([], |row| row.get(0))?)
+/// The sync file: a SQLite database next to the library database that holds
+/// the synced values, the outbox and copies of what the recorder last
+/// recorded. It has its own connection, which attaches the library database
+/// as `library` and only reads it; library writes never write the sync file
+/// and never wait for it. The file exists while sync is on.
+pub(crate) struct SyncStore {
+    path: PathBuf,
+    library: PathBuf,
+    connection: Mutex<Option<Connection>>,
 }
 
-/// The writer connection's temporary table of touched local ids and the
-/// triggers that fill it. Every write to a table that holds a synced field
-/// names the local id of the entity it changed; `record` reads the ids and
-/// clears the table in the same transaction. A merge of one tag into another
-/// names both tags in `sync_tag_merge`, so that the old name forwards to the
-/// new one. `sync_new` holds the records that wait to be written. The table and triggers exist only while sync is on, so they add
-/// no work to a write while it is off.
-const TRIGGERS: &[(&str, &str, &str)] = &[
-    ("item_insert", "AFTER INSERT ON main.library_item", "NEW.local_id"),
-    ("item_delete", "AFTER DELETE ON main.library_item", "OLD.local_id"),
-    ("item_update", "AFTER UPDATE ON main.library_item", "OLD.local_id"),
-    ("media_insert", "AFTER INSERT ON main.media_item", "NEW.media_id"),
-    ("media_delete", "AFTER DELETE ON main.media_item", "OLD.media_id"),
-    ("media_update", "AFTER UPDATE ON main.media_item", "OLD.media_id"),
-    ("root_insert", "AFTER INSERT ON main.library_root", "NEW.root_id"),
-    ("root_delete", "AFTER DELETE ON main.library_root", "OLD.root_id"),
-    ("root_update", "AFTER UPDATE ON main.library_root", "OLD.root_id"),
-    ("tag_insert", "AFTER INSERT ON main.tag_definition", "NEW.tag_id"),
-    ("tag_delete", "AFTER DELETE ON main.tag_definition", "OLD.tag_id"),
-    ("tag_update", "AFTER UPDATE ON main.tag_definition", "OLD.tag_id"),
-    ("group_insert", "AFTER INSERT ON main.tag_namespace", "NEW.namespace_id"),
-    ("group_delete", "AFTER DELETE ON main.tag_namespace", "OLD.namespace_id"),
-    ("folder_insert", "AFTER INSERT ON main.folder_definition", "NEW.folder_id"),
-    ("folder_delete", "AFTER DELETE ON main.folder_definition", "OLD.folder_id"),
-    ("folder_update", "AFTER UPDATE ON main.folder_definition", "OLD.folder_id"),
+impl SyncStore {
+    pub(crate) fn new(library: &Path) -> Self {
+        Self {
+            path: library.with_file_name("sync.sqlite"),
+            library: library.to_owned(),
+            connection: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn on(&self) -> bool {
+        self.path.exists()
+    }
+
+    /// The connection to the sync file, opened when it is first needed, and
+    /// the file created when `create` is true; `None` while sync is off.
+    /// Holding it keeps every other user of the sync file waiting.
+    pub(crate) fn lock(&self, create: bool) -> Result<MutexGuard<'_, Option<Connection>>> {
+        let mut connection = self.connection.lock();
+        if connection.is_none() && (create || self.on()) {
+            *connection = Some(self.open()?);
+        }
+        Ok(connection)
+    }
+
+    /// Closes and deletes the sync file.
+    pub(crate) fn remove(&self) -> Result<()> {
+        let mut connection = self.connection.lock();
+        *connection = None;
+        for suffix in ["", "-wal", "-shm"] {
+            let mut path = self.path.clone().into_os_string();
+            path.push(suffix);
+            match std::fs::remove_file(path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn open(&self) -> Result<Connection> {
+        let connection = Connection::open(&self.path)?;
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA journal_size_limit = 67108864;")?;
+        connection.execute_batch(include_str!("../sync_schema.sql"))?;
+        // The records that wait to be written (`flush`).
+        connection.execute_batch(
+            "CREATE TEMP TABLE sync_new (
+                 entity INTEGER NOT NULL, field TEXT NOT NULL, target INTEGER NOT NULL,
+                 value TEXT NOT NULL, reference INTEGER
+             );",
+        )?;
+        connection.execute("ATTACH DATABASE ?1 AS library", [self.library.to_string_lossy()])?;
+        // The caches of the library database's own connections have the
+        // same sizes.
+        connection.execute_batch("PRAGMA main.cache_size = -65536; PRAGMA library.cache_size = -16384;")?;
+        Ok(connection)
+    }
+}
+
+/// While sync is on, the library has the table `changed_entity` and these
+/// triggers, which give every local id whose row changed the revision of
+/// the write that changed it. That is the only sync work in a library write:
+/// one row for each item, collection, tag, tag group or folder whose own row
+/// a write changes, and nothing for the bulk changes of tags, ratings,
+/// lifecycles and lists, which the recorder finds from the `revision` of the
+/// `canonical_bitmap` rows (through the index `sync_bitmap_revision`) and the
+/// checksums of the `ordered_membership_chunk` rows. An item that enters or
+/// leaves a collection changes the collection's list, so media rows are
+/// marked only when they are updated. A write sets `library_meta.revision`
+/// to the next revision after these triggers have run, so they take that
+/// next revision.
+const MARKS: [(&str, &str, &str); 5] = [
+    ("library_root", "root_id", "OF name, notes, source_urls_json, cover_media_id, imported_at_ms, captured_at_ms, modified_at_ms"),
+    ("media_item", "media_id", "OF media_name, media_notes, file_id"),
+    ("tag_definition", "tag_id", ""),
+    ("tag_namespace", "namespace_id", ""),
+    ("folder_definition", "folder_id", ""),
 ];
 
-pub(crate) fn install_triggers(connection: &Connection) -> Result<()> {
-    let touch = |id: &str| {
-        format!(
-            "INSERT INTO temp.sync_touched SELECT {id}
-             WHERE NOT EXISTS (SELECT 1 FROM temp.sync_touched WHERE local_id = {id});"
-        )
-    };
+/// The triggers of `MARKS`, and the one that marks the items of a file whose
+/// facts change, as (name, event, the select of the marked ids).
+fn mark_triggers() -> Vec<(String, String, String)> {
+    let mut triggers = Vec::new();
+    for (table, id, columns) in MARKS {
+        if table != "media_item" {
+            triggers.push((format!("{table}_insert"), format!("INSERT ON {table}"), format!("SELECT NEW.{id} AS id")));
+            triggers.push((format!("{table}_delete"), format!("DELETE ON {table}"), format!("SELECT OLD.{id} AS id")));
+        }
+        let mut ids = format!("SELECT NEW.{id} AS id");
+        // Renaming a tag group renames every tag in it.
+        if table == "tag_namespace" {
+            ids.push_str(" UNION ALL SELECT tag_id FROM tag_definition WHERE namespace_id = NEW.namespace_id");
+        }
+        triggers.push((format!("{table}_update"), format!("UPDATE {columns} ON {table}"), ids));
+    }
+    triggers.push((
+        "media_file_update".into(),
+        "UPDATE OF content_hash, mime, size_bytes, width, height, duration_ms, frame_count ON media_file".into(),
+        "SELECT media_id AS id FROM media_item WHERE file_id = NEW.file_id".into(),
+    ));
+    triggers
+}
+
+/// Adds `changed_entity`, its triggers and the revision index of
+/// `canonical_bitmap` to the library.
+pub(crate) fn start_marking(transaction: &Transaction<'_>) -> Result<()> {
     let mut sql = String::from(
-        "CREATE TEMP TABLE IF NOT EXISTS sync_touched (local_id INTEGER PRIMARY KEY);
-         CREATE TEMP TABLE IF NOT EXISTS sync_tag_merge (source TEXT PRIMARY KEY, destination TEXT NOT NULL);
-         CREATE TEMP TABLE IF NOT EXISTS sync_new (
-             entity INTEGER NOT NULL, field TEXT NOT NULL, target INTEGER NOT NULL,
-             value TEXT NOT NULL, reference INTEGER
-         );",
+        "CREATE TABLE IF NOT EXISTS changed_entity (local_id INTEGER PRIMARY KEY, revision INTEGER NOT NULL) STRICT;
+         CREATE INDEX IF NOT EXISTS changed_entity_revision ON changed_entity(revision);
+         CREATE INDEX IF NOT EXISTS sync_bitmap_revision ON canonical_bitmap(revision);",
     );
-    for (name, event, id) in TRIGGERS {
+    // The upsert keeps one row for each local id; it is not overridden by
+    // the conflict policy of the statement that fires the trigger.
+    for (name, event, ids) in mark_triggers() {
         sql.push_str(&format!(
-            "CREATE TEMP TRIGGER IF NOT EXISTS sync_{name} {event} BEGIN {} END;",
-            touch(id)
+            "CREATE TRIGGER IF NOT EXISTS sync_{name} AFTER {event} BEGIN
+                 INSERT INTO changed_entity(local_id, revision)
+                 SELECT id, (SELECT revision + 1 FROM library_meta) FROM ({ids}) WHERE true
+                 ON CONFLICT(local_id) DO UPDATE SET revision = excluded.revision;
+             END;"
         ));
     }
-    // Renaming a tag group renames every tag in it, and a change to the
-    // facts of a file changes the `file` field of the item that uses it.
-    sql.push_str(&format!(
-        "CREATE TEMP TRIGGER IF NOT EXISTS sync_group_update AFTER UPDATE ON main.tag_namespace BEGIN
-             {}
-             INSERT INTO temp.sync_touched SELECT tag_id FROM main.tag_definition
-             WHERE namespace_id = OLD.namespace_id
-               AND tag_id NOT IN (SELECT local_id FROM temp.sync_touched);
-         END;
-         CREATE TEMP TRIGGER IF NOT EXISTS sync_file_update
-         AFTER UPDATE OF content_hash, mime, size_bytes, width, height, duration_ms, frame_count
-         ON main.media_file BEGIN
-             INSERT INTO temp.sync_touched SELECT media_id FROM main.media_item
-             WHERE file_id = OLD.file_id
-               AND media_id NOT IN (SELECT local_id FROM temp.sync_touched);
-         END;",
-        touch("OLD.namespace_id")
-    ));
-    connection.execute_batch(&sql)?;
-    Ok(())
+    Ok(transaction.execute_batch(&sql)?)
 }
 
-pub(crate) fn remove_triggers(connection: &Connection) -> Result<()> {
-    let mut sql = String::new();
-    for name in TRIGGERS
-        .iter()
-        .map(|(name, _, _)| *name)
-        .chain(["group_update", "file_update"])
-    {
-        sql.push_str(&format!("DROP TRIGGER IF EXISTS temp.sync_{name};"));
+pub(crate) fn stop_marking(transaction: &Transaction<'_>) -> Result<()> {
+    let mut sql = String::from("DROP TABLE IF EXISTS changed_entity; DROP INDEX IF EXISTS sync_bitmap_revision;");
+    for (name, _, _) in mark_triggers() {
+        sql.push_str(&format!("DROP TRIGGER IF EXISTS sync_{name};"));
     }
-    for table in ["sync_touched", "sync_tag_merge", "sync_new"] {
-        sql.push_str(&format!("DROP TABLE IF EXISTS temp.{table};"));
-    }
-    connection.execute_batch(&sql)?;
-    Ok(())
+    Ok(transaction.execute_batch(&sql)?)
 }
 
-/// Notes local ids whose entities changed without a trigger noting them, so
-/// that the next write records them. Sync must be on.
-pub(crate) fn touch(connection: &Connection, ids: &roaring::RoaringBitmap) -> Result<()> {
-    let mut statement =
-        connection.prepare_cached("INSERT OR IGNORE INTO temp.sync_touched(local_id) VALUES (?1)")?;
-    for id in ids {
-        statement.execute([id])?;
-    }
-    Ok(())
-}
-
-/// Notes that the tag `source` was merged into `destination`, when the
-/// library records its changes. `record` then records that the old name
-/// forwards to the new one.
-pub(crate) fn note_tag_merge(connection: &Connection, source: &str, destination: &str) -> Result<()> {
-    if recording(connection)? {
-        connection
-            .prepare_cached(
-                "INSERT INTO temp.sync_tag_merge(source, destination) VALUES (?1, ?2)
-                 ON CONFLICT(source) DO UPDATE SET destination = excluded.destination",
-            )?
-            .execute([source, destination])?;
-    }
-    Ok(())
-}
-
-/// The hybrid logical clock of this library, read once for a write and saved
-/// at its end. Each timestamp is above every timestamp the library has seen
-/// and above the wall clock.
+/// The hybrid logical clock of this library, read once for a pass of the
+/// recorder or a merge and saved at its end. Each timestamp is above every
+/// timestamp the library has seen and above the wall clock.
 pub(crate) struct Clock {
     /// The number that stands for this library's device id in `sync_value`.
     device_number: i64,

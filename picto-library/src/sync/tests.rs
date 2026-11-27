@@ -1,7 +1,8 @@
-//! Checks of recording and applying with real library operations. After
-//! every operation a full comparison of the library with the synced values
-//! must find nothing to record, and libraries that exchange their change
-//! records must end with the same library.
+//! Checks of recording and applying with real library operations. Once the
+//! recorder has caught up after one or more operations, a full comparison of
+//! the library with the synced values must find nothing to record, and
+//! libraries that exchange their change records must end with the same
+//! library.
 
 use std::collections::BTreeMap;
 
@@ -42,8 +43,11 @@ fn hash(n: u64) -> String {
     format!("{n:064x}")
 }
 
+/// A new library with sync on, in a folder of its own, because the sync file
+/// is next to the library database.
 fn open(directory: &std::path::Path, name: &str) -> Library {
-    let library = Library::create(directory.join(format!("{name}.sqlite"))).unwrap();
+    std::fs::create_dir(directory.join(name)).unwrap();
+    let library = Library::create(directory.join(name).join("library.sqlite")).unwrap();
     library.start_sync_recording().unwrap();
     library
 }
@@ -331,13 +335,14 @@ fn operate(library: &Library, random: &mut Random, next_hash: &mut u64, time: &m
 }
 
 fn assert_recorded(library: &Library, context: &str) {
+    library.record_sync_changes().unwrap();
     let differences = library.sync_differences().unwrap();
     assert!(differences.is_empty(), "{context}: a full comparison records {differences:?}");
 }
 
 /// Every synced value of a library as change records.
 fn synced_records(library: &Library) -> Vec<SyncRecord> {
-    library.database().read(WorkPriority::VisibleRead, super::all_records).unwrap()
+    library.synced_records().unwrap()
 }
 
 /// The library in sync keys: every entity with its state, and every order.
@@ -346,7 +351,7 @@ fn dump(library: &Library) -> BTreeMap<String, String> {
     library
         .database()
         .read(WorkPriority::VisibleRead, |connection| {
-            let mut local = Local::new(connection, &snapshot)?;
+            let mut local = Local::new(connection, &snapshot);
             let mut out = BTreeMap::new();
             for (kind, sql) in [
                 (SyncKind::Item, "SELECT media_id FROM media_item"),
@@ -420,8 +425,12 @@ fn every_operation_is_recorded_and_the_synced_values_project_to_the_same_library
         let mut log = Vec::new();
         for _ in 0..250 {
             log.push(operate(&library, &mut random, &mut next_hash, &mut time));
-            assert_recorded(&library, &format!("seed {seed} after {log:?}"));
+            // The recorder runs after one operation or after several.
+            if random.below(2) == 0 {
+                assert_recorded(&library, &format!("seed {seed} after {log:?}"));
+            }
         }
+        assert_recorded(&library, &format!("seed {seed} after {log:?}"));
         assert_projects(&library, directory.path(), &format!("single-{seed}-copy"));
     }
 }
@@ -437,6 +446,7 @@ fn exchange(count: usize, seed: u64) {
     let mut random = Random(seed);
     let (mut next_hash, mut time) = (0, 0);
     let send = |library: &Library, files: &mut Vec<Vec<SyncRecord>>| {
+        library.record_sync_changes().unwrap();
         let outbox = library.sync_outbox().unwrap();
         if !outbox.is_empty() {
             library.remove_from_sync_outbox(&outbox).unwrap();
@@ -458,7 +468,9 @@ fn exchange(count: usize, seed: u64) {
             }
             _ => {
                 log.push(format!("{step}: library {index} {}", operate(&libraries[index], &mut random, &mut next_hash, &mut time)));
-                assert_recorded(&libraries[index], &format!("seed {seed} after {log:?}"));
+                if random.below(2) == 0 {
+                    assert_recorded(&libraries[index], &format!("seed {seed} after {log:?}"));
+                }
             }
         }
     }
@@ -482,6 +494,7 @@ fn exchange(count: usize, seed: u64) {
 /// Applies records from another library. The library then matches the
 /// synced values, and applying recorded nothing of its own.
 fn apply(library: &Library, records: &[SyncRecord], context: &str) {
+    library.record_sync_changes().unwrap();
     let before = library.sync_outbox().unwrap();
     library.apply_sync_records(records).unwrap();
     let after = library.sync_outbox().unwrap();
@@ -500,6 +513,7 @@ fn two_and_three_libraries_that_exchange_records_end_the_same() {
 
 /// Sends every record that `from` has not sent yet to `to`.
 fn deliver(from: &Library, to: &Library) {
+    from.record_sync_changes().unwrap();
     let outbox = from.sync_outbox().unwrap();
     from.remove_from_sync_outbox(&outbox).unwrap();
     apply(to, &outbox, "deliver");
