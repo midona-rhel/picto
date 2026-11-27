@@ -24,8 +24,9 @@ pub(crate) const KEEP_BOTH: &str = "keep_both";
 /// The fields of the `application` setting that stay on each computer,
 /// because they describe the computer rather than the library: the window
 /// zoom, the window background effects, trackpad gestures, automatic import
-/// of watched folders, and the switches of AI tagging.
-const LOCAL_SETTINGS: [&str; 11] = [
+/// of watched folders, and the switches of AI tagging. The Subscriptions
+/// entry of the sidebar stays too, because subscriptions do not sync.
+const LOCAL_SETTINGS: [&str; 12] = [
     "zoomFactor",
     "frostedGlassRails",
     "acrylicRails",
@@ -37,6 +38,7 @@ const LOCAL_SETTINGS: [&str; 11] = [
     "aiTaggerOppaiOracleEnabled",
     "aiTaggerAutoOnImport",
     "aiTaggerWriteRating",
+    "showSidebarSubscriptions",
 ];
 
 /// Whether the field `name` of the `application` setting stays on this

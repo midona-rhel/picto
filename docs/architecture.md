@@ -294,10 +294,11 @@ those that stay on each computer, and so on), and a change to a field is a chang
 hybrid logical clock timestamp. The fields of the settings that stay on each computer are listed in
 `LOCAL_SETTINGS` in `picto-library/src/sync/local.rs`: the window zoom (`zoomFactor`), the window
 background effects (`frostedGlassRails`, `acrylicRails`), trackpad gestures
-(`viewerTrackpadGestures`), automatic import of watched folders (`autoImportEnabled`) and the
+(`viewerTrackpadGestures`), automatic import of watched folders (`autoImportEnabled`), the
 switches of AI tagging (`aiTaggerWd14Enabled`, `aiTaggerE621Enabled`, `aiTaggerEva02Enabled`,
-`aiTaggerOppaiOracleEnabled`, `aiTaggerAutoOnImport`, `aiTaggerWriteRating`), and the subscription
-fields, whose names start with `subscription`. The starred tags and the colours of tag groups are
+`aiTaggerOppaiOracleEnabled`, `aiTaggerAutoOnImport`, `aiTaggerWriteRating`) and the Subscriptions
+entry of the sidebar (`showSidebarSubscriptions`), and the subscription fields, whose names start
+with `subscription`. The starred tags and the colours of tag groups are
 fields of the settings and name tags and tag groups by name. The records are in the sync file,
 `sync.sqlite` next to the library database, which exists while sync is on
 (`Library::start_sync_recording`, `stop_sync_recording`). `sync_value` keeps, for each field, the
