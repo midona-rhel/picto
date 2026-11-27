@@ -6,13 +6,17 @@
 
 use std::collections::BTreeMap;
 
+use serde_json::{json, Value};
+
 use super::local::Local;
 use super::{SyncKind, SyncRecord};
 use crate::database::WorkPriority;
 use crate::model::{
-    FolderId, GroupRequest, ImmutableMediaFacts, Lifecycle, MediaId, PreparedImport, Rating,
-    RepairedMediaContent, RootId, RootKind,
+    DuplicateResolutionChoice, FileId, FolderId, GroupRequest, ImmutableMediaFacts, Lifecycle,
+    MediaId, PreparedImport, Rating, RepairedMediaContent, RootId, RootKind, SmartFolderId,
+    SmartFolderInput, SourceIdentity,
 };
+use crate::predicate::{FilterClause, FilterExpr, SetMatchMode, ViewQuerySpec};
 use crate::selection::SelectionTarget;
 use crate::Library;
 
@@ -109,6 +113,97 @@ fn one(root: RootId) -> SelectionTarget {
     SelectionTarget::Explicit { root_ids: vec![root] }
 }
 
+fn smart_folders(library: &Library) -> Vec<SmartFolderId> {
+    library
+        .database()
+        .read(WorkPriority::VisibleRead, |connection| {
+            Ok(connection
+                .prepare("SELECT smart_folder_id FROM smart_folder_definition ORDER BY smart_folder_id")?
+                .query_map([], |row| row.get(0).map(SmartFolderId))?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .unwrap()
+}
+
+fn smart_parent(library: &Library, smart_folder: SmartFolderId) -> Option<SmartFolderId> {
+    library
+        .database()
+        .read(WorkPriority::VisibleRead, |connection| {
+            Ok(connection.query_row(
+                "SELECT parent_id FROM smart_folder_definition WHERE smart_folder_id = ?1",
+                [smart_folder.0],
+                |row| row.get::<_, Option<u32>>(0),
+            )?)
+        })
+        .unwrap()
+        .map(SmartFolderId)
+}
+
+fn full_name(tag: &crate::TagRecord) -> String {
+    if tag.namespace.is_empty() {
+        tag.subname.clone()
+    } else {
+        format!("{}:{}", tag.namespace, tag.subname)
+    }
+}
+
+/// Random rules for a smart folder: a tag rule, a folder rule, a rating rule
+/// and the groups around them.
+fn rules(random: &mut Random, tags: &[crate::TagRecord], folders: &[FolderId]) -> ViewQuerySpec {
+    let mut clauses = Vec::new();
+    let tag_ids = (0..random.below(3)).filter_map(|_| random.pick(tags)).map(|tag| tag.tag_id).collect::<Vec<_>>();
+    if !tag_ids.is_empty() || random.below(4) == 0 {
+        clauses.push(FilterExpr::Clause(FilterClause::Tags { tag_ids, mode: SetMatchMode::Any }));
+    }
+    let folder_ids = (0..random.below(3)).filter_map(|_| random.pick(folders)).collect::<Vec<_>>();
+    if !folder_ids.is_empty() {
+        clauses.push(FilterExpr::Clause(FilterClause::Folders { folder_ids, mode: SetMatchMode::All }));
+    }
+    if random.below(2) == 0 {
+        clauses.push(FilterExpr::Clause(FilterClause::Ratings { ratings: vec![Rating::ALL[random.below(6)]] }));
+    }
+    let filter = match random.below(3) {
+        0 => FilterExpr::All(clauses),
+        1 => FilterExpr::Any(clauses),
+        _ => FilterExpr::All(vec![FilterExpr::Not(Box::new(FilterExpr::Any(clauses)))]),
+    };
+    ViewQuerySpec { filter, ..ViewQuerySpec::default() }
+}
+
+/// One or two views by their scope: of a folder, of a smart folder, or of
+/// the views without an id.
+fn random_scopes(random: &mut Random, folders: &[FolderId], smart_folders: &[SmartFolderId]) -> Vec<String> {
+    (0..random.below(3))
+        .filter_map(|_| match random.below(3) {
+            0 => random.pick(folders).map(|folder| format!("folder:{}", folder.0)),
+            1 => random.pick(smart_folders).map(|smart_folder| format!("smart:{}", smart_folder.0)),
+            _ => Some(["grid:defaults", "system:trash"][random.below(2)].to_owned()),
+        })
+        .collect()
+}
+
+/// Sets one field of a JSON object in `setting` or `view_pref`, as the
+/// settings of the app are changed.
+fn patch(library: &Library, table: &'static str, key: &str, field: &str, value: Value) -> crate::Result<()> {
+    let field = field.to_owned();
+    library.update_auxiliary_json("test.patch", "Change settings", table, key, table == "setting", move |stored| {
+        let mut object = stored.and_then(|stored| serde_json::from_str::<Value>(stored).ok()).unwrap_or_else(|| json!({}));
+        object[field] = value;
+        Ok(Some(object.to_string()))
+    })?;
+    Ok(())
+}
+
+fn file_of(library: &Library, root: RootId) -> FileId {
+    library
+        .database()
+        .read(WorkPriority::VisibleRead, |connection| {
+            Ok(connection.query_row("SELECT file_id FROM media_item WHERE media_id = ?1", [root.0], |row| row.get(0))?)
+        })
+        .map(FileId)
+        .unwrap()
+}
+
 /// Runs one random operation of the library. Operations that the library
 /// refuses (for example a rename to a name that exists) change nothing.
 fn operate(library: &Library, random: &mut Random, next_hash: &mut u64, time: &mut i64) -> String {
@@ -117,10 +212,12 @@ fn operate(library: &Library, random: &mut Random, next_hash: &mut u64, time: &m
     let roots = roots(library);
     let folders = folders(library);
     let tags = library.tags().unwrap();
-    let choice = random.below(27);
+    let smart_folders = smart_folders(library);
+    let choice = random.below(37);
     let root = random.pick(&roots);
     let folder = random.pick(&folders);
     let tag = random.pick(&tags);
+    let smart_folder = random.pick(&smart_folders);
     let name = TAGS[random.below(TAGS.len())].to_owned();
     let result: crate::Result<()> = (|| {
         match choice {
@@ -303,7 +400,7 @@ fn operate(library: &Library, random: &mut Random, next_hash: &mut u64, time: &m
                     library.set_folder_cover(folder, root)?;
                 }
             }
-            _ => {
+            26 => {
                 let media = random.pick(&kind_roots(library, RootKind::Media));
                 if let Some(media) = media {
                     let expected_hash = library.database().read(WorkPriority::VisibleRead, |connection| {
@@ -325,6 +422,101 @@ fn operate(library: &Library, random: &mut Random, next_hash: &mut u64, time: &m
                         },
                     )?;
                 }
+            }
+            27 | 28 => {
+                let name = NAMES[random.below(3)];
+                let parent_id = random.pick(&smart_folders).filter(|_| random.below(2) == 0);
+                let icon = ["star", ""][random.below(2)];
+                let notes = NAMES[random.below(3)];
+                let input = SmartFolderInput {
+                    name: name.into(),
+                    parent_id,
+                    icon: Some(icon.into()),
+                    color: None,
+                    notes: (random.below(2) == 0).then(|| notes.into()),
+                    view: rules(random, &tags, &folders),
+                };
+                match smart_folder.filter(|_| choice == 28) {
+                    Some(smart_folder) => {
+                        library.update_smart_folder(smart_folder, input)?;
+                    }
+                    None => {
+                        library.create_smart_folder(input)?;
+                    }
+                }
+            }
+            29 => {
+                if let Some(smart_folder) = smart_folder {
+                    library.delete_smart_folder(smart_folder)?;
+                }
+            }
+            30 => {
+                if let Some(smart_folder) = smart_folder {
+                    let parent = smart_parent(library, smart_folder);
+                    let mut siblings = smart_folders
+                        .iter()
+                        .copied()
+                        .filter(|sibling| smart_parent(library, *sibling) == parent)
+                        .collect::<Vec<_>>();
+                    if siblings.len() > 1 {
+                        let moved = siblings.remove(random.below(siblings.len()));
+                        siblings.insert(random.below(siblings.len() + 1), moved);
+                        library.reorder_smart_folder_children(parent, &siblings)?;
+                    }
+                }
+            }
+            31 => {
+                // The settings: a plain field, the starred tags and group
+                // colours by name, the Quick Access list by scope, and a
+                // subscription field that stays on this computer.
+                let value = match random.below(5) {
+                    0 => ("zoomFactor", json!(random.below(3))),
+                    1 => ("starredTags", json!(tag.iter().map(full_name).collect::<Vec<_>>())),
+                    2 => ("tagGroupColors", json!({ TAGS[4].split(':').next().unwrap(): NAMES[random.below(3)] })),
+                    3 => ("sidebarQuickAccess", json!(random_scopes(random, &folders, &smart_folders))),
+                    _ => ("subscriptionDefaultSchedule", json!(NAMES[random.below(3)])),
+                };
+                patch(library, "setting", "application", value.0, value.1)?;
+            }
+            32 => {
+                let scope = random_scopes(random, &folders, &smart_folders).pop().unwrap_or_else(|| "grid:defaults".into());
+                if random.below(4) == 0 {
+                    library.update_auxiliary_json("test.view", "Reset view", "view_pref", &scope, false, |_| Ok(None))?;
+                } else {
+                    patch(library, "view_pref", &scope, "sort_field", json!(NAMES[random.below(3)]))?;
+                }
+            }
+            33 | 34 => {
+                if choice == 34 && random.below(3) == 0 {
+                    library.clear_recent_views()?;
+                } else if let Some(root) = root {
+                    library.record_recent_view(root, now)?;
+                }
+            }
+            35 => {
+                let standalone = kind_roots(library, RootKind::Media);
+                if let (Some(a), Some(b)) = (random.pick(&standalone), random.pick(&standalone)) {
+                    let (a, b) = (file_of(library, a), file_of(library, b));
+                    if a != b {
+                        library.replace_detected_duplicate_pairs(&[(a, b, 3)], now)?;
+                        if random.below(3) != 0 {
+                            library.resolve_duplicate(a, b, DuplicateResolutionChoice::KeepBoth, now)?;
+                        }
+                    }
+                }
+            }
+            _ => {
+                // An import of a file that the library may have already,
+                // from a source, which adds the source to its item.
+                *next_hash += 1;
+                let mut input = prepared(hash(*next_hash % 24), Lifecycle::Active, Vec::new(), Vec::new());
+                input.source_identity = Some(SourceIdentity {
+                    source_key: "site".into(),
+                    source_item_key: format!("post-{}", random.below(4)),
+                    source_text: Some(NAMES[random.below(3)].into()),
+                    source_attempt_id: None,
+                });
+                library.ingest(&input)?;
             }
         }
         Ok(())
@@ -359,6 +551,7 @@ fn dump(library: &Library) -> BTreeMap<String, String> {
                 (SyncKind::Tag, "SELECT tag_id FROM tag_definition"),
                 (SyncKind::TagGroup, "SELECT namespace_id FROM tag_namespace"),
                 (SyncKind::Folder, "SELECT folder_id FROM folder_definition"),
+                (SyncKind::SmartFolder, "SELECT smart_folder_id FROM smart_folder_definition"),
             ] {
                 let ids = connection
                     .prepare(sql)?
@@ -379,6 +572,16 @@ fn dump(library: &Library) -> BTreeMap<String, String> {
                             .collect::<rusqlite::Result<Vec<_>>>()?;
                         line.push_str(&format!(" members {members:?} children {children:?}"));
                     }
+                    if kind == SyncKind::SmartFolder {
+                        let children = connection
+                            .prepare(
+                                "SELECT stable_key FROM smart_folder_definition WHERE parent_id = ?1
+                                 ORDER BY display_order, smart_folder_id",
+                            )?
+                            .query_map([id], |row| row.get::<_, String>(0))?
+                            .collect::<rusqlite::Result<Vec<_>>>()?;
+                        line.push_str(&format!(" children {children:?}"));
+                    }
                     if kind == SyncKind::Collection {
                         let members = snapshot.collection_orders[&RootId(id)]
                             .iter()
@@ -394,6 +597,19 @@ fn dump(library: &Library) -> BTreeMap<String, String> {
                 .query_map([], |row| row.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             out.insert("top level folders".into(), format!("{top:?}"));
+            let top = connection
+                .prepare(
+                    "SELECT stable_key FROM smart_folder_definition WHERE parent_id IS NULL
+                     ORDER BY display_order, smart_folder_id",
+                )?
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            out.insert("top level smart folders".into(), format!("{top:?}"));
+            for (kind, key) in local.all_rows()? {
+                if let Some(view) = local.row_view(kind, &key)? {
+                    out.insert(format!("{} {key}", kind.as_str()), format!("{view:?}"));
+                }
+            }
             Ok(out)
         })
         .unwrap()
@@ -765,4 +981,34 @@ fn a_library_with_empty_folders_records_nothing_after_it_is_opened_again() {
     library.remove_from_folder(&root, empty).unwrap();
     library.move_folder(emptied, None).unwrap();
     assert_recorded(&library, "after the folders are changed");
+}
+
+/// The times in Recently viewed, by content hash, most recent first.
+fn recently_viewed(library: &Library) -> Vec<(String, i64)> {
+    let snapshot = library.projections().snapshot();
+    snapshot.recent_views.iter().map(|(root, viewed_at)| (roots_hash(library, *root), *viewed_at)).collect()
+}
+
+#[test]
+fn undoing_clear_recently_viewed_brings_back_the_earlier_view_times_everywhere() {
+    let directory = tempfile::tempdir().unwrap();
+    let (first, second) = (open(directory.path(), "first"), open(directory.path(), "second"));
+    for n in 1..=2 {
+        first.ingest(&prepared(hash(n), Lifecycle::Active, Vec::new(), Vec::new())).unwrap();
+        first.record_recent_view(root_of(&first, &hash(n)), 10 * n as i64).unwrap();
+    }
+    deliver(&first, &second);
+    // The first item is viewed again after Recently viewed was cleared.
+    // Undoing the clear puts back the list from before, so the first item
+    // has its earlier time again, which is not later than the others.
+    first.clear_recent_views().unwrap();
+    first.record_sync_changes().unwrap();
+    first.record_recent_view(root_of(&first, &hash(1)), 100).unwrap();
+    first.record_sync_changes().unwrap();
+    first.undo().unwrap().expect("the clear can be undone");
+    assert_recorded(&first, "after the undo");
+    deliver(&first, &second);
+    let expected = vec![(hash(2), 20), (hash(1), 10)];
+    assert_eq!(recently_viewed(&first), expected);
+    assert_eq!(recently_viewed(&second), expected);
 }

@@ -89,7 +89,7 @@ CREATE TABLE folder_definition (
     auto_tag_ids BLOB NOT NULL DEFAULT X'',
     cover_root_id INTEGER REFERENCES library_root(root_id) ON DELETE SET NULL,
     -- A path on one computer. Two folders may name the same path, because
-    -- folders from several computers are synced; the app checks that a
+    -- folders from several computers are synced; the library checks that a
     -- folder the user watches does not repeat another folder's path.
     watch_path TEXT,
     watch_enabled INTEGER NOT NULL DEFAULT 0 CHECK (watch_enabled IN (0, 1)),
@@ -99,6 +99,10 @@ CREATE TABLE folder_definition (
     display_order INTEGER NOT NULL
 ) STRICT;
 
+-- Two smart folders in the same parent may have the same name, because
+-- smart folders from several computers are synced; the library checks that
+-- a smart folder the user creates or renames does not repeat the name of
+-- another one in the same parent.
 CREATE TABLE smart_folder_definition (
     smart_folder_id INTEGER PRIMARY KEY CHECK (smart_folder_id BETWEEN 1 AND 4294967295),
     stable_key TEXT NOT NULL UNIQUE,
@@ -108,8 +112,7 @@ CREATE TABLE smart_folder_definition (
     color TEXT,
     notes TEXT,
     view_query_json TEXT NOT NULL,
-    display_order INTEGER NOT NULL,
-    UNIQUE(parent_id, name)
+    display_order INTEGER NOT NULL
 ) STRICT;
 
 -- The members of each lifecycle, rating and tag, one row for each 65,536 ids

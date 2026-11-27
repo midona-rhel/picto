@@ -10,8 +10,22 @@ use serde_json::{json, Value};
 use super::values::View;
 use super::SyncKind;
 use crate::model::{Lifecycle, Rating, RootId};
+use crate::predicate::ViewQuerySpec;
 use crate::projection::ProjectionSnapshot;
 use crate::Result;
+
+/// The field of the `application` setting that lists the views of Quick
+/// Access in the sidebar, by scope.
+pub(crate) const QUICK_ACCESS: &str = "sidebarQuickAccess";
+
+/// The value of the field `decision` of a "Not duplicate" decision.
+pub(crate) const KEEP_BOTH: &str = "keep_both";
+
+/// Whether the field `name` of the `application` setting stays on this
+/// computer. The subscription fields do, because subscriptions do not sync.
+pub(crate) fn local_setting(name: &str) -> bool {
+    name.starts_with("subscription")
+}
 
 pub(crate) fn lifecycle_name(lifecycle: Lifecycle) -> &'static str {
     match lifecycle {
@@ -130,6 +144,8 @@ impl<'a> Local<'a> {
                      WHEN EXISTS(SELECT 1 FROM tag_definition WHERE tag_id = ?1) THEN 'tag'
                      WHEN EXISTS(SELECT 1 FROM tag_namespace WHERE namespace_id = ?1) THEN 'tag_group'
                      WHEN EXISTS(SELECT 1 FROM folder_definition WHERE folder_id = ?1) THEN 'folder'
+                     WHEN EXISTS(SELECT 1 FROM smart_folder_definition WHERE smart_folder_id = ?1)
+                         THEN 'smart_folder'
                      WHEN EXISTS(SELECT 1 FROM media_item WHERE media_id = ?1) THEN 'item'
                      WHEN EXISTS(SELECT 1 FROM library_item WHERE local_id = ?1 AND item_kind = 2)
                          THEN 'collection'
@@ -140,7 +156,7 @@ impl<'a> Local<'a> {
     }
 
     /// The sync key that the library gives a local entity now, or `None` when
-    /// the entity is gone.
+    /// the entity is gone or its kind has no local id.
     pub(crate) fn key(&self, kind: SyncKind, local_id: u32) -> Result<Option<String>> {
         let sql = match kind {
             SyncKind::Item => {
@@ -160,6 +176,8 @@ impl<'a> Local<'a> {
             }
             SyncKind::TagGroup => "SELECT display_name FROM tag_namespace WHERE namespace_id = ?1",
             SyncKind::Folder => "SELECT stable_key FROM folder_definition WHERE folder_id = ?1",
+            SyncKind::SmartFolder => "SELECT stable_key FROM smart_folder_definition WHERE smart_folder_id = ?1",
+            SyncKind::Library | SyncKind::ViewSettings | SyncKind::DuplicateDecision => return Ok(None),
         };
         Ok(self
             .connection
@@ -179,7 +197,8 @@ impl<'a> Local<'a> {
         Ok(self.key(kind, root_id.0)?.map(|key| (kind, key)))
     }
 
-    /// The local id of an entity, found by its sync key in the library.
+    /// The local id of an entity, found by its sync key in the library;
+    /// `None` also for the kinds without a local id.
     pub(crate) fn find(&self, kind: SyncKind, key: &str) -> Result<Option<u32>> {
         if kind == SyncKind::Tag {
             return Ok(self.snapshot.tag_ids_by_name.get(key).map(|id| id.0));
@@ -194,7 +213,9 @@ impl<'a> Local<'a> {
             }
             SyncKind::TagGroup => "SELECT namespace_id FROM tag_namespace WHERE display_name = ?1",
             SyncKind::Folder => "SELECT folder_id FROM folder_definition WHERE stable_key = ?1",
+            SyncKind::SmartFolder => "SELECT smart_folder_id FROM smart_folder_definition WHERE stable_key = ?1",
             SyncKind::Tag => unreachable!("tags are found in the projection"),
+            SyncKind::Library | SyncKind::ViewSettings | SyncKind::DuplicateDecision => return Ok(None),
         };
         Ok(self
             .connection
@@ -215,7 +236,8 @@ impl<'a> Local<'a> {
                                 file.duration_ms, file.frame_count, media.media_name,
                                 media.media_notes, root.root_id IS NOT NULL, root.name, root.notes,
                                 root.source_urls_json, root.imported_at_ms, root.captured_at_ms,
-                                root.modified_at_ms
+                                root.modified_at_ms,
+                                (SELECT viewed_at_ms FROM recent_view WHERE root_id = root.root_id)
                          FROM media_item media
                          JOIN media_file file ON file.file_id = media.file_id
                          LEFT JOIN library_root root ON root.root_id = media.media_id
@@ -238,12 +260,13 @@ impl<'a> Local<'a> {
                         };
                         let root = standalone
                             .then(|| -> rusqlite::Result<_> {
-                                Ok((
-                                    row.get::<_, String>(11)?,
-                                    row.get::<_, i64>(12)?,
-                                    row.get::<_, Option<i64>>(13)?,
-                                    row.get::<_, i64>(14)?,
-                                ))
+                                Ok(RootRow {
+                                    links: row.get(11)?,
+                                    imported: row.get(12)?,
+                                    captured: row.get(13)?,
+                                    modified: row.get(14)?,
+                                    viewed: row.get(15)?,
+                                })
                             })
                             .transpose()?;
                         Ok((file, name, notes, root))
@@ -255,10 +278,9 @@ impl<'a> Local<'a> {
                 view.fields.insert("file".into(), file);
                 view.fields.insert("name".into(), json!(name));
                 view.fields.insert("notes".into(), json!(notes));
+                view.fields.insert("sources".into(), self.sources(local_id)?);
                 match root {
-                    Some((links, imported, captured, modified)) => {
-                        self.root_fields(local_id, &links, imported, captured, modified, &mut view)?;
-                    }
+                    Some(root) => self.root_fields(local_id, &root, &mut view)?,
                     None => {
                         let owner = self.snapshot.media_owner.get(local_id).copied();
                         view.owner = match owner {
@@ -272,8 +294,9 @@ impl<'a> Local<'a> {
                 let row = self
                     .connection
                     .prepare_cached(
-                        "SELECT root.name, root.notes, root.source_urls_json, root.imported_at_ms,
-                                root.captured_at_ms, root.modified_at_ms, file.content_hash
+                        "SELECT root.name, root.notes, file.content_hash, root.source_urls_json,
+                                root.imported_at_ms, root.captured_at_ms, root.modified_at_ms,
+                                (SELECT viewed_at_ms FROM recent_view WHERE root_id = root.root_id)
                          FROM library_item item
                          JOIN library_root root ON root.root_id = item.local_id
                          JOIN media_item media ON media.media_id = root.cover_media_id
@@ -285,20 +308,23 @@ impl<'a> Local<'a> {
                             row.get::<_, String>(0)?,
                             row.get::<_, Option<String>>(1)?,
                             row.get::<_, String>(2)?,
-                            row.get::<_, i64>(3)?,
-                            row.get::<_, Option<i64>>(4)?,
-                            row.get::<_, i64>(5)?,
-                            row.get::<_, String>(6)?,
+                            RootRow {
+                                links: row.get(3)?,
+                                imported: row.get(4)?,
+                                captured: row.get(5)?,
+                                modified: row.get(6)?,
+                                viewed: row.get(7)?,
+                            },
                         ))
                     })
                     .optional()?;
-                let Some((name, notes, links, imported, captured, modified, cover)) = row else {
+                let Some((name, notes, cover, root)) = row else {
                     return Ok(None);
                 };
                 view.fields.insert("name".into(), json!(name));
                 view.fields.insert("notes".into(), json!(notes));
                 view.fields.insert("cover".into(), json!(cover));
-                self.root_fields(local_id, &links, imported, captured, modified, &mut view)?;
+                self.root_fields(local_id, &root, &mut view)?;
             }
             SyncKind::Tag | SyncKind::TagGroup => {
                 if self.key(kind, local_id)?.is_none() {
@@ -375,19 +401,302 @@ impl<'a> Local<'a> {
                     None => None,
                 };
             }
+            SyncKind::SmartFolder => {
+                let row = self
+                    .connection
+                    .prepare_cached(
+                        "SELECT name, icon, color, notes, view_query_json, parent_id
+                         FROM smart_folder_definition WHERE smart_folder_id = ?1",
+                    )?
+                    .query_row([local_id], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, Option<u32>>(5)?,
+                        ))
+                    })
+                    .optional()?;
+                let Some((name, icon, color, notes, rules, parent)) = row else {
+                    return Ok(None);
+                };
+                let rules = self.rules(&serde_json::from_str(&rules)?)?;
+                for (field, value) in [
+                    ("name", json!(name)),
+                    ("icon", json!(icon)),
+                    ("color", json!(color)),
+                    ("notes", json!(notes)),
+                    ("rules", rules),
+                ] {
+                    view.fields.insert(field.into(), value);
+                }
+                view.owner = match parent {
+                    Some(parent) => self.key(SyncKind::SmartFolder, parent)?,
+                    None => None,
+                };
+            }
+            SyncKind::Library | SyncKind::ViewSettings | SyncKind::DuplicateDecision => return Ok(None),
         }
         Ok(Some(view))
     }
 
-    fn root_fields(
-        &mut self,
-        root_id: u32,
-        links: &str,
-        imported: i64,
-        captured: Option<i64>,
-        modified: i64,
-        view: &mut View,
-    ) -> Result<()> {
+    /// The rules of a smart folder in sync keys: the `tag_ids` of each tag
+    /// rule become `tags`, the names of those tags, sorted, and the
+    /// `folder_ids` of each folder rule become `folders`, the keys of those
+    /// folders in their order, with `null` for a folder that the library does
+    /// not have. Such a folder matches nothing; the projection writes it as
+    /// the id 0, which no folder has.
+    fn rules(&mut self, rules: &ViewQuerySpec) -> Result<Value> {
+        let mut rules = serde_json::to_value(rules)?;
+        self.rules_value(&mut rules)?;
+        Ok(rules)
+    }
+
+    fn rules_value(&mut self, value: &mut Value) -> Result<()> {
+        match value {
+            Value::Object(object) => match object.get("clause").and_then(Value::as_str) {
+                Some("tags") => {
+                    let ids = object.remove("tag_ids").unwrap_or_default();
+                    let names = self.tag_names();
+                    let tags = ids
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|id| names.get(&(id.as_u64()? as u32)).cloned())
+                        .collect::<BTreeSet<_>>();
+                    object.insert("tags".into(), json!(tags));
+                }
+                Some("folders") => {
+                    let ids = object.remove("folder_ids").unwrap_or_default();
+                    let mut keys = Vec::new();
+                    for id in ids.as_array().into_iter().flatten() {
+                        let key = match id.as_u64() {
+                            Some(id) => self.folder_key(id as u32)?,
+                            None => None,
+                        };
+                        keys.push(json!(key));
+                    }
+                    object.insert("folders".into(), Value::Array(keys));
+                }
+                _ => {
+                    for child in object.values_mut() {
+                        self.rules_value(child)?;
+                    }
+                }
+            },
+            Value::Array(values) => {
+                for child in values {
+                    self.rules_value(child)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// The sources of a media item: its rows of `source_provenance`, sorted.
+    pub(crate) fn sources(&self, media_id: u32) -> Result<Value> {
+        let mut statement = self.connection.prepare_cached(
+            "SELECT source_key, source_item_key, source_text FROM source_provenance
+             WHERE media_id = ?1 ORDER BY source_key, source_item_key",
+        )?;
+        let rows = statement.query_map([media_id], |row| {
+            Ok(json!({
+                "source_key": row.get::<_, String>(0)?,
+                "source_item_key": row.get::<_, String>(1)?,
+                "source_text": row.get::<_, Option<String>>(2)?,
+            }))
+        })?;
+        Ok(Value::Array(rows.collect::<rusqlite::Result<Vec<_>>>()?))
+    }
+
+    /// The state of an entity of a kind without a local id, found by its
+    /// sync key, or `None` when the library does not have it.
+    pub(crate) fn row_view(&self, kind: SyncKind, key: &str) -> Result<Option<View>> {
+        match kind {
+            SyncKind::Library => self.settings_view().map(Some),
+            SyncKind::ViewSettings => self.view_settings(key),
+            SyncKind::DuplicateDecision => self.decision_view(key),
+            _ => Ok(None),
+        }
+    }
+
+    /// The sync key of a row that `changed_row` names by its kind and text,
+    /// or `None` when the row names no entity that the library has: a view
+    /// of a folder or smart folder that is gone, or a duplicate pair of a
+    /// file that is gone.
+    pub(crate) fn row_key(&self, kind: SyncKind, row: &str) -> Result<Option<String>> {
+        match kind {
+            SyncKind::Library => Ok(Some(String::new())),
+            SyncKind::ViewSettings => self.scope_key(row),
+            SyncKind::DuplicateDecision => {
+                let Some((a, b)) = row.split_once(':') else { return Ok(None) };
+                let (Ok(a), Ok(b)) = (a.parse::<u32>(), b.parse::<u32>()) else { return Ok(None) };
+                let hash = |file_id: u32| -> Result<Option<String>> {
+                    Ok(self
+                        .connection
+                        .prepare_cached("SELECT content_hash FROM media_file WHERE file_id = ?1")?
+                        .query_row([file_id], |row| row.get::<_, String>(0))
+                        .optional()?)
+                };
+                Ok(hash(a)?.zip(hash(b)?).map(|(a, b)| super::decision_key(&a, &b)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// The keys of the "Not duplicate" decisions about the file of the item
+    /// `media_id`.
+    pub(crate) fn decisions_of(&self, media_id: u32) -> Result<Vec<String>> {
+        let mut statement = self.connection.prepare_cached(
+            "SELECT a.content_hash, b.content_hash FROM media_item media
+             JOIN duplicate_pair pair ON pair.file_id_a = media.file_id OR pair.file_id_b = media.file_id
+             JOIN media_file a ON a.file_id = pair.file_id_a
+             JOIN media_file b ON b.file_id = pair.file_id_b
+             WHERE media.media_id = ?1 AND pair.status = 2",
+        )?;
+        let rows = statement.query_map([media_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+        let mut keys = Vec::new();
+        for row in rows {
+            let (a, b) = row?;
+            keys.push(super::decision_key(&a, &b));
+        }
+        Ok(keys)
+    }
+
+    /// The sync keys of every entity of the kinds without a local id that
+    /// the library has.
+    pub(crate) fn all_rows(&self) -> Result<Vec<(SyncKind, String)>> {
+        let mut rows = vec![(SyncKind::Library, String::new())];
+        let scopes = self
+            .connection
+            .prepare("SELECT scope FROM view_pref")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for scope in scopes {
+            rows.extend(self.scope_key(&scope)?.map(|key| (SyncKind::ViewSettings, key)));
+        }
+        let pairs = self
+            .connection
+            .prepare("SELECT file_id_a || ':' || file_id_b FROM duplicate_pair WHERE status = 2")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for pair in pairs {
+            let key = self.row_key(SyncKind::DuplicateDecision, &pair)?;
+            rows.extend(key.map(|key| (SyncKind::DuplicateDecision, key)));
+        }
+        Ok(rows)
+    }
+
+    /// The sync key of a scope of `view_pref`, or of an entry of the Quick
+    /// Access list, which names views the same way: `folder:<id>` and
+    /// `smart:<id>` become `folder:<uuid>` and `smart:<uuid>`, and any other
+    /// text stays as it is. `None` when the folder or smart folder is gone.
+    pub(crate) fn scope_key(&self, scope: &str) -> Result<Option<String>> {
+        let (prefix, kind, id) = if let Some(id) = scope.strip_prefix("folder:") {
+            ("folder:", SyncKind::Folder, id)
+        } else if let Some(id) = scope.strip_prefix("smart:") {
+            ("smart:", SyncKind::SmartFolder, id)
+        } else {
+            return Ok(Some(scope.to_owned()));
+        };
+        let Ok(id) = id.parse::<u32>() else { return Ok(None) };
+        Ok(self.key(kind, id)?.map(|key| format!("{prefix}{key}")))
+    }
+
+    /// The scope in the library of a sync key that `scope_key` made, or
+    /// `None` when the library does not have the folder or smart folder.
+    pub(crate) fn local_scope(&self, key: &str) -> Result<Option<String>> {
+        match super::view_owner(key) {
+            Some((kind, owner)) => {
+                let prefix = if kind == SyncKind::Folder { "folder:" } else { "smart:" };
+                Ok(self.find(kind, owner)?.map(|id| format!("{prefix}{id}")))
+            }
+            None => Ok(Some(key.to_owned())),
+        }
+    }
+
+    /// The library's settings: one field `setting:<name>` for each field of
+    /// the `application` setting that is not `null` and does not stay on
+    /// this computer (`local_setting`). The Quick Access list names folders
+    /// and smart folders by sync key, and leaves out those that are gone.
+    fn settings_view(&self) -> Result<View> {
+        let stored = self
+            .connection
+            .prepare_cached("SELECT value_json FROM setting WHERE key = 'application'")?
+            .query_row([], |row| row.get::<_, String>(0))
+            .optional()?;
+        let settings = stored
+            .and_then(|stored| serde_json::from_str::<Value>(&stored).ok())
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let mut view = View::default();
+        for (name, value) in settings {
+            if local_setting(&name) || value.is_null() {
+                continue;
+            }
+            let value = match (name.as_str(), value) {
+                (QUICK_ACCESS, Value::Array(entries)) => {
+                    let mut keys = Vec::with_capacity(entries.len());
+                    for entry in entries {
+                        match entry.as_str() {
+                            Some(scope) => keys.extend(self.scope_key(scope)?.map(Value::String)),
+                            None => keys.push(entry),
+                        }
+                    }
+                    Value::Array(keys)
+                }
+                (_, value) => value,
+            };
+            view.fields.insert(format!("setting:{name}"), value);
+        }
+        Ok(view)
+    }
+
+    /// The settings of the view with the sync key `key`: the field `value`
+    /// with the row's JSON. `None` when the view has no row or its folder or
+    /// smart folder is gone.
+    fn view_settings(&self, key: &str) -> Result<Option<View>> {
+        let Some(scope) = self.local_scope(key)? else { return Ok(None) };
+        let stored = self
+            .connection
+            .prepare_cached("SELECT value_json FROM view_pref WHERE scope = ?1")?
+            .query_row([&scope], |row| row.get::<_, String>(0))
+            .optional()?;
+        Ok(stored.map(|stored| {
+            let mut view = View::default();
+            let value = serde_json::from_str::<Value>(&stored).unwrap_or(Value::String(stored));
+            view.fields.insert("value".into(), value);
+            view
+        }))
+    }
+
+    /// The "Not duplicate" decision with the sync key `key`: the field
+    /// `decision`, while the pair of the two files has status 2 and both
+    /// files are items of the library.
+    fn decision_view(&self, key: &str) -> Result<Option<View>> {
+        let Some((a, b)) = key.split_once(':') else { return Ok(None) };
+        let decided = self
+            .connection
+            .prepare_cached(
+                "SELECT EXISTS(SELECT 1 FROM media_file a, media_file b, duplicate_pair pair
+                 WHERE a.content_hash = ?1 AND b.content_hash = ?2
+                   AND pair.file_id_a = MIN(a.file_id, b.file_id) AND pair.file_id_b = MAX(a.file_id, b.file_id)
+                   AND pair.status = 2
+                   AND EXISTS(SELECT 1 FROM media_item WHERE file_id = a.file_id)
+                   AND EXISTS(SELECT 1 FROM media_item WHERE file_id = b.file_id))",
+            )?
+            .query_row([a, b], |row| row.get::<_, bool>(0))?;
+        Ok(decided.then(|| {
+            let mut view = View::default();
+            view.fields.insert("decision".into(), json!(KEEP_BOTH));
+            view
+        }))
+    }
+
+    fn root_fields(&mut self, root_id: u32, root: &RootRow, view: &mut View) -> Result<()> {
         self.prepare(&RoaringBitmap::from_iter([root_id]))?;
         let lifecycle = self
             .snapshot
@@ -401,14 +710,15 @@ impl<'a> Local<'a> {
             .iter()
             .find(|(_, members)| members.contains(root_id))
             .map_or(0, |(rating, _)| rating.bitmap_key());
-        let links = serde_json::from_str::<Value>(links).unwrap_or_else(|_| json!([]));
+        let links = serde_json::from_str::<Value>(&root.links).unwrap_or_else(|_| json!([]));
         for (field, value) in [
             ("links", links),
-            ("imported_at", json!(imported)),
-            ("captured_at", json!(captured)),
-            ("modified_at", json!(modified)),
+            ("imported_at", json!(root.imported)),
+            ("captured_at", json!(root.captured)),
+            ("modified_at", json!(root.modified)),
             ("lifecycle", json!(lifecycle_name(lifecycle))),
             ("rating", json!(rating)),
+            ("viewed_at", json!(root.viewed)),
         ] {
             view.fields.insert(field.into(), value);
         }
@@ -416,4 +726,14 @@ impl<'a> Local<'a> {
         view.folders = self.root_folders.get(&root_id).into_iter().flatten().cloned().collect();
         Ok(())
     }
+}
+
+/// The columns of `library_root` that the root fields of an item or
+/// collection come from, and the time it was last viewed (`recent_view`).
+struct RootRow {
+    links: String,
+    imported: i64,
+    captured: Option<i64>,
+    modified: i64,
+    viewed: Option<i64>,
 }

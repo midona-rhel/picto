@@ -323,6 +323,12 @@ fn main() -> R<()> {
         library.set_notes(&one, Some(format!("note {n}")), now())?;
         Ok(())
     }, None::<fn() -> R<()>>)?;
+    // Viewing an item writes the time it was viewed into `recent_view`.
+    bench_write(&library, "record_recent_view 1", "1", runs * 4, || {
+        n += 1;
+        library.record_recent_view(ids[at(500_000) + n % 100], now())?;
+        Ok(())
+    }, None::<fn() -> R<()>>)?;
 
     let mut created: Vec<SmartFolderId> = Vec::new();
     let mut sc = 0;
@@ -405,7 +411,7 @@ fn main() -> R<()> {
     }
     emit_write("permanently_delete 1k (from Trash)", "1000", &mut del_ms, &mut del_recorded);
     if sync {
-        bench_apply(&library, roots, runs, &at, &one)?;
+        bench_apply(&library, roots, runs, &at, &one, smart_ids[1])?;
         library.database().checkpoint_wal()?;
         print_sizes(&path, sync, "after the writes")?;
     }
@@ -617,20 +623,30 @@ fn main() -> R<()> {
 
 /// Applies change records that another computer made: a rating of one item,
 /// a tag on 1,000 items, a tag on 1,000 to 200,000 items with and without
-/// writes to `other` at the same time, and a new item. Each run uses later
-/// timestamps, so that the records replace the stored ones.
-fn bench_apply(library: &Library, roots: usize, runs: usize, at: &dyn Fn(usize) -> usize, other: &SelectionTarget) -> R<()> {
+/// writes to `other` at the same time, a new item, a view of one item, and a
+/// new name of the smart folder `smart_folder`, which writes the folders,
+/// the smart folders and the settings. Each run uses later timestamps, so
+/// that the records replace the stored ones.
+fn bench_apply(
+    library: &Library,
+    roots: usize,
+    runs: usize,
+    at: &dyn Fn(usize) -> usize,
+    other: &SelectionTarget,
+    smart_folder: SmartFolderId,
+) -> R<()> {
     let mut wall_ms = now() + 60_000;
-    let mut record = |key: String, field: &str, value: serde_json::Value| {
+    let mut record_of = |kind: SyncKind, key: String, field: &str, value: serde_json::Value| {
         wall_ms += 1;
         SyncRecord {
-            kind: SyncKind::Item,
+            kind,
             key,
             field: field.into(),
             value,
             timestamp: SyncTimestamp { wall_ms, counter: 0, device: "benchmark".into() },
         }
     };
+    let mut record = |key: String, field: &str, value: serde_json::Value| record_of(SyncKind::Item, key, field, value);
     let mut samples = Vec::new();
     for run in 0..runs * 2 {
         let records = vec![record(format!("hash-{}", at(500_000)), "rating", serde_json::json!(run % 5 + 1))];
@@ -715,6 +731,29 @@ fn bench_apply(library: &Library, roots: usize, runs: usize, at: &dyn Fn(usize) 
         samples.push(ms(t));
     }
     emit("apply_sync_records new item", &format!("{roots} roots"), &mut samples);
+    let mut samples = Vec::new();
+    for run in 0..runs * 2 {
+        let records = vec![record(format!("hash-{}", at(600_000)), "viewed_at", serde_json::json!(now() + run as i64))];
+        let t = Instant::now();
+        library.apply_sync_records(&records)?;
+        samples.push(ms(t));
+    }
+    emit("apply_sync_records view of 1 item", "1", &mut samples);
+    let smart_key = library.database().read(picto_library::database::WorkPriority::VisibleRead, |connection| {
+        Ok(connection.query_row(
+            "SELECT stable_key FROM smart_folder_definition WHERE smart_folder_id = ?1",
+            [smart_folder.0],
+            |row| row.get::<_, String>(0),
+        )?)
+    })?;
+    let mut samples = Vec::new();
+    for run in 0..runs * 2 {
+        let records = vec![record_of(SyncKind::SmartFolder, smart_key.clone(), "name", serde_json::json!(format!("Renamed {run}")))];
+        let t = Instant::now();
+        library.apply_sync_records(&records)?;
+        samples.push(ms(t));
+    }
+    emit("apply_sync_records smart folder name (writes the folder trees)", "1", &mut samples);
     Ok(())
 }
 

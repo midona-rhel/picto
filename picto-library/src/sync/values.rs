@@ -26,20 +26,23 @@ pub(crate) struct View {
     /// For items outside a collection and for collections: the folders that
     /// hold them.
     pub folders: BTreeSet<String>,
-    /// For an item, the collection it is a member of; for a folder, its
-    /// parent folder.
+    /// For an item, the collection it is a member of; for a folder or a
+    /// smart folder, its parent.
     pub owner: Option<String>,
 }
 
 /// The fields that every item and collection outside a collection has, and
 /// the value the projection uses when the synced values do not hold one.
-pub(crate) const ROOT_FIELDS: [&str; 6] = [
+/// `viewed_at` is the time the root was last viewed, `null` while it is not
+/// in Recently viewed.
+pub(crate) const ROOT_FIELDS: [&str; 7] = [
     "links",
     "imported_at",
     "captured_at",
     "modified_at",
     "lifecycle",
     "rating",
+    "viewed_at",
 ];
 
 fn root_default(field: &str) -> Value {
@@ -53,8 +56,8 @@ fn root_default(field: &str) -> Value {
 
 pub(crate) type Raw = BTreeMap<String, Stored>;
 
-/// The folders that the synced values show, with the parent and position of
-/// each.
+/// The folders, or the smart folders, that the synced values show, with the
+/// parent and position of each.
 #[derive(Default)]
 pub(crate) struct FolderTree {
     /// Parent and position key of every visible folder.
@@ -72,7 +75,8 @@ pub(crate) struct Synced<'a> {
     /// them: the items and collections that came back in the library under
     /// their old local id, as an undo of Delete Permanently brings them back.
     pub revived: HashSet<(SyncKind, String)>,
-    tree: Option<Rc<FolderTree>>,
+    /// The tree of folders and the tree of smart folders.
+    trees: HashMap<SyncKind, Rc<FolderTree>>,
 }
 
 impl<'a> Synced<'a> {
@@ -81,13 +85,13 @@ impl<'a> Synced<'a> {
             connection,
             raws: HashMap::new(),
             revived: HashSet::new(),
-            tree: None,
+            trees: HashMap::new(),
         }
     }
 
     pub(crate) fn forget(&mut self) {
         self.raws.clear();
-        self.tree = None;
+        self.trees.clear();
     }
 
     pub(crate) fn raw(&mut self, kind: SyncKind, key: &str) -> Result<Rc<Raw>> {
@@ -221,9 +225,23 @@ impl<'a> Synced<'a> {
 
     /// Whether the synced values show the entity. An item needs its `file`
     /// field, a collection needs a visible member, and a tag group is also
-    /// shown while a visible tag is in it.
+    /// shown while a visible tag is in it. The settings of a folder's or a
+    /// smart folder's view are shown while that folder is, and a duplicate
+    /// decision while both its items are. The library's settings are always
+    /// shown.
     pub(crate) fn visible(&mut self, kind: SyncKind, key: &str) -> Result<bool> {
         match kind {
+            SyncKind::Library => Ok(true),
+            SyncKind::ViewSettings => Ok(self.alive(kind, key)?
+                && match super::view_owner(key) {
+                    Some((owner, owner_key)) => self.visible(owner, owner_key)?,
+                    None => true,
+                }),
+            SyncKind::DuplicateDecision => {
+                let Some((a, b)) = key.split_once(':') else { return Ok(false) };
+                Ok(self.alive(kind, key)? && self.visible(SyncKind::Item, a)? && self.visible(SyncKind::Item, b)?)
+            }
+            SyncKind::SmartFolder => self.alive(kind, key),
             SyncKind::Item => Ok(self.alive(kind, key)?
                 && self
                     .raw(kind, key)?
@@ -414,7 +432,12 @@ impl<'a> Synced<'a> {
         let mut view = View::default();
         match kind {
             SyncKind::Item => {
-                for (field, default) in [("file", Value::Null), ("name", json!("")), ("notes", Value::Null)] {
+                for (field, default) in [
+                    ("file", Value::Null),
+                    ("name", json!("")),
+                    ("notes", Value::Null),
+                    ("sources", json!([])),
+                ] {
                     view.fields.insert(field.to_owned(), text(field, default));
                 }
                 view.owner = self.owner(&raw)?;
@@ -464,18 +487,144 @@ impl<'a> Synced<'a> {
                     _ => false,
                 };
                 view.fields.insert("cover".into(), if shown { cover } else { Value::Null });
-                view.owner = self.folder_tree()?.place.get(key).and_then(|place| place.0.clone());
+                view.owner = self.tree(kind)?.place.get(key).and_then(|place| place.0.clone());
+            }
+            SyncKind::SmartFolder => {
+                for (field, default) in [
+                    ("name", json!("")),
+                    ("icon", Value::Null),
+                    ("color", Value::Null),
+                    ("notes", Value::Null),
+                ] {
+                    view.fields.insert(field.to_owned(), text(field, default));
+                }
+                let rules = self.shown_rules(&text("rules", json!({})))?;
+                view.fields.insert("rules".into(), rules);
+                view.owner = self.tree(kind)?.place.get(key).and_then(|place| place.0.clone());
+            }
+            SyncKind::Library => {
+                for (field, stored) in raw.iter() {
+                    let Some(name) = field.strip_prefix("setting:") else { continue };
+                    if stored.value.is_null() || super::local::local_setting(name) {
+                        continue;
+                    }
+                    let mut value = stored.value.clone();
+                    if let (super::local::QUICK_ACCESS, Value::Array(entries)) = (name, &mut value) {
+                        let mut shown = Vec::with_capacity(entries.len());
+                        for entry in entries.drain(..) {
+                            let owner = entry.as_str().and_then(super::view_owner);
+                            if let Some((kind, key)) = owner {
+                                if !self.visible(kind, key)? {
+                                    continue;
+                                }
+                            }
+                            shown.push(entry);
+                        }
+                        *entries = shown;
+                    }
+                    view.fields.insert(field.clone(), value);
+                }
+            }
+            SyncKind::ViewSettings => {
+                view.fields.insert("value".into(), text("value", Value::Null));
+            }
+            SyncKind::DuplicateDecision => {
+                view.fields.insert("decision".into(), text("decision", Value::Null));
             }
             SyncKind::Tag | SyncKind::TagGroup => {}
         }
         Ok(Some(view))
     }
 
-    /// The tree of visible folders. A folder whose parent is not visible is
-    /// at the top level. When parents form a cycle, the folder in the cycle
-    /// whose `place` has the latest timestamp is at the top level.
-    pub(crate) fn folder_tree(&mut self) -> Result<Rc<FolderTree>> {
-        if let Some(tree) = &self.tree {
+    /// The rules of a smart folder as the synced values show them. In each
+    /// tag rule, a tag that is not visible counts as the tag it was renamed
+    /// or merged into (`resolve_tag`), and is left out when there is none;
+    /// the names are sorted. When a tag was left out, the filter is then
+    /// cleaned as the library cleans it when it deletes a tag
+    /// (`predicate::rewrite_tag_reference`): a tag rule without tags is
+    /// removed, and so are an `any` group left without rules and a `not` of
+    /// a removed rule. In each folder rule, a folder that is not visible is
+    /// `null`.
+    fn shown_rules(&mut self, rules: &Value) -> Result<Value> {
+        let mut rules = rules.clone();
+        let mut left_out = false;
+        self.resolve_rules(&mut rules, &mut left_out)?;
+        if left_out {
+            if let Some(filter) = rules.get_mut("filter") {
+                *filter = cleaned(filter).unwrap_or_else(|| json!({"kind": "all", "value": []}));
+            }
+        }
+        Ok(rules)
+    }
+
+    fn resolve_rules(&mut self, value: &mut Value, left_out: &mut bool) -> Result<()> {
+        match value {
+            Value::Object(object) => match object.get("clause").and_then(Value::as_str) {
+                Some("tags") => {
+                    let mut tags = BTreeSet::new();
+                    for tag in object.get("tags").and_then(Value::as_array).into_iter().flatten() {
+                        match tag.as_str().map(|tag| self.resolve_tag(tag)).transpose()?.flatten() {
+                            Some(tag) => {
+                                tags.insert(tag);
+                            }
+                            None => *left_out = true,
+                        }
+                    }
+                    object.insert("tags".into(), json!(tags));
+                }
+                Some("folders") => {
+                    let mut folders = Vec::new();
+                    for folder in object.get("folders").and_then(Value::as_array).into_iter().flatten() {
+                        let shown = match folder.as_str() {
+                            Some(key) if self.visible(SyncKind::Folder, key)? => json!(key),
+                            _ => Value::Null,
+                        };
+                        folders.push(shown);
+                    }
+                    object.insert("folders".into(), Value::Array(folders));
+                }
+                _ => {
+                    for child in object.values_mut() {
+                        self.resolve_rules(child, left_out)?;
+                    }
+                }
+            },
+            Value::Array(values) => {
+                for child in values {
+                    self.resolve_rules(child, left_out)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// The smart folders whose stored rules name the tag or folder `key` in
+    /// a tag rule or a folder rule.
+    pub(crate) fn rules_naming(&self, key: &str) -> Result<Vec<String>> {
+        let mut statement = self.connection.prepare_cached(
+            "SELECT smart.key, value.value FROM sync_identity smart
+             CROSS JOIN sync_value value ON value.entity = smart.entity
+             WHERE smart.kind = 'smart_folder' AND value.field = 'rules' AND value.target = 0
+               AND instr(value.value, json_quote(?1)) > 0",
+        )?;
+        let rows = statement.query_map([key], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+        let mut smart_folders = Vec::new();
+        for row in rows {
+            let (smart_folder, rules) = row?;
+            if names(&serde_json::from_str(&rules)?, key) {
+                smart_folders.push(smart_folder);
+            }
+        }
+        Ok(smart_folders)
+    }
+
+    /// The tree of visible folders, or of visible smart folders. A folder
+    /// whose parent is not visible is at the top level. When parents form a
+    /// cycle, the folder in the cycle whose `place` has the latest timestamp
+    /// is at the top level.
+    pub(crate) fn tree(&mut self, kind: SyncKind) -> Result<Rc<FolderTree>> {
+        if let Some(tree) = self.trees.get(&kind) {
             return Ok(tree.clone());
         }
         let mut statement = self.connection.prepare_cached(
@@ -484,9 +633,9 @@ impl<'a> Synced<'a> {
              FROM sync_identity folder
              CROSS JOIN sync_value value ON value.entity = folder.entity
              JOIN sync_device device ON device.device = value.device
-             WHERE folder.kind = 'folder' AND value.field IN ('deleted', 'place') AND value.target = 0",
+             WHERE folder.kind = ?1 AND value.field IN ('deleted', 'place') AND value.target = 0",
         )?;
-        let rows = statement.query_map([], |row| {
+        let rows = statement.query_map([kind.as_str()], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -565,7 +714,7 @@ impl<'a> Synced<'a> {
             children.sort_by(|a, b| (&position[a], a).cmp(&(&position[b], b)));
         }
         let tree = Rc::new(tree);
-        self.tree = Some(tree.clone());
+        self.trees.insert(kind, tree.clone());
         Ok(tree)
     }
 
@@ -581,6 +730,57 @@ impl<'a> Synced<'a> {
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(keys)
+    }
+}
+
+/// A smart folder's filter after the tags that are not visible were left
+/// out of its tag rules: the same filter without the tag rules that have no
+/// tags left, the `any` groups that have no rules left and the `not` of a
+/// removed rule. `None` when the filter itself is removed.
+fn cleaned(filter: &Value) -> Option<Value> {
+    let kind = filter.get("kind").and_then(Value::as_str);
+    let value = filter.get("value");
+    match kind {
+        Some("all") | Some("any") => {
+            let children = value
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(cleaned)
+                .collect::<Vec<_>>();
+            if kind == Some("any") && children.is_empty() {
+                return None;
+            }
+            Some(json!({"kind": kind, "value": children}))
+        }
+        Some("not") => value.and_then(cleaned).map(|child| json!({"kind": "not", "value": child})),
+        Some("clause")
+            if value.and_then(|clause| clause.get("clause")).and_then(Value::as_str) == Some("tags") =>
+        {
+            let empty = value
+                .and_then(|clause| clause.get("tags"))
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty);
+            (!empty).then(|| filter.clone())
+        }
+        _ => Some(filter.clone()),
+    }
+}
+
+/// Whether the rules `value` name `key` in the tags of a tag rule or the
+/// folders of a folder rule.
+fn names(value: &Value, key: &str) -> bool {
+    match value {
+        Value::Object(object) => match object.get("clause").and_then(Value::as_str) {
+            Some("tags") | Some("folders") => ["tags", "folders"]
+                .iter()
+                .filter_map(|list| object.get(*list).and_then(Value::as_array))
+                .flatten()
+                .any(|named| named.as_str() == Some(key)),
+            _ => object.values().any(|child| names(child, key)),
+        },
+        Value::Array(values) => values.iter().any(|child| names(child, key)),
+        _ => false,
     }
 }
 

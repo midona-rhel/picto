@@ -2,19 +2,21 @@
 //! change records, and writing synced values from other computers into the
 //! library.
 //!
-//! Each entity of the library (item, collection, tag, tag group, folder) has
-//! a sync key that is the same on every computer, and fields. A change to a
-//! field is a change record with a hybrid logical clock timestamp. For each
-//! field the record with the latest timestamp wins. The sync file
-//! (`SyncStore`) holds those records in `sync_value`, and the library is a
-//! projection of them: `values` computes what the synced values show for an
-//! entity, `local` reads what the library holds, `record` compares the two
-//! for what changed in the library since its last pass and records what
-//! differs, and `apply` writes what the synced values show into the library.
+//! Each entity of the library (item, collection, tag, tag group, folder,
+//! smart folder, the library's settings, the settings of one view and a "Not
+//! duplicate" decision) has a sync key that is the same on every computer,
+//! and fields. A change to a field is a change record with a hybrid logical
+//! clock timestamp. For each field the record with the latest timestamp
+//! wins. The sync file (`SyncStore`) holds those records in `sync_value`,
+//! and the library is a projection of them: `values` computes what the
+//! synced values show for an entity, `local` reads what the library holds,
+//! `record` compares the two for what changed in the library since its last
+//! pass and records what differs, and `apply` writes what the synced values
+//! show into the library.
 //!
-//! Library writes do no sync work apart from the triggers of `MARKS`. The
-//! recorder runs in the background after writes, on the sync file's own
-//! connection, and reads the library in a read transaction.
+//! Library writes do no sync work apart from the triggers of `MARKS` and
+//! `ROW_MARKS`. The recorder runs in the background after writes, on the
+//! sync file's own connection, and reads the library in a read transaction.
 
 mod apply;
 mod local;
@@ -49,6 +51,17 @@ pub enum SyncKind {
     Tag,
     TagGroup,
     Folder,
+    SmartFolder,
+    /// The library's settings: the synced fields of the `application`
+    /// setting. A library has one, with the empty key.
+    Library,
+    /// The settings of one view (a row of `view_pref`), keyed by the view's
+    /// scope with the local id in it replaced by a sync key: `folder:<uuid>`,
+    /// `smart:<uuid>`, or a scope without an id such as `grid:defaults`.
+    ViewSettings,
+    /// A "Not duplicate" decision about two items, keyed by their content
+    /// hashes, sorted and joined with `:` (`decision_key`).
+    DuplicateDecision,
 }
 
 impl SyncKind {
@@ -59,6 +72,10 @@ impl SyncKind {
             Self::Tag => "tag",
             Self::TagGroup => "tag_group",
             Self::Folder => "folder",
+            Self::SmartFolder => "smart_folder",
+            Self::Library => "library",
+            Self::ViewSettings => "view_settings",
+            Self::DuplicateDecision => "duplicate_decision",
         }
     }
 
@@ -69,8 +86,40 @@ impl SyncKind {
             "tag" => Self::Tag,
             "tag_group" => Self::TagGroup,
             "folder" => Self::Folder,
+            "smart_folder" => Self::SmartFolder,
+            "library" => Self::Library,
+            "view_settings" => Self::ViewSettings,
+            "duplicate_decision" => Self::DuplicateDecision,
             _ => return None,
         })
+    }
+
+    /// Whether the library holds an entity of this kind in a row with a
+    /// local id. The library's settings, view settings and duplicate
+    /// decisions are rows without one, which `local` finds by their sync key.
+    pub(crate) fn has_local_id(self) -> bool {
+        !matches!(self, Self::Library | Self::ViewSettings | Self::DuplicateDecision)
+    }
+}
+
+/// The key of the "Not duplicate" decision about the items with the content
+/// hashes `a` and `b`.
+pub(crate) fn decision_key(a: &str, b: &str) -> String {
+    if a <= b {
+        format!("{a}:{b}")
+    } else {
+        format!("{b}:{a}")
+    }
+}
+
+/// The folder or smart folder whose view the view settings with the sync key
+/// `key` belong to. The other views (`grid:defaults`, `system:trash` and so
+/// on) belong to none.
+pub(crate) fn view_owner(key: &str) -> Option<(SyncKind, &str)> {
+    if let Some(folder) = key.strip_prefix("folder:") {
+        Some((SyncKind::Folder, folder))
+    } else {
+        key.strip_prefix("smart:").map(|smart| (SyncKind::SmartFolder, smart))
     }
 }
 
@@ -196,22 +245,62 @@ impl SyncStore {
 /// While sync is on, the library has the table `changed_entity` and these
 /// triggers, which give every local id whose row changed the revision of
 /// the write that changed it. That is the only sync work in a library write:
-/// one row for each item, collection, tag, tag group or folder whose own row
-/// a write changes, and nothing for the bulk changes of tags, ratings,
-/// lifecycles and lists, which the recorder finds from the `revision` of the
-/// `canonical_bitmap` rows (through the index `sync_bitmap_revision`) and the
-/// checksums of the `ordered_membership_chunk` rows. An item that enters or
-/// leaves a collection changes the collection's list, so media rows are
-/// marked only when they are updated. A write sets `library_meta.revision`
-/// to the next revision after these triggers have run, so they take that
-/// next revision.
-const MARKS: [(&str, &str, &str); 5] = [
+/// one row for each item, collection, tag, tag group, folder or smart folder
+/// whose own row a write changes, and for each item whose sources change,
+/// and nothing for the bulk changes of tags, ratings, lifecycles and lists,
+/// which the recorder finds from the `revision` of the `canonical_bitmap`
+/// rows (through the index `sync_bitmap_revision`) and the checksums of the
+/// `ordered_membership_chunk` rows. An item that enters or leaves a
+/// collection changes the collection's list, so media rows are marked only
+/// when they are updated. Viewing an item writes `recent_view` and has no
+/// trigger: the recorder finds the views from their times
+/// (`record::viewed_changes`). A write sets `library_meta.revision` to the
+/// next revision after these triggers have run, so they take that next
+/// revision.
+const MARKS: [(&str, &str, &str); 7] = [
     ("library_root", "root_id", "OF name, notes, source_urls_json, cover_media_id, imported_at_ms, captured_at_ms, modified_at_ms"),
     ("media_item", "media_id", "OF media_name, media_notes, file_id"),
     ("tag_definition", "tag_id", ""),
     ("tag_namespace", "namespace_id", ""),
     ("folder_definition", "folder_id", ""),
+    ("smart_folder_definition", "smart_folder_id", ""),
+    ("source_provenance", "media_id", ""),
 ];
+
+/// The rows that hold an entity without a local id, which the triggers of
+/// `row_triggers` note in `changed_row` by kind and the text that
+/// identifies the row: (table, the condition under which a row is such an
+/// entity, the kind, the text). `{row}` stands for `NEW` or `OLD`. The
+/// `application` setting is the library's settings, each row of `view_pref`
+/// is the settings of one view, and a duplicate pair with status 2 (Not
+/// duplicate) is a decision, identified by its two file ids.
+const ROW_MARKS: [(&str, &str, &str, &str); 3] = [
+    ("setting", "{row}.key = 'application'", "library", "''"),
+    ("view_pref", "true", "view_settings", "{row}.scope"),
+    ("duplicate_pair", "{row}.status = 2", "duplicate_decision", "{row}.file_id_a || ':' || {row}.file_id_b"),
+];
+
+/// The triggers of `ROW_MARKS`, as (name, event, condition, kind, text). An
+/// update of a duplicate pair is noted only when its status changes, so that
+/// a scan that updates the distances of found pairs does no sync work.
+fn row_triggers() -> Vec<(String, String, String, &'static str, String)> {
+    let mut triggers = Vec::new();
+    for (table, condition, kind, text) in ROW_MARKS {
+        let new = |value: &str| value.replace("{row}", "NEW");
+        let old = |value: &str| value.replace("{row}", "OLD");
+        let updated = if table == "duplicate_pair" { "UPDATE OF status" } else { "UPDATE" };
+        triggers.push((format!("{table}_insert"), format!("INSERT ON {table}"), new(condition), kind, new(text)));
+        triggers.push((format!("{table}_delete"), format!("DELETE ON {table}"), old(condition), kind, old(text)));
+        triggers.push((
+            format!("{table}_update"),
+            format!("{updated} ON {table}"),
+            format!("({}) OR ({})", old(condition), new(condition)),
+            kind,
+            new(text),
+        ));
+    }
+    triggers
+}
 
 /// The triggers of `MARKS`, and the one that marks the items of a file whose
 /// facts change, as (name, event, the select of the marked ids).
@@ -237,12 +326,16 @@ fn mark_triggers() -> Vec<(String, String, String)> {
     triggers
 }
 
-/// Adds `changed_entity`, its triggers and the revision index of
-/// `canonical_bitmap` to the library.
+/// Adds `changed_entity`, `changed_row`, their triggers and the revision
+/// index of `canonical_bitmap` to the library.
 pub(crate) fn start_marking(transaction: &Transaction<'_>) -> Result<()> {
     let mut sql = String::from(
         "CREATE TABLE IF NOT EXISTS changed_entity (local_id INTEGER PRIMARY KEY, revision INTEGER NOT NULL) STRICT;
          CREATE INDEX IF NOT EXISTS changed_entity_revision ON changed_entity(revision);
+         CREATE TABLE IF NOT EXISTS changed_row (
+             kind TEXT NOT NULL, row TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(kind, row)
+         ) WITHOUT ROWID, STRICT;
+         CREATE INDEX IF NOT EXISTS changed_row_revision ON changed_row(revision);
          CREATE INDEX IF NOT EXISTS sync_bitmap_revision ON canonical_bitmap(revision);
          DELETE FROM tag_merge;",
     );
@@ -257,17 +350,41 @@ pub(crate) fn start_marking(transaction: &Transaction<'_>) -> Result<()> {
              END;"
         ));
     }
+    for (name, event, condition, kind, text) in row_triggers() {
+        sql.push_str(&format!(
+            "CREATE TRIGGER IF NOT EXISTS sync_{name} AFTER {event} WHEN {condition} BEGIN
+                 INSERT INTO changed_row(kind, row, revision)
+                 VALUES ('{kind}', {text}, (SELECT revision + 1 FROM library_meta))
+                 ON CONFLICT(kind, row) DO UPDATE SET revision = excluded.revision;
+             END;"
+        ));
+    }
     Ok(transaction.execute_batch(&sql)?)
 }
 
 pub(crate) fn stop_marking(transaction: &Transaction<'_>) -> Result<()> {
     let mut sql = String::from(
-        "DROP TABLE IF EXISTS changed_entity; DROP INDEX IF EXISTS sync_bitmap_revision;",
+        "DROP TABLE IF EXISTS changed_entity; DROP TABLE IF EXISTS changed_row;
+         DROP INDEX IF EXISTS sync_bitmap_revision;",
     );
-    for (name, _, _) in mark_triggers() {
+    for name in mark_triggers().into_iter().map(|trigger| trigger.0).chain(row_triggers().into_iter().map(|trigger| trigger.0)) {
         sql.push_str(&format!("DROP TRIGGER IF EXISTS sync_{name};"));
     }
     Ok(transaction.execute_batch(&sql)?)
+}
+
+/// Notes in `changed_entity` that the projection changed the view time of
+/// the root `root_id` in a library write of `revision`. Writing
+/// `recent_view` fires no trigger, and a view time that is not the latest
+/// one is found only from this note.
+pub(crate) fn mark_viewed(transaction: &Transaction<'_>, root_id: u32, revision: u64) -> Result<()> {
+    transaction
+        .prepare_cached(
+            "INSERT INTO changed_entity(local_id, revision) VALUES (?1, ?2)
+             ON CONFLICT(local_id) DO UPDATE SET revision = excluded.revision",
+        )?
+        .execute(rusqlite::params![root_id, revision as i64])?;
+    Ok(())
 }
 
 /// The hybrid logical clock of this library, read once for a pass of the
@@ -361,7 +478,12 @@ pub(crate) fn entity(connection: &Connection, kind: SyncKind, key: &str) -> Resu
 /// One record as `sync_value` stores it. A field `tag:<name>` or
 /// `folder:<uuid>` is stored as `tag` or `folder` with the tag or folder as
 /// its target; every other field has the target 0. `reference` is the
-/// entity that the value of a field without a target names.
+/// entity that the value of a field without a target names, or that the
+/// entity is shown only with: the folder or smart folder of a view's
+/// settings, and the two items of a duplicate decision, the first named by
+/// its field `deleted` and the second by its field `decision`, so that each
+/// item finds the decision. The tags and folders that a smart folder's rules
+/// name are not references; they are found by reading the rules.
 struct StoredRow {
     entity: i64,
     field: String,
@@ -383,6 +505,10 @@ fn stored_row(connection: &Connection, kind: SyncKind, key: &str, field: &str, v
         (_, _) if target.is_some() => None,
         (SyncKind::Item, "collection") => first.map(|key| (SyncKind::Collection, key)),
         (SyncKind::Folder, "place") => first.map(|key| (SyncKind::Folder, key)),
+        (SyncKind::SmartFolder, "place") => first.map(|key| (SyncKind::SmartFolder, key)),
+        (SyncKind::ViewSettings, _) => view_owner(key),
+        (SyncKind::DuplicateDecision, "deleted") => key.split_once(':').map(|(a, _)| (SyncKind::Item, a)),
+        (SyncKind::DuplicateDecision, "decision") => key.split_once(':').map(|(_, b)| (SyncKind::Item, b)),
         (SyncKind::Tag, "renamed_to") => value.as_str().map(|key| (SyncKind::Tag, key)),
         (SyncKind::Collection, "cover") => value.as_str().map(|key| (SyncKind::Item, key)),
         (SyncKind::Folder, "cover") => first
