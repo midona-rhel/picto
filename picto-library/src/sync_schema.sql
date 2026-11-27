@@ -87,6 +87,9 @@ CREATE TABLE IF NOT EXISTS sync_pending (
     entity INTEGER PRIMARY KEY,
     state INTEGER NOT NULL CHECK (state IN (0, 1, 2, 3))
 ) STRICT;
+-- The next entities to write, and whether any entity waits to be revived or
+-- recorded, are found without reading every waiting entity.
+CREATE INDEX IF NOT EXISTS sync_pending_state ON sync_pending(state, entity);
 
 -- For each field of a waiting entity that records from other computers
 -- changed, the value it had before them, stored as in sync_value. The
@@ -101,6 +104,9 @@ CREATE TABLE IF NOT EXISTS sync_pending_value (
     value TEXT NOT NULL,
     PRIMARY KEY(entity, field, target)
 ) WITHOUT ROWID, STRICT;
+-- The waiting entities in the same folder as another are found through this
+-- index (`pending_projection`).
+CREATE INDEX IF NOT EXISTS sync_pending_value_target ON sync_pending_value(field, target);
 
 -- Copies of the library's membership bitmaps and ordered lists as the
 -- recorder last recorded them. Comparing a changed row of the library with

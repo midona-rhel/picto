@@ -18,10 +18,10 @@ be rebuilt from SQLite. Every committed write settles its projections, increment
 revision, and announces the categories of what it changed. The app reads those categories again.
 It does not predict the library's state, and it does not adjust counts itself.
 
-A visible root is standalone image/video media or an ordered collection. Physical files, logical
-media occurrences, and visible roots have separate identities. Attached collection members inherit
-their root's lifecycle and folder placement. `All` contains active roots only; Inbox and Trash are
-separate lifecycle scopes.
+A root is what the grid shows as one tile: a standalone media item, or a collection of media items
+in an order. A stored file, a media item and a root each have an id of their own. The members of a
+collection have the lifecycle and the folders of the collection. `All` shows only the roots whose
+lifecycle is Active; Inbox and Trash show the roots in those two lifecycles.
 
 One file is exactly one media item, enforced by a unique index on `media_item(file_id)`. Every
 import resolves a file it already holds to that item: a standalone import adds its tags and
@@ -89,16 +89,18 @@ contain that byte sequence, while alphabetical order keeps SQLite's NOCASE rule 
 NUL. The `root_fts` table remains the source of the settled text, and the in-memory matcher is
 tested against a full-table `instr()` scan of it, which gives the exact expected result.
 
-Captured/imported date windows use signed bit-sliced projections, retaining pre-epoch
-timestamps rather than clamping their ordering keys. Missing captured dates share the `-1`
-sort bucket with real `-1` timestamps, with root ID breaking ties in either direction.
-Filtering retains its existing nonnegative date-range semantics and excludes missing dates.
-Folder-tree order uses the same direct descending imported-date selection. These paths select
-only the requested ordinal window. Sequential `items.query` cursors page the same resident
-orders: value-keyed cursors for date, size and recently-viewed order seek their position in one
-cached complete order, and name, rating, random and folder-order cursors keep their pagers.
-The derived checkpoint implementation version distinguishes signed date keys from older
-clamped keys; incompatible derived checkpoints rebuild from canonical SQLite data.
+A window sorted by the captured or the imported date is read from bit-sliced indexes of the dates,
+which hold one bitmap for each bit of the value and keep its sign, so a date before 1970 sorts
+before 1970 instead of being counted as 1970. A root without a captured date sorts as the date
+`-1`, together with the roots whose date is -1 ms, and among equal dates the root id decides the
+order in both directions. A date filter matches only dates of 0 or later, and never a root that has
+no such date. The order of a folder-tree scope, newest imported first, is read from the same
+indexes. Each of these reads finds only the roots at the positions that the window asks for. The
+pages of `items.query` read the same orders in memory: a page sorted by date, size or recently
+viewed finds where it starts in one cached complete order, and pages sorted by name, rating,
+random order or folder order keep their own pagers. The version of the checkpoint tells the
+signed date keys from the older keys, which counted dates before 1970 as 1970, and a checkpoint
+with another version is built again from the SQLite tables.
 
 The app's grid holds at most 1,500 items of a view at a time (`app/src/grid/window.rs`), so a
 selection that reaches beyond the loaded items is never built from the loaded items. Select All
@@ -114,6 +116,9 @@ One projection snapshot holds everything a grid read needs: lifecycle, rating, t
 kind, MIME and color bitmaps; numeric and date indexes; collection and folder orders; media
 ownership; cover palettes; the settled search text; the alphabetical name tree; drawing facts
 for every root; recently viewed roots in display order; and folder parents for tree scopes.
+Every folder has an order and a member bitmap, also a folder without members. An open gives them
+to a folder that never had members, which has no rows in `ordered_membership_chunk`, as the write
+that creates a folder does.
 Drawing facts live in immutable 1,024-root shards that intern each shard's content hashes and
 MIME strings; names come from the alphabetical index rather than a second copy. A window
 builds its summaries from these records and the bitmaps alone. Detail requests, media
@@ -267,9 +272,11 @@ marks a stopped merge and a merge with a failed file for undo, and removes the b
 merge has finished or has been undone. The other library's subscriptions, watched folders,
 settings, recent views and duplicate decisions are not read.
 
-`picto-library/examples/library_ops_benchmark.rs` measures these operations on a synthetic library
-(`-- [roots] [runs] [smart_folders]`, default 1M roots and 100 smart folders; `--sync` measures
-them with sync recording on, and applying change records). Its output is local and never committed.
+`picto-library/examples/library_ops_benchmark.rs` measures these operations on a generated library
+(`-- [roots] [runs] [smart_folders]`, by default 1M roots and 100 smart folders). With `--sync` it
+measures them with sync on, and also measures applying change records from another computer,
+among them a tag on up to 200,000 items with and without writes of the user at the same time. Its
+output is local and never committed.
 
 ### Recording changes for sync
 
@@ -315,14 +322,23 @@ entity is written. The entities are then written into the library in small trans
 background priority. An item or collection whose new records only change its lifecycle, rating,
 tags, name, notes, links or modification date, and a new item outside collections and folders, are
 written directly into their rows and bitmaps, 32 in one transaction; a new item is created as an
-import creates it. The others are written with their structure, one in each
+import creates it. What the synced values show for these 32 is read from the sync file before the
+transaction starts, and the tags that hold them are found on the thread pool of the smart folders,
+so that the transaction holds the library's writer for only a few milliseconds and a write of the
+user waits no longer than that. The others are written with their structure, one in each
 transaction together with the waiting entities whose position changed in the same folder: tags,
 tag groups and folders are created and removed, the folder tree is written as a whole when a folder
 or a tag is written, and items and collections are written with `restore_structure`, the code that
 undo uses for collections. The items of a tag that was renamed or merged get the tag it went to in
 the same transaction, also when they still wait. Items that the synced values no longer show are
 deleted as Delete Permanently deletes them. A transaction is written only when the library has not
-changed since the recorder's last pass; otherwise the recorder runs again first.
+changed since the recorder's last pass; otherwise the recorder runs again first. When such a
+transaction is the only write since the recorder's last pass and no entity waits to be revived or
+recorded, the library shows what the synced values show for everything the transaction wrote. The
+next pass then records nothing: it only stores the keys of the entities that the transaction
+created and brings its copies of the bitmaps and lists up to the library, without reading the
+entities that still wait. The time to write a batch therefore grows with the size of the batch,
+and not with its square.
 
 The recorder compares a waiting entity like any other, so a change that the user makes to it at any
 time, also between two of these transactions, is recorded with a later timestamp, and the synced
@@ -418,11 +434,13 @@ runtime, gallery-dl, OF-Scraper or any other helper program for sources:
 `query -> provider adapter -> shared HTTP runtime -> one exposed post -> current-post downloads ->
 canonical ingest -> settlement acknowledgement -> next post`
 
-Provider adapters (`picto-sources/src/providers/`) own only endpoint selection, bounded
-pagination and cursor decoding, response parsing, and media descriptors. The shared runtime owns
-scheduling, HTTP pacing and retries, downloads, staging, ingest, counters, and settlement. One
-provider's headers, authentication, or parsing must not affect another. The product site registry
-(`core/src/subscriptions/sites.rs`) and the native registry are tested for exact equality.
+A provider (`picto-sources/src/providers/`) does only what differs from site to site: it chooses
+the addresses to request, reads the pages of results up to a limit and the cursors between them,
+parses the responses and describes the media files. The shared runtime does the rest: the
+schedule, the pace of the HTTP requests and their retries, the downloads, the staging, the
+import, the counters and the settlement. The headers, logins and parsing of one provider must not
+change what another provider does. A test checks that the list of sites in
+`core/src/subscriptions/sites.rs` and the list of providers are the same.
 
 ### One-post settlement
 
@@ -454,9 +472,9 @@ expose another post until the current one settles.
   after settlement, failure, startup recovery, or reset. Restart resumes from the last settled
   post; stable source identity and content hashes keep a repeated post idempotent.
 
-Progress counters: posts traversed (metadata inspected), posts added (complete media set reached
-the library), posts skipped (settled without a new visible item). A post is never reported as
-added before canonical ingest succeeds.
+A run counts three numbers: the posts traversed, whose metadata was read; the posts added, all of
+whose media files reached the library; and the posts skipped, which were settled without a new item
+in the library. A post is counted as added only after its import has committed.
 
 The totals that the subscription list shows over all runs are computed from the stored results
 of the runs: the distinct source posts added and source items retained for each query, and the

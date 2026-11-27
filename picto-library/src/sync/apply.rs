@@ -36,6 +36,9 @@ pub(crate) struct Projected {
     /// The entities written with everything the synced values show for
     /// them, which therefore no longer wait to be written.
     pub written: BTreeSet<Key>,
+    /// Whether the write changed the structure of the library: tags, tag
+    /// groups, the folder tree, or the lists of folders and collections.
+    pub structure: bool,
 }
 
 type Key = (SyncKind, String);
@@ -144,29 +147,35 @@ pub(crate) fn pending_projection(
     connection: &Connection,
     direct_limit: usize,
 ) -> Result<(Vec<(i64, SyncKind, String, bool)>, bool)> {
+    // One state at a time, so that the index on `sync_pending(state, entity)`
+    // gives the rows in order and only the first ones are read.
     let mut statement = connection.prepare_cached(
-        "SELECT pending.entity, identity.kind, identity.key, pending.state = ?4
+        "SELECT pending.entity, identity.kind, identity.key, pending.state = ?3
          FROM sync_pending pending JOIN sync_identity identity ON identity.entity = pending.entity
-         WHERE pending.state IN (?1, ?2) ORDER BY pending.entity LIMIT ?3",
+         WHERE pending.state = ?1 ORDER BY pending.entity LIMIT ?2",
     )?;
-    let mut read = |states: (i64, i64), limit: usize| -> Result<Vec<_>> {
-        let rows = statement.query_map(rusqlite::params![states.0, states.1, limit as i64, REVIVE], |row| {
+    let mut read = |state: i64, limit: usize| -> Result<Vec<_>> {
+        let rows = statement.query_map(rusqlite::params![state, limit as i64, REVIVE], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, bool>(3)?))
         })?;
         let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows.into_iter().filter_map(|(entity, kind, key, revived)| Some((entity, SyncKind::parse(&kind)?, key, revived))).collect())
     };
-    let direct = read((FIELDS, FIELDS), direct_limit)?;
+    let direct = read(FIELDS, direct_limit)?;
     if !direct.is_empty() {
         return Ok((direct, true));
     }
-    let mut chunk = read((PROJECT, REVIVE), 1)?;
+    // The first entity, in the order of `entity`, of the two states.
+    let mut chunk = read(PROJECT, 1)?;
+    chunk.extend(read(REVIVE, 1)?);
+    chunk.sort_by_key(|row| row.0);
+    chunk.truncate(1);
     let Some(&(first, _, _, _)) = chunk.first() else { return Ok((chunk, false)) };
     let mut statement = connection.prepare_cached(
         "SELECT DISTINCT pending.entity, identity.kind, identity.key, pending.state = ?4
          FROM sync_pending_value mine
-         JOIN sync_pending_value other ON other.field = 'folder' AND other.target = mine.target
-         JOIN sync_pending pending ON pending.entity = other.entity
+         CROSS JOIN sync_pending_value other ON other.field = 'folder' AND other.target = mine.target
+         CROSS JOIN sync_pending pending ON pending.entity = other.entity
          JOIN sync_identity identity ON identity.entity = pending.entity
          WHERE mine.entity = ?1 AND mine.field = 'folder' AND other.entity <> ?1 AND pending.state IN (?2, ?3)",
     )?;
@@ -190,6 +199,10 @@ pub(crate) fn finish_projection(
     written: &BTreeSet<Key>,
 ) -> Result<()> {
     let transaction = connection.unchecked_transaction()?;
+    // The values from before of an entity that no longer waits are removed
+    // by entity, so that the cost of this transaction does not grow with
+    // the number of entities that still wait.
+    let mut values = transaction.prepare_cached("DELETE FROM sync_pending_value WHERE entity = ?1")?;
     for (entity, _, _, revived) in chunk {
         let sql = if *revived {
             "UPDATE sync_pending SET state = 2 WHERE entity = ?1"
@@ -197,48 +210,67 @@ pub(crate) fn finish_projection(
             "DELETE FROM sync_pending WHERE entity = ?1"
         };
         transaction.prepare_cached(sql)?.execute([entity])?;
+        values.execute([entity])?;
     }
     let mut statement = transaction.prepare_cached(
         "DELETE FROM sync_pending WHERE state IN (?3, ?4)
-             AND entity = (SELECT entity FROM sync_identity WHERE kind = ?1 AND key = ?2)",
+             AND entity = (SELECT entity FROM sync_identity WHERE kind = ?1 AND key = ?2)
+         RETURNING entity",
     )?;
     for (kind, key) in written {
-        statement.execute(rusqlite::params![kind.as_str(), key, PROJECT, FIELDS])?;
+        let removed = statement
+            .query_map(rusqlite::params![kind.as_str(), key, PROJECT, FIELDS], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for entity in removed {
+            values.execute([entity])?;
+        }
     }
-    drop(statement);
-    transaction.execute(
-        "DELETE FROM sync_pending_value
-         WHERE entity NOT IN (SELECT entity FROM sync_pending WHERE state IN (?1, ?2))",
-        [PROJECT, FIELDS],
-    )?;
+    drop((statement, values));
     Ok(transaction.commit()?)
 }
 
-/// Writes what the synced values (read through `sync`) show for `keys` into
-/// the library and `snapshot`. With `direct`, the keys are written with
-/// `write_directly` where it can. The entities in `revived` count as visible
-/// even when the synced values delete them.
-#[allow(clippy::too_many_arguments)]
+/// The synced values (read through `sync`) for a write of `keys`, in which
+/// the entities in `revived` count as visible even when the synced values
+/// delete them. With `direct`, what the synced values show for each key is
+/// read here, before the library transaction, so that the transaction does
+/// not wait for these reads of the sync file. Nothing else writes the sync
+/// file while its connection is held, so the values stay the same.
+pub(crate) fn synced_for_projection<'a>(
+    sync: &'a Connection,
+    keys: &BTreeSet<Key>,
+    revived: HashSet<Key>,
+    direct: bool,
+) -> Result<Synced<'a>> {
+    let mut synced = Synced::new(sync);
+    synced.revived = revived;
+    if direct {
+        for (kind, key) in keys {
+            synced.view(*kind, key)?;
+        }
+    }
+    Ok(synced)
+}
+
+/// Writes what `synced` shows for `keys` into the library and `snapshot`.
+/// With `direct`, the keys are written with `write_directly` where it can.
 pub(crate) fn project(
     transaction: &Transaction<'_>,
     revision: u64,
     snapshot: &mut ProjectionSnapshot,
-    sync: &Connection,
+    synced: &mut Synced<'_>,
     keys: BTreeSet<Key>,
-    revived: HashSet<Key>,
     direct: bool,
     protected: &BTreeSet<FileId>,
 ) -> Result<Projected> {
-    let mut synced = Synced::new(sync);
-    synced.revived = revived;
     let mut projected = Projected::default();
     projected.resources.extend(
         ["roots", "media", "sidebar", "tags", "folders", "collections", "search", "navigation", "smart-folders"]
             .map(str::to_owned),
     );
-    let keys = if direct { write_directly(transaction, revision, snapshot, &mut synced, keys, &mut projected)? } else { keys };
+    let keys = if direct { write_directly(transaction, revision, snapshot, synced, keys, &mut projected)? } else { keys };
     if !keys.is_empty() {
-        project_structure(transaction, revision, snapshot, &mut synced, &keys, protected, &mut projected)?;
+        projected.structure = true;
+        project_structure(transaction, revision, snapshot, synced, &keys, protected, &mut projected)?;
     }
     crate::smart::settle_affected_for(
         transaction,
