@@ -11,8 +11,10 @@
 -- folder, the row also holds the id of the cloud library, the path of the
 -- cloud folder that holds it, the machine id of the computer that last
 -- synced this copy, the sequence number of the last change file this device
--- wrote, whether sync is paused, and when this device last wrote its
--- device.json, in milliseconds since 1970.
+-- wrote, whether sync is paused, when this device last wrote its
+-- device.json, in milliseconds since 1970, and the base snapshots that
+-- sync_value was last built from (a JSON list of snapshot ids) with, for each
+-- device, the greatest of their covers (a JSON object).
 CREATE TABLE IF NOT EXISTS sync_state (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     device_id TEXT NOT NULL,
@@ -24,7 +26,18 @@ CREATE TABLE IF NOT EXISTS sync_state (
     machine_id TEXT,
     written_seq INTEGER NOT NULL DEFAULT 0,
     paused INTEGER NOT NULL DEFAULT 0,
-    synced_at_ms INTEGER
+    synced_at_ms INTEGER,
+    adopted_snapshots TEXT NOT NULL DEFAULT '[]',
+    adopted_covers TEXT NOT NULL DEFAULT '{}'
+) STRICT;
+
+-- The snapshots of the cloud library that this computer has seen without a
+-- manifest or without all their shards, with the time it first saw each one
+-- so, in milliseconds since 1970. A snapshot that stays incomplete for seven
+-- days from then is deleted.
+CREATE TABLE IF NOT EXISTS sync_incomplete (
+    snapshot_id TEXT PRIMARY KEY,
+    first_seen_ms INTEGER NOT NULL
 ) STRICT;
 
 -- For each other device, the sequence number of the last of its change files

@@ -14,7 +14,8 @@
 //! pass and records what differs, and `apply` writes what the synced values
 //! show into the library.
 //! `cloud` reads and writes the files of the cloud folder through which the
-//! computers exchange their change records.
+//! computers exchange their change records, and `snapshot` what a snapshot
+//! of the synced values holds and how a library adopts snapshots.
 //!
 //! Library writes do no sync work apart from the triggers of `MARKS` and
 //! `ROW_MARKS`. The recorder runs in the background after writes, on the
@@ -25,6 +26,7 @@ pub(crate) mod cloud;
 mod local;
 mod order;
 mod record;
+pub(crate) mod snapshot;
 #[cfg(test)]
 mod tests;
 mod values;
@@ -166,6 +168,10 @@ pub(crate) struct SyncStore {
     path: PathBuf,
     library: PathBuf,
     lock: Mutex<()>,
+    /// The snapshots of the cloud library whose shards this process has
+    /// read with the right checksums. A snapshot is written once, so it is
+    /// checked once in each run of the app.
+    pub(crate) verified: Mutex<std::collections::HashSet<String>>,
 }
 
 /// The connection to the sync file for one use; `None` while sync is off.
@@ -196,6 +202,7 @@ impl SyncStore {
             path: library.with_file_name("sync.sqlite"),
             library: library.to_owned(),
             lock: Mutex::new(()),
+            verified: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -237,6 +244,14 @@ impl SyncStore {
                  entity INTEGER NOT NULL, field TEXT NOT NULL, target INTEGER NOT NULL,
                  value TEXT NOT NULL, reference INTEGER
              );",
+        )?;
+        // The fields that the cloud data hold while base snapshots are
+        // adopted (`snapshot::begin_adoption`).
+        connection.execute_batch(
+            "CREATE TEMP TABLE sync_adopted (
+                 field TEXT NOT NULL, target INTEGER NOT NULL, entity INTEGER NOT NULL,
+                 PRIMARY KEY(field, target, entity)
+             ) WITHOUT ROWID;",
         )?;
         connection.execute("ATTACH DATABASE ?1 AS library", [self.library.to_string_lossy()])?;
         // The caches of the library database's own connections have the
@@ -452,10 +467,22 @@ impl Clock {
     }
 }
 
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
+#[cfg(test)]
+thread_local! {
+    /// How far the tests of this thread have moved the time forward, in
+    /// milliseconds, to check what sync does after days and weeks.
+    pub(crate) static TIME_SHIFT_MS: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+}
+
+/// The time in milliseconds since 1970 that sync works with: the wall
+/// clock, moved forward in tests by `TIME_SHIFT_MS`.
+pub(crate) fn now_ms() -> i64 {
+    let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis() as i64)
+        .map_or(0, |duration| duration.as_millis() as i64);
+    #[cfg(test)]
+    let now = now + TIME_SHIFT_MS.with(std::cell::Cell::get);
+    now
 }
 
 /// The number that stands for a device id in `sync_value`, added when new.

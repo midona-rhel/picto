@@ -127,11 +127,21 @@ pub(crate) fn merge_remote(transaction: &Transaction<'_>, records: &[SyncRecord]
     for ((kind, key), state) in keys {
         statement.execute(rusqlite::params![super::entity(transaction, kind, &key)?, state, FIELDS, PROJECT])?;
     }
-    transaction.execute(
-        "DELETE FROM sync_pending_value
-         WHERE entity NOT IN (SELECT entity FROM sync_pending WHERE state IN (?1, ?2))",
-        [PROJECT, FIELDS],
-    )?;
+    // `merge` noted a value from before for every field of the records. The
+    // values of an entity that does not wait to be written are no use, and
+    // are removed for the entities of these records only, so that a merge
+    // costs what its records hold and not what waits from earlier merges.
+    let mut entities = HashSet::new();
+    for record in records {
+        if entities.insert((record.kind, record.key.as_str())) {
+            transaction
+                .prepare_cached(
+                    "DELETE FROM sync_pending_value WHERE entity = ?1
+                         AND NOT EXISTS (SELECT 1 FROM sync_pending WHERE entity = ?1 AND state IN (?2, ?3))",
+                )?
+                .execute(rusqlite::params![super::entity(transaction, record.kind, &record.key)?, PROJECT, FIELDS])?;
+        }
+    }
     Ok(())
 }
 
