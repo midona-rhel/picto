@@ -35,17 +35,22 @@ pub(crate) const FIELDS: i64 = 3;
 
 type Records = BTreeMap<(SyncKind, String, String), Value>;
 
-/// What changed: local entities that are compared one by one, the lists
-/// whose order is compared, and the roots that entered or left a lifecycle,
-/// rating, tag or folder. A list marked `true` is compared as a whole;
+/// What changed: local entities that are compared one by one, the entities
+/// without a local id that are compared one by one by their sync key, the
+/// lists whose order is compared, the roots that entered or left a
+/// lifecycle, rating, tag or folder, and the roots whose view time changed,
+/// with the time they have now. A list marked `true` is compared as a whole;
 /// otherwise only the part that differs from the list before.
 #[derive(Default)]
 struct Touched {
     ids: BTreeSet<u32>,
+    rows: BTreeSet<(SyncKind, String)>,
     folder_lists: BTreeMap<FolderId, bool>,
     collection_lists: BTreeMap<RootId, bool>,
     folder_tree: bool,
+    smart_tree: bool,
     changes: Vec<Change>,
+    viewed: Vec<(u32, Option<i64>)>,
 }
 
 /// The lists that changed, as (owner kind, owner id), and their order as
@@ -135,6 +140,7 @@ pub(crate) fn record(
         drop(recorder);
         let owners = if structure { changed_lists(transaction)?.into_iter().collect() } else { Vec::new() };
         copy(transaction, since, &owners)?;
+        copy_views(transaction, &viewed_changes(transaction, snapshot, &touched.ids)?)?;
         transaction.execute("UPDATE sync_state SET recorded_revision = ?1", [revision as i64])?;
         return Ok(());
     }
@@ -152,6 +158,8 @@ pub(crate) fn record(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let (mut touched, mut before) = touched(transaction, snapshot, since)?;
+    let viewed = viewed_changes(transaction, snapshot, &touched.ids)?;
+    touched.viewed = viewed.changes.clone();
     let owners = std::mem::take(&mut before.owners);
     let mut recorder = Recorder::new(transaction, before, snapshot);
     // An entity whose synced values wait to be written is compared like any
@@ -192,7 +200,125 @@ pub(crate) fn record(
     }
     let owners = owners.into_iter().filter(|owner| !held.contains(owner)).collect::<Vec<_>>();
     copy(transaction, since, &owners)?;
+    copy_views(transaction, &viewed)?;
     transaction.execute("UPDATE sync_state SET recorded_revision = ?1", [revision as i64])?;
+    Ok(())
+}
+
+/// The Recently viewed list compared with the recorder's copy of it
+/// (`recorded_view`): the roots whose view time differs, with the time they
+/// have now (`None` when they left the list), and the latest time and the
+/// checksum of the list now.
+struct Viewed {
+    changes: Vec<(u32, Option<i64>)>,
+    latest: i64,
+    checksum: u64,
+}
+
+/// A number for one entry of the Recently viewed list. The checksum of the
+/// list is the sum of these numbers, so that it changes when any entry
+/// changes and can be brought up to date one entry at a time.
+fn view_hash(root_id: u32, viewed_at: i64) -> u64 {
+    let mut hash = (u64::from(root_id) << 32) ^ (viewed_at as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    hash = (hash ^ (hash >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    hash = (hash ^ (hash >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    hash ^ (hash >> 31)
+}
+
+/// Finds the roots whose view time changed since the last pass without a
+/// trigger on `recent_view`, which every view of an item writes. Viewing an
+/// item gives it a time later than every other time in the list, so the
+/// candidates are the roots viewed after the latest time of the copy and the
+/// roots in `touched`, whose rows changed: roots that were deleted, restored
+/// or written by the projection, which notes them (`super::mark_viewed`).
+/// When the checksum of the list now equals the copy's checksum with the
+/// candidates brought up to date, the candidates are all that changed.
+/// Otherwise something else changed the list, such as clearing Recently
+/// viewed or undoing that, and the whole list is compared with the copy.
+/// The list is read from the snapshot in memory; only the candidates are
+/// looked up in the copy.
+fn viewed_changes(transaction: &Transaction<'_>, snapshot: &ProjectionSnapshot, touched: &BTreeSet<u32>) -> Result<Viewed> {
+    let (latest, checksum) = transaction
+        .query_row("SELECT latest, checksum FROM recorded_view_state", [], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)? as u64))
+        })
+        .optional()?
+        .unwrap_or((i64::MIN, 0));
+    let touched_roots = touched.iter().copied().collect::<RoaringBitmap>();
+    let mut now = 0u64;
+    let mut candidates = BTreeMap::new();
+    for (root, viewed_at) in snapshot.recent_views.iter() {
+        now = now.wrapping_add(view_hash(root.0, *viewed_at));
+        if *viewed_at > latest || touched_roots.contains(root.0) {
+            candidates.insert(root.0, Some(*viewed_at));
+        }
+    }
+    for root in &touched_roots {
+        candidates.entry(root).or_insert(None);
+    }
+    let mut old = HashMap::new();
+    if !candidates.is_empty() {
+        let ids = serde_json::to_string(&candidates.keys().collect::<Vec<_>>())?;
+        let mut statement = transaction.prepare_cached(
+            "SELECT copy.root_id, copy.viewed_at FROM json_each(?1) candidate
+             CROSS JOIN recorded_view copy ON copy.root_id = candidate.value",
+        )?;
+        for row in statement.query_map([ids], |row| Ok((row.get::<_, u32>(0)?, row.get::<_, i64>(1)?)))? {
+            let (root, viewed_at) = row?;
+            old.insert(root, viewed_at);
+        }
+    }
+    let mut expected = checksum;
+    for (root, viewed_at) in &candidates {
+        if let Some(old) = old.get(root) {
+            expected = expected.wrapping_sub(view_hash(*root, *old));
+        }
+        if let Some(viewed_at) = viewed_at {
+            expected = expected.wrapping_add(view_hash(*root, *viewed_at));
+        }
+    }
+    let changes = if expected == now {
+        candidates.into_iter().filter(|(root, viewed_at)| old.get(root).copied() != *viewed_at).collect()
+    } else {
+        let copy = transaction
+            .prepare_cached("SELECT root_id, viewed_at FROM recorded_view")?
+            .query_map([], |row| Ok((row.get::<_, u32>(0)?, row.get::<_, i64>(1)?)))?
+            .collect::<rusqlite::Result<HashMap<_, _>>>()?;
+        let mut changes = Vec::new();
+        for (root, viewed_at) in snapshot.recent_views.iter() {
+            if copy.get(&root.0) != Some(viewed_at) {
+                changes.push((root.0, Some(*viewed_at)));
+            }
+        }
+        for root in copy.keys() {
+            if !snapshot.recent_views.members.contains(*root) {
+                changes.push((*root, None));
+            }
+        }
+        changes
+    };
+    Ok(Viewed {
+        changes,
+        latest: snapshot.recent_views.first().map_or(i64::MIN, |(_, viewed_at)| *viewed_at),
+        checksum: now,
+    })
+}
+
+/// Brings the copy of the Recently viewed list up to the library.
+fn copy_views(transaction: &Transaction<'_>, viewed: &Viewed) -> Result<()> {
+    let mut insert =
+        transaction.prepare_cached("INSERT OR REPLACE INTO recorded_view(root_id, viewed_at) VALUES (?1, ?2)")?;
+    let mut remove = transaction.prepare_cached("DELETE FROM recorded_view WHERE root_id = ?1")?;
+    for (root, viewed_at) in &viewed.changes {
+        match viewed_at {
+            Some(viewed_at) => insert.execute(rusqlite::params![root, viewed_at])?,
+            None => remove.execute([root])?,
+        };
+    }
+    transaction.execute(
+        "INSERT OR REPLACE INTO recorded_view_state(singleton, latest, checksum) VALUES (1, ?1, ?2)",
+        rusqlite::params![viewed.latest, viewed.checksum as i64],
+    )?;
     Ok(())
 }
 
@@ -249,7 +375,10 @@ pub(crate) fn record_full(transaction: &Transaction<'_>, snapshot: &ProjectionSn
             collection_lists: [(collection, true)].into(),
             ..Touched::default()
         }))
-        .chain([Touched { folder_tree: true, ..Touched::default() }]);
+        .chain([
+            Touched { folder_tree: true, ..Touched::default() },
+            Touched { smart_tree: true, ..Touched::default() },
+        ]);
     for list in lists {
         recorder.lists(list)?;
         let positions = std::mem::take(&mut recorder.positions);
@@ -266,8 +395,13 @@ pub(crate) fn record_full(transaction: &Transaction<'_>, snapshot: &ProjectionSn
         recorder.write(records, &mut clock, false)?;
         recorder.update_identities(&entities)?;
     }
+    let mut recorder = Recorder::new(transaction, Before::default(), snapshot);
+    recorder.compare(Touched { rows: touched.rows, ..Touched::default() })?;
+    let records = std::mem::take(&mut recorder.records);
+    recorder.write(records, &mut clock, false)?;
     clock.save(transaction)?;
-    copy(transaction, -1, &owners)
+    copy(transaction, -1, &owners)?;
+    copy_views(transaction, &viewed_changes(transaction, snapshot, &BTreeSet::new())?)
 }
 
 /// The records that a full comparison of the library with the synced values
@@ -292,7 +426,7 @@ pub(crate) fn differences(
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (kind, key) in alive {
         let Some(kind) = SyncKind::parse(&kind) else { continue };
-        if recorder.synced.visible(kind, &key)? && recorder.local.find(kind, &key)?.is_none() {
+        if recorder.synced.visible(kind, &key)? && recorder.local_view(kind, &key)?.is_none() {
             recorder.put(kind, &key, "deleted", json!(true));
         }
     }
@@ -306,6 +440,7 @@ pub(crate) fn differences(
 fn everything(connection: &Connection, snapshot: &ProjectionSnapshot) -> Result<Touched> {
     let mut touched = Touched {
         folder_tree: true,
+        smart_tree: true,
         ..Touched::default()
     };
     for sql in [
@@ -314,12 +449,14 @@ fn everything(connection: &Connection, snapshot: &ProjectionSnapshot) -> Result<
         "SELECT tag_id FROM tag_definition",
         "SELECT namespace_id FROM tag_namespace",
         "SELECT folder_id FROM folder_definition",
+        "SELECT smart_folder_id FROM smart_folder_definition",
     ] {
         let mut statement = connection.prepare(sql)?;
         for id in statement.query_map([], |row| row.get::<_, u32>(0))? {
             touched.ids.insert(id?);
         }
     }
+    touched.rows.extend(Local::new(connection, snapshot).all_rows()?);
     touched.folder_lists = snapshot.folder_orders.keys().map(|id| (*id, true)).collect();
     touched.collection_lists = snapshot.collection_orders.keys().map(|id| (*id, true)).collect();
     Ok(touched)
@@ -335,9 +472,10 @@ fn decode_order(payloads: impl IntoIterator<Item = Vec<u8>>) -> Vec<u32> {
 }
 
 /// Finds what changed in the library after the revision `since`: the local
-/// ids in `changed_entity`, the bitmap rows whose revision is later and
-/// whose checksum differs from the copy, and the lists whose chunks differ
-/// from the copy. Returns the changes and the lists as they were.
+/// ids in `changed_entity`, the rows in `changed_row`, the bitmap rows whose
+/// revision is later and whose checksum differs from the copy, and the
+/// lists whose chunks differ from the copy. Returns the changes and the
+/// lists as they were.
 fn touched(
     transaction: &Transaction<'_>,
     snapshot: &ProjectionSnapshot,
@@ -345,6 +483,18 @@ fn touched(
 ) -> Result<(Touched, Before)> {
     let mut touched = Touched { ids: changed_ids(transaction, since)?, ..Touched::default() };
     let mut before = Before::default();
+    {
+        let local = Local::new(transaction, snapshot);
+        let mut statement =
+            transaction.prepare_cached("SELECT kind, row FROM library.changed_row WHERE revision > ?1")?;
+        let rows = statement
+            .query_map([since], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (kind, row) in rows {
+            let Some(kind) = SyncKind::parse(&kind) else { continue };
+            touched.rows.extend(local.row_key(kind, &row)?.map(|key| (kind, key)));
+        }
+    }
     let mut statement = transaction.prepare_cached(
         "SELECT now.domain, now.key_id, now.high_bits, now.payload, recorded.payload
          FROM library.canonical_bitmap now
@@ -607,6 +757,9 @@ struct Recorder<'a> {
     written_after: Option<(i64, i64)>,
     /// The tags that the last records written made visible.
     appeared_tags: BTreeSet<String>,
+    /// The roots whose view time is recorded as a set (`record_sets`), with
+    /// the time they have now.
+    viewed: Vec<(u32, Option<i64>)>,
 }
 
 impl<'a> Recorder<'a> {
@@ -629,6 +782,18 @@ impl<'a> Recorder<'a> {
             fresh: false,
             written_after: None,
             appeared_tags: BTreeSet::new(),
+            viewed: Vec::new(),
+        }
+    }
+
+    /// The state of an entity in the library, found by its sync key.
+    fn local_view(&mut self, kind: SyncKind, key: &str) -> Result<Option<View>> {
+        if !kind.has_local_id() {
+            return self.local.row_view(kind, key);
+        }
+        match self.local.find(kind, key)? {
+            Some(local_id) => self.local.view(kind, local_id),
+            None => Ok(None),
         }
     }
 
@@ -676,14 +841,15 @@ impl<'a> Recorder<'a> {
             }
             let records = std::mem::take(&mut self.records);
             self.positions.clear();
-            let moved = records
-                .keys()
-                .any(|(kind, _, field)| *kind == SyncKind::Folder && matches!(field.as_str(), "place" | "deleted"));
+            let moved = |tree: SyncKind| {
+                records.keys().any(|(kind, _, field)| *kind == tree && matches!(field.as_str(), "place" | "deleted"))
+            };
+            let moved = [SyncKind::Folder, SyncKind::SmartFolder].into_iter().filter(|tree| moved(*tree)).collect::<Vec<_>>();
             let changed = self.write(records, clock, true)?;
-            if changed.is_empty() && !moved {
+            if changed.is_empty() && moved.is_empty() {
                 break;
             }
-            self.second_pass(changed, moved)?;
+            self.second_pass(changed, &moved)?;
         }
         Ok(())
     }
@@ -768,16 +934,37 @@ impl<'a> Recorder<'a> {
                             }
                         }
                     }
+                    // A duplicate pair of its file with the status Not
+                    // duplicate is a decision that the library shows now,
+                    // also after an import of a file whose item was deleted
+                    // and whose pairs were kept.
+                    if entity.kind == SyncKind::Item {
+                        for decision in self.local.decisions_of(entity.local_id)? {
+                            touched.rows.insert((SyncKind::DuplicateDecision, decision));
+                        }
+                    }
                 }
-                SyncKind::Folder => touched.folder_tree = true,
-                SyncKind::Tag | SyncKind::TagGroup => {}
+                // The settings of its view stay in the library while it is
+                // deleted, so a folder that an undo brings back shows them
+                // again.
+                SyncKind::Folder => {
+                    touched.folder_tree = true;
+                    touched.rows.insert((SyncKind::ViewSettings, format!("folder:{key}")));
+                }
+                SyncKind::SmartFolder => {
+                    touched.smart_tree = true;
+                    touched.rows.insert((SyncKind::ViewSettings, format!("smart:{key}")));
+                }
+                _ => {}
             }
         }
+        let rows = std::mem::take(&mut touched.rows);
         self.lists(touched)?;
         for kind in [
             SyncKind::TagGroup,
             SyncKind::Tag,
             SyncKind::Folder,
+            SyncKind::SmartFolder,
             SyncKind::Collection,
             SyncKind::Item,
         ] {
@@ -786,6 +973,10 @@ impl<'a> Recorder<'a> {
                     self.entity(entity, view.as_ref())?;
                 }
             }
+        }
+        for (kind, key) in rows {
+            let view = self.local_view(kind, &key)?;
+            self.diff(kind, &key, view.as_ref())?;
         }
         let positions = std::mem::take(&mut self.positions);
         for (record, value) in positions {
@@ -803,15 +994,21 @@ impl<'a> Recorder<'a> {
             self.collection_list(collection, whole)?;
         }
         if touched.folder_tree {
-            self.folder_tree()?;
+            self.folder_tree(SyncKind::Folder)?;
+        }
+        if touched.smart_tree {
+            self.folder_tree(SyncKind::SmartFolder)?;
         }
         Ok(())
     }
 
     /// The changed local ids as entities with their old and new keys. A key
-    /// change touches what refers to the entity: the items and folders of a
-    /// renamed tag, and the lists and covers that hold an item whose hash
-    /// was repaired.
+    /// change touches what refers to the entity: the items, folders and
+    /// smart folders of a renamed tag, and the lists and covers that hold an
+    /// item whose hash was repaired. The duplicate decisions about such an
+    /// item are compared in `compare` as for any item that the synced values
+    /// do not show; the decision under the old hash needs no record, because
+    /// deleting the old item hides it.
     fn entities(&mut self, touched: &mut Touched) -> Result<Vec<Entity>> {
         let mut entities = Vec::new();
         let mut queue = touched.ids.iter().copied().collect::<Vec<_>>();
@@ -843,6 +1040,11 @@ impl<'a> Recorder<'a> {
                             }
                         }
                         referring.extend(folders_with_auto_tag(self.transaction, local_id)?);
+                        for (smart_folder, rules) in self.local.snapshot.smart_queries.iter() {
+                            if names_tag(&rules.filter, TagId(local_id)) {
+                                referring.push(*smart_folder);
+                            }
+                        }
                     }
                     SyncKind::Item => {
                         let owner = self.local.snapshot.media_owner.get(local_id).copied();
@@ -873,6 +1075,9 @@ impl<'a> Recorder<'a> {
             if kind == SyncKind::Folder {
                 touched.folder_tree = true;
             }
+            if kind == SyncKind::SmartFolder {
+                touched.smart_tree = true;
+            }
             entities.push(Entity {
                 kind,
                 local_id,
@@ -883,12 +1088,13 @@ impl<'a> Recorder<'a> {
         Ok(entities)
     }
 
-    /// Decides which roots of the membership changes are recorded as a set:
-    /// those that changed only through memberships. The others are
-    /// compared one by one, and so are the roots of a tag that was renamed or
-    /// that another key forwards to, because what the synced values show for
-    /// those needs the rules of projection. Returns the fields to record for
-    /// the set.
+    /// Decides which roots of the membership changes and of the changed view
+    /// times are recorded as a set: those that changed only through
+    /// memberships or their view time. The others are compared one by one,
+    /// and so are the roots of a tag that was renamed or that another key
+    /// forwards to, because what the synced values show for those needs the
+    /// rules of projection. Returns the fields to record for the set; the
+    /// view times to record are kept in `viewed`.
     fn split_sets(&mut self, touched: &mut Touched) -> Result<Vec<SetRecord>> {
         let ids = touched.ids.iter().copied().collect::<RoaringBitmap>();
         let mut single = RoaringBitmap::new();
@@ -957,6 +1163,8 @@ impl<'a> Recorder<'a> {
         for set in &sets {
             single |= &self.waiting.roots(self.transaction, &set.roots)?;
         }
+        let viewed = std::mem::take(&mut touched.viewed);
+        single |= &self.waiting.roots(self.transaction, &viewed.iter().map(|(root, _)| *root).collect())?;
         single -= &ids;
         single -= &self.skipped_roots;
         for set in &mut sets {
@@ -964,6 +1172,10 @@ impl<'a> Recorder<'a> {
             set.roots -= &ids;
             set.roots -= &single;
         }
+        self.viewed = viewed
+            .into_iter()
+            .filter(|(root, _)| !ids.contains(*root) && !single.contains(*root) && !self.skipped_roots.contains(*root))
+            .collect();
         touched.ids.extend(single.iter());
         Ok(sets)
     }
@@ -1047,7 +1259,8 @@ impl<'a> Recorder<'a> {
 
     /// Records the fields of roots as sets: one statement for each field
     /// reads the stored values of the whole set and adds a record to
-    /// `temp.sync_new` for each root whose shown value differs. A root that
+    /// `temp.sync_new` for each root whose shown value differs, and one more
+    /// statement does the same for the view times in `viewed`. A root that
     /// is in a set existed before the write, so the synced values know it.
     /// The records are written with the next records that `write` writes.
     fn record_sets(&mut self, sets: &[SetRecord]) -> Result<()> {
@@ -1074,6 +1287,27 @@ impl<'a> Recorder<'a> {
                 set.compare
             ])?;
         }
+        if self.viewed.is_empty() {
+            return Ok(());
+        }
+        // The view times differ from root to root, so each root is given
+        // with its time, as the JSON text of the value.
+        let viewed = self
+            .viewed
+            .iter()
+            .map(|(root, viewed_at)| json!([root, json!(viewed_at).to_string()]))
+            .collect::<Vec<_>>();
+        self.transaction
+            .prepare_cached(
+                "INSERT INTO temp.sync_new(entity, field, target, value, reference)
+                 SELECT identity.entity, 'viewed_at', 0, changed.value ->> 1, NULL
+                 FROM json_each(?1) changed CROSS JOIN sync_identity identity
+                     ON identity.local_id = changed.value ->> 0
+                 WHERE COALESCE((SELECT stored.value FROM sync_value stored
+                                 WHERE stored.entity = identity.entity AND stored.field = 'viewed_at'
+                                   AND stored.target = 0), 'null') <> changed.value ->> 1",
+            )?
+            .execute([serde_json::to_string(&viewed)?])?;
         Ok(())
     }
 
@@ -1164,7 +1398,7 @@ impl<'a> Recorder<'a> {
                 };
                 fields.insert("collection".into(), collection);
             }
-            SyncKind::Folder => {
+            SyncKind::Folder | SyncKind::SmartFolder => {
                 let place = self.position(kind, key, "place", Some(json!(view.owner)), || json!([view.owner, ""]))?;
                 fields.insert("place".into(), place);
             }
@@ -1222,6 +1456,13 @@ impl<'a> Recorder<'a> {
                 self.put(kind, key, field, value.clone());
             }
         }
+        // A setting that the library no longer has is recorded as `null`.
+        // The other kinds have the same fields in both views.
+        if kind == SyncKind::Library {
+            for field in shown.fields.keys().filter(|field| !view.fields.contains_key(*field)) {
+                self.put(kind, key, field, Value::Null);
+            }
+        }
         match kind {
             SyncKind::Item => {
                 let field = (kind, key.to_owned(), "collection".to_owned());
@@ -1239,14 +1480,14 @@ impl<'a> Recorder<'a> {
                 }
             }
             SyncKind::Collection => self.root_changes(kind, key, view)?,
-            SyncKind::Folder => {
+            SyncKind::Folder | SyncKind::SmartFolder => {
                 let field = (kind, key.to_owned(), "place".to_owned());
                 if view.owner != shown.owner || self.positions.contains_key(&field) {
                     let value = self.position(kind, key, "place", Some(json!(view.owner)), || json!([view.owner, ""]))?;
                     self.put(kind, key, "place", value);
                 }
             }
-            SyncKind::Tag | SyncKind::TagGroup => {}
+            _ => {}
         }
         Ok(())
     }
@@ -1366,11 +1607,16 @@ impl<'a> Recorder<'a> {
         Ok(())
     }
 
-    /// Compares the children of every folder with their position keys.
-    fn folder_tree(&mut self) -> Result<()> {
-        let mut statement = self.transaction.prepare_cached(
-            "SELECT folder_id, parent_id FROM folder_definition ORDER BY parent_id, display_order, folder_id",
-        )?;
+    /// Compares the children of every folder, or of every smart folder, with
+    /// their position keys.
+    fn folder_tree(&mut self, kind: SyncKind) -> Result<()> {
+        let sql = if kind == SyncKind::Folder {
+            "SELECT folder_id, parent_id FROM folder_definition ORDER BY parent_id, display_order, folder_id"
+        } else {
+            "SELECT smart_folder_id, parent_id FROM smart_folder_definition
+             ORDER BY parent_id, display_order, smart_folder_id"
+        };
+        let mut statement = self.transaction.prepare_cached(sql)?;
         let rows = statement
             .query_map([], |row| Ok((row.get::<_, u32>(0)?, row.get::<_, Option<u32>>(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1379,17 +1625,17 @@ impl<'a> Recorder<'a> {
         for (folder, parent) in rows {
             children.entry(parent).or_default().push(folder);
         }
-        let tree = self.synced.folder_tree()?;
+        let tree = self.synced.tree(kind)?;
         for (parent, list) in children {
             if self.waits(&list) {
                 continue;
             }
             let parent_key = match parent {
-                Some(parent) => self.local.folder_key(parent)?,
+                Some(parent) => self.local.key(kind, parent)?,
                 None => None,
             };
             let mut lookup = |recorder: &mut Self, folder: u32| -> Result<Option<(SyncKind, String, Option<String>)>> {
-                let Some(key) = recorder.local.folder_key(folder)? else { return Ok(None) };
+                let Some(key) = recorder.local.key(kind, folder)? else { return Ok(None) };
                 // A folder that waits to be written keeps the position key
                 // it had before the records from other computers, also
                 // where its parent was gone and the folder was shown at the
@@ -1398,16 +1644,16 @@ impl<'a> Recorder<'a> {
                 // also while that parent waits to be removed; one shown at
                 // the top because its parent is gone keeps the key it is
                 // shown with.
-                let waiting = recorder.waiting.contains(recorder.transaction, SyncKind::Folder, &key)?;
-                let stored = recorder.synced.raw(SyncKind::Folder, &key)?.get("place").map(|stored| stored.value.clone());
+                let waiting = recorder.waiting.contains(recorder.transaction, kind, &key)?;
+                let stored = recorder.synced.raw(kind, &key)?.get("place").map(|stored| stored.value.clone());
                 let stored_key = stored.as_ref().and_then(|place| place.get(1)).and_then(Value::as_str).map(str::to_owned);
                 let stored_parent = stored.as_ref().and_then(|place| place.get(0)).and_then(Value::as_str).map(str::to_owned);
-                let position = match recorder.old_value(SyncKind::Folder, &key, "place")? {
+                let position = match recorder.old_value(kind, &key, "place")? {
                     Some(old) => old.get(1).and_then(Value::as_str).map(str::to_owned),
                     None if waiting || stored_parent == parent_key => stored_key,
                     None => tree.place.get(&key).filter(|place| place.0 == parent_key).map(|place| place.1.clone()),
                 };
-                Ok(Some((SyncKind::Folder, key, position)))
+                Ok(Some((kind, key, position)))
             };
             for (kind, key, position) in self.order(&list, (0, list.len()), &mut lookup)? {
                 self.positions.insert((kind, key, "place".into()), json!([parent_key, position]));
@@ -1500,13 +1746,39 @@ impl<'a> Recorder<'a> {
         // left that tag in the library since the last pass, because a tag
         // that another tag now forwards to can be shown differently for the
         // same reason.
+        //
+        // The place of a folder or smart folder that the synced values show
+        // and that equals the stored place is no change of the library's own
+        // either: the library holds the folder where the synced values put
+        // it, and they show it elsewhere only because of the places of other
+        // folders, such as a cycle of parents that a folder waiting to be
+        // written closes. Recording it again would give it the latest
+        // timestamp, which decides where such a cycle is broken, so the next
+        // comparison would find it again. The full state of a folder that the
+        // synced values do not show keeps its place, because another computer
+        // can receive that state before the place it repeats.
+        let mut same_place = Vec::new();
+        for ((kind, key, field), value) in &records {
+            if field == "place"
+                && matches!(kind, SyncKind::Folder | SyncKind::SmartFolder)
+                && self.synced.visible(*kind, key)?
+            {
+                let stored = self.synced.raw(*kind, key)?.get("place").map(|stored| stored.value.clone());
+                if stored.as_ref() == Some(value) {
+                    same_place.push((*kind, key.clone(), field.clone()));
+                }
+            }
+        }
+        for record in same_place {
+            records.remove(&record);
+        }
         if !self.skipped.is_empty() || self.waiting.any {
             let mut dropped = Vec::new();
             for ((kind, key, field), value) in &records {
                 let entity = (*kind, key.clone());
                 let stored = self.synced.raw(*kind, key)?.get(field.as_str()).map(|stored| stored.value.clone());
                 let mut names_waiting = false;
-                for named in references(*kind, field, value) {
+                for named in references(*kind, key, field, value) {
                     names_waiting |= self.waiting.contains(self.transaction, named.0, &named.1)?;
                 }
                 let waiting = self.waiting.get(self.transaction, *kind, key)?;
@@ -1521,7 +1793,7 @@ impl<'a> Recorder<'a> {
                 }
                 unchanged |= waiting.is_some_and(|old| old.get(field) == Some(value));
                 let mut missing = false;
-                for named in references(*kind, field, value).into_iter().chain(stored.iter().flat_map(|stored| references(*kind, field, stored))) {
+                for named in references(*kind, key, field, value).into_iter().chain(stored.iter().flat_map(|stored| references(*kind, key, field, stored))) {
                     if !self.waiting.contains(self.transaction, named.0, &named.1)? && !self.skipped.contains(&named) {
                         continue;
                     }
@@ -1597,18 +1869,29 @@ impl<'a> Recorder<'a> {
     }
 
     /// The second comparison: every entity that refers to a key whose
-    /// visibility changed is compared again with the new synced values.
-    /// When a folder moved or appeared, every folder is compared again: the
+    /// visibility changed is compared again with the new synced values, and
+    /// so are every smart folder whose rules name such a tag or folder and
+    /// the settings, whose Quick Access list names folders. When
+    /// a folder moved or appeared, every folder is compared again: the
     /// parent that the synced values show for a folder in a cycle depends on
-    /// the `place` of the other folders in it.
-    fn second_pass(&mut self, changed: Vec<(SyncKind, String)>, moved: bool) -> Result<()> {
+    /// the `place` of the other folders in it. The same holds for smart
+    /// folders. An entity without a local id is compared also when the
+    /// library does not have it, so that a decision about an item that
+    /// appears again, which the library no longer has, is recorded as
+    /// deleted.
+    fn second_pass(&mut self, changed: Vec<(SyncKind, String)>, moved: &[SyncKind]) -> Result<()> {
         // The entity itself is compared again too: its full state can hold
         // `false` for a tag key that forwards to a tag it has.
         let mut referring = changed.iter().cloned().collect::<BTreeSet<_>>();
-        if moved {
-            let mut statement = self.transaction.prepare_cached("SELECT stable_key FROM folder_definition")?;
+        for tree in moved {
+            let sql = if *tree == SyncKind::Folder {
+                "SELECT stable_key FROM folder_definition"
+            } else {
+                "SELECT stable_key FROM smart_folder_definition"
+            };
+            let mut statement = self.transaction.prepare_cached(sql)?;
             for key in statement.query_map([], |row| row.get::<_, String>(0))? {
-                referring.insert((SyncKind::Folder, key?));
+                referring.insert((*tree, key?));
             }
         }
         let mut keys = changed;
@@ -1644,14 +1927,40 @@ impl<'a> Recorder<'a> {
                     }
                 }
             }
+            if matches!(kind, SyncKind::Tag | SyncKind::Folder) {
+                for smart_folder in self.synced.rules_naming(&key)? {
+                    referring.insert((SyncKind::SmartFolder, smart_folder));
+                }
+            }
+            // The rules in the library name a folder by its local id, also
+            // while the folder is deleted, so a folder that an undo brings
+            // back is named again by rules whose synced values no longer
+            // name it.
+            if kind == SyncKind::Folder {
+                if let Some(folder) = self.local.find(kind, &key)? {
+                    for (smart_folder, rules) in self.local.snapshot.smart_queries.iter() {
+                        if names_folder(&rules.filter, FolderId(folder)) {
+                            referring.extend(self.local.key(SyncKind::SmartFolder, *smart_folder)?.map(|key| (SyncKind::SmartFolder, key)));
+                        }
+                    }
+                }
+            }
+            // The Quick Access list of the settings names folders and smart
+            // folders.
+            if matches!(kind, SyncKind::Folder | SyncKind::SmartFolder) {
+                referring.insert((SyncKind::Library, String::new()));
+            }
         }
         let mut roots = RoaringBitmap::new();
         let mut found = Vec::new();
+        let mut rows = Vec::new();
         for (kind, key) in referring {
             if self.skipped.contains(&(kind, key.clone())) {
                 continue;
             }
-            if let Some(local_id) = self.local.find(kind, &key)? {
+            if !kind.has_local_id() {
+                rows.push((kind, key));
+            } else if let Some(local_id) = self.local.find(kind, &key)? {
                 if matches!(kind, SyncKind::Item | SyncKind::Collection) {
                     roots.insert(local_id);
                 }
@@ -1659,11 +1968,15 @@ impl<'a> Recorder<'a> {
             }
         }
         self.local.prepare(&roots)?;
-        if moved {
-            self.folder_tree()?;
+        for tree in moved {
+            self.folder_tree(*tree)?;
         }
         for (kind, key, local_id) in found {
             let view = self.local.view(kind, local_id)?;
+            self.diff(kind, &key, view.as_ref())?;
+        }
+        for (kind, key) in rows {
+            let view = self.local_view(kind, &key)?;
             self.diff(kind, &key, view.as_ref())?;
         }
         let positions = std::mem::take(&mut self.positions);
@@ -1674,8 +1987,11 @@ impl<'a> Recorder<'a> {
     }
 }
 
-/// The entities that a value of the field `field` of a `kind` entity names.
-fn references(kind: SyncKind, field: &str, value: &Value) -> Vec<(SyncKind, String)> {
+/// The entities that a value of the field `field` names, for the entity of
+/// the kind `kind` with the key `entity`. For the settings of a folder's
+/// view and for a duplicate decision, every field names the entities that
+/// it is shown only with: the folder, or the two items.
+fn references(kind: SyncKind, entity: &str, field: &str, value: &Value) -> Vec<(SyncKind, String)> {
     let key = |kind: SyncKind, value: Option<&Value>| value.and_then(Value::as_str).map(|key| (kind, key.to_owned()));
     if let Some(tag) = field.strip_prefix("tag:") {
         return vec![(SyncKind::Tag, tag.to_owned())];
@@ -1686,6 +2002,7 @@ fn references(kind: SyncKind, field: &str, value: &Value) -> Vec<(SyncKind, Stri
     match (kind, field) {
         (SyncKind::Item, "collection") => key(SyncKind::Collection, value.get(0)).into_iter().collect(),
         (SyncKind::Folder, "place") => key(SyncKind::Folder, value.get(0)).into_iter().collect(),
+        (SyncKind::SmartFolder, "place") => key(SyncKind::SmartFolder, value.get(0)).into_iter().collect(),
         (SyncKind::Tag, "renamed_to") => key(SyncKind::Tag, Some(value)).into_iter().collect(),
         (SyncKind::Collection, "cover") => key(SyncKind::Item, Some(value)).into_iter().collect(),
         (SyncKind::Folder, "cover") => value
@@ -1698,7 +2015,61 @@ fn references(kind: SyncKind, field: &str, value: &Value) -> Vec<(SyncKind, Stri
         (SyncKind::Folder, "auto_tags") => {
             value.as_array().into_iter().flatten().filter_map(|tag| key(SyncKind::Tag, Some(tag))).collect()
         }
+        (SyncKind::SmartFolder, "rules") => {
+            let mut named = Vec::new();
+            rule_references(value, &mut named);
+            named
+        }
+        (SyncKind::ViewSettings, _) => {
+            super::view_owner(entity).map(|(kind, key)| (kind, key.to_owned())).into_iter().collect()
+        }
+        (SyncKind::DuplicateDecision, _) => entity
+            .split_once(':')
+            .map(|(a, b)| vec![(SyncKind::Item, a.to_owned()), (SyncKind::Item, b.to_owned())])
+            .unwrap_or_default(),
         _ => Vec::new(),
+    }
+}
+
+/// Adds the tags and folders that the rules of a smart folder, in sync keys,
+/// name to `named`.
+fn rule_references(value: &Value, named: &mut Vec<(SyncKind, String)>) {
+    match value {
+        Value::Object(object) => match object.get("clause").and_then(Value::as_str) {
+            Some("tags") | Some("folders") => {
+                for (list, kind) in [("tags", SyncKind::Tag), ("folders", SyncKind::Folder)] {
+                    let keys = object.get(list).and_then(Value::as_array).into_iter().flatten();
+                    named.extend(keys.filter_map(Value::as_str).map(|key| (kind, key.to_owned())));
+                }
+            }
+            _ => object.values().for_each(|child| rule_references(child, named)),
+        },
+        Value::Array(values) => values.iter().for_each(|child| rule_references(child, named)),
+        _ => {}
+    }
+}
+
+/// Whether the filter of a smart folder's rules names the tag `tag`.
+fn names_tag(filter: &crate::predicate::FilterExpr, tag: TagId) -> bool {
+    use crate::predicate::{FilterClause, FilterExpr};
+    match filter {
+        FilterExpr::All(children) | FilterExpr::Any(children) => children.iter().any(|child| names_tag(child, tag)),
+        FilterExpr::Not(child) => names_tag(child, tag),
+        FilterExpr::Clause(FilterClause::Tags { tag_ids, .. }) => tag_ids.contains(&tag),
+        FilterExpr::Clause(_) => false,
+    }
+}
+
+/// Whether the filter of a smart folder's rules names the folder `folder`.
+fn names_folder(filter: &crate::predicate::FilterExpr, folder: FolderId) -> bool {
+    use crate::predicate::{FilterClause, FilterExpr};
+    match filter {
+        FilterExpr::All(children) | FilterExpr::Any(children) => {
+            children.iter().any(|child| names_folder(child, folder))
+        }
+        FilterExpr::Not(child) => names_folder(child, folder),
+        FilterExpr::Clause(FilterClause::Folders { folder_ids, .. }) => folder_ids.contains(&folder),
+        FilterExpr::Clause(_) => false,
     }
 }
 

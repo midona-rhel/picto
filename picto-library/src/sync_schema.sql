@@ -18,11 +18,13 @@ CREATE TABLE IF NOT EXISTS sync_state (
 
 -- Every sync key that the synced values or the library know, with the
 -- number that stands for it in sync_value. local_id is the local entity
--- (item, collection, tag, tag group, folder) that had this key when the
--- recorder last recorded it; it stays after the entity is deleted, so that
--- an item that an undo brings back under the same local id is recognized. A
--- local id is unique across kinds and never used again, because every kind
--- takes its ids from library_meta.next_local_id.
+-- (item, collection, tag, tag group, folder, smart folder) that had this key
+-- when the recorder last recorded it; it stays after the entity is deleted,
+-- so that an item that an undo brings back under the same local id is
+-- recognized. A local id is unique across kinds and never used again,
+-- because every kind takes its ids from library_meta.next_local_id. The
+-- library's settings, view settings and duplicate decisions have no local
+-- id.
 CREATE TABLE IF NOT EXISTS sync_identity (
     entity INTEGER PRIMARY KEY,
     kind TEXT NOT NULL,
@@ -81,8 +83,8 @@ CREATE TABLE IF NOT EXISTS sync_outbox (
 -- local id, as an undo of Delete Permanently brings it back. State 2: such an
 -- entity was written; the recorder records its full state next. State 3: the
 -- records merged for the entity change only its lifecycle, rating, tags,
--- name, notes, links or modification date, which are written into its rows
--- and bitmaps directly.
+-- name, notes, links, modification date, view time or sources, which are
+-- written into its rows and bitmaps directly.
 CREATE TABLE IF NOT EXISTS sync_pending (
     entity INTEGER PRIMARY KEY,
     state INTEGER NOT NULL CHECK (state IN (0, 1, 2, 3))
@@ -128,3 +130,19 @@ CREATE TABLE IF NOT EXISTS recorded_order (
     payload BLOB NOT NULL,
     PRIMARY KEY(owner_kind, owner_id, chunk_index)
 ) WITHOUT ROWID, STRICT;
+
+-- The Recently viewed list as the recorder last recorded it: the view time
+-- of each root in it, and in recorded_view_state the latest of those times
+-- and a checksum of the whole list. Viewing an item writes a time later than
+-- every other, so a pass of the recorder finds the new views as the times
+-- after `latest`, and the checksum tells whether anything else in the list
+-- changed (`record::viewed_changes`).
+CREATE TABLE IF NOT EXISTS recorded_view (
+    root_id INTEGER PRIMARY KEY,
+    viewed_at INTEGER NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS recorded_view_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    latest INTEGER NOT NULL,
+    checksum INTEGER NOT NULL
+) STRICT;

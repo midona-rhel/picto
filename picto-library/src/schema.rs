@@ -9,7 +9,8 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-11-27-shared-watch-paths";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-11-27-shared-smart-folder-names";
+const SHARED_WATCH_PATHS_PREDECESSOR: &str = "picto-library-schema-1-2026-11-27-shared-watch-paths";
 const NO_CLOUD_SYNC_PREDECESSOR: &str = "picto-library-schema-1-2026-11-25-no-cloud-sync";
 const KEPT_DELETED_FILES_PREDECESSOR: &str = "picto-library-schema-1-2026-11-23-kept-deleted-files";
 const TOMBSTONE_ENTRIES_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-task-rollback-aliases";
@@ -148,7 +149,8 @@ pub fn migrate_for_open(
     if generation != SCHEMA_GENERATION
         || !matches!(
             fingerprint.as_str(),
-            NO_CLOUD_SYNC_PREDECESSOR
+            SHARED_WATCH_PATHS_PREDECESSOR
+                | NO_CLOUD_SYNC_PREDECESSOR
                 | KEPT_DELETED_FILES_PREDECESSOR
                 | TOMBSTONE_ENTRIES_PREDECESSOR
                 | COMBINED_IMPORT_PREDECESSOR
@@ -231,6 +233,7 @@ pub fn migrate_for_open(
             )?;
             }
             if ![
+                SHARED_WATCH_PATHS_PREDECESSOR,
                 NO_CLOUD_SYNC_PREDECESSOR,
                 KEPT_DELETED_FILES_PREDECESSOR,
                 TOMBSTONE_ENTRIES_PREDECESSOR,
@@ -289,6 +292,7 @@ pub fn migrate_for_open(
             // journal of changed roots and its triggers are kept, defined
             // once for every earlier schema.
             if ![
+                SHARED_WATCH_PATHS_PREDECESSOR,
                 NO_CLOUD_SYNC_PREDECESSOR,
                 KEPT_DELETED_FILES_PREDECESSOR,
                 TOMBSTONE_ENTRIES_PREDECESSOR,
@@ -331,6 +335,7 @@ pub fn migrate_for_open(
             // revision, so a saved projection checkpoint stays valid and
             // gets the new fingerprint.
             if [
+                SHARED_WATCH_PATHS_PREDECESSOR,
                 NO_CLOUD_SYNC_PREDECESSOR,
                 KEPT_DELETED_FILES_PREDECESSOR,
                 TOMBSTONE_ENTRIES_PREDECESSOR,
@@ -428,6 +433,7 @@ pub fn migrate_for_open(
             connection.execute_batch(ALIAS_SCHEMA)?;
             drop_cloud_sync_tables(connection)?;
             drop_watch_path_uniqueness(connection)?;
+            drop_smart_folder_name_uniqueness(connection)?;
             connection.execute(
                 "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
                 [SCHEMA_FINGERPRINT],
@@ -527,6 +533,41 @@ fn drop_watch_path_uniqueness(connection: &Connection) -> Result<()> {
          ALTER TABLE folder_definition_rebuilt RENAME TO folder_definition;
          CREATE INDEX idx_folder_parent_order
              ON folder_definition(parent_id, display_order, folder_id);"
+    ))?;
+    Ok(())
+}
+
+/// Rebuilds `smart_folder_definition` without the uniqueness of a name in
+/// its parent, when the table still has it. Synced smart folders come from
+/// several computers, so two of them can have the same name in the same
+/// parent; `Library::create_smart_folder` and `update_smart_folder` check
+/// the name when the user sets it. The rows, their ids and their order are
+/// kept, so a saved projection checkpoint stays valid.
+fn drop_smart_folder_name_uniqueness(connection: &Connection) -> Result<()> {
+    let definition: String = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'smart_folder_definition'",
+        [],
+        |row| row.get(0),
+    )?;
+    if !definition.contains("UNIQUE(parent_id, name)") {
+        return Ok(());
+    }
+    let table = SCHEMA
+        .split(";\n")
+        .find(|statement| statement.contains("CREATE TABLE smart_folder_definition ("))
+        .ok_or_else(|| LibraryError::InvalidState("the schema has no smart_folder_definition".into()))?
+        .replace("CREATE TABLE smart_folder_definition (", "CREATE TABLE smart_folder_definition_rebuilt (");
+    connection.execute_batch(&format!(
+        "{table};
+         INSERT INTO smart_folder_definition_rebuilt (
+             smart_folder_id, stable_key, parent_id, name, icon, color, notes, view_query_json,
+             display_order
+         )
+         SELECT smart_folder_id, stable_key, parent_id, name, icon, color, notes, view_query_json,
+                display_order
+         FROM smart_folder_definition;
+         DROP TABLE smart_folder_definition;
+         ALTER TABLE smart_folder_definition_rebuilt RENAME TO smart_folder_definition;"
     ))?;
     Ok(())
 }
@@ -1151,6 +1192,57 @@ mod tests {
         assert_eq!(count(&connection, "SELECT COUNT(*) FROM sqlite_master WHERE name = 'tag_merge'"), 1);
         connection
             .execute("UPDATE folder_definition SET watch_path = '/watched' WHERE folder_id = 2", [])
+            .unwrap();
+        assert_eq!(backups_in(directory.path()), 1);
+    }
+
+    /// A library of the schema whose smart folder names were unique in their
+    /// parent loses that uniqueness, keeps its smart folders and a backup,
+    /// and opens a second time without another migration.
+    #[test]
+    fn the_migration_lets_two_smart_folders_in_one_parent_share_a_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        let unique = super::SCHEMA
+            .split(";\n")
+            .find(|statement| statement.contains("CREATE TABLE smart_folder_definition ("))
+            .unwrap()
+            .replace("    display_order INTEGER NOT NULL\n", "    display_order INTEGER NOT NULL,\n    UNIQUE(parent_id, name)\n")
+            .replace("CREATE TABLE smart_folder_definition (", "CREATE TABLE smart_folder_definition_unique (");
+        connection
+            .execute_batch(&format!(
+                "PRAGMA foreign_keys = OFF;
+                 {unique};
+                 DROP TABLE smart_folder_definition;
+                 ALTER TABLE smart_folder_definition_unique RENAME TO smart_folder_definition;
+                 INSERT INTO smart_folder_definition
+                     (smart_folder_id, stable_key, parent_id, name, view_query_json, display_order)
+                     VALUES (1, 'top', NULL, 'Top', '{{}}', 0), (2, 'child', 1, 'Child', '{{}}', 0);"
+            ))
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE library_meta SET schema_fingerprint = ?1",
+                [super::SHARED_WATCH_PATHS_PREDECESSOR],
+            )
+            .unwrap();
+        drop(connection);
+
+        drop(LibraryDatabase::open(&path).unwrap());
+        drop(LibraryDatabase::open(&path).unwrap());
+
+        let connection = Connection::open(&path).unwrap();
+        super::validate(&connection).unwrap();
+        assert_eq!(count(&connection, "SELECT COUNT(*) FROM smart_folder_definition WHERE parent_id = 1"), 1);
+        connection
+            .execute(
+                "INSERT INTO smart_folder_definition
+                     (smart_folder_id, stable_key, parent_id, name, view_query_json, display_order)
+                     VALUES (3, 'second child', 1, 'Child', '{}', 1)",
+                [],
+            )
             .unwrap();
         assert_eq!(backups_in(directory.path()), 1);
     }

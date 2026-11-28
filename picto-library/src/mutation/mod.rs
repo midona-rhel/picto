@@ -44,7 +44,6 @@ mod sync;
 pub(crate) mod tasks;
 use tags::*;
 use folders::*;
-use smart_folders::*;
 use structure::*;
 use merge::*;
 pub use merge::{SharedFileMerge, merged_notes};
@@ -53,6 +52,7 @@ pub use structure::remove_item_tombstones;
 // The sync module writes synced values into the library with the code that
 // undo, Delete Permanently and tag deletion use.
 pub(crate) use folders::load_folder_definition;
+pub(crate) use smart_folders::load_smart_folder_definition;
 pub(crate) use structure::{capture_structure, delete_roots, restore_structure};
 pub(crate) use tags::remove_tag_in_transaction;
 pub(crate) use undo::apply_semantic_change;

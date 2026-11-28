@@ -11,18 +11,19 @@ use std::sync::Arc;
 
 use roaring::RoaringBitmap;
 use rusqlite::{Connection, OptionalExtension, Transaction};
-use serde_json::Value;
+use serde_json::{json, Value};
 
-use super::local::{lifecycle_from_name, rating_from_number, Local};
+use super::local::{lifecycle_from_name, local_setting, rating_from_number, Local, QUICK_ACCESS};
 use super::record::{FIELDS, PROJECT, REVIVE};
 use super::values::{Synced, View};
 use super::{merge, Clock, SyncKind, SyncRecord};
 use crate::bitmap::{BitmapDomain, BitmapKey};
 use crate::history::{
-    FolderDefinitionState, SemanticChange, StructuralFolderPosition, StructuralMediaNoteState,
-    StructuralRootState, StructuralState,
+    FolderDefinitionState, SemanticChange, SmartFolderDefinitionState, StructuralFolderPosition,
+    StructuralMediaNoteState, StructuralRootState, StructuralState,
 };
-use crate::model::{FileId, FolderId, MediaId, RootId, RootKind};
+use crate::model::{FileId, FolderId, MediaId, RootId, RootKind, SmartFolderId};
+use crate::predicate::ViewQuerySpec;
 use crate::ordering::OrderOwnerKind;
 use crate::projection::ProjectionSnapshot;
 use crate::{LibraryDatabase, LibraryError, Result};
@@ -49,26 +50,28 @@ pub(crate) fn merge_remote(transaction: &Transaction<'_>, records: &[SyncRecord]
     let mut clock = Clock::load(transaction)?;
     let mut synced = Synced::new(transaction);
     // The entities whose visibility a record can change, and the
-    // collections an item leaves or joins.
+    // collections an item leaves or joins. A collection is shown while it
+    // has a visible member, so an item that appears or disappears can show
+    // or hide its collection too.
     let mut watched = BTreeSet::new();
     for record in records {
         let key = (record.kind, record.key.clone());
-        match record.field.as_str() {
+        let collections = match record.field.as_str() {
             "deleted" | "file" | "renamed_to" => {
                 watched.insert(key);
+                record.kind == SyncKind::Item
             }
-            "collection" => {
-                let raw = synced.raw(record.kind, &record.key)?;
-                for value in [raw.get("collection").map(|stored| &stored.value), Some(&record.value)]
-                    .into_iter()
-                    .flatten()
-                {
-                    if let Some(collection) = value.get(0).and_then(Value::as_str) {
-                        watched.insert((SyncKind::Collection, collection.to_owned()));
-                    }
+            "collection" => true,
+            _ => false,
+        };
+        if collections {
+            let raw = synced.raw(record.kind, &record.key)?;
+            let new = (record.field == "collection").then_some(&record.value);
+            for value in [raw.get("collection").map(|stored| &stored.value), new].into_iter().flatten() {
+                if let Some(collection) = value.get(0).and_then(Value::as_str) {
+                    watched.insert((SyncKind::Collection, collection.to_owned()));
                 }
             }
-            _ => {}
         }
     }
     let mut before = Vec::new();
@@ -107,9 +110,11 @@ pub(crate) fn merge_remote(transaction: &Transaction<'_>, records: &[SyncRecord]
                     }
                     continue;
                 }
-                // Folders are written as a whole tree, and a folder that
-                // appears or disappears takes its member list with it.
-                if kind != SyncKind::Folder && referrer_kind != SyncKind::Folder {
+                // Folders and smart folders are written as whole trees, and
+                // a folder that appears or disappears takes its member list
+                // with it. The settings of its view are written on their own.
+                let tree = |kind: SyncKind| matches!(kind, SyncKind::Folder | SyncKind::SmartFolder);
+                if referrer_kind == SyncKind::ViewSettings || (!tree(kind) && !tree(referrer_kind)) {
                     keys.insert((referrer_kind, referrer), PROJECT);
                 }
             }
@@ -132,7 +137,8 @@ pub(crate) fn merge_remote(transaction: &Transaction<'_>, records: &[SyncRecord]
 
 /// The fields of an item or collection that are written into its rows and
 /// bitmaps directly, with its tags, when they are all that changed.
-const DIRECT_FIELDS: [&str; 6] = ["lifecycle", "rating", "name", "notes", "links", "modified_at"];
+const DIRECT_FIELDS: [&str; 8] =
+    ["lifecycle", "rating", "name", "notes", "links", "modified_at", "viewed_at", "sources"];
 
 /// The entities whose synced values are written by the next library
 /// transaction, as (entity, kind, key, whether it counts as visible), and
@@ -282,12 +288,12 @@ pub(crate) fn project(
     Ok(projected)
 }
 
-/// Writes the lifecycle, rating, tags, name, notes, links and modification
-/// date that the synced values show for each of `keys` into the library's
-/// rows and bitmaps, with the code that undo uses, when the key is an item
-/// outside a collection or a collection that the library and the synced
-/// values both show and that differs in nothing else. Returns the other
-/// keys.
+/// Writes the lifecycle, rating, tags, name, notes, links, modification
+/// date, view time and sources that the synced values show for each of
+/// `keys` into the library's rows and bitmaps, with the code that undo uses,
+/// when the key is an item outside a collection or a collection that the
+/// library and the synced values both show and that differs in nothing else.
+/// Returns the other keys.
 fn write_directly(
     transaction: &Transaction<'_>,
     revision: u64,
@@ -327,10 +333,20 @@ fn write_directly(
             (Some(root), Some(current)) => (root, Some(current)),
             // An item that the library lacks and that the synced values show
             // outside a collection and outside every folder is added as an
-            // import adds it.
-            (None, _) if kind == SyncKind::Item && shown.owner.is_none() && shown.folders.is_empty() => {
+            // import adds it, unless a folder names it as its cover, which
+            // only the write with structure sets.
+            (None, _)
+                if kind == SyncKind::Item
+                    && shown.owner.is_none()
+                    && shown.folders.is_empty()
+                    && !synced
+                        .referrers(kind, &key, None)?
+                        .iter()
+                        .any(|(referrer, _, field)| *referrer == SyncKind::Folder && field == "cover") =>
+            {
                 let root = create_item(transaction, snapshot, &key, &shown)?;
                 created.insert(root);
+                write_decisions_of(transaction, synced, &key, projected)?;
                 (root, None)
             }
             _ => {
@@ -370,6 +386,13 @@ fn write_directly(
             for tag in &current.tags {
                 was.extend(snapshot.tag_ids_by_name.get(tag).map(|tag| BitmapKey { domain: BitmapDomain::Tag, key_id: tag.0 }));
             }
+        }
+        let differs = |field: &str| current.as_ref().is_none_or(|current| current.fields.get(field) != shown.fields.get(field));
+        if differs("viewed_at") {
+            write_viewed(transaction, revision, root, shown.fields["viewed_at"].as_i64(), projected)?;
+        }
+        if kind == SyncKind::Item && differs("sources") {
+            write_sources(transaction, root, root, &shown.fields["sources"])?;
         }
         let mut now = partitions(&shown).to_vec();
         for tag in &shown.tags {
@@ -530,13 +553,23 @@ fn project_structure(
         }
     }
 
-    // The folder tree is written when a folder or a tag, which folders name
-    // as auto-tags, is among the keys. Otherwise only the covers that name
-    // one of the items and collections written are checked.
-    let tree = keys.iter().any(|(kind, _)| matches!(kind, SyncKind::Folder | SyncKind::Tag | SyncKind::TagGroup));
+    // The folder tree, the smart folder tree and the library's settings are
+    // written when a folder, a smart folder, the settings or a tag, which
+    // folders name as auto-tags and smart folders in their rules, is among
+    // the keys. Smart folders and the settings name folders, so they are
+    // written after the folders. Otherwise only the covers that name one of
+    // the items and collections written are checked.
+    let tree = keys.iter().any(|(kind, _)| {
+        matches!(
+            kind,
+            SyncKind::Folder | SyncKind::Tag | SyncKind::TagGroup | SyncKind::SmartFolder | SyncKind::Library
+        )
+    });
     let new_folders = if tree { folders(transaction, revision, snapshot, synced)? } else { Vec::new() };
     if tree {
-        projected.written.extend(synced.folder_tree()?.place.keys().map(|folder| (SyncKind::Folder, folder.clone())));
+        projected
+            .written
+            .extend(synced.tree(SyncKind::Folder)?.place.keys().map(|folder| (SyncKind::Folder, folder.clone())));
     }
     roots(transaction, revision, snapshot, synced, keys, protected, projected)?;
     let covers = if tree {
@@ -551,6 +584,15 @@ fn project_structure(
                 let raw = synced.raw(*kind, key)?;
                 let collection = raw.get("collection").and_then(|stored| stored.value.get(0)).and_then(Value::as_str);
                 named.extend(collection.map(|collection| (SyncKind::Collection, collection.to_owned())));
+            }
+        }
+        // An item is shown as a cover only outside a collection, so the
+        // items that a write of a collection takes out of it or puts into it
+        // count as well: the roots that the write changed.
+        {
+            let local = Local::new(transaction, snapshot);
+            for root in &projected.roots {
+                named.extend(local.root_key(RootId(root))?);
             }
         }
         for (kind, key) in &named {
@@ -628,6 +670,41 @@ fn project_structure(
             transaction.execute("DELETE FROM tag_namespace WHERE namespace_id = ?1", [namespace_id])?;
         }
     }
+
+    // Removing a tag above also rewrites the rules of smart folders, so the
+    // smart folders are written after it, with what the synced values show.
+    // A folder or smart folder created here takes the settings of its view
+    // with it.
+    let mut views = keys
+        .iter()
+        .filter(|(kind, _)| *kind == SyncKind::ViewSettings)
+        .map(|(_, key)| key.clone())
+        .collect::<BTreeSet<_>>();
+    if tree {
+        let new_smart_folders = smart_folders(transaction, revision, snapshot, synced, projected)?;
+        write_settings(transaction, revision, snapshot, synced, projected)?;
+        let local = Local::new(transaction, snapshot);
+        for (kind, id) in new_folders
+            .iter()
+            .map(|folder| (SyncKind::Folder, folder.0))
+            .chain(new_smart_folders.iter().map(|smart_folder| (SyncKind::SmartFolder, smart_folder.0)))
+        {
+            let Some(key) = local.key(kind, id)? else { continue };
+            for (referrer_kind, view, _) in synced.referrers(kind, &key, None)? {
+                if referrer_kind == SyncKind::ViewSettings {
+                    views.insert(view);
+                }
+            }
+        }
+    }
+    for view in views {
+        write_view_settings(transaction, revision, snapshot, synced, &view, projected)?;
+    }
+    for (kind, key) in keys {
+        if *kind == SyncKind::DuplicateDecision {
+            write_decision(transaction, synced, key, projected)?;
+        }
+    }
     Ok(())
 }
 
@@ -651,7 +728,7 @@ fn folders(
     snapshot: &mut ProjectionSnapshot,
     synced: &mut Synced<'_>,
 ) -> Result<Vec<FolderId>> {
-    let tree = synced.folder_tree()?;
+    let tree = synced.tree(SyncKind::Folder)?;
     let mut created = Vec::new();
     let mut ids = HashMap::new();
     {
@@ -746,7 +823,7 @@ fn folder_covers_and_lists(
     only: Option<&BTreeSet<String>>,
     projected: &mut Projected,
 ) -> Result<()> {
-    let tree = synced.folder_tree()?;
+    let tree = synced.tree(SyncKind::Folder)?;
     for key in tree.place.keys().filter(|key| only.is_none_or(|only| only.contains(*key))) {
         let (folder_id, cover) = {
             let local = Local::new(transaction, snapshot);
@@ -818,7 +895,7 @@ fn remove_folders(
     synced: &mut Synced<'_>,
     projected: &mut Projected,
 ) -> Result<()> {
-    let tree = synced.folder_tree()?;
+    let tree = synced.tree(SyncKind::Folder)?;
     let rows = transaction
         .prepare("SELECT folder_id, stable_key, parent_id FROM folder_definition")?
         .query_map([], |row| Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<u32>>(2)?)))?
@@ -969,6 +1046,7 @@ fn roots(
     // Files and media rows for items the library lacks, and file facts.
     let mut media_ids = HashMap::new();
     let mut sizes = HashMap::new();
+    let mut created = Vec::new();
     for (key, target) in &item_targets {
         let existing = Local::new(transaction, snapshot).find(SyncKind::Item, key)?;
         let Some(target) = target else {
@@ -1001,7 +1079,10 @@ fn roots(
                 )?;
                 media
             }
-            None => insert_item(transaction, key, file)?,
+            None => {
+                created.push(key.clone());
+                insert_item(transaction, key, file)?
+            }
         };
         if mime.starts_with("image/") {
             Arc::make_mut(&mut snapshot.image_media).insert(media);
@@ -1105,16 +1186,28 @@ fn roots(
     replacement.media_notes = Arc::new(media_notes);
     replacement.folders = folder_positions(transaction, snapshot, synced, &affected, folder_targets)?;
     crate::mutation::restore_structure(transaction, revision, snapshot, &affected, &expected, &replacement)?;
+    for (_, _, root, view) in &shown_roots {
+        write_viewed(transaction, revision, *root, view.fields["viewed_at"].as_i64(), projected)?;
+    }
 
-    // Names of items, which the structure does not hold for members.
+    // Names and sources of items, which the structure does not hold.
     for (key, target) in &item_targets {
         let Some(target) = target else { continue };
+        let media = media_ids[key];
         transaction.execute(
             "UPDATE media_item SET media_name = ?2 WHERE media_id = ?1 AND media_name IS NOT ?2",
-            rusqlite::params![media_ids[key], target.view.fields["name"].as_str().unwrap_or_default()],
+            rusqlite::params![media, target.view.fields["name"].as_str().unwrap_or_default()],
         )?;
+        let sources = &target.view.fields["sources"];
+        if Local::new(transaction, snapshot).sources(media)? != *sources {
+            let root = snapshot.media_owner.get(media).map_or(media, |owner| owner.0);
+            write_sources(transaction, media, root, sources)?;
+        }
     }
     projected.roots |= &affected;
+    for key in &created {
+        write_decisions_of(transaction, synced, key, projected)?;
+    }
 
     let gone = item_targets
         .iter()
@@ -1232,4 +1325,386 @@ fn folder_positions(
         positions.insert(folder_id, list);
     }
     Ok(positions)
+}
+
+/// Creates the smart folders the synced values show that the library lacks,
+/// writes the name, icon, colour, notes, rules, parent and position of every
+/// shown smart folder, and removes the smart folders that the synced values
+/// no longer show, the deepest first. Returns the smart folders that were
+/// created.
+fn smart_folders(
+    transaction: &Transaction<'_>,
+    revision: u64,
+    snapshot: &mut ProjectionSnapshot,
+    synced: &mut Synced<'_>,
+    projected: &mut Projected,
+) -> Result<Vec<SmartFolderId>> {
+    let tree = synced.tree(SyncKind::SmartFolder)?;
+    let mut created = Vec::new();
+    let mut ids = HashMap::new();
+    {
+        let local = Local::new(transaction, snapshot);
+        for key in tree.place.keys() {
+            let id = match local.find(SyncKind::SmartFolder, key)? {
+                Some(id) => SmartFolderId(id),
+                None => {
+                    let id = SmartFolderId(LibraryDatabase::allocate_id(transaction)?);
+                    created.push((id, key.clone()));
+                    id
+                }
+            };
+            ids.insert(key.clone(), id);
+        }
+    }
+    // A new smart folder is created at the top level first, so that its
+    // parent exists when the parents are written below.
+    for (smart_folder_id, key) in &created {
+        let state = SmartFolderDefinitionState {
+            smart_folder_id: *smart_folder_id,
+            stable_key: key.clone(),
+            parent_id: None,
+            name: String::new(),
+            icon: None,
+            color: None,
+            notes: None,
+            view: ViewQuerySpec::default(),
+            display_order: 0,
+        };
+        change(transaction, revision, snapshot, SemanticChange::SmartFolderDefinition {
+            smart_folder_id: *smart_folder_id,
+            before: None,
+            after: Some(Box::new(state)),
+        })?;
+    }
+    for (parent, children) in &tree.children {
+        for (index, key) in children.iter().enumerate() {
+            let smart_folder_id = ids[key];
+            let Some(view) = synced.view(SyncKind::SmartFolder, key)? else { continue };
+            let current = crate::mutation::load_smart_folder_definition(transaction, smart_folder_id)?
+                .ok_or_else(|| LibraryError::InvalidState(format!("smart folder {key} disappeared")))?;
+            let mut target = current.clone();
+            target.parent_id = parent.as_ref().map(|parent| ids[parent]);
+            target.display_order = index as i64;
+            target.name = view.fields["name"].as_str().unwrap_or_default().to_owned();
+            target.icon = view.fields["icon"].as_str().map(str::to_owned);
+            target.color = view.fields["color"].as_str().map(str::to_owned);
+            target.notes = view.fields["notes"].as_str().map(str::to_owned);
+            target.view = local_rules(transaction, snapshot, &view.fields["rules"])?;
+            if target != current {
+                change(transaction, revision, snapshot, SemanticChange::SmartFolderDefinition {
+                    smart_folder_id,
+                    before: Some(Box::new(current)),
+                    after: Some(Box::new(target)),
+                })?;
+            }
+        }
+    }
+    let rows = transaction
+        .prepare("SELECT smart_folder_id, stable_key, parent_id FROM smart_folder_definition")?
+        .query_map([], |row| Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<u32>>(2)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let parents = rows.iter().map(|(id, _, parent)| (*id, *parent)).collect::<HashMap<_, _>>();
+    let depth = |mut id: u32| {
+        let mut depth = 0;
+        while let Some(Some(parent)) = parents.get(&id) {
+            depth += 1;
+            id = *parent;
+            if depth > parents.len() {
+                break;
+            }
+        }
+        depth
+    };
+    let mut gone = rows
+        .iter()
+        .filter(|(_, key, _)| !tree.place.contains_key(key))
+        .map(|(id, _, _)| (depth(*id), *id))
+        .collect::<Vec<_>>();
+    gone.sort_by(|a, b| b.cmp(a));
+    for (_, id) in gone {
+        let current = crate::mutation::load_smart_folder_definition(transaction, SmartFolderId(id))?;
+        change(transaction, revision, snapshot, SemanticChange::SmartFolderDefinition {
+            smart_folder_id: SmartFolderId(id),
+            before: current.map(Box::new),
+            after: None,
+        })?;
+    }
+    projected.written.extend(tree.place.keys().map(|key| (SyncKind::SmartFolder, key.clone())));
+    Ok(created.into_iter().map(|(smart_folder_id, _)| smart_folder_id).collect())
+}
+
+/// The rules of a smart folder in the library's ids, from the rules that
+/// the synced values show (`Synced::view`): each tag name becomes the id of
+/// that tag, which is created when the library lacks it, and each folder key
+/// the id of that folder, or 0, which no folder has, for `null` and for a
+/// folder that the library does not have.
+fn local_rules(transaction: &Transaction<'_>, snapshot: &mut ProjectionSnapshot, rules: &Value) -> Result<ViewQuerySpec> {
+    let mut rules = rules.clone();
+    local_rule_ids(transaction, snapshot, &mut rules)?;
+    Ok(serde_json::from_value(rules)?)
+}
+
+fn local_rule_ids(transaction: &Transaction<'_>, snapshot: &mut ProjectionSnapshot, value: &mut Value) -> Result<()> {
+    match value {
+        Value::Object(object) => match object.get("clause").and_then(Value::as_str) {
+            Some("tags") => {
+                let mut ids = Vec::new();
+                for tag in object.remove("tags").unwrap_or_default().as_array().into_iter().flatten() {
+                    if let Some(tag) = tag.as_str() {
+                        ids.push(ensure_tag(transaction, snapshot, tag)?.0);
+                    }
+                }
+                object.insert("tag_ids".into(), json!(ids));
+            }
+            Some("folders") => {
+                let local = Local::new(transaction, snapshot);
+                let mut ids = Vec::new();
+                for folder in object.remove("folders").unwrap_or_default().as_array().into_iter().flatten() {
+                    let id = match folder.as_str() {
+                        Some(key) => local.find(SyncKind::Folder, key)?,
+                        None => None,
+                    };
+                    ids.push(id.unwrap_or(0));
+                }
+                object.insert("folder_ids".into(), json!(ids));
+            }
+            _ => {
+                for child in object.values_mut() {
+                    local_rule_ids(transaction, snapshot, child)?;
+                }
+            }
+        },
+        Value::Array(values) => {
+            for child in values {
+                local_rule_ids(transaction, snapshot, child)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Writes the library's settings that the synced values show into the
+/// `application` setting. The fields that stay on this computer
+/// (`local_setting`) are kept; every other field is replaced. The Quick
+/// Access list names folders and smart folders by their local ids again, and
+/// leaves out those that the library does not have.
+fn write_settings(
+    transaction: &Transaction<'_>,
+    revision: u64,
+    snapshot: &mut ProjectionSnapshot,
+    synced: &mut Synced<'_>,
+    projected: &mut Projected,
+) -> Result<()> {
+    let shown = synced.view(SyncKind::Library, "")?.unwrap_or_default();
+    let before = transaction
+        .query_row("SELECT value_json FROM setting WHERE key = 'application'", [], |row| row.get::<_, String>(0))
+        .optional()?;
+    let original = before
+        .as_deref()
+        .and_then(|before| serde_json::from_str::<Value>(before).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let mut settings = original.clone();
+    settings.retain(|name, _| local_setting(name));
+    {
+        let local = Local::new(transaction, snapshot);
+        for (field, value) in &shown.fields {
+            let Some(name) = field.strip_prefix("setting:") else { continue };
+            let value = match (name, value) {
+                (QUICK_ACCESS, Value::Array(entries)) => {
+                    let mut scopes = Vec::with_capacity(entries.len());
+                    for entry in entries {
+                        match entry.as_str() {
+                            Some(key) => scopes.extend(local.local_scope(key)?.map(Value::String)),
+                            None => scopes.push(entry.clone()),
+                        }
+                    }
+                    Value::Array(scopes)
+                }
+                _ => value.clone(),
+            };
+            settings.insert(name.to_owned(), value);
+        }
+    }
+    projected.written.insert((SyncKind::Library, String::new()));
+    if settings == original {
+        return Ok(());
+    }
+    change(transaction, revision, snapshot, SemanticChange::AuxiliaryJson {
+        table: "setting",
+        key: "application".into(),
+        before,
+        after: Some(serde_json::to_string(&settings)?),
+        resource: "settings",
+    })?;
+    projected.resources.insert("settings".into());
+    Ok(())
+}
+
+/// Writes the settings of the view with the sync key `key` that the synced
+/// values show into its row of `view_pref`, or removes the row when they do
+/// not show them. A view of a folder or smart folder that the library does
+/// not have is left alone; it is written when that folder is created.
+fn write_view_settings(
+    transaction: &Transaction<'_>,
+    revision: u64,
+    snapshot: &mut ProjectionSnapshot,
+    synced: &mut Synced<'_>,
+    key: &str,
+    projected: &mut Projected,
+) -> Result<()> {
+    let Some(scope) = Local::new(transaction, snapshot).local_scope(key)? else { return Ok(()) };
+    let shown = synced.view(SyncKind::ViewSettings, key)?.map(|view| view.fields["value"].clone());
+    let before = transaction
+        .query_row("SELECT value_json FROM view_pref WHERE scope = ?1", [&scope], |row| row.get::<_, String>(0))
+        .optional()?;
+    projected.written.insert((SyncKind::ViewSettings, key.to_owned()));
+    let current = before.as_deref().map(|before| serde_json::from_str::<Value>(before).unwrap_or(Value::String(before.to_owned())));
+    if current == shown {
+        return Ok(());
+    }
+    change(transaction, revision, snapshot, SemanticChange::AuxiliaryJson {
+        table: "view_pref",
+        key: scope,
+        before,
+        after: shown.map(|value| serde_json::to_string(&value)).transpose()?,
+        resource: "settings",
+    })?;
+    projected.resources.insert("settings".into());
+    Ok(())
+}
+
+/// Writes the "Not duplicate" decision with the sync key `key` into the
+/// duplicate pair of its two files: status 2 while the synced values show
+/// the decision, and back to status 1 (Detected) when they no longer do, as
+/// undoing Not duplicate does. A pair that the duplicate scan of this
+/// computer has not found is added with the distance 0; the next scan keeps
+/// it, because a scan does not change a decided pair. While the library
+/// lacks one of the two items, the decision is written when that item is
+/// created (`write_decisions_of`).
+fn write_decision(transaction: &Transaction<'_>, synced: &mut Synced<'_>, key: &str, projected: &mut Projected) -> Result<()> {
+    let Some((a, b)) = key.split_once(':') else { return Ok(()) };
+    let file = |hash: &str| -> Result<Option<u32>> {
+        Ok(transaction
+            .prepare_cached(
+                "SELECT file_id FROM media_file file WHERE content_hash = ?1
+                 AND EXISTS(SELECT 1 FROM media_item WHERE file_id = file.file_id)",
+            )?
+            .query_row([hash], |row| row.get::<_, u32>(0))
+            .optional()?)
+    };
+    let (Some(a), Some(b)) = (file(a)?, file(b)?) else { return Ok(()) };
+    let (low, high) = (a.min(b), a.max(b));
+    let status = transaction
+        .query_row(
+            "SELECT status FROM duplicate_pair WHERE file_id_a = ?1 AND file_id_b = ?2",
+            [low, high],
+            |row| row.get::<_, u8>(0),
+        )
+        .optional()?;
+    let shown = synced.view(SyncKind::DuplicateDecision, key)?.is_some();
+    let now = super::now_ms();
+    let written = match (shown, status) {
+        (true, None) => transaction.execute(
+            "INSERT INTO duplicate_pair (file_id_a, file_id_b, distance, status, detected_at_ms, decided_at_ms)
+             VALUES (?1, ?2, 0, 2, ?3, ?3)",
+            rusqlite::params![low, high, now],
+        )?,
+        (true, Some(1)) => transaction.execute(
+            "UPDATE duplicate_pair SET status = 2, decided_at_ms = ?3, winner_file_id = NULL
+             WHERE file_id_a = ?1 AND file_id_b = ?2",
+            rusqlite::params![low, high, now],
+        )?,
+        (false, Some(2)) => transaction.execute(
+            "UPDATE duplicate_pair SET status = 1, decided_at_ms = NULL, winner_file_id = NULL
+             WHERE file_id_a = ?1 AND file_id_b = ?2",
+            rusqlite::params![low, high],
+        )?,
+        _ => 0,
+    };
+    if written > 0 {
+        projected.resources.insert("duplicates".into());
+    }
+    Ok(())
+}
+
+/// Writes the duplicate decisions about the item `key`, which was just
+/// created in the library: those that the synced values hold, and those
+/// that the library holds for its file from before, which a deleted item of
+/// the same file or a repaired hash can leave and which the library would
+/// otherwise show again with the new item.
+fn write_decisions_of(transaction: &Transaction<'_>, synced: &mut Synced<'_>, key: &str, projected: &mut Projected) -> Result<()> {
+    let mut decisions = BTreeSet::new();
+    for (kind, decision, _) in synced.referrers(SyncKind::Item, key, None)? {
+        if kind == SyncKind::DuplicateDecision {
+            decisions.insert(decision);
+        }
+    }
+    let mut statement = transaction.prepare_cached(
+        "SELECT a.content_hash, b.content_hash FROM media_file file
+         JOIN duplicate_pair pair ON pair.file_id_a = file.file_id OR pair.file_id_b = file.file_id
+         JOIN media_file a ON a.file_id = pair.file_id_a
+         JOIN media_file b ON b.file_id = pair.file_id_b
+         WHERE file.content_hash = ?1 AND pair.status = 2",
+    )?;
+    for row in statement.query_map([key], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))? {
+        let (a, b) = row?;
+        decisions.insert(super::decision_key(&a, &b));
+    }
+    drop(statement);
+    for decision in decisions {
+        write_decision(transaction, synced, &decision, projected)?;
+    }
+    Ok(())
+}
+
+/// Writes the time the root `root_id` was last viewed, or removes it from
+/// Recently viewed when `viewed_at` is `None`. Writing `recent_view` fires
+/// no trigger, so the root is noted for the recorder (`super::mark_viewed`).
+fn write_viewed(
+    transaction: &Transaction<'_>,
+    revision: u64,
+    root_id: u32,
+    viewed_at: Option<i64>,
+    projected: &mut Projected,
+) -> Result<()> {
+    let current = transaction
+        .query_row("SELECT viewed_at_ms FROM recent_view WHERE root_id = ?1", [root_id], |row| row.get::<_, i64>(0))
+        .optional()?;
+    if current == viewed_at {
+        return Ok(());
+    }
+    match viewed_at {
+        Some(viewed_at) => transaction.execute(
+            "INSERT INTO recent_view (root_id, viewed_at_ms) VALUES (?1, ?2)
+             ON CONFLICT(root_id) DO UPDATE SET viewed_at_ms = excluded.viewed_at_ms",
+            rusqlite::params![root_id, viewed_at],
+        )?,
+        None => transaction.execute("DELETE FROM recent_view WHERE root_id = ?1", [root_id])?,
+    };
+    super::mark_viewed(transaction, root_id, revision)?;
+    projected.resources.insert("recently-viewed".into());
+    Ok(())
+}
+
+/// Replaces the sources of the media item `media_id` with the value of its
+/// field `sources`, and queues the search text of its root `root_id`, which
+/// holds the text of the sources, to be indexed again.
+fn write_sources(transaction: &Transaction<'_>, media_id: u32, root_id: u32, sources: &Value) -> Result<()> {
+    transaction.execute("DELETE FROM source_provenance WHERE media_id = ?1", [media_id])?;
+    let mut insert = transaction.prepare_cached(
+        "INSERT OR REPLACE INTO source_provenance (source_key, source_item_key, media_id, source_text)
+         VALUES (?1, ?2, ?3, ?4)",
+    )?;
+    for source in sources.as_array().into_iter().flatten() {
+        let text = |field: &str| source.get(field).and_then(Value::as_str);
+        insert.execute(rusqlite::params![
+            text("source_key").unwrap_or_default(),
+            text("source_item_key").unwrap_or_default(),
+            media_id,
+            text("source_text"),
+        ])?;
+    }
+    crate::fts::mark_one(transaction, RootId(root_id), super::now_ms())
 }

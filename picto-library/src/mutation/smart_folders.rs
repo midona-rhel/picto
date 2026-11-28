@@ -47,6 +47,7 @@ impl Library {
             }
             crate::smart::validate_capacity(transaction)?;
             validate_smart_parent(transaction, parent_id, None)?;
+            validate_smart_name(transaction, parent_id, &name, None)?;
             let smart_folder_id = SmartFolderId(LibraryDatabase::allocate_id(transaction)?);
             let display_order = transaction.query_row(
                 "SELECT COALESCE(MAX(display_order) + 1, 0)
@@ -131,6 +132,9 @@ impl Library {
                 .ok_or_else(|| {
                     LibraryError::NotFound(format!("smart folder {smart_folder_id}"))
                 })?;
+            if before.name != name || before.parent_id != parent_id {
+                validate_smart_name(transaction, parent_id, &name, Some(smart_folder_id))?;
+            }
             let query_changed = before.parent_id != parent_id || before.view != view;
             if transaction.execute(
                 "UPDATE smart_folder_definition
@@ -461,7 +465,31 @@ pub(super) fn validate_smart_parent(
     Ok(())
 }
 
-pub(super) fn load_smart_folder_definition(
+/// Refuses `name` for a smart folder in `parent_id` when another smart folder
+/// there has it. The database allows two such smart folders, because smart
+/// folders synced from several computers can share a name, so only the
+/// names that the user gives are checked.
+fn validate_smart_name(
+    transaction: &rusqlite::Transaction<'_>,
+    parent_id: Option<SmartFolderId>,
+    name: &str,
+    smart_folder_id: Option<SmartFolderId>,
+) -> Result<()> {
+    let taken = transaction.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM smart_folder_definition
+             WHERE parent_id IS ?1 AND name = ?2 AND smart_folder_id IS NOT ?3
+         )",
+        rusqlite::params![parent_id.map(|id| id.0), name, smart_folder_id.map(|id| id.0)],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if taken {
+        return Err(LibraryError::InvalidInput(format!("smart folder {name} already exists")));
+    }
+    Ok(())
+}
+
+pub(crate) fn load_smart_folder_definition(
     connection: &rusqlite::Connection,
     smart_folder_id: SmartFolderId,
 ) -> Result<Option<SmartFolderDefinitionState>> {
