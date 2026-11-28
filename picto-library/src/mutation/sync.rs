@@ -1,5 +1,8 @@
 //! Cloud sync: turning it on and off, running the recorder, reading the
-//! outbox, and applying change records from other computers.
+//! outbox, and applying change records from other computers. `cloud` syncs
+//! with the cloud folder.
+
+mod cloud;
 
 use super::*;
 use crate::sync::SyncRecord;

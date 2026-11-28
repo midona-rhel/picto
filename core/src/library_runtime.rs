@@ -43,8 +43,8 @@ pub fn start(
             start_checkpoint_worker(Arc::clone(&application), cancel.child_token()),
         ),
         (
-            "library-sync-recording",
-            start_sync_recording_worker(Arc::clone(&application), cancel.child_token()),
+            "library-sync",
+            start_sync_worker(Arc::clone(&application), cancel.child_token()),
         ),
         (
             "library-derivatives",
@@ -353,14 +353,28 @@ fn start_checkpoint_worker(
     })
 }
 
-fn start_sync_recording_worker(
+/// How often the sync worker syncs with the cloud folder while the library
+/// has no unsent changes, to read the change files of other computers.
+const CLOUD_SYNC_INTERVAL: Duration = Duration::from_secs(5);
+
+/// While sync is on, the recorder records the library's changes about a
+/// second after they are written; a pass returns at once when nothing was
+/// written since the last one. While the library is also connected to a
+/// cloud folder and sync is not paused, the worker syncs with the folder
+/// (`Library::sync_with_cloud`) every `CLOUD_SYNC_INTERVAL`, and in the
+/// second after the recorder recorded changes. After a sync fails, for
+/// example because the cloud folder is not available, the next sync waits
+/// for the interval. Library writes never wait for the worker: it uses the
+/// sync file's own connection and writes the library only in small
+/// transactions at background priority.
+fn start_sync_worker(
     application: Arc<LibraryApplication>,
     cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        // While sync is on, the recorder records the library's changes about
-        // a second after they are written. A pass returns at once when
-        // nothing was written since the last one.
+        let mut computer = None;
+        let mut last_sync: Option<std::time::Instant> = None;
+        let mut failed = false;
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => return,
@@ -369,10 +383,33 @@ fn start_sync_recording_worker(
                     if !library.sync_on() {
                         continue;
                     }
-                    match tokio::task::spawn_blocking(move || library.record_sync_changes()).await {
-                        Ok(Ok(())) => {}
-                        Ok(Err(error)) => tracing::warn!(%error, "Sync recording failed"),
-                        Err(error) => tracing::warn!(%error, "Sync recording worker stopped"),
+                    if computer.is_none() {
+                        computer = crate::cloud_sync::this_computer();
+                    }
+                    let computer = computer.clone();
+                    let due = last_sync.is_none_or(|time| time.elapsed() >= CLOUD_SYNC_INTERVAL);
+                    let result = tokio::task::spawn_blocking(move || {
+                        library.record_sync_changes()?;
+                        let Some(computer) = computer else { return Ok(false) };
+                        if !due && (failed || !library.has_unsent_sync_changes()?) {
+                            return Ok(false);
+                        }
+                        library.sync_with_cloud(&computer).map(|_| true)
+                    })
+                    .await;
+                    match result {
+                        Ok(Ok(synced)) => {
+                            if synced {
+                                last_sync = Some(std::time::Instant::now());
+                                failed = false;
+                            }
+                        }
+                        Ok(Err(error)) => {
+                            tracing::warn!(%error, "Sync failed");
+                            last_sync = Some(std::time::Instant::now());
+                            failed = true;
+                        }
+                        Err(error) => tracing::warn!(%error, "Sync worker stopped"),
                     }
                 }
             }
@@ -414,7 +451,9 @@ fn start_derivative_worker(
                     }
                 }
             }
-            // Retries become ready with time; a short fallback picks them up.
+            // A failed job is tried again after a delay. The worker looks
+            // for work at least every two seconds, so that it finds such a
+            // job soon after its delay ends.
             if !wake.next(&cancel, Duration::from_millis(50), Duration::from_secs(2)).await {
                 return;
             }

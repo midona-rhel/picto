@@ -2,7 +2,9 @@
 //! recorder has caught up after one or more operations, a full comparison of
 //! the library with the synced values must find nothing to record, and
 //! libraries that exchange their change records must end with the same
-//! library.
+//! library. `cloud` checks libraries that sync through a cloud folder.
+
+mod cloud;
 
 use std::collections::BTreeMap;
 

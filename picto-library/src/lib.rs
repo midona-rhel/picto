@@ -53,4 +53,4 @@ pub use projection::{ProjectionSnapshot, ProjectionStore};
 pub use publication::{LibraryChanged, MutationReceipt};
 pub use query_request::{LoadStage, OpenCancellation, OpenStage};
 pub use smart::SmartFolderRecord;
-pub use sync::{SyncKind, SyncRecord, SyncTimestamp};
+pub use sync::{SyncComputer, SyncKind, SyncRecord, SyncReport, SyncTimestamp};

@@ -13,12 +13,15 @@
 //! `record` compares the two for what changed in the library since its last
 //! pass and records what differs, and `apply` writes what the synced values
 //! show into the library.
+//! `cloud` reads and writes the files of the cloud folder through which the
+//! computers exchange their change records.
 //!
 //! Library writes do no sync work apart from the triggers of `MARKS` and
 //! `ROW_MARKS`. The recorder runs in the background after writes, on the
 //! sync file's own connection, and reads the library in a read transaction.
 
 mod apply;
+pub(crate) mod cloud;
 mod local;
 mod order;
 mod record;
@@ -36,6 +39,7 @@ use serde_json::Value;
 use crate::Result;
 
 pub(crate) use apply::{finish_projection, merge_remote, pending_projection, project, synced_for_projection};
+pub use cloud::{SyncComputer, SyncReport};
 #[cfg(test)]
 pub(crate) use record::differences;
 pub(crate) use record::{record, record_full};
