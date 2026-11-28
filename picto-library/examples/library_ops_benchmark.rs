@@ -769,17 +769,18 @@ fn bench_apply(
     Ok(())
 }
 
-/// The id of the cloud library that `bench_cloud` syncs with, and of the
-/// other computer whose change files it reads.
-const CLOUD_LIBRARY: &str = "0b7e4c52-3f1d-4a8e-9c6b-2d5f8a1e7c40";
+/// The device id of the other computer whose change files `bench_cloud`
+/// reads.
 const OTHER_DEVICE: &str = "9a3d6f10-5c2e-4b7a-8e1f-4d6c2b9a0e57";
 
-/// Syncs through a cloud folder in the temporary directory: sends a rating
-/// of one item and a tag added to 200k items, reads the same from change
-/// files that another computer wrote, and syncs with nothing to do, as the
-/// sync worker does every few seconds. Then measures two writes in
-/// alternating runs without and with a thread that records and syncs as the
-/// sync worker does, but every 100 ms instead of every second.
+/// Turns sync on with a cloud folder in the temporary directory, which
+/// writes the first snapshot, and syncs through it: sends a rating of one
+/// item and a tag added to 200k items, reads the same from change files
+/// that another computer wrote, and syncs with nothing to do, as the sync
+/// worker does every few seconds. Then measures two writes in alternating
+/// runs without and with a thread that records and syncs as the sync worker
+/// does, but every 100 ms instead of every second. Last, another library
+/// opens the cloud library.
 fn bench_cloud(
     library: &Library,
     directory: &std::path::Path,
@@ -791,7 +792,11 @@ fn bench_cloud(
     let cloud = directory.join("cloud");
     std::fs::create_dir_all(&cloud)?;
     let computer = SyncComputer { machine_id: "benchmark".into(), name: "benchmark".into(), app_version: "benchmark".into() };
-    library.connect_sync_folder(&cloud, CLOUD_LIBRARY, "benchmark", &computer)?;
+    let t = Instant::now();
+    let cloud_library = library.turn_on_sync(&cloud, "benchmark", &computer)?;
+    println!("ROW|turn_on_sync with recording on (writes the first snapshot)|-|{:.1}|-|1 run", ms(t));
+    let snapshots = cloud.join("picto").join(&cloud_library).join("snapshots");
+    println!("SIZE first snapshot: {} bytes", folder_bytes(&snapshots)?);
     let sync = || -> R<f64> {
         let t = Instant::now();
         library.sync_with_cloud(&computer)?.ok_or("the library is not connected to the cloud folder")?;
@@ -814,7 +819,7 @@ fn bench_cloud(
     }
     emit("sync_with_cloud sends apply_tags add 200k", "200000 records, 2 files", &mut samples);
 
-    let changes = cloud.join("picto").join(CLOUD_LIBRARY).join("devices").join(OTHER_DEVICE).join("changes");
+    let changes = cloud.join("picto").join(&cloud_library).join("devices").join(OTHER_DEVICE).join("changes");
     std::fs::create_dir_all(&changes)?;
     let mut seq = 0;
     let mut wall_ms = now() + 120_000;
@@ -898,7 +903,29 @@ fn bench_cloud(
     emit("set_rating Four 200k, sync worker stopped", "200000", &mut rating_off);
     emit("set_rating Four 200k, sync worker running", "200000", &mut rating_on);
     read_tag(at(200_000), true)?;
+    // Another computer opens the cloud library in a new library: it reads
+    // the snapshot and every change file after it and writes everything into
+    // the library. The new library is in a folder of its own, because the
+    // sync file is next to the library database.
+    std::fs::create_dir_all(directory.join("second"))?;
+    let second = Library::create(directory.join("second").join("library.sqlite"))?;
+    let other = SyncComputer { machine_id: "second".into(), name: "second".into(), app_version: "benchmark".into() };
+    let t = Instant::now();
+    second.open_from_cloud(&cloud, &cloud_library, &other)?;
+    let opened = ms(t);
+    let roots = second.projections().snapshot().root_kinds.values().map(|roots| roots.len()).sum::<u64>();
+    println!("ROW|open_from_cloud in a new library (no originals)|{roots} roots|{opened:.1}|-|1 run");
     Ok(())
+}
+
+/// The size of the files in `folder` and the folders in it, in bytes.
+fn folder_bytes(folder: &std::path::Path) -> R<u64> {
+    let mut bytes = 0;
+    for entry in std::fs::read_dir(folder)? {
+        let entry = entry?;
+        bytes += if entry.file_type()?.is_dir() { folder_bytes(&entry.path())? } else { entry.metadata()?.len() };
+    }
+    Ok(bytes)
 }
 
 fn bench_tag_pages(library: &Library, runs: usize) -> R<()> {

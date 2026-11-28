@@ -14,10 +14,15 @@
 //! - `devices/<device id>/changes/<seq>.jsonl.zst`: the change records that
 //!   one sync of the device wrote, at most `CHANGE_FILE_RECORDS` of them. The
 //!   sequence numbers of a device start at 1 and have no gaps.
+//! - `snapshots/<snapshot id>/`: the shards `<nn>.jsonl.zst` of a snapshot of
+//!   the synced values, and its `manifest.json` (`Manifest`), which is
+//!   written last. `snapshot` says what a snapshot holds.
 //!
 //! A change file is JSON Lines compressed with zstd. Each line is one record,
 //! written as the array `[kind, key, field, value, wall ms, counter]`. The
 //! device id of the record's timestamp is the name of the device's folder.
+//! A shard of a snapshot holds records of every device, so each of its
+//! lines ends with the device id.
 //!
 //! Every file is written under a temporary name in its folder, flushed to
 //! disk and then renamed, so that this computer never leaves part of a file
@@ -209,6 +214,263 @@ impl CloudFolder {
         let file = DeviceFile { computer: &computer.name, app_version: &computer.app_version, last_sync_ms };
         write_atomically(&self.device(device).join("device.json"), &serde_json::to_vec_pretty(&file)?, true)
     }
+
+    /// The change files of `device`, as (sequence number, time of the last
+    /// change of the file in milliseconds since 1970), in order.
+    pub(crate) fn change_files(&self, device: &str) -> Result<Vec<(i64, i64)>> {
+        let listing = match std::fs::read_dir(self.device(device).join("changes")) {
+            Ok(listing) => listing,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        let mut files = Vec::new();
+        for entry in listing {
+            let entry = entry?;
+            let Some(seq) = entry.file_name().to_str().and_then(change_file_seq) else { continue };
+            let modified = entry.metadata()?.modified()?;
+            let modified_ms = modified.duration_since(std::time::UNIX_EPOCH).map_or(0, |time| time.as_millis() as i64);
+            files.push((seq, modified_ms));
+        }
+        files.sort();
+        Ok(files)
+    }
+
+    pub(crate) fn delete_change_file(&self, device: &str, seq: i64) -> Result<()> {
+        remove_file(&self.change_file(device, seq))
+    }
+
+    fn snapshot(&self, snapshot_id: &str) -> PathBuf {
+        self.path.join("snapshots").join(snapshot_id)
+    }
+
+    /// The snapshots in `snapshots/`: the manifest of each one whose
+    /// manifest can be read and whose shards are all there with the size
+    /// that the manifest gives, and the ids of the others, which are
+    /// incomplete. Whether a shard's content has the right checksum is
+    /// checked when it is read (`read_shard`).
+    pub(crate) fn snapshots(&self) -> Result<(Vec<Manifest>, Vec<String>)> {
+        let listing = match std::fs::read_dir(self.path.join("snapshots")) {
+            Ok(listing) => listing,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), Vec::new())),
+            Err(error) => return Err(error.into()),
+        };
+        let (mut complete, mut incomplete) = (Vec::new(), Vec::new());
+        for entry in listing {
+            let entry = entry?;
+            let Some(id) = entry.file_name().to_str().filter(|name| is_snapshot_id(name)).map(str::to_owned) else { continue };
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let manifest = std::fs::read(entry.path().join("manifest.json"))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Manifest>(&bytes).ok())
+                .filter(|manifest| manifest.snapshot_id == id)
+                .filter(|manifest| {
+                    manifest.shards.iter().all(|shard| {
+                        is_shard_name(&shard.file)
+                            && std::fs::metadata(entry.path().join(&shard.file)).is_ok_and(|metadata| metadata.len() == shard.bytes)
+                    })
+                });
+            match manifest {
+                Some(manifest) => complete.push(manifest),
+                None => incomplete.push(id),
+            }
+        }
+        complete.sort_by(|a, b| a.snapshot_id.cmp(&b.snapshot_id));
+        incomplete.sort();
+        Ok((complete, incomplete))
+    }
+
+    /// The records of one shard of a snapshot, or `None` when the file does
+    /// not have the checksum that the manifest gives or cannot be read.
+    pub(crate) fn read_shard(&self, manifest: &Manifest, shard: &Shard) -> Option<Vec<SyncRecord>> {
+        use sha2::Digest;
+        let bytes = std::fs::read(self.snapshot(&manifest.snapshot_id).join(&shard.file)).ok()?;
+        if hex(&sha2::Sha256::digest(&bytes)) != shard.sha256 {
+            return None;
+        }
+        let text = zstd::stream::decode_all(&bytes[..]).ok()?;
+        let mut records = Vec::new();
+        for line in text.split(|byte| *byte == b'\n').filter(|line| !line.is_empty()) {
+            let (kind, key, field, value, wall_ms, counter, device) = serde_json::from_slice::<ShardLine>(line).ok()?;
+            records.push(SyncRecord { kind, key, field, value, timestamp: SyncTimestamp { wall_ms, counter, device } });
+        }
+        Some(records)
+    }
+
+    /// Starts to write the snapshot `snapshot_id` with `shards` shards.
+    pub(crate) fn snapshot_writer(&self, snapshot_id: &str, shards: usize) -> Result<SnapshotWriter> {
+        let folder = self.snapshot(snapshot_id);
+        std::fs::create_dir_all(&folder)?;
+        let mut files = Vec::new();
+        for index in 0..shards {
+            let name = format!("{index:02}.jsonl.zst");
+            let temporary = folder.join(format!("{name}.picto-writing-{}", uuid::Uuid::new_v4()));
+            let encoder = zstd::stream::Encoder::new(std::io::BufWriter::new(std::fs::File::create(&temporary)?), 3)?;
+            files.push(ShardWriter { name, temporary, encoder, records: 0 });
+        }
+        Ok(SnapshotWriter { snapshot_id: snapshot_id.to_owned(), folder, files })
+    }
+
+    /// Deletes the folder of the snapshot `snapshot_id` with everything in it.
+    pub(crate) fn delete_snapshot(&self, snapshot_id: &str) -> Result<()> {
+        match std::fs::remove_dir_all(self.snapshot(snapshot_id)) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// The manifest of a snapshot, `snapshots/<snapshot id>/manifest.json`. It is
+/// written after every shard, so a snapshot without it is not finished.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct Manifest {
+    pub snapshot_id: String,
+    /// The device that wrote the snapshot, and the name of its computer.
+    pub device_id: String,
+    pub computer: String,
+    /// When the snapshot was written, in milliseconds since 1970.
+    pub written_at_ms: i64,
+    /// For each device, the last of its change files whose records the
+    /// snapshot holds.
+    pub covers: BTreeMap<String, i64>,
+    pub shards: Vec<Shard>,
+    /// The content hashes of the items whose fields this snapshot is the
+    /// first to leave out, because they were deleted more than 30 days
+    /// before it was written. Their originals can be deleted later.
+    pub pruned_originals: Vec<String>,
+}
+
+/// One file of a snapshot, which holds the records of the entities whose
+/// keys fall into it (`snapshot::shard_of`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct Shard {
+    pub file: String,
+    /// The SHA-256 checksum of the file, in hex, and its size in bytes.
+    pub sha256: String,
+    pub bytes: u64,
+    pub records: u64,
+}
+
+/// One line of a snapshot's shard: kind, key, field, value, wall time,
+/// counter and device id. A snapshot holds the records of every device, so
+/// each line names its device.
+type ShardLine = (SyncKind, String, String, Value, i64, i64, String);
+
+struct ShardWriter {
+    name: String,
+    temporary: PathBuf,
+    encoder: zstd::stream::Encoder<'static, std::io::BufWriter<std::fs::File>>,
+    records: u64,
+}
+
+/// The shards of a snapshot that is being written. Each shard is written
+/// under a temporary name and renamed when it is finished; the manifest is
+/// written last (`finish`).
+pub(crate) struct SnapshotWriter {
+    snapshot_id: String,
+    folder: PathBuf,
+    files: Vec<ShardWriter>,
+}
+
+impl SnapshotWriter {
+    pub(crate) fn shards(&self) -> usize {
+        self.files.len()
+    }
+
+    /// Adds one record to the shard `shard`. `value` is the record's value
+    /// as JSON text.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn add(
+        &mut self,
+        shard: usize,
+        kind: SyncKind,
+        key: &str,
+        field: &str,
+        value: &str,
+        wall_ms: i64,
+        counter: i64,
+        device: &str,
+    ) -> Result<()> {
+        let file = &mut self.files[shard];
+        let encoder = &mut file.encoder;
+        encoder.write_all(b"[")?;
+        serde_json::to_writer(&mut *encoder, &kind)?;
+        encoder.write_all(b",")?;
+        serde_json::to_writer(&mut *encoder, key)?;
+        encoder.write_all(b",")?;
+        serde_json::to_writer(&mut *encoder, field)?;
+        write!(encoder, ",{value},{wall_ms},{counter},")?;
+        serde_json::to_writer(&mut *encoder, device)?;
+        encoder.write_all(b"]\n")?;
+        file.records += 1;
+        Ok(())
+    }
+
+    /// Finishes every shard, renames it to its name, and writes the
+    /// manifest with the snapshot id and the shards filled in. Shards without records are left
+    /// out of the snapshot.
+    pub(crate) fn finish(self, mut manifest: Manifest) -> Result<Manifest> {
+        use sha2::Digest;
+        manifest.snapshot_id = self.snapshot_id;
+        manifest.shards.clear();
+        for file in self.files {
+            let writer = file.encoder.finish()?;
+            let file_handle = writer.into_inner().map_err(|error| LibraryError::Io(error.into_error()))?;
+            file_handle.sync_all()?;
+            drop(file_handle);
+            if file.records == 0 {
+                remove_file(&file.temporary)?;
+                continue;
+            }
+            let bytes = std::fs::read(&file.temporary)?;
+            let path = self.folder.join(&file.name);
+            rename(&file.temporary, &path)?;
+            manifest.shards.push(Shard {
+                file: file.name,
+                sha256: hex(&sha2::Sha256::digest(&bytes)),
+                bytes: bytes.len() as u64,
+                records: file.records,
+            });
+        }
+        write_atomically(&self.folder.join("manifest.json"), &serde_json::to_vec_pretty(&manifest)?, false)?;
+        Ok(manifest)
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn remove_file(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+        _ => Ok(()),
+    }
+}
+
+/// The sequence number of a change file's name, or `None` for a name that
+/// the sync does not write.
+fn change_file_seq(name: &str) -> Option<i64> {
+    let seq = name.strip_suffix(".jsonl.zst")?;
+    if seq.is_empty() || seq.starts_with('0') || !seq.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    seq.parse().ok()
+}
+
+/// A new snapshot id: the time `now_ms`, written with 13 digits so that ids
+/// sort by time, a hyphen and a random lowercase UUID.
+pub(crate) fn snapshot_id(now_ms: i64) -> String {
+    format!("{now_ms:013}-{}", uuid::Uuid::new_v4())
+}
+
+fn is_snapshot_id(name: &str) -> bool {
+    name.split_once('-').is_some_and(|(time, id)| time.len() == 13 && time.bytes().all(|byte| byte.is_ascii_digit()) && is_id(id))
+}
+
+fn is_shard_name(name: &str) -> bool {
+    name.strip_suffix(".jsonl.zst").is_some_and(|index| index.len() == 2 && index.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// The folder of the cloud library `library_id` in `root`. The id must be a
@@ -326,28 +588,44 @@ pub(crate) struct CloudState {
     pub machine_id: String,
     pub written_seq: i64,
     pub paused: bool,
+    /// The base snapshots that the synced values were last built from, and
+    /// for each device the greatest of their `covers`.
+    pub adopted: Vec<String>,
+    pub adopted_covers: BTreeMap<String, i64>,
 }
 
 /// The cloud state, or `None` when the library is not connected to a cloud
 /// folder.
 pub(crate) fn state(connection: &Connection) -> Result<Option<CloudState>> {
-    Ok(connection
+    connection
         .query_row(
-            "SELECT device_id, library_id, cloud_folder, machine_id, written_seq, paused
+            "SELECT device_id, library_id, cloud_folder, machine_id, written_seq, paused, adopted_snapshots, adopted_covers
              FROM sync_state WHERE library_id IS NOT NULL",
             [],
             |row| {
-                Ok(CloudState {
-                    device_id: row.get(0)?,
-                    library_id: row.get(1)?,
-                    folder: PathBuf::from(row.get::<_, String>(2)?),
-                    machine_id: row.get(3)?,
-                    written_seq: row.get(4)?,
-                    paused: row.get(5)?,
-                })
+                Ok((
+                    CloudState {
+                        device_id: row.get(0)?,
+                        library_id: row.get(1)?,
+                        folder: PathBuf::from(row.get::<_, String>(2)?),
+                        machine_id: row.get(3)?,
+                        written_seq: row.get(4)?,
+                        paused: row.get(5)?,
+                        adopted: Vec::new(),
+                        adopted_covers: BTreeMap::new(),
+                    },
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
             },
         )
-        .optional()?)
+        .optional()?
+        .map(|(mut state, adopted, covers)| -> Result<CloudState> {
+            state.adopted = serde_json::from_str(&adopted)?;
+            state.adopted_covers = serde_json::from_str(&covers)?;
+            Ok(state)
+        })
+        .transpose()
 }
 
 /// Stores the cloud library that the library syncs with. A library that
@@ -381,10 +659,10 @@ pub(crate) fn connect(connection: &Connection, library_id: &str, folder: &str, m
 /// file. The copy writes its change files under the new id from sequence
 /// number 1. The records in its outbox take the new id in the synced values
 /// too, because the device id of a record is the folder of the file it is
-/// in. Every other device is read again from its first change file. The old
-/// device id is read from the change file after the last one this copy
-/// wrote, so that what the original wrote after the copy was made is merged
-/// too. Returns the new state.
+/// in. The positions read are cleared; the caller then adopts the base
+/// snapshots, which reads every device, the old device id among them, from
+/// the change file after the snapshots' `covers`, so that what the original
+/// wrote after the copy was made is merged too. Returns the new state.
 pub(crate) fn take_new_device_id(transaction: &Transaction<'_>, machine_id: &str) -> Result<CloudState> {
     let (old, written_seq) = transaction.query_row("SELECT device_id, written_seq FROM sync_state", [], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
@@ -410,6 +688,50 @@ pub(crate) fn take_new_device_id(transaction: &Transaction<'_>, machine_id: &str
         rusqlite::params![old, written_seq],
     )?;
     state(transaction)?.ok_or_else(|| LibraryError::InvalidState("the library is not connected to a cloud folder".into()))
+}
+
+/// Notes the base snapshots `adopted` and their `covers` as the ones the
+/// synced values were built from, and the last change file read of each
+/// other device as `read`.
+pub(crate) fn set_adopted(
+    transaction: &Transaction<'_>,
+    adopted: &[String],
+    covers: &BTreeMap<String, i64>,
+    read: &BTreeMap<String, i64>,
+) -> Result<()> {
+    transaction.execute(
+        "UPDATE sync_state SET adopted_snapshots = ?1, adopted_covers = ?2",
+        [serde_json::to_string(adopted)?, serde_json::to_string(covers)?],
+    )?;
+    transaction.execute("DELETE FROM sync_read", [])?;
+    for (device, seq) in read {
+        set_read_position(transaction, device, *seq)?;
+    }
+    Ok(())
+}
+
+/// Notes the snapshot ids `incomplete` as seen incomplete at `now_ms`, keeps
+/// the time each one was first seen so, and forgets the ids that are no
+/// longer incomplete. Returns each incomplete id with the time it was first
+/// seen incomplete.
+pub(crate) fn note_incomplete(connection: &Connection, incomplete: &[String], now_ms: i64) -> Result<Vec<(String, i64)>> {
+    let transaction = connection.unchecked_transaction()?;
+    transaction.execute(
+        "DELETE FROM sync_incomplete WHERE snapshot_id NOT IN (SELECT value FROM json_each(?1))",
+        [serde_json::to_string(incomplete)?],
+    )?;
+    let mut seen = Vec::new();
+    for id in incomplete {
+        transaction
+            .prepare_cached("INSERT OR IGNORE INTO sync_incomplete(snapshot_id, first_seen_ms) VALUES (?1, ?2)")?
+            .execute(rusqlite::params![id, now_ms])?;
+        let first = transaction
+            .prepare_cached("SELECT first_seen_ms FROM sync_incomplete WHERE snapshot_id = ?1")?
+            .query_row([id], |row| row.get(0))?;
+        seen.push((id.clone(), first));
+    }
+    transaction.commit()?;
+    Ok(seen)
 }
 
 /// For each other device, the last of its change files that the library

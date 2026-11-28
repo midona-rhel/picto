@@ -24,6 +24,14 @@ impl Library {
     /// device id and records the library's full state into it. From then on
     /// the recorder records what changes (`record_sync_changes`).
     pub fn start_sync_recording(&self) -> Result<()> {
+        self.start_recording(true)
+    }
+
+    /// `start_sync_recording`, which records the full state only when `full`
+    /// is true. A new library that is opened from the cloud records nothing,
+    /// so that the defaults it was created with do not win over the cloud
+    /// library's values.
+    pub(super) fn start_recording(&self, full: bool) -> Result<()> {
         if self.sync.on() {
             return Err(LibraryError::InvalidState("sync is already on".into()));
         }
@@ -37,7 +45,10 @@ impl Library {
                      VALUES (1, ?1, 0, 0, ?2)",
                     rusqlite::params![uuid::Uuid::new_v4().to_string(), revision as i64],
                 )?;
-                crate::sync::record_full(transaction, snapshot)
+                if full {
+                    crate::sync::record_full(transaction, snapshot)?;
+                }
+                Ok(())
             })
         })();
         if started.is_err() {

@@ -276,8 +276,9 @@ settings, recent views and duplicate decisions are not read.
 (`-- [roots] [runs] [smart_folders]`, by default 1M roots and 100 smart folders). With `--sync` it
 measures them with sync on, and also measures applying change records from another computer,
 among them a tag on up to 200,000 items with and without writes of the user at the same time. It
-also measures syncs through a cloud folder in a temporary directory, and two writes with and
-without the sync running beside them. Its output is local and never committed.
+also measures turning sync on with a cloud folder in a temporary directory, which writes the first
+snapshot, syncs through that folder, two writes with and without the sync running beside them, and
+opening the cloud library in a new library. Its output is local and never committed.
 
 ### Recording changes for sync
 
@@ -412,40 +413,81 @@ the name that the user gives.
 ### Syncing through a cloud folder
 
 The computers exchange their change records through a folder that the Google Drive or Dropbox
-app copies between them (`picto-library/src/sync/cloud.rs`). `Library::connect_sync_folder`
-stores the cloud library's id and the path of that folder in `sync_state`, and writes
-`picto/<library id>/library.json` when it is not there yet. In that folder, each copy of the
-library writes into `devices/<device id>/`: its change files `changes/<seq>.jsonl.zst`, numbered
-from 1 without gaps, and `device.json` with the name of the computer, the version of Picto and the
-time of its last sync that read or wrote a change file. A change file is JSON Lines compressed with
-zstd, one record `[kind, key, field, value, wall ms, counter]` on each line and at most 100,000
-records; the device id of the timestamps is the name of the folder. Every file is written under a
-temporary name, flushed and renamed. Only `device.json` is ever written over.
+app copies between them (`picto-library/src/sync/cloud.rs`). `Library::turn_on_sync` makes a new
+cloud library: it records the full state of the library into `sync_value`, stores the cloud
+library's id and the path of that folder in `sync_state`, writes `picto/<library id>/library.json`
+and writes the first snapshot. `Library::open_from_cloud` opens a cloud library in a new, empty
+library on another computer: it turns sync on without recording anything and syncs, which adopts
+the base snapshots and writes everything into the library. A library that has content is never
+joined with a cloud library. `Library::set_sync_paused` pauses and resumes sync: while it is
+paused the library records its changes and reads and writes no files. `Library::stop_sync_recording`
+turns sync off; the cloud library stays in the folder. `core/src/cloud_sync.rs` has the same four
+functions for the open library of the core.
+
+In the cloud folder, each copy of the library writes into `devices/<device id>/`: its change files
+`changes/<seq>.jsonl.zst`, numbered from 1 without gaps, and `device.json` with the name of the
+computer, the version of Picto and the time of its last sync that read or wrote a change file. A
+change file is JSON Lines compressed with zstd, one record `[kind, key, field, value, wall ms,
+counter]` on each line and at most 100,000 records; the device id of the timestamps is the name of
+the folder. A snapshot is `snapshots/<snapshot id>/`: shards `<nn>.jsonl.zst`, which hold the
+records `[kind, key, field, value, wall ms, counter, device id]` of the entities whose key falls
+into them, at most 100 of them with about 200,000 records each, and `manifest.json`, written last,
+with the device and computer that wrote the snapshot, when, `covers` (for each device the last
+change file whose records it holds), each shard's size and SHA-256 checksum, and
+`pruned_originals`. A snapshot id is the time it was written, with 13 digits, a hyphen and a random
+UUID. Every file is written under a temporary name, flushed and renamed. Only `device.json` is ever
+written over.
+
+A snapshot is valid when its manifest and every shard are there with the right size, and each shard
+has the right checksum; the shards of a snapshot are read once in each run of the app to check
+that, and their sizes are compared after that. Snapshots rank by the sum of their `covers`, then by
+their id. The base snapshots are the valid snapshots that no higher-ranked valid snapshot covers,
+and the synced state is their merge, every change file after the greatest of their `covers` for
+its device, and the outbox (`picto-library/src/sync/snapshot.rs`). `sync_state` notes the base
+snapshots that `sync_value` was built from. When the base snapshots differ, the sync adopts them:
+one transaction of the sync file merges their records and the change files after them, removes the
+synced values that none of them holds, and notes them and the change files read; the entities whose
+visible state changed are then written into the library.
 
 `Library::sync_with_cloud` first checks whether the database is a copy: the machine id that the
-caller gives is not the one in `sync_state`, or the device's folder holds the change file after the
-last one the database noted as written. That happens when the library folder was copied to another
-computer, when a backup was restored, and when a sync stopped after it wrote a change file and
-before it noted it. A copy takes a new device id: the records in its outbox take the new id in
-`sync_value`, every other device is read again from its first change file, and the old device id is
-read from the file after the last one the copy wrote. The sync then reads the change files of every
-other device in sequence order and stops at the first one that is missing or cannot be read yet,
-as a file is while the cloud app downloads it. Each file is merged in one transaction of the sync
-file that also moves `sync_read` for that device, so a crash merges the file again or not at all,
-and the merged entities are then written into the library as described above. Last, the outbox is
-written as the next change files; after each file is written, one transaction removes its records
-from the outbox and notes its number. A crash between the two leaves a file that the next sync finds
-after the noted number, so the database takes a new device id and sends the outbox again under it.
-The records are then in two files with the same value and timestamps that differ only in the
-device id, which every computer merges to the same value.
+caller gives is not the one in `sync_state`, the device's folder holds the change file after the
+last one the database noted as written, or a snapshot covers more of the device than that. That
+happens when the library folder was copied to another computer, when a backup was restored, also one
+older than the cleanup of its later change files, and when a sync stopped after it wrote a change
+file and before it noted it. A copy waits until a snapshot is in the folder, takes a new device id,
+whose records in its outbox take the new id in `sync_value`, and adopts the base snapshots. The sync
+then adopts the base snapshots when they are not the ones it adopted, and reads the change files of
+every other device in sequence order from the last one read, or from the adopted snapshots' `covers`,
+and stops at the first one that is missing or cannot be read yet, as a file is while the cloud app
+downloads it. A file that is gone because the cleanup deleted it is covered by the base snapshots,
+which the sync then adopts. Each file is merged in one transaction of the sync file that also moves
+`sync_read` for that device, so a crash merges the file again or not at all, and the merged entities
+are then written into the library as described above. Next, the outbox is written as the next
+change files; after each file is written, one transaction removes its records from the outbox and
+notes its number. A crash between the two leaves a file that the next sync finds after the noted
+number, so the database takes a new device id and sends the outbox again under it. The records are
+then in two files with the same value and timestamps that differ only in the device id, which every
+computer merges to the same value.
+
+Last, the sync writes a snapshot when the newest base snapshot was written more than seven days
+ago, the outbox is empty and no change file it needs is missing. It is the synced values with the
+`covers` that the sync has read, which are then the cloud data, and it leaves out every field of an
+entity that was deleted more than 30 days before, other than `deleted` and `renamed_to`, and every
+reference, other than `place`, that is more than 30 days old and names such an entity or one the
+synced values do not know. A `tag:<old>` field of a tag that went to another tag is written as the
+field of that tag, with its timestamp, when it is the newer one. The items whose fields are left out
+are listed in `pruned_originals`. Then the cleanup deletes the snapshots that a higher-ranked valid
+snapshot written more than seven days ago covers, one at a time against those that remain, the
+snapshots that have been incomplete for seven days since this computer first saw them so
+(`sync_incomplete`), and the change files that every valid snapshot covers and whose files are more
+than seven days old. The originals in `pruned_originals` are not deleted yet.
 
 The core's sync worker (`library-sync` in `core/src/library_runtime.rs`) runs the recorder every
-second while sync is on. While the library is connected to a cloud folder and sync is not paused
-(`Library::set_sync_paused`), it also syncs every five seconds, and in the second after the
-recorder recorded changes. The machine id is a random id kept in the file `machine-id` of the
-app's data folder (`core/src/cloud_sync.rs`). The sync uses the sync file's connection; it writes
-the library only in the small background transactions of the projection, so library writes do not
-wait for it.
+second while sync is on. While the library is connected to a cloud folder and sync is not paused,
+it also syncs every five seconds, and in the second after the recorder recorded changes. The
+machine id is a random id kept in the file `machine-id` of the app's data folder
+(`core/src/cloud_sync.rs`). The sync uses the sync file's connection; it writes the library only in
+the small background transactions of the projection, so library writes do not wait for it.
 
 ## Stored files and the pictures made from them
 
