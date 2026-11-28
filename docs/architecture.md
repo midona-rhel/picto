@@ -346,7 +346,10 @@ and not with its square.
 
 The recorder compares a waiting entity like any other, so a change that the user makes to it at any
 time, also between two of these transactions, is recorded with a later timestamp, and the synced
-values that are written later hold it. A value of a waiting entity is not recorded when it is still
+values that are written later hold it. A pass reads from `sync_pending` and `sync_pending_value`
+only the entities that it compares or that a compared value names, and the waiting roots only among
+the roots that changed, so a pass after a write of the user costs what that write changed, also
+while hundreds of thousands of entities wait. A value of a waiting entity is not recorded when it is still
 the value from before the records (`sync_pending_value`), or when it is the value the synced values
 store but do not show only because other entities that it names wait too, such as a cover that is
 deleted; a tag of a waiting root is recorded only when the root entered or left that tag since the
